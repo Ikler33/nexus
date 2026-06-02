@@ -1,0 +1,20 @@
+{
+  "name": "nexus",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Nexus — local-first knowledge base (Obsidian-форк, Tauri 2 + Rust + React)",
+  "packageManager": "pnpm@11.5.1",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @nexus/desktop app:dev",
+    "build": "pnpm --filter @nexus/desktop build",
+    "build:app": "pnpm --filter @nexus/desktop app:build",
+    "preview": "pnpm --filter @nexus/desktop preview",
+    "test": "pnpm -r --if-present test",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck"
+  }
+}

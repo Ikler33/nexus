@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Минимальный набор прав для каркаса Nexus (Ф0). Расширяется осознанно — аудит в Ф0-12 (AC-SEC-5).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

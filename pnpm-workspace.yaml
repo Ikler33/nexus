@@ -1,0 +1,9 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - 'plugins/*'
+
+# Разрешённые postinstall-скрипты (pnpm блокирует их по умолчанию из соображений
+# безопасности). esbuild ставит платформенный бинарь — он нужен Vite/Vitest.
+allowBuilds:
+  esbuild: true
