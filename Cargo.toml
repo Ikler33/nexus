@@ -26,6 +26,8 @@ blake3 = "1"
 # AI-слой (§4.3, ADR-005): HTTP к chat/embedding серверам. rustls — без системного OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-trait = "0.1"
+# Векторный ANN (§3): usearch HNSW, mmap, sibling-файл .nexus/vectors.usearch
+usearch = "2"
 # dev-only
 tempfile = "3"
 

@@ -171,3 +171,12 @@
     Зафиксирован риск ADR-005 (nomic англоцентричен; мультиязычный bge-m3/e5 — позже, §6.5). Дока: `docs/dev/ai.md`.
 
   Embedding-провайдер для RAG; chat — Ф1-7.
+
+- **Ф1-4 — usearch ANN-индекс.**
+  - `vector::VectorIndex` (usearch HNSW, Cos, sibling-файл `.nexus/vectors.usearch`): `open(path,dim)`
+    (dim из эмбеддера), `upsert` (ключ=chunk_id, замена без дублей), `remove`, `search` → `VectorHit`,
+    `save`/`len`/`contains`. Зависимость `usearch`.
+  - Тесты: upsert+search+no-dup (AC-Б4-2), отказ при иной размерности (AC-Б5-1), remove чистит выдачу
+    (AC-Б8-2), персистентность. Дока: `docs/dev/vector.md`.
+
+  Закрывает (на уровне индекса) **AC-Б4-2 / AC-Б5-1 / AC-Б8-2**; интеграция в индексатор — Ф1-5.

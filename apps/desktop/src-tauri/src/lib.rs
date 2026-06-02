@@ -27,6 +27,8 @@ pub mod search;
 pub mod state;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
+/// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.
+pub mod vector;
 /// Файловый watcher (debounce + ignore + нормализация по пути).
 pub mod watcher;
 
