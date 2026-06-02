@@ -44,6 +44,7 @@ Tauri 2 · Rust (rusqlite, usearch, git2, reqwest, tokio, tracing, pulldown-cmar
 - `docs/architecture/` — спека (синхронизируй при уточнении; смена ADR — через §0).
 - rustdoc (`///`) / TSDoc на публичных API; `docs/dev/<module>.md` на нетривиальные подсистемы (write-actor, indexer, watcher, broker, RAG).
 - `docs/plugin-api/` синхронно с SDK; `CHANGELOG.md` (Keep a Changelog); `README.md` по процессу.
+- **Отложил/урезал что-то осознанно → запиши в `docs/BACKLOG.md`** (единый реестр, не только в `## Дальше` доки и коммит). Закрыл пункт — вычеркни. Принцип «no silent caps».
 - **Баг-фикс = регресс-тест (красный) → фикс → правка затронутой доки (и неверной доки!) → привязка к `AC-…`.**
 - PR не готов, если код зелёный, а дока не обновлена.
 
