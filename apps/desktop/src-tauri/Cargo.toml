@@ -27,6 +27,8 @@ thiserror = { workspace = true }
 notify-debouncer-full = { workspace = true }
 pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

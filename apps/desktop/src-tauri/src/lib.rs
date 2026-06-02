@@ -5,6 +5,8 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1 ARCHITECTURE). По мере роста (срезы Ф0-2+)
 //! команды разъезжаются по модулю `commands/` (vault / search / graph / …).
 
+/// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
+pub mod ai;
 /// Markdown-чанкер для RAG (§6.1).
 pub mod chunker;
 /// Tauri IPC-команды.

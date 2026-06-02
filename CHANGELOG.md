@@ -161,3 +161,13 @@
   - Тесты: короткий/frontmatter/заголовки/overlap/код-атомарен. Дока: `docs/dev/chunker.md`.
 
   Готовит **AC-Б4-1** (эмбеддинг по чанкам — замкнётся в Ф1-5).
+
+- **Ф1-3 — EmbeddingProvider + HTTP-клиент (ADR-005).**
+  - `ai`: трейт `EmbeddingProvider` (embed_documents/embed_query, dim, model_id); `OpenAiEmbedder`
+    (`/v1/embeddings`, task-префиксы nomic, L2-нормализация, проверка размерности); `MockEmbedder`
+    (тесты без сервера); `LocalConfig` (`.nexus/local.json`: chat/embedding раздельно).
+  - Зависимости: `reqwest` (rustls), `async-trait`. Сервер: nomic-embed-text :8081 (dim 768).
+  - Тесты: l2/мок/конфиг + **живой smoke nomic** (`#[ignore]`) — dim 768, семантический ранкинг ✓.
+    Зафиксирован риск ADR-005 (nomic англоцентричен; мультиязычный bge-m3/e5 — позже, §6.5). Дока: `docs/dev/ai.md`.
+
+  Embedding-провайдер для RAG; chat — Ф1-7.
