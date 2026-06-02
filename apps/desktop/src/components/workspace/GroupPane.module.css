@@ -1,0 +1,102 @@
+.pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--color-border);
+}
+
+.pane:first-child {
+  border-left: none;
+}
+
+.tabbar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-right: 1px solid var(--color-border);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  background: transparent;
+}
+
+.tab[data-active] {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+/* Тонкая акцентная подсветка активной группы. */
+.pane[data-active] .tab[data-active] {
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+
+.tabName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  flex: none;
+}
+
+.close {
+  display: inline-flex;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-sm);
+}
+
+.close:hover {
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.split {
+  display: inline-flex;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+}
+
+.split:hover {
+  color: var(--color-text);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.empty {
+  margin: auto;
+  color: var(--color-text-muted);
+}

@@ -2,15 +2,18 @@ import { commands, type Disposable } from './commands';
 import { isTauri, tauriApi } from './tauri-api';
 import { useUIStore } from '../stores/ui';
 import { useVaultStore } from '../stores/vault';
+import { activeBuffer, useWorkspaceStore } from '../stores/workspace';
 
-/** Открытие vault: нативный диалог в Tauri, мок в браузере. */
+/** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
 export async function openVaultFlow(): Promise<void> {
-  if (!isTauri()) {
+  if (isTauri()) {
+    const dir = await tauriApi.vault.pickDirectory();
+    if (!dir) return;
+    await useVaultStore.getState().openVault(dir);
+  } else {
     await useVaultStore.getState().openVault('');
-    return;
   }
-  const dir = await tauriApi.vault.pickDirectory();
-  if (dir) await useVaultStore.getState().openVault(dir);
+  useWorkspaceStore.getState().reset();
 }
 
 /** Регистрирует команды ядра. Возвращает Disposable для снятия (тесты/HMR). */
@@ -35,9 +38,16 @@ export function registerCoreCommands(): Disposable {
       title: 'Сохранить файл',
       source: 'core',
       run: () => {
-        const { activeFile, saveActiveFile } = useVaultStore.getState();
-        if (activeFile) return saveActiveFile(activeFile.content);
+        const buffer = activeBuffer(useWorkspaceStore.getState());
+        if (buffer) return useWorkspaceStore.getState().saveBuffer(buffer.path);
       },
+    }),
+    commands.register({
+      id: 'view.splitRight',
+      title: 'Разделить вправо',
+      source: 'core',
+      defaultKey: 'mod+\\',
+      run: () => useWorkspaceStore.getState().splitRight(),
     }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };

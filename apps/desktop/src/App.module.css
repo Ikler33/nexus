@@ -59,44 +59,4 @@
   min-height: 0;
 }
 
-.hint {
-  margin: auto;
-  color: var(--color-text-muted);
-}
-
-.editorPane {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-}
-
-.editorScroll {
-  flex: 1;
-  min-height: 0;
-}
-
-.editorHeader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
-  font-size: var(--text-sm);
-}
-
-.editorPath {
-  font-family: var(--font-mono);
-  color: var(--color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dirtyDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  flex: none;
-}
+/* Область редактора (вкладки/сплиты) и подсказки — в EditorArea/GroupPane (Ф0-9). */

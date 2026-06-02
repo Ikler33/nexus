@@ -2,15 +2,11 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from './App';
 import { useVaultStore } from './stores/vault';
+import { useWorkspaceStore } from './stores/workspace';
 
 beforeEach(() => {
-  useVaultStore.setState({
-    info: null,
-    childrenByPath: {},
-    expanded: {},
-    loading: {},
-    selectedPath: null,
-  });
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  useWorkspaceStore.getState().reset();
 });
 
 describe('App (Ф0-3)', () => {

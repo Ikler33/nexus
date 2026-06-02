@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
-import { useVaultStore } from '../../stores/vault';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
 import styles from './Sidebar.module.css';
 
@@ -12,7 +12,7 @@ import styles from './Sidebar.module.css';
 export function Sidebar() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NoteRef[]>([]);
-  const openFile = useVaultStore((s) => s.openFile);
+  const openFile = useWorkspaceStore((s) => s.openFile);
   const q = query.trim();
 
   useEffect(() => {

@@ -1,19 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useVaultStore } from '../../stores/vault';
+import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
 
 beforeEach(() => {
-  useVaultStore.setState({
-    info: null,
-    childrenByPath: {},
-    expanded: {},
-    loading: {},
-    selectedPath: null,
-  });
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  useWorkspaceStore.getState().reset();
 });
 
-describe('FileTree (Ф0-3)', () => {
+describe('FileTree (Ф0-3/Ф0-9)', () => {
   it('рендерит корневые узлы открытого vault', async () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);
@@ -29,13 +25,10 @@ describe('FileTree (Ф0-3)', () => {
     expect(await screen.findByText('Roadmap.md')).toBeInTheDocument();
   });
 
-  it('клик по файлу открывает его в редакторе', async () => {
+  it('клик по файлу открывает его в активной группе (workspace)', async () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);
     fireEvent.click(await screen.findByText('README.md'));
-    await waitFor(() => {
-      expect(useVaultStore.getState().activeFile?.path).toBe('README.md');
-      expect(useVaultStore.getState().selectedPath).toBe('README.md');
-    });
+    await waitFor(() => expect(activePath(useWorkspaceStore.getState())).toBe('README.md'));
   });
 });

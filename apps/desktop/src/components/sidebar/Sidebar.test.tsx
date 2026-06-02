@@ -1,19 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useVaultStore } from '../../stores/vault';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { Sidebar } from './Sidebar';
 
 beforeEach(() => {
-  useVaultStore.setState({
-    info: null,
-    childrenByPath: {},
-    expanded: {},
-    loading: {},
-    selectedPath: null,
-    activeFile: null,
-    dirty: false,
-    notes: [],
-  });
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  useWorkspaceStore.getState().reset();
 });
 
 describe('Sidebar (Ф0-7)', () => {

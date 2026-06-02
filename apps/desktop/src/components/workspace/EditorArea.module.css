@@ -1,0 +1,11 @@
+.groups {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+}
+
+.hint {
+  margin: auto;
+  color: var(--color-text-muted);
+}

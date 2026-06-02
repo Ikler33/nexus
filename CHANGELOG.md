@@ -94,3 +94,15 @@
   - Тесты: реестр (приоритет/combo/dispose) + палитра (открытие/фильтр/Enter/Esc). Дока: `docs/dev/commands.md`.
 
   Закрывает command-registry часть **AC-DOD-Ф0** (база для плагинного registerCommand).
+
+- **Ф0-9 — Workspace: вкладки/сплиты (Б12).**
+  - `useWorkspaceStore`: буферы (один на путь), группы/вкладки, активная группа; openFile/openLink/
+    setActiveTab/setActiveGroup/closeTab(+GC)/splitRight/updateBufferDoc/saveBuffer/reset; селекторы
+    `activeBuffer`/`activePath`. Контекст AI/backlinks — из активной вкладки активной группы.
+  - UI: `EditorArea` (сплиты в ряд) + `GroupPane` (вкладки + split + Editor[key=group] + BacklinksBar[path]).
+  - Рефактор: vault-стор → только дерево/заметки; `BacklinksBar` принимает `path`; команды `file.save`/
+    `view.splitRight`; открытие vault сбрасывает workspace.
+  - Тесты: workspace (dirty при переключении — Б12-2; split+контекст — Б12-1; close/GC/openLink) + правки
+    FileTree/Sidebar/App/BacklinksBar. Дока: `docs/dev/workspace.md`.
+
+  Закрывает **AC-Б12-1**, **AC-Б12-2**.

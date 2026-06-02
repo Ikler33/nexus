@@ -1,27 +1,20 @@
 import { useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { isTauri } from './lib/tauri-api';
-import { registerCoreCommands, openVaultFlow } from './lib/commands-core';
+import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { Editor } from './components/editor/Editor';
-import { BacklinksBar } from './components/editor/BacklinksBar';
+import { EditorArea } from './components/workspace/EditorArea';
 import { CommandPalette } from './components/command/CommandPalette';
 import styles from './App.module.css';
 
 /**
- * Каркас рабочего пространства (Ф0-3/Ф0-5): sidebar с деревом + редактор CodeMirror.
- * Вкладки/сплиты — Ф0-9, backlinks-бар — Ф0-6. Вне Tauri открывается мок-vault.
+ * Оболочка приложения: sidebar (поиск + дерево) + область редактора со вкладками/сплитами
+ * (Б12) + Command Palette. Вне Tauri открывается мок-vault. Глобальные хоткеи — через keymap.
  */
 export function App() {
   const info = useVaultStore((s) => s.info);
-  const activeFile = useVaultStore((s) => s.activeFile);
-  const dirty = useVaultStore((s) => s.dirty);
-  const openVault = useVaultStore((s) => s.openVault);
-  const setActiveContent = useVaultStore((s) => s.setActiveContent);
-  const saveActiveFile = useVaultStore((s) => s.saveActiveFile);
-  const openLink = useVaultStore((s) => s.openLink);
 
   useKeymap();
 
@@ -32,9 +25,9 @@ export function App() {
 
   useEffect(() => {
     if (!isTauri() && !info) {
-      void openVault('');
+      void openVaultFlow();
     }
-  }, [info, openVault]);
+  }, [info]);
 
   return (
     <div className={styles.layout}>
@@ -55,29 +48,7 @@ export function App() {
       </aside>
 
       <main className={styles.main}>
-        {activeFile ? (
-          <div className={styles.editorPane}>
-            <header className={styles.editorHeader}>
-              <span className={styles.editorPath}>{activeFile.path}</span>
-              {dirty && (
-                <span className={styles.dirtyDot} title="Есть несохранённые изменения" aria-label="несохранено" />
-              )}
-            </header>
-            <div className={styles.editorScroll}>
-              <Editor
-                path={activeFile.path}
-                initialDoc={activeFile.content}
-                onChange={setActiveContent}
-                onSave={saveActiveFile}
-                onOpenLink={openLink}
-                getNotes={() => useVaultStore.getState().notes}
-              />
-            </div>
-            <BacklinksBar />
-          </div>
-        ) : (
-          <p className={styles.hint}>Выберите файл в дереве слева</p>
-        )}
+        <EditorArea />
       </main>
 
       <CommandPalette />

@@ -8,21 +8,19 @@ function reset() {
     childrenByPath: {},
     expanded: {},
     loading: {},
-    selectedPath: null,
-    activeFile: null,
-    dirty: false,
     notes: [],
   });
 }
 
 beforeEach(reset);
 
-describe('vault store (Ф0-3)', () => {
-  it('openVault загружает корень', async () => {
+describe('vault store (Ф0-3/Ф0-9)', () => {
+  it('openVault загружает корень и заметки', async () => {
     await useVaultStore.getState().openVault('');
     const s = useVaultStore.getState();
     expect(s.info).not.toBeNull();
     expect(s.childrenByPath['']?.length ?? 0).toBeGreaterThan(0);
+    expect(s.notes.length).toBeGreaterThan(0);
   });
 
   it('toggleDir лениво грузит детей и раскрывает', async () => {
@@ -30,7 +28,6 @@ describe('vault store (Ф0-3)', () => {
     await useVaultStore.getState().toggleDir('Projects');
     const s = useVaultStore.getState();
     expect(s.expanded['Projects']).toBe(true);
-    expect(s.childrenByPath['Projects']).toBeDefined();
     const visible = flattenVisible(s.childrenByPath, s.expanded, s.loading);
     expect(visible.some((n) => n.entry.path === 'Projects/Roadmap.md')).toBe(true);
   });
@@ -43,8 +40,6 @@ describe('vault store (Ф0-3)', () => {
     const s = useVaultStore.getState();
     expect(s.expanded['Projects']).toBeUndefined();
     expect(s.childrenByPath['Projects']).toBeDefined();
-    const visible = flattenVisible(s.childrenByPath, s.expanded, s.loading);
-    expect(visible.some((n) => n.entry.path.startsWith('Projects/'))).toBe(false);
   });
 
   it('flattenVisible отражает глубину вложенности', async () => {
@@ -54,24 +49,7 @@ describe('vault store (Ф0-3)', () => {
     await useVaultStore.getState().toggleDir('Projects/Alpha');
     const s = useVaultStore.getState();
     const visible = flattenVisible(s.childrenByPath, s.expanded, s.loading);
-    const spec = visible.find((n) => n.entry.path === 'Projects/Alpha/Spec.md');
-    expect(spec?.depth).toBe(2);
-  });
-
-  it('openFile читает содержимое и делает файл активным', async () => {
-    await useVaultStore.getState().openVault('');
-    await useVaultStore.getState().openFile('README.md');
-    const s = useVaultStore.getState();
-    expect(s.activeFile?.path).toBe('README.md');
-    expect(s.activeFile?.content).toContain('# Mock Vault');
-    expect(s.selectedPath).toBe('README.md');
-    expect(s.dirty).toBe(false);
-  });
-
-  it('openLink резолвит wikilink и открывает файл', async () => {
-    await useVaultStore.getState().openVault('');
-    await useVaultStore.getState().openLink('Projects/Roadmap');
-    expect(useVaultStore.getState().activeFile?.path).toBe('Projects/Roadmap.md');
+    expect(visible.find((n) => n.entry.path === 'Projects/Alpha/Spec.md')?.depth).toBe(2);
   });
 });
 

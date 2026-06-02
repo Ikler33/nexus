@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import { tauriApi, type BacklinkEntry } from '../../lib/tauri-api';
-import { useVaultStore } from '../../stores/vault';
+import { useWorkspaceStore } from '../../stores/workspace';
 import styles from './BacklinksBar.module.css';
 
 /**
- * Backlinks-бар (DESIGN §3 editor-bottom): входящие ссылки активного файла из SQLite
- * (ADR-004). Состояния loading / empty / список; клик ведёт к источнику.
+ * Backlinks-бар (DESIGN §3 editor-bottom): входящие ссылки файла `path` из SQLite (ADR-004).
+ * Состояния loading / empty / список; клик ведёт к источнику. `path` — активная вкладка
+ * своей группы (Б12).
  */
-export function BacklinksBar() {
-  const activeFile = useVaultStore((s) => s.activeFile);
-  const openFile = useVaultStore((s) => s.openFile);
-  const path = activeFile?.path ?? null;
+export function BacklinksBar({ path }: { path: string }) {
+  const openFile = useWorkspaceStore((s) => s.openFile);
 
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<BacklinkEntry[]>([]);

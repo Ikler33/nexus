@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronRight, File as FileIcon, Folder } from 'lucide-react';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
+import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import styles from './FileTree.module.css';
 
 const ROW_HEIGHT = 28;
@@ -16,9 +17,9 @@ export function FileTree() {
   const childrenByPath = useVaultStore((s) => s.childrenByPath);
   const expanded = useVaultStore((s) => s.expanded);
   const loading = useVaultStore((s) => s.loading);
-  const selectedPath = useVaultStore((s) => s.selectedPath);
+  const selectedPath = useWorkspaceStore(activePath);
   const toggleDir = useVaultStore((s) => s.toggleDir);
-  const openFile = useVaultStore((s) => s.openFile);
+  const openFile = useWorkspaceStore((s) => s.openFile);
 
   const nodes = useMemo(
     () => flattenVisible(childrenByPath, expanded, loading),
