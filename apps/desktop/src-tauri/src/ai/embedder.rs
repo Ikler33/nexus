@@ -27,6 +27,19 @@ pub fn l2_normalize(v: &mut [f32]) {
     }
 }
 
+/// Task-префиксы по идентификатору модели (nomic/e5 требуют `search_query:`/`search_document:`;
+/// для bge-m3 и прочих — пусто). Эвристика по подстроке имени — настраиваемо позже через конфиг.
+pub fn default_prefixes(model: &str) -> Option<(String, String)> {
+    let m = model.to_lowercase();
+    if m.contains("nomic") {
+        Some(("search_query: ".into(), "search_document: ".into()))
+    } else if m.contains("e5") {
+        Some(("query: ".into(), "passage: ".into()))
+    } else {
+        None
+    }
+}
+
 /// Эмбеддер через OpenAI-совместимый `POST {base}/v1/embeddings` (llama.cpp-server).
 /// Применяет task-префиксы (nomic: `search_query:` / `search_document:`) и L2-нормализацию.
 pub struct OpenAiEmbedder {
@@ -69,6 +82,36 @@ impl OpenAiEmbedder {
             query_prefix,
             document_prefix,
         })
+    }
+
+    /// Узнаёт размерность модели одним пробным эмбеддингом (когда `embedding.dim` не задан
+    /// в `local.json`). Не применяет проверку/префиксы — только длину вектора.
+    pub async fn probe_dim(base_url: &str, model: &str) -> AiResult<usize> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AiError::Http(e.to_string()))?;
+        let endpoint = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({ "model": model, "input": ["dim probe"] });
+        let resp = client
+            .post(&endpoint)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AiError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(AiError::Http(format!("статус {}", resp.status())));
+        }
+        let parsed: EmbeddingsResponse = resp
+            .json()
+            .await
+            .map_err(|e| AiError::BadResponse(e.to_string()))?;
+        parsed
+            .data
+            .first()
+            .map(|i| i.embedding.len())
+            .filter(|&n| n > 0)
+            .ok_or_else(|| AiError::BadResponse("пустой ответ при пробе размерности".into()))
     }
 
     async fn embed_raw(&self, inputs: Vec<String>) -> AiResult<Vec<Vec<f32>>> {

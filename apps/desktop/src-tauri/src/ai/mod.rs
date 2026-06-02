@@ -5,8 +5,9 @@ mod config;
 mod embedder;
 
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
-pub use embedder::{l2_normalize, EmbeddingProvider, OpenAiEmbedder};
-// MockEmbedder (тест-мок) реэкспортируется из `embedder` для кросс-модульных тестов начиная с Ф1-4.
+#[cfg(test)]
+pub(crate) use embedder::MockEmbedder;
+pub use embedder::{default_prefixes, l2_normalize, EmbeddingProvider, OpenAiEmbedder};
 
 use thiserror::Error;
 

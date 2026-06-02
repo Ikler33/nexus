@@ -180,3 +180,21 @@
     (AC-Б8-2), персистентность. Дока: `docs/dev/vector.md`.
 
   Закрывает (на уровне индекса) **AC-Б4-2 / AC-Б5-1 / AC-Б8-2**; интеграция в индексатор — Ф1-5.
+
+- **Ф1-5 — Индексация с эмбеддингами (сборка RAG-индекса).**
+  - `indexer`: на каждый `.md` (при включённом RAG) чанкинг → эмбеддинг батчами под семафором →
+    в ОДНОЙ write-транзакции с file/links/tags полная замена `chunks` (+FTS5 триггерами) → после
+    коммита usearch `remove` старых + `upsert(chunk_id, vec)` новых (1:1, без осиротевших векторов).
+  - `Indexer::with_rag` (эмбеддер + `VectorIndex` + флаг `force`) vs `Indexer::new` (без AI);
+    `spawn(indexer)` теперь принимает готовый индексатор. `remove_file` чистит chunks+FTS+векторы.
+  - **Переэмбеддизация при смене модели (§6.5):** `embedding.model`/`dim` в `settings`;
+    `reconcile_embedding_model` в `open_vault` при расхождении чистит chunks+файл векторов и поднимает
+    `force` → полный перескан игнорирует mtime-шорткат. `dim` из конфига или `probe_dim` (не хардкод).
+  - `open_vault` строит RAG из `.nexus/local.json`; нет конфига/сервер недоступен → vault без AI
+    (local-first). `VaultContext.vectors` делится с поиском (Ф1-6). Прогресс/чекпойнт usearch в скане.
+  - Добавлено: `DbError::External`, `OpenAiEmbedder::probe_dim`, `ai::default_prefixes` (nomic/e5).
+  - Тесты (`MockEmbedder`): запись chunks+FTS+векторов, реиндексация без дублей, `remove`-чистка,
+    `force`-перескан; реконсиляция модели. **Живой** end-to-end на nomic :8081 — семантический
+    поиск находит нужный чанк. Дока: `docs/dev/indexer.md`.
+
+  Закрывает **AC-Б4-1 / AC-Б8-1**; на уровне индексации — **AC-Б4-2 / AC-Б5-2 / AC-Б8-2 / AC-PERF-5**.
