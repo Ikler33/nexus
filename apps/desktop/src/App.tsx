@@ -1,10 +1,13 @@
 import { useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
-import { isTauri, tauriApi } from './lib/tauri-api';
+import { isTauri } from './lib/tauri-api';
+import { registerCoreCommands, openVaultFlow } from './lib/commands-core';
+import { useKeymap } from './hooks/useKeymap';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { Editor } from './components/editor/Editor';
 import { BacklinksBar } from './components/editor/BacklinksBar';
+import { CommandPalette } from './components/command/CommandPalette';
 import styles from './App.module.css';
 
 /**
@@ -20,20 +23,18 @@ export function App() {
   const saveActiveFile = useVaultStore((s) => s.saveActiveFile);
   const openLink = useVaultStore((s) => s.openLink);
 
+  useKeymap();
+
+  useEffect(() => {
+    const disposable = registerCoreCommands();
+    return () => disposable.dispose();
+  }, []);
+
   useEffect(() => {
     if (!isTauri() && !info) {
       void openVault('');
     }
   }, [info, openVault]);
-
-  const handleOpen = async () => {
-    if (!isTauri()) {
-      await openVault('');
-      return;
-    }
-    const dir = await tauriApi.vault.pickDirectory();
-    if (dir) await openVault(dir);
-  };
 
   return (
     <div className={styles.layout}>
@@ -42,7 +43,11 @@ export function App() {
           <span className={styles.vaultName} title={info?.root}>
             {info?.name ?? 'Nexus'}
           </span>
-          <button className={styles.openBtn} onClick={handleOpen} title="Открыть vault…">
+          <button
+            className={styles.openBtn}
+            onClick={() => void openVaultFlow()}
+            title="Открыть vault…"
+          >
             <FolderOpen size={16} aria-hidden />
           </button>
         </header>
@@ -74,6 +79,8 @@ export function App() {
           <p className={styles.hint}>Выберите файл в дереве слева</p>
         )}
       </main>
+
+      <CommandPalette />
     </div>
   );
 }

@@ -85,3 +85,12 @@
   - Тесты: Rust (path/title/tag/пусто), фронт (дерево↔результаты/тег/пусто/очистка). Дока: `docs/dev/search.md`.
 
   Поиск части **AC-DOD-Ф0** (FTS-допущение зафиксировано).
+
+- **Ф0-8 — Command Registry + Palette + keymap.**
+  - Реестр `commands` (§4.6): register/run/dispose/subscribe; `Command{id,title,source,defaultKey,run}`;
+    `resolve` с приоритетом пользователь>плагин>ядро; `normalizeCombo`/`eventToCombo`/`formatCombo`.
+  - `CommandPalette` (Cmd/Ctrl+P): фильтр, ↑/↓/Enter/Esc, клик; `useKeymap` (window keydown → команда).
+  - Команды ядра: `palette.open`/`vault.open`/`file.save`; `useUIStore`.
+  - Тесты: реестр (приоритет/combo/dispose) + палитра (открытие/фильтр/Enter/Esc). Дока: `docs/dev/commands.md`.
+
+  Закрывает command-registry часть **AC-DOD-Ф0** (база для плагинного registerCommand).
