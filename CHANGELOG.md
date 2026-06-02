@@ -135,3 +135,11 @@
   - Регресс-тест `csp_and_capabilities_are_hardened`. Дока: `docs/dev/security.md`.
 
   Закрывает каркасную часть **AC-SEC-5** (broker/iframe-изоляция — Ф2; рантайм-CSP — на упаковке).
+
+- **Ф0-13 — Plugin loader (минимум).**
+  - `plugin`: `ApiVersion`/`parse`, `PluginManifest`, `check_compatibility` (С-13: `min_api_version` —
+    минимум ядра; `^1.0` отвергается), `load_manifest`, `scan_plugins` (`.nexus/plugins/*`);
+    команда `list_plugins`. Без broker/исполнения (Ф2).
+  - Тесты: совместимость/`TooNew`/`TooOld`/каретка-`BadVersion`/битый json/scan. Дока: `docs/dev/plugins.md`.
+
+  Закрывает каркас плагинов части **AC-DOD-Ф0** (С-13).

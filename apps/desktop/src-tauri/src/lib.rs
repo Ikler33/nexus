@@ -15,6 +15,8 @@ pub mod graph;
 pub mod indexer;
 /// Markdown-парсер (frontmatter, ссылки, теги).
 pub mod parser;
+/// Plugin loader (минимум): manifest + совместимость версии API (без broker — Ф2).
+pub mod plugin;
 /// Поиск по метаданным (title/path/tags) — Ф0.
 pub mod search;
 /// Глобальное состояние (managed state).
@@ -56,6 +58,7 @@ pub fn run() {
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::search::search_vault,
+            commands::plugin::list_plugins,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");
