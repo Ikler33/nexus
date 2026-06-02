@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockVault from './mock/vault';
 
@@ -34,6 +34,27 @@ export interface NoteRef {
   title: string | null;
 }
 
+/** Результат гибридного поиска по телу (зеркалит Rust `search::SearchHit`). */
+export interface SearchHit {
+  chunkId: number;
+  path: string;
+  title: string | null;
+  headingPath: string | null;
+  snippet: string;
+  /** Слитый RRF-score (вектор + FTS); шкала относительная, для сортировки. */
+  score: number;
+}
+
+/** Предложенная связь (зеркалит Rust `suggest::LinkSuggestion`). */
+export interface LinkSuggestion {
+  path: string;
+  title: string | null;
+  /** max-sim score (косинус, относительный — для сортировки/порога). */
+  score: number;
+  /** «Причина» — сниппет лучшего совпавшего чанка целевой заметки. */
+  reason: string;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -56,6 +77,16 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
+
+/**
+ * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`).
+ * Порядок: `sources` → много `token` → `done` (или `error`).
+ */
+export type ChatStreamEvent =
+  | { type: 'sources'; sources: SearchHit[] }
+  | { type: 'token'; text: string }
+  | { type: 'done'; full: string }
+  | { type: 'error'; message: string };
 
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
@@ -114,9 +145,60 @@ export const tauriApi = {
   },
 
   search: {
-    /** Поиск по title/path/tags (Ф0; полнотекст по телу — Ф1). */
+    /** Поиск по title/path/tags (метаданные, Ф0). */
     searchVault: (query: string) =>
       isTauri() ? invoke<NoteRef[]>('search_vault', { query }) : mockVault.searchVault(query),
+
+    /**
+     * Гибридный поиск по ТЕЛУ (вектор + FTS5 (+граф) → RRF, §6.2). `limit` по умолчанию 10.
+     * `folder`/`tag` — префильтр по метаданным ДО KNN; `center` — открытый файл (граф-ранг).
+     */
+    searchContent: (
+      query: string,
+      opts?: { limit?: number; folder?: string; tag?: string; center?: string },
+    ) =>
+      isTauri()
+        ? invoke<SearchHit[]>('search_content', {
+            query,
+            limit: opts?.limit,
+            folder: opts?.folder,
+            tag: opts?.tag,
+            center: opts?.center,
+          })
+        : mockVault.searchContent(query, opts),
+  },
+
+  suggest: {
+    /** Предложения связей для файла (режим 1 max-sim, Ф1-9). Вне Tauri — мок. */
+    forFile: (path: string, limit?: number) =>
+      isTauri()
+        ? invoke<LinkSuggestion[]>('get_link_suggestions', { path, limit })
+        : mockVault.getLinkSuggestions(path, limit),
+  },
+
+  chat: {
+    /**
+     * RAG-чат со стримингом (Ф1-7): события приходят в `onEvent` (`sources` → `token`… → `done`).
+     * Возвращает функцию отмены текущего стрима. Вне Tauri — мок.
+     */
+    streamRag: (
+      question: string,
+      onEvent: (event: ChatStreamEvent) => void,
+      opts?: { k?: number; center?: string },
+    ): (() => void) => {
+      if (!isTauri()) return mockVault.streamChat(question, onEvent, opts?.k);
+      const channel = new Channel<ChatStreamEvent>();
+      channel.onmessage = onEvent;
+      invoke<void>('chat_rag', {
+        question,
+        k: opts?.k,
+        center: opts?.center,
+        channel,
+      }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
+      return () => {
+        void invoke<void>('chat_cancel');
+      };
+    },
   },
 };
 

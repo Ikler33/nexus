@@ -143,3 +143,151 @@
   - Тесты: совместимость/`TooNew`/`TooOld`/каретка-`BadVersion`/битый json/scan. Дока: `docs/dev/plugins.md`.
 
   Закрывает каркас плагинов части **AC-DOD-Ф0** (С-13).
+
+### Added — Фаза 1 (AI Core)
+
+- **Ф1-1 — Схема v2: chunks + FTS5 + триггеры.**
+  - Миграция `002_chunks_fts.sql`: таблица `chunks` (+`idx_chunks_file`) + `fts_chunks` (FTS5
+    external-content поверх `chunks.content`) + триггеры синхронизации `chunks_ai/ad/au` (§5).
+  - Тест `fts_chunks_synced_via_triggers` (AC-Б8-1/8-2): текст находится сразу после вставки,
+    исчезает после удаления чанка. Дока: `docs/dev/db.md` (schema v2).
+
+  Закрывает **AC-Б8-1/8-2** (FTS-синхронизация), готовит почву под чанкер/эмбеддинги.
+
+- **Ф1-2 — Чанкер (markdown-aware).**
+  - `chunk_document`: frontmatter вырезан; разбиение по ATX-заголовкам (heading_path); sliding window
+    с overlap ВНУТРИ окна (по словам), fenced-code атомарен; `char_start/end` — в исходном файле;
+    `token_count` по тексту чанка. `Tokenizer` (placeholder `WordTokenizer`; реальный — Ф1-3).
+  - Тесты: короткий/frontmatter/заголовки/overlap/код-атомарен. Дока: `docs/dev/chunker.md`.
+
+  Готовит **AC-Б4-1** (эмбеддинг по чанкам — замкнётся в Ф1-5).
+
+- **Ф1-3 — EmbeddingProvider + HTTP-клиент (ADR-005).**
+  - `ai`: трейт `EmbeddingProvider` (embed_documents/embed_query, dim, model_id); `OpenAiEmbedder`
+    (`/v1/embeddings`, task-префиксы nomic, L2-нормализация, проверка размерности); `MockEmbedder`
+    (тесты без сервера); `LocalConfig` (`.nexus/local.json`: chat/embedding раздельно).
+  - Зависимости: `reqwest` (rustls), `async-trait`. Сервер: nomic-embed-text :8081 (dim 768).
+  - Тесты: l2/мок/конфиг + **живой smoke nomic** (`#[ignore]`) — dim 768, семантический ранкинг ✓.
+    Зафиксирован риск ADR-005 (nomic англоцентричен; мультиязычный bge-m3/e5 — позже, §6.5). Дока: `docs/dev/ai.md`.
+
+  Embedding-провайдер для RAG; chat — Ф1-7.
+
+- **Ф1-4 — usearch ANN-индекс.**
+  - `vector::VectorIndex` (usearch HNSW, Cos, sibling-файл `.nexus/vectors.usearch`): `open(path,dim)`
+    (dim из эмбеддера), `upsert` (ключ=chunk_id, замена без дублей), `remove`, `search` → `VectorHit`,
+    `save`/`len`/`contains`. Зависимость `usearch`.
+  - Тесты: upsert+search+no-dup (AC-Б4-2), отказ при иной размерности (AC-Б5-1), remove чистит выдачу
+    (AC-Б8-2), персистентность. Дока: `docs/dev/vector.md`.
+
+  Закрывает (на уровне индекса) **AC-Б4-2 / AC-Б5-1 / AC-Б8-2**; интеграция в индексатор — Ф1-5.
+
+- **Ф1-5 — Индексация с эмбеддингами (сборка RAG-индекса).**
+  - `indexer`: на каждый `.md` (при включённом RAG) чанкинг → эмбеддинг батчами под семафором →
+    в ОДНОЙ write-транзакции с file/links/tags полная замена `chunks` (+FTS5 триггерами) → после
+    коммита usearch `remove` старых + `upsert(chunk_id, vec)` новых (1:1, без осиротевших векторов).
+  - `Indexer::with_rag` (эмбеддер + `VectorIndex` + флаг `force`) vs `Indexer::new` (без AI);
+    `spawn(indexer)` теперь принимает готовый индексатор. `remove_file` чистит chunks+FTS+векторы.
+  - **Переэмбеддизация при смене модели (§6.5):** `embedding.model`/`dim` в `settings`;
+    `reconcile_embedding_model` в `open_vault` при расхождении чистит chunks+файл векторов и поднимает
+    `force` → полный перескан игнорирует mtime-шорткат. `dim` из конфига или `probe_dim` (не хардкод).
+  - `open_vault` строит RAG из `.nexus/local.json`; нет конфига/сервер недоступен → vault без AI
+    (local-first). `VaultContext.vectors` делится с поиском (Ф1-6). Прогресс/чекпойнт usearch в скане.
+  - Добавлено: `DbError::External`, `OpenAiEmbedder::probe_dim`, `ai::default_prefixes` (nomic/e5).
+  - Тесты (`MockEmbedder`): запись chunks+FTS+векторов, реиндексация без дублей, `remove`-чистка,
+    `force`-перескан; реконсиляция модели. **Живой** end-to-end на nomic :8081 — семантический
+    поиск находит нужный чанк. Дока: `docs/dev/indexer.md`.
+
+  Закрывает **AC-Б4-1 / AC-Б8-1**; на уровне индексации — **AC-Б4-2 / AC-Б5-2 / AC-Б8-2 / AC-PERF-5**.
+
+- **Ф1-6 — Hybrid search + RRF (§6.2).**
+  - `search::hybrid_search`: вектор (usearch, семантика) **+** FTS5/BM25 (`fts_chunks`, лексика) → две
+    независимые выдачи кандидатов (по 50) → **Reciprocal Rank Fusion** (`rrf_fuse`, k=60) → топ-`limit`
+    с резолвом метаданных и сниппетом. Сливаем РАНГИ, не «сырые» score (cos vs BM25 — разные шкалы).
+  - `fts_query`: санитизация ввода в MATCH (токены в кавычках через OR, юникод/кириллица; нет инъекции
+    FTS-синтаксиса). Изящная деградация: нет эмбеддера → только FTS; пусто/без совпадений → пусто.
+  - Команда `search_content(query, limit?)`; `VaultContext.embedder` (эмбеддинг запроса вне лока пула).
+    `SearchHit` (camelCase). Контракт фронта `tauriApi.search.searchContent` + мок `mock/vault.ts`.
+  - `rrf_fuse` принимает N списков → граф как **3-й ранг** (§6.2, REVIEW С-4: БЕЗ аддитивного `+0.2`)
+    добавится третьим списком там, где есть центр-файл (чат/suggest, Ф1-7+).
+  - Тесты: `rrf_fuse`, `fts_query`, FTS-only, сортировка+резолв, пустые случаи; **живой** на nomic :8081
+    (запрос без лексических пересечений → семантический топ из вектора). Фронт: тест мока. Дока: `docs/dev/search.md`.
+
+  Закрывает **AC-Б6-1** на уровне механизма (семантика через usearch HNSW, не линейный скан; перф на
+  500k — AC-PERF-3 позже). НЕ закрывает **AC-Б6-2** (префильтр метаданных ДО KNN) — follow-up вместе с
+  граф-рангом, dedup overlap-чанков и реранкером (jina :8082).
+
+- **Ф1-7 — Chat-провайдер + стриминг (ADR-005, §4.1/§4.3).**
+  - `ai::ChatProvider` (`stream_chat` с колбэком токенов + флагом отмены) и `OpenAiChatProvider`
+    (`/v1/chat/completions`, `stream:true`, SSE через `Response::chunk()` — без новых зависимостей;
+    парсер `parse_sse_delta`, `[DONE]`). `build_rag_messages` (system: только по контексту, цитаты [n],
+    язык вопроса; пронумерованный контекст). `ChatMessage`.
+  - Команда `chat_rag(channel, question, k?)`: поток `ChatStreamEvent` в Tauri `Channel` (§4.1) —
+    `Sources` (гибрид-поиск Ф1-6) → `Token`… → `Done`/`Error`. Контекст = полное содержимое топ-k
+    чанков (`search::fetch_chunk_contexts`). Лок vault снят до сетевых вызовов. Отмена — `chat_cancel`
+    + `AppState::begin_chat` (один активный чат, новый стрим отменяет прежний).
+  - `VaultContext.chat` (`build_chat` из `local.json → ai.chat`). Фронт: `ChatStreamEvent`,
+    `tauriApi.chat.streamRag → cancelFn`, мок `streamChat`.
+  - Тесты: `parse_sse_delta`, `build_rag_messages`; **живой** стрим Qwen :8080 (токены, «Париж»);
+    фронт — мок streamChat (порядок событий, отмена). Дока: `docs/dev/chat.md`.
+
+  Закрывает **AC-Б10** (стриминг через Channel + финализация в `Done` + отмена). UI чата — Ф1-8.
+
+- **Ф1-6 доработка — префильтр (AC-Б6-2) + граф-ранг + dedup overlap (§6.2).**
+  - **AC-Б6-2 (префильтр ДО KNN):** `SearchFilter { folder, tag }` → `allowed_chunk_ids`; вектор-ветвь
+    через usearch `filtered_search` (фильтр ВНУТРИ обхода HNSW — `VectorIndex::search_filtered`, не
+    пост-фильтр), FTS-ветвь через `JOIN files`, граф-ветвь — пересечением. Закрывает AC-Б6-2.
+  - **Граф — 3-й ранг RRF (§6.2, REVIEW С-4):** `center` (открытый файл) → BFS по `links` (`GRAPH_HOPS=2`)
+    → чанки соседей по (хоп, `chunk_index`) третьим списком в `rrf_fuse` — **в шкале RRF, БЕЗ `+0.2`**.
+  - **Dedup overlap:** пере-выбор `limit×OVERFETCH` → схлоп соседних чанков одного файла (|Δindex|≤1).
+  - `SearchOptions`; `search_content(query, limit?, folder?, tag?, center?)`; `chat_rag` передаёт `center`.
+    Фронт: `searchContent(query, {limit,folder,tag,center})`, `streamRag(.., {center})`, мок учитывает `folder`.
+  - Тесты: префильтр по папке, граф-ранг (изолированно), dedup overlap (+ живые зелёные). 63 Rust + 4 живых.
+
+  Закрывает **AC-Б6-2**; граф-ранг — пункт DoD-Ф1 «hybrid+RRF без +0.2». Остаётся (осознанно): реранкер
+  (опц., ADR-005, под eval-гейтом AC-EVAL-3 после Ф1-10), фильтр по дате, калибровка весов на eval.
+
+- **Ф1-8 — Чат-UI (RAG, DESIGN §«AI Chat»).**
+  - `stores/chat.ts` (`useChatStore`): сессия-лента `ChatMessage[]`, `send`/`stop`/`clear`; стрим через
+    `tauriApi.chat.streamRag` (`sources`→`token`…→`done`/`error`), один стрим за раз, отмена.
+  - `components/chat/ChatPanel.tsx` (+CSS-модуль): правая панель — пустое состояние, лента user/assistant,
+    каретка стрима, **Стоп**/**Отправить** (Enter/Shift+Enter), кликабельные источники → `openFile`,
+    бейдж «локально». Контекст retrieval = открытый файл (`activePath` → `center`, граф-ранг).
+  - Интеграция: `ui.chatOpen` + команда `view.chat` (`mod+j`) + кнопка в шапке + 3-я колонка layout;
+    i18n namespace `chat` (RU/EN). Удалены дубли доков (отдельный коммит).
+  - Тесты: стор (стрим→ответ+источники, stop/clear/пустой ввод) и панель (пустое состояние, рендер
+    ответа + клик источника → `openFile`, Enter-отправка, disabled). Фронт **57 тестов**.
+    **Проверено в превью**: вопрос → стрим + источники → клик открывает файл. Дока: `docs/dev/chat.md`.
+
+  Закрывает **AC-DOD-Ф1** (видимый поток «вопрос → ответ с источниками»). Виртуализация ленты,
+  индикатор облака, персист сессий — в `docs/BACKLOG.md`.
+
+- **Ф1-9 — Предложения связей (режим 1, max-sim).**
+  - `suggest::get_link_suggestions`: на лету из готовых usearch-векторов (без embedder-сервера) — соседи
+    каждого чанка файла → агрегация по целевому файлу по МАКСИМУМУ similarity → исключение уже связанных
+    и самого файла → порог `MIN_SCORE` → топ-`limit`. `VectorIndex::get_vector`. `LinkSuggestion`.
+    Команда `get_link_suggestions(path, limit?)`. Режим 1 — тихий (REVIEW С-8: на save LLM не дёргаем).
+  - Фронт: `AiPanel` с вкладками **Чат**/**Связи** (рефактор правой панели; `ChatView`+`SuggestView`),
+    `stores/suggest` (load/«пересчитать», dismiss-сессия, accept → дописывает `[[wikilink]]` в буфер),
+    карточки score%/причина/Добавить/Скрыть. Команда `view.suggest`; i18n; `tauriApi.suggest.forFile`+мок.
+  - **Фикс Ф0-5:** `Editor` теперь синкает внешнее изменение того же файла (accept/watcher), не только
+    смену файла — `externalSync`, без ложного dirty; + регресс-тест.
+  - Тесты: suggest (max-sim / исключение связанных / пусто) + **живой** nomic (топ — близкая заметка);
+    стор+`SuggestView`+`Editor`-регресс. Фронт **64 теста**, Rust **+4** (incl. живой). Дока `docs/dev/suggest.md`.
+
+  Закрывает Ф1-9 (suggest режим 1, max-sim — пункт AC-DOD-Ф1). Режим 2 (LLM), кэш `link_suggestions`,
+  персист dismiss, калибровка порога — в `docs/BACKLOG.md`.
+
+- **Ф1-10 — Eval-харнесс качества RAG (§6.6, AC-EVAL-1..6).**
+  - `eval/golden.json` — корпус (RU/EN) + кейсы `query→файлы`, включая **кросс-язычные** (AC-EVAL-6);
+    `eval/baseline.json` — пороги + условия (модель/сервер/k/набор, AC-EVAL-4).
+  - `eval::{recall_at_k, reciprocal_rank, ndcg_at_k}` (чистые) + `run_eval` (через `hybrid_search`,
+    файловая релевантность) + `EvalReport`/`CaseResult` + `index_corpus` + `load_golden/baseline`.
+  - Раннер-гейт: `#[ignore]`-тест `live_eval_meets_baseline` — печатает отчёт и падает при метриках ниже
+    baseline (**AC-EVAL-3**). Запуск: `cargo test live_eval_meets_baseline -- --ignored --nocapture`.
+  - **Фактический baseline** (nomic @ :8081, k=8, 10 кейсов): recall@8 = nDCG@8 = MRR = **0.800**; 8/10
+    идеальны, **2 промаха — кросс-язычные** → количественно подтверждён риск ADR-005 (AC-EVAL-6 ждёт
+    мультиязычный эмбеддер). Тесты: математика метрик + парс + e2e на mock + живой ≥ baseline. Дока `docs/dev/eval.md`.
+
+  Закрывает **AC-EVAL-1..5** (golden, метрики, baseline-гейт, условия в отчёте; suggest-порог per-model).
+  **AC-EVAL-6** измерен и зафиксирован как недостигнутый на nomic (нужен мультиязычный эмбеддер — BACKLOG).
+  **🏁 Фаза 1 (AI Core) завершена** — RAG end-to-end + видимый UI + suggest + измеримое качество.

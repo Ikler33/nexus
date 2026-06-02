@@ -1,0 +1,35 @@
+{
+  "description": "Golden-набор RAG-эвала Nexus (AC-EVAL-1). Корпус разнотемных заметок (RU/EN) + кейсы вопрос→ожидаемые файлы, включая кросс-язычные (AC-EVAL-6). Калибруется/расширяется.",
+  "corpus": [
+    { "path": "cats.md", "body": "# Кошки\n\nДомашние кошки много спят днём, любят тепло и охотятся на мышей. Мурлыканье успокаивает." },
+    { "path": "dogs.md", "body": "# Собаки\n\nСобаки — социальные животные, любят прогулки, апортируют мяч и хорошо поддаются дрессировке." },
+    { "path": "sourdough.md", "body": "# Sourdough\n\nBaking bread with a sourdough starter relies on wild yeast fermentation; feed the starter flour and water before mixing the dough." },
+    { "path": "espresso.md", "body": "# Эспрессо\n\nЭспрессо готовят, пропуская горячую воду под давлением через молотый кофе; важны помол и температура." },
+    { "path": "rockets.md", "body": "# Rockets\n\nReaching orbit requires accelerating sideways fast enough that the spacecraft keeps missing the Earth; multistage rockets shed mass as fuel burns." },
+    { "path": "quarks.md", "body": "# Кварки\n\nКварки удерживаются глюонами через сильное взаимодействие; квантовая хромодинамика описывает их связывание в адроны." },
+    { "path": "budget.md", "body": "# Бюджет\n\nЛичный бюджет — это планирование доходов и расходов, выделение части денег на накопления и резервный фонд." },
+    { "path": "git.md", "body": "# Git\n\nGit is a version control system; branches let you work in parallel, and merges combine histories back together." },
+    { "path": "photosynthesis.md", "body": "# Photosynthesis\n\nPlants convert sunlight, water and carbon dioxide into glucose and oxygen inside chloroplasts; light energy drives the reaction." },
+    { "path": "gardening.md", "body": "# Огород\n\nВыращивание помидоров на грядке требует солнечного места, регулярного полива и подвязки кустов к опоре." },
+    { "path": "yoga.md", "body": "# Йога\n\nЙога сочетает растяжку, дыхательные практики и удержание поз для гибкости и расслабления." },
+    { "path": "insomnia.md", "body": "# Сон\n\nБессонница ухудшается от экрана перед сном и кофеина; помогает режим, темнота и прохлада в спальне." },
+    { "path": "rust-lang.md", "body": "# Rust\n\nThe Rust language enforces memory safety at compile time; the borrow checker tracks ownership and lifetimes without a garbage collector." },
+    { "path": "sqlite.md", "body": "# SQLite\n\nSQLite is an embedded relational database stored in a single file; it supports transactions and full-text search." },
+    { "path": "mountains.md", "body": "# Горы\n\nГорные походы требуют выносливости и снаряжения; на высоте холодает и воздух разрежён." },
+    { "path": "ocean.md", "body": "# Ocean\n\nThe deep ocean hosts strange bioluminescent creatures; currents move heat and nutrients around the planet." },
+    { "path": "jazz.md", "body": "# Джаз\n\nДжаз вырос из блюза и регтайма; импровизация и свинговый ритм — его сердце." },
+    { "path": "taxes.md", "body": "# Налоги\n\nНалоги удерживают с дохода; важно вовремя подавать декларацию и учитывать вычеты." }
+  ],
+  "cases": [
+    { "query": "почему моя кошка так много спит днём", "relevant": ["cats.md"], "note": "RU→RU" },
+    { "query": "how to bake bread using a starter culture", "relevant": ["sourdough.md"], "note": "EN→EN" },
+    { "query": "что такое кварки и сильное взаимодействие", "relevant": ["quarks.md"], "note": "RU→RU" },
+    { "query": "planning personal income, spending and savings", "relevant": ["budget.md"], "note": "EN→RU кросс-язычный (AC-EVAL-6)" },
+    { "query": "how do plants turn sunlight into energy", "relevant": ["photosynthesis.md"], "note": "EN→EN" },
+    { "query": "как растения превращают солнечный свет в энергию", "relevant": ["photosynthesis.md"], "note": "RU→EN кросс-язычный (AC-EVAL-6)" },
+    { "query": "version control branches and merging", "relevant": ["git.md"], "note": "EN→EN" },
+    { "query": "выращивание помидоров на грядке", "relevant": ["gardening.md"], "note": "RU→RU" },
+    { "query": "ownership and the borrow checker in a systems language", "relevant": ["rust-lang.md"], "note": "EN→EN" },
+    { "query": "что помогает уснуть при бессоннице", "relevant": ["insomnia.md"], "note": "RU→RU" }
+  ]
+}

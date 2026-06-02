@@ -5,10 +5,16 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1 ARCHITECTURE). По мере роста (срезы Ф0-2+)
 //! команды разъезжаются по модулю `commands/` (vault / search / graph / …).
 
+/// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
+pub mod ai;
+/// Markdown-чанкер для RAG (§6.1).
+pub mod chunker;
 /// Tauri IPC-команды.
 mod commands;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
+pub mod eval;
 /// Граф ссылок: беклинки из SQLite (ADR-004).
 pub mod graph;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
@@ -21,8 +27,12 @@ pub mod plugin;
 pub mod search;
 /// Глобальное состояние (managed state).
 pub mod state;
+/// Предложения связей (режим 1 max-sim) — §6.
+pub mod suggest;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
+/// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.
+pub mod vector;
 /// Файловый watcher (debounce + ignore + нормализация по пути).
 pub mod watcher;
 
@@ -58,6 +68,10 @@ pub fn run() {
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::search::search_vault,
+            commands::search::search_content,
+            commands::chat::chat_rag,
+            commands::chat::chat_cancel,
+            commands::suggest::get_link_suggestions,
             commands::plugin::list_plugins,
         ])
         .run(tauri::generate_context!())

@@ -1,9 +1,12 @@
 import type {
   BacklinkEntry,
+  ChatStreamEvent,
   FileEntry,
   GraphData,
   GraphEdge,
+  LinkSuggestion,
   NoteRef,
+  SearchHit,
   VaultInfo,
 } from '../tauri-api';
 
@@ -108,6 +111,91 @@ export async function searchVault(query: string): Promise<NoteRef[]> {
     const content = (CONTENT[n.path] ?? '').toLowerCase();
     return content.includes(`#${q}`); // совпадение по тегу
   });
+}
+
+export async function searchContent(
+  query: string,
+  opts?: { limit?: number; folder?: string; tag?: string; center?: string },
+): Promise<SearchHit[]> {
+  const limit = opts?.limit ?? 10;
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const terms = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (terms.length === 0) return [];
+
+  const hits: SearchHit[] = [];
+  for (const [path, content] of Object.entries(CONTENT)) {
+    if (opts?.folder && path !== opts.folder && !path.startsWith(`${opts.folder}/`)) continue;
+    const lower = content.toLowerCase();
+    // Псевдо-RRF-score: число вхождений терминов (приближение релевантности для превью).
+    const score = terms.reduce((s, t) => s + lower.split(t).length - 1, 0);
+    if (score === 0) continue;
+    const idx = lower.indexOf(terms[0]);
+    const snippet = content.slice(Math.max(0, idx - 40), idx + 200).replace(/\s+/g, ' ').trim();
+    hits.push({ chunkId: hits.length, path, title: null, headingPath: null, snippet, score });
+  }
+  return hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
+}
+
+/** Предложения связей для превью/тестов: общие слова с другими (незалинкованными) заметками. */
+export async function getLinkSuggestions(path: string, limit = 5): Promise<LinkSuggestion[]> {
+  const raw = CONTENT[path];
+  if (!raw) return [];
+  const terms = new Set(
+    raw
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((t) => t.length > 3),
+  );
+  const linked = new Set<string>();
+  const re = /\[\[([^\]\n]+?)\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const tgt = m[1].split('|')[0].split('#')[0].trim();
+    linked.add(tgt);
+    linked.add(`${tgt}.md`);
+  }
+
+  const out: LinkSuggestion[] = [];
+  for (const [p, c] of Object.entries(CONTENT)) {
+    if (p === path || linked.has(p) || linked.has(p.replace(/\.md$/, ''))) continue;
+    const words = c.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+    const overlap = words.filter((w) => terms.has(w)).length;
+    if (overlap === 0) continue;
+    out.push({
+      path: p,
+      title: null,
+      score: overlap / Math.max(words.length, 1),
+      reason: c.slice(0, 120).replace(/\s+/g, ' ').trim(),
+    });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/** Симуляция RAG-чат-стрима для превью/тестов: sources → токены (по словам) → done. */
+export function streamChat(
+  question: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  k = 8,
+): () => void {
+  let cancelled = false;
+  void (async () => {
+    const sources = await searchContent(question, { limit: k });
+    if (cancelled) return;
+    onEvent({ type: 'sources', sources });
+    const answer = sources.length
+      ? `На основе заметок: ${sources[0].snippet.slice(0, 80)}… [1]`
+      : 'Не нашёл ответа в ваших заметках.';
+    for (const tok of answer.split(/(\s+)/)) {
+      if (cancelled) return;
+      await new Promise((r) => setTimeout(r, 15));
+      onEvent({ type: 'token', text: tok });
+    }
+    if (!cancelled) onEvent({ type: 'done', full: answer });
+  })();
+  return () => {
+    cancelled = true;
+  };
 }
 
 export async function getLocalGraph(center: string, hops: number): Promise<GraphData> {

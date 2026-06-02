@@ -34,8 +34,12 @@
 
 ## Схема v1 (`migrations/001_initial.sql`)
 `files, links, tags, file_tags, aliases, settings` + индексы (`idx_links_source`, `idx_links_target`,
-`idx_file_tags_file`, `idx_files_updated`). Источник — ARCHITECTURE §5. `chunks / fts_chunks /
-usearch / chat_* / link_suggestions` — отдельными миграциями в Ф1 (FTS5/usearch нельзя `ALTER` →
+`idx_file_tags_file`, `idx_files_updated`). Источник — ARCHITECTURE §5.
+
+**v2** (`002_chunks_fts.sql`, Ф1-1): `chunks` (+`idx_chunks_file`) + `fts_chunks` (FTS5
+external-content поверх `chunks.content`) + триггеры синхронизации `chunks_ai/ad/au`. FTS5
+доступен в bundled SQLite. `usearch` (векторный ANN) — sibling-файл, не в SQLite (Ф1-4);
+`chat_* / link_suggestions` — отдельными миграциями позже (FTS5/usearch нельзя `ALTER` →
 пересоздание + переиндексация из контент-таблиц).
 
 ## Как тестируется

@@ -34,4 +34,18 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
     await waitFor(() => expect(host.textContent).toContain('bbb'));
     expect(changes).toBe(0);
   });
+
+  it('внешнее изменение того же файла синкается в редактор без ложного dirty (Ф1-9 accept / watcher)', async () => {
+    let changes = 0;
+    const { rerender } = render(
+      <Editor path="A.md" initialDoc="hello" onChange={() => { changes += 1; }} />,
+    );
+    const host = screen.getByTestId('editor');
+    await waitFor(() => expect(host.textContent).toContain('hello'));
+
+    // Тот же path, новый doc (как accept дописал [[wikilink]]) → отражается, onChange НЕ зовётся.
+    rerender(<Editor path="A.md" initialDoc="hello [[B]]" onChange={() => { changes += 1; }} />);
+    await waitFor(() => expect(host.textContent).toContain('[[B]]'));
+    expect(changes).toBe(0);
+  });
 });

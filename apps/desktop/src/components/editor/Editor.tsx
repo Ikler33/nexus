@@ -86,14 +86,21 @@ export function Editor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Смена файла → заменяем документ одним dispatch (view НЕ пересоздаётся).
+  // Замена документа одним dispatch (view НЕ пересоздаётся): при смене файла ИЛИ внешнем изменении
+  // того же файла (accept-связь Ф1-9, watcher-reload). Эхо собственной правки (initialDoc уже равен
+  // содержимому view) игнорируем — иначе цикл и прыжок курсора при наборе. `externalSync` → не dirty.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || loadedPath.current === path) return;
+    if (!view) return;
+    const switching = loadedPath.current !== path;
+    if (!switching && initialDoc === view.state.doc.toString()) return;
     loadedPath.current = path;
+    const anchor = switching
+      ? 0
+      : Math.min(view.state.selection.main.anchor, initialDoc.length);
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: initialDoc },
-      selection: { anchor: 0 },
+      selection: { anchor },
       annotations: externalSync.of(true),
     });
   }, [path, initialDoc]);
