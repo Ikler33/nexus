@@ -215,3 +215,19 @@
   Закрывает **AC-Б6-1** на уровне механизма (семантика через usearch HNSW, не линейный скан; перф на
   500k — AC-PERF-3 позже). НЕ закрывает **AC-Б6-2** (префильтр метаданных ДО KNN) — follow-up вместе с
   граф-рангом, dedup overlap-чанков и реранкером (jina :8082).
+
+- **Ф1-7 — Chat-провайдер + стриминг (ADR-005, §4.1/§4.3).**
+  - `ai::ChatProvider` (`stream_chat` с колбэком токенов + флагом отмены) и `OpenAiChatProvider`
+    (`/v1/chat/completions`, `stream:true`, SSE через `Response::chunk()` — без новых зависимостей;
+    парсер `parse_sse_delta`, `[DONE]`). `build_rag_messages` (system: только по контексту, цитаты [n],
+    язык вопроса; пронумерованный контекст). `ChatMessage`.
+  - Команда `chat_rag(channel, question, k?)`: поток `ChatStreamEvent` в Tauri `Channel` (§4.1) —
+    `Sources` (гибрид-поиск Ф1-6) → `Token`… → `Done`/`Error`. Контекст = полное содержимое топ-k
+    чанков (`search::fetch_chunk_contexts`). Лок vault снят до сетевых вызовов. Отмена — `chat_cancel`
+    + `AppState::begin_chat` (один активный чат, новый стрим отменяет прежний).
+  - `VaultContext.chat` (`build_chat` из `local.json → ai.chat`). Фронт: `ChatStreamEvent`,
+    `tauriApi.chat.streamRag → cancelFn`, мок `streamChat`.
+  - Тесты: `parse_sse_delta`, `build_rag_messages`; **живой** стрим Qwen :8080 (токены, «Париж»);
+    фронт — мок streamChat (порядок событий, отмена). Дока: `docs/dev/chat.md`.
+
+  Закрывает **AC-Б10** (стриминг через Channel + финализация в `Done` + отмена). UI чата — Ф1-8.

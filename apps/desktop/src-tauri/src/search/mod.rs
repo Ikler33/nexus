@@ -196,6 +196,46 @@ pub async fn hybrid_search(
     Ok(hits)
 }
 
+/// Полное содержимое чанков по id (для сборки RAG-контекста чата). Ключ — `chunk_id`, значение —
+/// `(метка-источник = путь [> heading], содержимое)`. Отсутствующие/удалённые id просто опускаются.
+pub async fn fetch_chunk_contexts(
+    reader: &ReadPool,
+    ids: &[i64],
+) -> DbResult<HashMap<i64, (String, String)>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let ids = ids.to_vec();
+    reader
+        .query(move |c| {
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "SELECT ch.id, f.path, ch.heading_path, ch.content \
+                 FROM chunks ch JOIN files f ON f.id = ch.file_id \
+                 WHERE f.is_deleted = 0 AND ch.id IN ({placeholders})"
+            );
+            let mut stmt = c.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                let id: i64 = r.get(0)?;
+                let path: String = r.get(1)?;
+                let heading: Option<String> = r.get(2)?;
+                let content: String = r.get(3)?;
+                let label = match heading {
+                    Some(h) => format!("{path} > {h}"),
+                    None => path,
+                };
+                Ok((id, (label, content)))
+            })?;
+            let mut map = HashMap::new();
+            for row in rows {
+                let (id, v) = row?;
+                map.insert(id, v);
+            }
+            Ok(map)
+        })
+        .await
+}
+
 /// Сниппет из содержимого чанка: схлопывает пробелы, режет по границе символа до `SNIPPET_CHARS`.
 fn snippet_of(content: &str) -> String {
     let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");

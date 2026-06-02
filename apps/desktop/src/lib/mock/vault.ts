@@ -1,5 +1,6 @@
 import type {
   BacklinkEntry,
+  ChatStreamEvent,
   FileEntry,
   GraphData,
   GraphEdge,
@@ -128,6 +129,32 @@ export async function searchContent(query: string, limit = 10): Promise<SearchHi
     hits.push({ chunkId: hits.length, path, title: null, headingPath: null, snippet, score });
   }
   return hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
+}
+
+/** Симуляция RAG-чат-стрима для превью/тестов: sources → токены (по словам) → done. */
+export function streamChat(
+  question: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  k = 8,
+): () => void {
+  let cancelled = false;
+  void (async () => {
+    const sources = await searchContent(question, k);
+    if (cancelled) return;
+    onEvent({ type: 'sources', sources });
+    const answer = sources.length
+      ? `На основе заметок: ${sources[0].snippet.slice(0, 80)}… [1]`
+      : 'Не нашёл ответа в ваших заметках.';
+    for (const tok of answer.split(/(\s+)/)) {
+      if (cancelled) return;
+      await new Promise((r) => setTimeout(r, 15));
+      onEvent({ type: 'token', text: tok });
+    }
+    if (!cancelled) onEvent({ type: 'done', full: answer });
+  })();
+  return () => {
+    cancelled = true;
+  };
 }
 
 export async function getLocalGraph(center: string, hops: number): Promise<GraphData> {

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockVault from './mock/vault';
 
@@ -68,6 +68,16 @@ export interface GraphData {
   edges: GraphEdge[];
 }
 
+/**
+ * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`).
+ * Порядок: `sources` → много `token` → `done` (или `error`).
+ */
+export type ChatStreamEvent =
+  | { type: 'sources'; sources: SearchHit[] }
+  | { type: 'token'; text: string }
+  | { type: 'done'; full: string }
+  | { type: 'error'; message: string };
+
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -134,6 +144,28 @@ export const tauriApi = {
       isTauri()
         ? invoke<SearchHit[]>('search_content', { query, limit })
         : mockVault.searchContent(query, limit),
+  },
+
+  chat: {
+    /**
+     * RAG-чат со стримингом (Ф1-7): события приходят в `onEvent` (`sources` → `token`… → `done`).
+     * Возвращает функцию отмены текущего стрима. Вне Tauri — мок.
+     */
+    streamRag: (
+      question: string,
+      onEvent: (event: ChatStreamEvent) => void,
+      opts?: { k?: number },
+    ): (() => void) => {
+      if (!isTauri()) return mockVault.streamChat(question, onEvent, opts?.k);
+      const channel = new Channel<ChatStreamEvent>();
+      channel.onmessage = onEvent;
+      invoke<void>('chat_rag', { question, k: opts?.k, channel }).catch((e: unknown) =>
+        onEvent({ type: 'error', message: String(e) }),
+      );
+      return () => {
+        void invoke<void>('chat_cancel');
+      };
+    },
   },
 };
 

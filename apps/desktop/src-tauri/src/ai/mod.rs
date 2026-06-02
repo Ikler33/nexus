@@ -1,9 +1,11 @@
 //! AI-слой (§4.3, **ADR-005**): раздельные Chat / Embedding провайдеры (разные хосты/модели).
-//! Ф1-3 — embedding-провайдер; chat-провайдер придёт в Ф1-7.
+//! Ф1-3 — embedding-провайдер; Ф1-7 — chat-провайдер со стримингом.
 
+mod chat;
 mod config;
 mod embedder;
 
+pub use chat::{build_rag_messages, ChatMessage, ChatProvider, OpenAiChatProvider};
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
 #[cfg(test)]
 pub(crate) use embedder::MockEmbedder;

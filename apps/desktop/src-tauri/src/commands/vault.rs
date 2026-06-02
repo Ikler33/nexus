@@ -6,7 +6,9 @@ use std::sync::Arc;
 use rusqlite::OptionalExtension;
 use tauri::State;
 
-use crate::ai::{self, EmbeddingProvider, LocalConfig, OpenAiEmbedder};
+use crate::ai::{
+    self, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider, OpenAiEmbedder,
+};
 use crate::db::Database;
 use crate::state::{AppState, VaultContext};
 use crate::vault::{self, FileEntry, NoteRef, VaultInfo};
@@ -47,6 +49,9 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
         None => (None, None, crate::indexer::Indexer::new(&db, root.clone())),
     };
 
+    // Chat-провайдер (ADR-005: отдельный хост) — независимо от embedding RAG.
+    let chat = build_chat(&root).await;
+
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     crate::indexer::spawn(indexer);
 
@@ -55,6 +60,7 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
         db,
         vectors,
         embedder,
+        chat,
     });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
@@ -99,6 +105,21 @@ async fn build_rag(
 
     tracing::info!(model = %model, dim, force, "RAG включён");
     Some((Arc::new(embedder), Arc::new(vectors), force))
+}
+
+/// Строит chat-провайдер из `.nexus/local.json` (`ai.chat`). `None`, если секции нет или клиент
+/// не инициализировался. Доступность сервера здесь НЕ проверяем — это выяснится при первом стриме.
+async fn build_chat(root: &Path) -> Option<Arc<dyn ChatProvider>> {
+    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
+        .await
+        .ok()?;
+    let chat = LocalConfig::parse(&raw).ok()?.ai.chat?;
+    let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
+    let provider = OpenAiChatProvider::new(&chat.url, &model, None)
+        .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
+        .ok()?;
+    tracing::info!(model = %model, "chat-провайдер включён");
+    Some(Arc::new(provider))
 }
 
 /// Сверяет активную модель/размерность эмбеддера с `settings`. При расхождении на НЕпервом запуске
