@@ -4,6 +4,7 @@ import type {
   GraphData,
   GraphEdge,
   NoteRef,
+  SearchHit,
   VaultInfo,
 } from '../tauri-api';
 
@@ -108,6 +109,25 @@ export async function searchVault(query: string): Promise<NoteRef[]> {
     const content = (CONTENT[n.path] ?? '').toLowerCase();
     return content.includes(`#${q}`); // совпадение по тегу
   });
+}
+
+export async function searchContent(query: string, limit = 10): Promise<SearchHit[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const terms = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (terms.length === 0) return [];
+
+  const hits: SearchHit[] = [];
+  for (const [path, content] of Object.entries(CONTENT)) {
+    const lower = content.toLowerCase();
+    // Псевдо-RRF-score: число вхождений терминов (приближение релевантности для превью).
+    const score = terms.reduce((s, t) => s + lower.split(t).length - 1, 0);
+    if (score === 0) continue;
+    const idx = lower.indexOf(terms[0]);
+    const snippet = content.slice(Math.max(0, idx - 40), idx + 200).replace(/\s+/g, ' ').trim();
+    hits.push({ chunkId: hits.length, path, title: null, headingPath: null, snippet, score });
+  }
+  return hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
 }
 
 export async function getLocalGraph(center: string, hops: number): Promise<GraphData> {

@@ -34,6 +34,17 @@ export interface NoteRef {
   title: string | null;
 }
 
+/** Результат гибридного поиска по телу (зеркалит Rust `search::SearchHit`). */
+export interface SearchHit {
+  chunkId: number;
+  path: string;
+  title: string | null;
+  headingPath: string | null;
+  snippet: string;
+  /** Слитый RRF-score (вектор + FTS); шкала относительная, для сортировки. */
+  score: number;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -114,9 +125,15 @@ export const tauriApi = {
   },
 
   search: {
-    /** Поиск по title/path/tags (Ф0; полнотекст по телу — Ф1). */
+    /** Поиск по title/path/tags (метаданные, Ф0). */
     searchVault: (query: string) =>
       isTauri() ? invoke<NoteRef[]>('search_vault', { query }) : mockVault.searchVault(query),
+
+    /** Гибридный поиск по ТЕЛУ (вектор + FTS5 → RRF, Ф1-6). `limit` по умолчанию 10. */
+    searchContent: (query: string, limit?: number) =>
+      isTauri()
+        ? invoke<SearchHit[]>('search_content', { query, limit })
+        : mockVault.searchContent(query, limit),
   },
 };
 

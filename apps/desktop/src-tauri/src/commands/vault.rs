@@ -33,24 +33,29 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
 
     // RAG (Ф1-5): строим эмбеддер + векторный индекс из .nexus/local.json. Если конфига нет
     // или embedding-сервер недоступен — vault открывается без AI (local-first).
-    let (vectors, indexer) = match build_rag(&root, &db).await {
+    let (vectors, embedder, indexer) = match build_rag(&root, &db).await {
         Some((embedder, vec_index, force)) => {
             let idx = crate::indexer::Indexer::with_rag(
                 &db,
                 root.clone(),
-                embedder,
+                embedder.clone(),
                 vec_index.clone(),
                 force,
             );
-            (Some(vec_index), idx)
+            (Some(vec_index), Some(embedder), idx)
         }
-        None => (None, crate::indexer::Indexer::new(&db, root.clone())),
+        None => (None, None, crate::indexer::Indexer::new(&db, root.clone())),
     };
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     crate::indexer::spawn(indexer);
 
-    *state.vault.write().await = Some(VaultContext { root, db, vectors });
+    *state.vault.write().await = Some(VaultContext {
+        root,
+        db,
+        vectors,
+        embedder,
+    });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
 }

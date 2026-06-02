@@ -64,6 +64,7 @@ pub fn run() {
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::search::search_vault,
+            commands::search::search_content,
             commands::plugin::list_plugins,
         ])
         .run(tauri::generate_context!())
