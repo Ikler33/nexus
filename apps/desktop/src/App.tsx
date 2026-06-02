@@ -3,17 +3,21 @@ import { FolderOpen } from 'lucide-react';
 import { isTauri, tauriApi } from './lib/tauri-api';
 import { useVaultStore } from './stores/vault';
 import { FileTree } from './components/sidebar/FileTree';
+import { Editor } from './components/editor/Editor';
 import styles from './App.module.css';
 
 /**
- * Каркас рабочего пространства (Ф0-3): sidebar с файловым деревом + основная область.
- * Полноценные вкладки/сплиты и редактор появятся в Ф0-5/Ф0-9. Вне Tauri открывается
- * мок-vault автоматически (превью/демо), в Tauri — через системный диалог выбора папки.
+ * Каркас рабочего пространства (Ф0-3/Ф0-5): sidebar с деревом + редактор CodeMirror.
+ * Вкладки/сплиты — Ф0-9, backlinks-бар — Ф0-6. Вне Tauri открывается мок-vault.
  */
 export function App() {
   const info = useVaultStore((s) => s.info);
-  const selectedPath = useVaultStore((s) => s.selectedPath);
+  const activeFile = useVaultStore((s) => s.activeFile);
+  const dirty = useVaultStore((s) => s.dirty);
   const openVault = useVaultStore((s) => s.openVault);
+  const setActiveContent = useVaultStore((s) => s.setActiveContent);
+  const saveActiveFile = useVaultStore((s) => s.saveActiveFile);
+  const openLink = useVaultStore((s) => s.openLink);
 
   useEffect(() => {
     if (!isTauri() && !info) {
@@ -45,8 +49,23 @@ export function App() {
       </aside>
 
       <main className={styles.main}>
-        {selectedPath ? (
-          <code className={styles.selected}>{selectedPath}</code>
+        {activeFile ? (
+          <div className={styles.editorPane}>
+            <header className={styles.editorHeader}>
+              <span className={styles.editorPath}>{activeFile.path}</span>
+              {dirty && (
+                <span className={styles.dirtyDot} title="Есть несохранённые изменения" aria-label="несохранено" />
+              )}
+            </header>
+            <Editor
+              path={activeFile.path}
+              initialDoc={activeFile.content}
+              onChange={setActiveContent}
+              onSave={saveActiveFile}
+              onOpenLink={openLink}
+              getNotes={() => useVaultStore.getState().notes}
+            />
+          </div>
         ) : (
           <p className={styles.hint}>Выберите файл в дереве слева</p>
         )}

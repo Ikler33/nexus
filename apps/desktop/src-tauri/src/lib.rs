@@ -46,6 +46,9 @@ pub fn run() {
             app_version,
             commands::vault::open_vault,
             commands::vault::list_dir,
+            commands::vault::read_file,
+            commands::vault::write_file,
+            commands::vault::list_notes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");

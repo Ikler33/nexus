@@ -58,3 +58,14 @@
     теги. Дока: `docs/dev/indexer.md`.
 
   Закрытые гейты: **AC-Б9-1**, **AC-Б9-2**, **AC-Б9-3**.
+
+- **Ф0-5 — Редактор CodeMirror 6 (source-mode).**
+  - CM6: markdown-подсветка, декорации `[[wikilink]]`/`![[embed]]`/`#tag` (токены цвета),
+    клик по wikilink → навигация, автокомплит имён заметок внутри `[[…`.
+  - Контракт CM6↔React: `EditorView` один раз; смена файла — `dispatch` (без пересоздания),
+    помеченный аннотацией `externalSync` (нет ложного dirty); guard StrictMode; save по `Mod-s`.
+  - Rust-команды `read_file`/`write_file` (write-safe canonicalize) + `list_notes`.
+  - Стор vault: активный файл, dirty, заметки; `openFile`/`openLink`/`saveActiveFile`.
+  - Тесты: 17 фронт (extensions/Editor+регресс/стор/FileTree), Rust 20. Дока: `docs/dev/editor.md`.
+
+  Часть **AC-DOD-Ф0** (source-mode редактор, `[[wikilink]]` клик/автокомплит).

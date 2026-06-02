@@ -70,6 +70,31 @@ pub fn resolve_vault_path(root: &Path, rel: &Path) -> VaultResult<PathBuf> {
     Ok(full)
 }
 
+/// Лёгкая ссылка на заметку (для автокомплита `[[wikilink]]` и поиска).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteRef {
+    pub path: String,
+    pub title: Option<String>,
+}
+
+/// Канонизация пути для ЗАПИСИ: целевой файл может не существовать, поэтому канонизируем
+/// РОДИТЕЛЯ (он обязан существовать) и проверяем его принадлежность vault; имя добавляем
+/// после. Та же анти-traversal граница, что и [`resolve_vault_path`] (AC-SEC-1).
+pub fn resolve_vault_path_for_write(root: &Path, rel: &Path) -> VaultResult<PathBuf> {
+    if rel.is_absolute() {
+        return Err(VaultError::PathEscape);
+    }
+    let full = root.join(rel);
+    let file_name = full.file_name().ok_or(VaultError::PathEscape)?.to_owned();
+    let parent = full.parent().ok_or(VaultError::PathEscape)?;
+    let parent_canon = parent.canonicalize()?;
+    if !parent_canon.starts_with(root) {
+        return Err(VaultError::PathEscape);
+    }
+    Ok(parent_canon.join(file_name))
+}
+
 /// Имя vault = имя его корневого каталога.
 pub fn vault_name(root: &Path) -> String {
     root.file_name()
@@ -193,5 +218,15 @@ mod tests {
             resolve_vault_path(&root, Path::new("/etc/passwd")),
             Err(VaultError::PathEscape)
         ));
+    }
+
+    /// Запись: новый файл в существующем каталоге vault — ок; побег наружу — отказ.
+    #[test]
+    fn write_resolve_allows_new_file_blocks_escape() {
+        let dir = make_vault();
+        let root = dir.path().canonicalize().unwrap();
+        assert!(resolve_vault_path_for_write(&root, Path::new("Notes/New.md")).is_ok());
+        assert!(resolve_vault_path_for_write(&root, Path::new("../escape.md")).is_err());
+        assert!(resolve_vault_path_for_write(&root, Path::new("/tmp/x.md")).is_err());
     }
 }

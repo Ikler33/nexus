@@ -1,0 +1,10 @@
+.editor {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* CodeMirror сам управляет своим поддеревом; контейнер только задаёт размер. */
+.editor :global(.cm-editor) {
+  height: 100%;
+}

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useVaultStore } from '../../stores/vault';
 import { FileTree } from './FileTree';
@@ -29,10 +29,13 @@ describe('FileTree (Ф0-3)', () => {
     expect(await screen.findByText('Roadmap.md')).toBeInTheDocument();
   });
 
-  it('клик по файлу выделяет его в сторе', async () => {
+  it('клик по файлу открывает его в редакторе', async () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);
     fireEvent.click(await screen.findByText('README.md'));
-    expect(useVaultStore.getState().selectedPath).toBe('README.md');
+    await waitFor(() => {
+      expect(useVaultStore.getState().activeFile?.path).toBe('README.md');
+      expect(useVaultStore.getState().selectedPath).toBe('README.md');
+    });
   });
 });

@@ -18,7 +18,7 @@ export function FileTree() {
   const loading = useVaultStore((s) => s.loading);
   const selectedPath = useVaultStore((s) => s.selectedPath);
   const toggleDir = useVaultStore((s) => s.toggleDir);
-  const selectFile = useVaultStore((s) => s.selectFile);
+  const openFile = useVaultStore((s) => s.openFile);
 
   const nodes = useMemo(
     () => flattenVisible(childrenByPath, expanded, loading),
@@ -49,7 +49,7 @@ export function FileTree() {
     const node = nodes[index];
     if (!node) return;
     if (node.entry.isDir) void toggleDir(node.entry.path);
-    else selectFile(node.entry.path);
+    else void openFile(node.entry.path);
   };
 
   const move = (index: number) => {

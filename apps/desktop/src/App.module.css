@@ -54,22 +54,44 @@
 
 .main {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-8);
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .hint {
+  margin: auto;
   color: var(--color-text-muted);
 }
 
-.selected {
-  font-family: var(--font-mono);
+.editorPane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
   font-size: var(--text-sm);
-  color: var(--color-text);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-elevated);
+}
+
+.editorPath {
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dirtyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  flex: none;
 }

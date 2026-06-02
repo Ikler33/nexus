@@ -28,6 +28,12 @@ export interface VaultInfo {
   name: string;
 }
 
+/** Лёгкая ссылка на заметку (зеркалит Rust `vault::NoteRef`) — для автокомплита/поиска. */
+export interface NoteRef {
+  path: string;
+  title: string | null;
+}
+
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -47,6 +53,20 @@ export const tauriApi = {
     /** Ленивый листинг каталога (`dirPath` относительный; '' = корень). */
     listDir: (dirPath: string) =>
       isTauri() ? invoke<FileEntry[]>('list_dir', { dirPath }) : mockVault.listDir(dirPath),
+
+    /** Читает содержимое файла vault. */
+    readFile: (path: string) =>
+      isTauri() ? invoke<string>('read_file', { path }) : mockVault.readFile(path),
+
+    /** Пишет содержимое файла vault. */
+    writeFile: (path: string, content: string) =>
+      isTauri()
+        ? invoke<void>('write_file', { path, content })
+        : mockVault.writeFile(path, content),
+
+    /** Все заметки vault (path + title) — для автокомплита `[[wikilink]]`. */
+    listNotes: () =>
+      isTauri() ? invoke<NoteRef[]>('list_notes') : mockVault.listNotes(),
 
     /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
     pickDirectory: async (): Promise<string | null> => {
