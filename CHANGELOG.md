@@ -22,3 +22,15 @@
   - Стартовый CSP + минимальные capabilities (`core:default`); строгий аудит — в Ф0-12 (AC-SEC-5).
 
   Закрытые гейты: **AC-Q-1**, **AC-Q-2**, **AC-Q-3** (зелёные сборка/тесты/линтеры).
+
+- **Ф0-2 — БД-слой (rusqlite + write-actor).**
+  - `Database` (`src-tauri/src/db`): единственный поток-писатель `WriteActor` (синхронные
+    транзакции, ADR-003) + пул read-коннектов `ReadPool` (WAL, `spawn_blocking`).
+  - Раннер миграций: версионированные SQL (`include_str!`), версия в `PRAGMA user_version`
+    (транзакционно, идемпотентно, резюмируемо). Схема v1: `files/links/tags/file_tags/aliases/settings`
+    + индексы (ARCHITECTURE §5).
+  - Тесты (на temp-файле, реальный WAL): атомарный rollback, конкурентные записи без `SQLITE_BUSY`,
+    идемпотентность миграций, чтение во время записи.
+  - Модульная дока: `docs/dev/db.md`.
+
+  Закрытые гейты: **AC-Б7-1**, **AC-Б7-2**, **AC-PR-3**.

@@ -5,6 +5,9 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1 ARCHITECTURE). По мере роста (срезы Ф0-2+)
 //! команды разъезжаются по модулю `commands/` (vault / search / graph / …).
 
+/// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
+pub mod db;
+
 /// Возвращает версию приложения из `CARGO_PKG_VERSION`.
 ///
 /// Первая сквозная IPC-команда — служит дымовым тестом моста фронт ↔ Rust.
