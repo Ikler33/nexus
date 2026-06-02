@@ -9,10 +9,16 @@
 mod commands;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// Инкрементальный индексатор (files/links/tags) — §4.2.
+pub mod indexer;
+/// Markdown-парсер (frontmatter, ссылки, теги).
+pub mod parser;
 /// Глобальное состояние (managed state).
 pub mod state;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
+/// Файловый watcher (debounce + ignore + нормализация по пути).
+pub mod watcher;
 
 /// Возвращает версию приложения из `CARGO_PKG_VERSION`.
 ///

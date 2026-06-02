@@ -45,3 +45,16 @@
   - Тесты: Rust (листинг/ленивость/traversal), фронт (стор + FileTree). Дока: `docs/dev/vault.md`.
 
   Закрытые гейты: **AC-SEC-1** (vault-команды), задел **AC-PERF-7** (виртуализация).
+
+- **Ф0-4 — Watcher + парсер + инкрементальная индексация.**
+  - `parser` (pulldown-cmark): title, сырой frontmatter, ссылки (`[[wiki]]`/`![[embed]]`/markdown),
+    `#tags`, word_count; матчи в коде исключаются.
+  - `watcher` (notify-debouncer-full, 400 мс): `is_ignored` (`.nexus`/`.git`/`*.db*`/dotfiles),
+    нормализация событий по пути (remove+create → один Upsert; шторм схлопывается).
+  - `indexer`: UPSERT `files` по path (сохраняет `file_id` при atomic-save), полная замена
+    `links`/`tags`, прямой+обратный резолв целей; soft-delete; начальный скан; обвязка
+    watcher→index в `open_vault`.
+  - Тесты: parser (5), watcher (3), indexer (3) — atomic-save/file_id+беклинки, обратный резолв,
+    теги. Дока: `docs/dev/indexer.md`.
+
+  Закрытые гейты: **AC-Б9-1**, **AC-Б9-2**, **AC-Б9-3**.

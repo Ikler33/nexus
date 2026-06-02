@@ -26,6 +26,10 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
         root: root.to_string_lossy().into_owned(),
         name: vault::vault_name(&root),
     };
+
+    // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
+    crate::indexer::spawn(&db, root.clone());
+
     *state.vault.write().await = Some(VaultContext { root, db });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
