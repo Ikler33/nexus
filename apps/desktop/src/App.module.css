@@ -71,6 +71,11 @@
   height: 100%;
 }
 
+.editorScroll {
+  flex: 1;
+  min-height: 0;
+}
+
 .editorHeader {
   display: flex;
   align-items: center;

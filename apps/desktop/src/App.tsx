@@ -4,6 +4,7 @@ import { isTauri, tauriApi } from './lib/tauri-api';
 import { useVaultStore } from './stores/vault';
 import { FileTree } from './components/sidebar/FileTree';
 import { Editor } from './components/editor/Editor';
+import { BacklinksBar } from './components/editor/BacklinksBar';
 import styles from './App.module.css';
 
 /**
@@ -57,14 +58,17 @@ export function App() {
                 <span className={styles.dirtyDot} title="Есть несохранённые изменения" aria-label="несохранено" />
               )}
             </header>
-            <Editor
-              path={activeFile.path}
-              initialDoc={activeFile.content}
-              onChange={setActiveContent}
-              onSave={saveActiveFile}
-              onOpenLink={openLink}
-              getNotes={() => useVaultStore.getState().notes}
-            />
+            <div className={styles.editorScroll}>
+              <Editor
+                path={activeFile.path}
+                initialDoc={activeFile.content}
+                onChange={setActiveContent}
+                onSave={saveActiveFile}
+                onOpenLink={openLink}
+                getNotes={() => useVaultStore.getState().notes}
+              />
+            </div>
+            <BacklinksBar />
           </div>
         ) : (
           <p className={styles.hint}>Выберите файл в дереве слева</p>

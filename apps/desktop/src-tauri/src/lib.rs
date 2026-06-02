@@ -9,6 +9,8 @@
 mod commands;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// Граф ссылок: беклинки из SQLite (ADR-004).
+pub mod graph;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
 pub mod indexer;
 /// Markdown-парсер (frontmatter, ссылки, теги).
@@ -49,6 +51,7 @@ pub fn run() {
             commands::vault::read_file,
             commands::vault::write_file,
             commands::vault::list_notes,
+            commands::graph::get_backlinks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");

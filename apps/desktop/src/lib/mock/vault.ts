@@ -1,4 +1,4 @@
-import type { FileEntry, NoteRef, VaultInfo } from '../tauri-api';
+import type { BacklinkEntry, FileEntry, NoteRef, VaultInfo } from '../tauri-api';
 
 /**
  * Фейковый vault для браузерного превью и тестов (DESIGN §0): фронт работает на тех же
@@ -61,6 +61,35 @@ export async function readFile(path: string): Promise<string> {
 
 export async function writeFile(path: string, content: string): Promise<void> {
   CONTENT[path] = content;
+}
+
+function lineContext(content: string, idx: number): string {
+  const start = content.lastIndexOf('\n', idx) + 1;
+  const end = content.indexOf('\n', idx);
+  return content.slice(start, end === -1 ? content.length : end).trim();
+}
+
+export async function getBacklinks(path: string): Promise<BacklinkEntry[]> {
+  const noExt = path.endsWith('.md') ? path.slice(0, -3) : path;
+  const base = basename(noExt);
+  const out: BacklinkEntry[] = [];
+  for (const [src, content] of Object.entries(CONTENT)) {
+    if (src === path) continue;
+    const re = /\[\[([^\]\n]+?)\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      const target = m[1].split('|')[0].split('#')[0].trim();
+      if (target === path || target === noExt || target === base) {
+        out.push({
+          sourcePath: src,
+          sourceTitle: null,
+          context: lineContext(content, m.index),
+          lineNumber: content.slice(0, m.index).split('\n').length,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
 }
 
 export async function listNotes(): Promise<NoteRef[]> {

@@ -34,6 +34,14 @@ export interface NoteRef {
   title: string | null;
 }
 
+/** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
+export interface BacklinkEntry {
+  sourcePath: string;
+  sourceTitle: string | null;
+  context: string | null;
+  lineNumber: number | null;
+}
+
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -74,6 +82,14 @@ export const tauriApi = {
       const picked = await openDialog({ directory: true, multiple: false });
       return typeof picked === 'string' ? picked : null;
     },
+  },
+
+  graph: {
+    /** Беклинки файла (источник истины — SQLite, ADR-004). */
+    getBacklinks: (path: string) =>
+      isTauri()
+        ? invoke<BacklinkEntry[]>('get_backlinks', { path })
+        : mockVault.getBacklinks(path),
   },
 };
 

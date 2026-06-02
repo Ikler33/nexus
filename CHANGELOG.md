@@ -69,3 +69,11 @@
   - Тесты: 17 фронт (extensions/Editor+регресс/стор/FileTree), Rust 20. Дока: `docs/dev/editor.md`.
 
   Часть **AC-DOD-Ф0** (source-mode редактор, `[[wikilink]]` клик/автокомплит).
+
+- **Ф0-6 — Беклинки из SQLite + backlinks-бар.**
+  - Rust `graph::get_backlinks` (ADR-004): запрос по `idx_links_target` (без petgraph),
+    `BacklinkEntry{sourcePath,sourceTitle,context,lineNumber}`; команда `get_backlinks`.
+  - Фронт: `BacklinksBar` (слот editor-bottom) с loading/empty/списком, клик → переход к источнику.
+  - Тесты: Rust (беклинки A,C→B + контекст + пусто), фронт (бар + пустое состояние). Дока: `docs/dev/graph.md`.
+
+  Закрывает беклинки части **AC-DOD-Ф0** (беклинки из SQLite).
