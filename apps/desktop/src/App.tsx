@@ -1,29 +1,56 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { FolderOpen } from 'lucide-react';
 import { isTauri, tauriApi } from './lib/tauri-api';
+import { useVaultStore } from './stores/vault';
+import { FileTree } from './components/sidebar/FileTree';
 import styles from './App.module.css';
 
 /**
- * Каркас приложения (Ф0-1). Контент-заглушка: проверяет, что фронт собирается,
- * рендерится и умеет ходить в нативный слой через единый IPC-шов `tauriApi`.
- * Реальный layout (sidebar / editor / AI-panel, DESIGN §3) появится в срезах Ф0-3+.
+ * Каркас рабочего пространства (Ф0-3): sidebar с файловым деревом + основная область.
+ * Полноценные вкладки/сплиты и редактор появятся в Ф0-5/Ф0-9. Вне Tauri открывается
+ * мок-vault автоматически (превью/демо), в Tauri — через системный диалог выбора папки.
  */
 export function App() {
-  const [version, setVersion] = useState('dev');
+  const info = useVaultStore((s) => s.info);
+  const selectedPath = useVaultStore((s) => s.selectedPath);
+  const openVault = useVaultStore((s) => s.openVault);
 
   useEffect(() => {
-    // В браузерном превью (без Tauri) IPC недоступен — остаётся 'dev'.
-    if (!isTauri()) return;
-    tauriApi.app
-      .version()
-      .then(setVersion)
-      .catch(() => setVersion('dev'));
-  }, []);
+    if (!isTauri() && !info) {
+      void openVault('');
+    }
+  }, [info, openVault]);
+
+  const handleOpen = async () => {
+    if (!isTauri()) {
+      await openVault('');
+      return;
+    }
+    const dir = await tauriApi.vault.pickDirectory();
+    if (dir) await openVault(dir);
+  };
 
   return (
-    <main className={styles.app}>
-      <h1 className={styles.title}>Nexus</h1>
-      <p className={styles.subtitle}>Local-first knowledge base · Phase 0 scaffold</p>
-      <code className={styles.version}>v{version}</code>
-    </main>
+    <div className={styles.layout}>
+      <aside className={styles.sidebar}>
+        <header className={styles.sidebarHeader}>
+          <span className={styles.vaultName} title={info?.root}>
+            {info?.name ?? 'Nexus'}
+          </span>
+          <button className={styles.openBtn} onClick={handleOpen} title="Открыть vault…">
+            <FolderOpen size={16} aria-hidden />
+          </button>
+        </header>
+        <FileTree />
+      </aside>
+
+      <main className={styles.main}>
+        {selectedPath ? (
+          <code className={styles.selected}>{selectedPath}</code>
+        ) : (
+          <p className={styles.hint}>Выберите файл в дереве слева</p>
+        )}
+      </main>
+    </div>
   );
 }

@@ -1,16 +1,28 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from './App';
+import { useVaultStore } from './stores/vault';
 
-describe('App (caркас Ф0-1)', () => {
-  it('рендерит заголовок Nexus', () => {
+beforeEach(() => {
+  useVaultStore.setState({
+    info: null,
+    childrenByPath: {},
+    expanded: {},
+    loading: {},
+    selectedPath: null,
+  });
+});
+
+describe('App (Ф0-3)', () => {
+  it('автооткрывает мок-vault и показывает файловое дерево', async () => {
     render(<App />);
-    expect(screen.getByRole('heading', { name: 'Nexus' })).toBeInTheDocument();
+    expect(await screen.findByText('README.md')).toBeInTheDocument();
+    expect(screen.getByText('Projects')).toBeInTheDocument();
   });
 
-  it('в браузерном окружении показывает версию-заглушку', () => {
+  it('до выбора файла показывает подсказку', async () => {
     render(<App />);
-    // isTauri() === false в jsdom → IPC не вызывается, остаётся 'dev'.
-    expect(screen.getByText('vdev')).toBeInTheDocument();
+    await screen.findByText('README.md');
+    expect(screen.getByText(/Выберите файл/)).toBeInTheDocument();
   });
 });

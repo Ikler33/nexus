@@ -1,0 +1,61 @@
+.tree {
+  flex: 1;
+  overflow: auto;
+  outline: none;
+}
+
+.tree:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.row:hover {
+  background: var(--color-bg-elevated);
+}
+
+.row[data-active] {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.row[data-selected] {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  color: var(--color-text);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.caret {
+  flex: none;
+  color: var(--color-text-muted);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.caret[data-expanded] {
+  transform: rotate(90deg);
+}
+
+.caretSpacer {
+  display: inline-block;
+  width: 14px;
+  flex: none;
+}
+
+.empty {
+  padding: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}

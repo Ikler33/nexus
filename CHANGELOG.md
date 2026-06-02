@@ -34,3 +34,14 @@
   - Модульная дока: `docs/dev/db.md`.
 
   Закрытые гейты: **AC-Б7-1**, **AC-Б7-2**, **AC-PR-3**.
+
+- **Ф0-3 — Vault + ленивое дерево файлов.**
+  - Rust `vault`: `resolve_vault_path` (единая канонизация/анти-traversal — задел AC-SEC-1),
+    ленивый `list_dir` (содержимое одного каталога, скрытие dotfiles/`.conflict`); команды
+    `open_vault`/`list_dir`; managed state `AppState { vault }`; плагин `tauri-plugin-dialog`.
+  - Фронт: IPC-шов расширен (`vault.*`) + мок-бэкенд для превью; Zustand-стор vault;
+    виртуализированное дерево (`@tanstack/react-virtual`, flatten видимых узлов) с клавиатурной
+    навигацией (`aria-activedescendant`); layout sidebar + main; иконки Lucide.
+  - Тесты: Rust (листинг/ленивость/traversal), фронт (стор + FileTree). Дока: `docs/dev/vault.md`.
+
+  Закрытые гейты: **AC-SEC-1** (vault-команды), задел **AC-PERF-7** (виртуализация).

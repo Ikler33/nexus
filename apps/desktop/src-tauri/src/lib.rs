@@ -5,8 +5,14 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1 ARCHITECTURE). По мере роста (срезы Ф0-2+)
 //! команды разъезжаются по модулю `commands/` (vault / search / graph / …).
 
+/// Tauri IPC-команды.
+mod commands;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// Глобальное состояние (managed state).
+pub mod state;
+/// Vault: ленивый листинг + канонизация путей (анти-traversal).
+pub mod vault;
 
 /// Возвращает версию приложения из `CARGO_PKG_VERSION`.
 ///
@@ -28,7 +34,13 @@ pub fn run() {
     );
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![app_version])
+        .plugin(tauri_plugin_dialog::init())
+        .manage(state::AppState::new())
+        .invoke_handler(tauri::generate_handler![
+            app_version,
+            commands::vault::open_vault,
+            commands::vault::list_dir,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");
 }
