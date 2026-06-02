@@ -1,15 +1,19 @@
-import { useEffect } from 'react';
-import { FolderOpen, Languages } from 'lucide-react';
+import { lazy, Suspense, useEffect } from 'react';
+import { FolderOpen, Languages, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from './lib/tauri-api';
 import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { changeLocale } from './i18n/setup';
+import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
 import { CommandPalette } from './components/command/CommandPalette';
 import styles from './App.module.css';
+
+// Граф грузится лениво (sigma.js — тяжёлый WebGL-движок, §10): чанк только при открытии.
+const GraphView = lazy(() => import('./components/graph/GraphView'));
 
 /**
  * Оболочка приложения: sidebar (поиск + дерево) + область редактора со вкладками/сплитами
@@ -17,6 +21,8 @@ import styles from './App.module.css';
  */
 export function App() {
   const info = useVaultStore((s) => s.info);
+  const graphOpen = useUIStore((s) => s.graphOpen);
+  const toggleGraph = useUIStore((s) => s.toggleGraph);
   const { t, i18n } = useTranslation();
 
   useKeymap();
@@ -40,6 +46,14 @@ export function App() {
             {info?.name ?? t('app.name')}
           </span>
           <div className={styles.headerActions}>
+            <button
+              className={styles.openBtn}
+              onClick={() => toggleGraph()}
+              title={t('commands.view.graph')}
+              aria-label={t('commands.view.graph')}
+            >
+              <Share2 size={16} aria-hidden />
+            </button>
             <button
               className={styles.openBtn}
               onClick={() => changeLocale(i18n.language === 'ru' ? 'en' : 'ru')}
@@ -66,6 +80,11 @@ export function App() {
       </main>
 
       <CommandPalette />
+      {graphOpen && (
+        <Suspense fallback={null}>
+          <GraphView />
+        </Suspense>
+      )}
     </div>
   );
 }

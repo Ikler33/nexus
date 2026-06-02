@@ -32,10 +32,15 @@
     "label": "Command palette",
     "empty": "No commands"
   },
+  "graph": {
+    "title": "Local graph",
+    "empty": "Open a file to see its graph"
+  },
   "commands": {
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
     "file.save": "Save file",
-    "view.splitRight": "Split right"
+    "view.splitRight": "Split right",
+    "view.graph": "Local graph"
   }
 }

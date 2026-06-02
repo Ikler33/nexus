@@ -53,6 +53,14 @@ export function registerCoreCommands(): Disposable {
       defaultKey: 'mod+\\',
       run: () => useWorkspaceStore.getState().splitRight(),
     }),
+    commands.register({
+      id: 'view.graph',
+      title: 'Local graph',
+      titleKey: 'commands.view.graph',
+      source: 'core',
+      defaultKey: 'mod+g',
+      run: () => useUIStore.getState().toggleGraph(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

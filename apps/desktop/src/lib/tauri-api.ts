@@ -42,6 +42,21 @@ export interface BacklinkEntry {
   lineNumber: number | null;
 }
 
+/** Узел/ребро/данные локального графа (зеркалит Rust `graph::*`). */
+export interface GraphNode {
+  id: number;
+  path: string;
+  title: string | null;
+}
+export interface GraphEdge {
+  source: number;
+  target: number;
+}
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -90,6 +105,12 @@ export const tauriApi = {
       isTauri()
         ? invoke<BacklinkEntry[]>('get_backlinks', { path })
         : mockVault.getBacklinks(path),
+
+    /** Локальный N-hop граф вокруг файла (ADR-004). */
+    getLocalGraph: (center: string, hops: number) =>
+      isTauri()
+        ? invoke<GraphData>('get_local_graph', { center, hops })
+        : mockVault.getLocalGraph(center, hops),
   },
 
   search: {

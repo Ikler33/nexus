@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use crate::graph::{self, BacklinkEntry};
+use crate::graph::{self, BacklinkEntry, GraphData};
 use crate::state::AppState;
 
 /// Беклинки файла (источник истины — SQLite, запрос по idx_links_target).
@@ -11,11 +11,26 @@ pub async fn get_backlinks(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Vec<BacklinkEntry>, String> {
-    let reader = {
-        let guard = state.vault.read().await;
-        guard.as_ref().ok_or("vault не открыт")?.db.reader().clone()
-    };
+    let reader = reader(&state).await?;
     graph::get_backlinks(&reader, path)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Локальный N-hop граф вокруг файла (ADR-004).
+#[tauri::command]
+pub async fn get_local_graph(
+    state: State<'_, AppState>,
+    center: String,
+    hops: u32,
+) -> Result<GraphData, String> {
+    let reader = reader(&state).await?;
+    graph::get_local_graph(&reader, center, hops)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn reader(state: &State<'_, AppState>) -> Result<crate::db::ReadPool, String> {
+    let guard = state.vault.read().await;
+    Ok(guard.as_ref().ok_or("vault не открыт")?.db.reader().clone())
 }

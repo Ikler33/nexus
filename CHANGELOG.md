@@ -118,3 +118,11 @@
     AC-I18N-4 (Collator), AC-I18N-5 (детекция/смена). Дока: `docs/dev/i18n.md`.
 
   Закрывает **AC-I18N-1…5** (бэкенд-i18n AC-I18N-6 и плагины AC-I18N-7 — позже).
+
+- **Ф0-11 — Граф (базовый).**
+  - Rust `graph::get_local_graph` (BFS N-hop из SQLite, ADR-004); команда `get_local_graph`.
+  - Фронт: `GraphView` (sigma.js + graphology, ленивый chunk §10); раскладка ForceAtlas2 в
+    **Web Worker** (`layout.worker.ts`, AC-PERF-6); клик по узлу → открыть; команда `view.graph` (Cmd/Ctrl+G).
+  - Тесты: Rust (N-hop по глубине, пустой центр), фронт (`computeLayout`, мок графа). Дока: `docs/dev/graph.md`.
+
+  Закрывает граф-часть **AC-DOD-Ф0**; layout в Worker — **AC-PERF-6**.

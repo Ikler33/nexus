@@ -16,7 +16,17 @@
 - Rust: `backlinks_come_from_sqlite_with_context` (A,C → B; контекст; пустой случай).
 - Фронт: бар показывает входящие ссылки / пустое состояние.
 
+## Локальный граф (Ф0-11)
+- Rust `get_local_graph(reader, center, hops)` — BFS по неориентированным связям до глубины
+  `hops` из SQLite (без petgraph); рёбра — внутри полученного множества id. `GraphData {nodes, edges}`.
+  Команда `get_local_graph(center, hops)`.
+- Фронт: `GraphView` (sigma.js + graphology, **ленивый** chunk — §10). Раскладка — ForceAtlas2 в
+  **Web Worker** (`layout.worker.ts` → `computeLayout`), не блокирует main-thread (**AC-PERF-6**).
+  Клик по узлу → `openFile`. Открытие — команда `view.graph` (Cmd/Ctrl+G) / кнопка в шапке.
+- Тесты: Rust (N-hop расширяется по глубине, пустой центр), фронт (`computeLayout` назначает
+  координаты; мок `getLocalGraph`).
+
 ## Дальше
-- `get_local_graph` (рекурсивный CTE по links, N-hop) + sigma.js — Ф0-11.
-- Рефетч беклинков после правок/реиндексации (сейчас — на смену активного файла).
-- petgraph-кэш — только под тяжёлые алгоритмы, не на старте (ADR-004).
+- Глобальный граф (опц., с предупреждением о стоимости); фильтры; overlay-слот плагинов.
+- Рефетч беклинков/графа после правок/реиндексации (сейчас — на смену активного файла).
+- petgraph-кэш — только под тяжёлые алгоритмы (PageRank/кластеризация), не на старте (ADR-004).

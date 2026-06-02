@@ -54,6 +54,7 @@ pub fn run() {
             commands::vault::write_file,
             commands::vault::list_notes,
             commands::graph::get_backlinks,
+            commands::graph::get_local_graph,
             commands::search::search_vault,
         ])
         .run(tauri::generate_context!())

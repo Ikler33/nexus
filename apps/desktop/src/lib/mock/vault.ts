@@ -1,4 +1,11 @@
-import type { BacklinkEntry, FileEntry, NoteRef, VaultInfo } from '../tauri-api';
+import type {
+  BacklinkEntry,
+  FileEntry,
+  GraphData,
+  GraphEdge,
+  NoteRef,
+  VaultInfo,
+} from '../tauri-api';
 
 /**
  * Фейковый vault для браузерного превью и тестов (DESIGN §0): фронт работает на тех же
@@ -101,6 +108,65 @@ export async function searchVault(query: string): Promise<NoteRef[]> {
     const content = (CONTENT[n.path] ?? '').toLowerCase();
     return content.includes(`#${q}`); // совпадение по тегу
   });
+}
+
+export async function getLocalGraph(center: string, hops: number): Promise<GraphData> {
+  if (!CONTENT[center]) return { nodes: [], edges: [] };
+  const paths = Object.keys(CONTENT);
+  const idOf = (p: string) => paths.indexOf(p);
+
+  const resolveTarget = (t: string): string | null => {
+    const want = t.endsWith('.md') ? t.slice(0, -3) : t;
+    return (
+      paths.find(
+        (p) =>
+          p === t ||
+          p.replace(/\.md$/, '') === want ||
+          basename(p.replace(/\.md$/, '')) === basename(want),
+      ) ?? null
+    );
+  };
+
+  const adj = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+    (adj.get(b) ?? adj.set(b, new Set()).get(b)!).add(a);
+  };
+  for (const [src, content] of Object.entries(CONTENT)) {
+    const re = /\[\[([^\]\n]+?)\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      const tgt = resolveTarget(m[1].split('|')[0].split('#')[0].trim());
+      if (tgt && tgt !== src) link(src, tgt);
+    }
+  }
+
+  const inSet = new Set([center]);
+  let frontier = [center];
+  for (let h = 0; h < hops; h++) {
+    const next: string[] = [];
+    for (const f of frontier)
+      for (const n of adj.get(f) ?? [])
+        if (!inSet.has(n)) {
+          inSet.add(n);
+          next.push(n);
+        }
+    frontier = next;
+  }
+
+  const nodes = [...inSet].map((p) => ({ id: idOf(p), path: p, title: null }));
+  const edges: GraphEdge[] = [];
+  const seen = new Set<string>();
+  for (const a of inSet)
+    for (const b of adj.get(a) ?? [])
+      if (inSet.has(b)) {
+        const key = [a, b].sort().join('|');
+        if (!seen.has(key)) {
+          seen.add(key);
+          edges.push({ source: idOf(a), target: idOf(b) });
+        }
+      }
+  return { nodes, edges };
 }
 
 export async function listNotes(): Promise<NoteRef[]> {
