@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Rust / Cargo
+/target
+**/target/
+
+# Tauri generated artifacts
+apps/desktop/src-tauri/gen/
+
+# Test / coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local config
+.claude/
