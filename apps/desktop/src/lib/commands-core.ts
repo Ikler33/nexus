@@ -21,21 +21,24 @@ export function registerCoreCommands(): Disposable {
   const disposers = [
     commands.register({
       id: 'palette.open',
-      title: 'Палитра команд',
+      title: 'Command palette',
+      titleKey: 'commands.palette.open',
       source: 'core',
       defaultKey: 'mod+p',
       run: () => useUIStore.getState().openPalette(),
     }),
     commands.register({
       id: 'vault.open',
-      title: 'Открыть vault…',
+      title: 'Open vault…',
+      titleKey: 'commands.vault.open',
       source: 'core',
       defaultKey: 'mod+o',
       run: () => openVaultFlow(),
     }),
     commands.register({
       id: 'file.save',
-      title: 'Сохранить файл',
+      title: 'Save file',
+      titleKey: 'commands.file.save',
       source: 'core',
       run: () => {
         const buffer = activeBuffer(useWorkspaceStore.getState());
@@ -44,7 +47,8 @@ export function registerCoreCommands(): Disposable {
     }),
     commands.register({
       id: 'view.splitRight',
-      title: 'Разделить вправо',
+      title: 'Split right',
+      titleKey: 'commands.view.splitRight',
       source: 'core',
       defaultKey: 'mod+\\',
       run: () => useWorkspaceStore.getState().splitRight(),

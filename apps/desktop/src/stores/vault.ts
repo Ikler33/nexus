@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { tauriApi, type FileEntry, type NoteRef, type VaultInfo } from '../lib/tauri-api';
+import { compareEntries } from '../i18n/format';
 
 /** Узел плоского (развёрнутого) представления дерева для виртуализации. */
 export interface FlatNode {
@@ -35,7 +36,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       tauriApi.vault.listDir(''),
       tauriApi.vault.listNotes().catch(() => []),
     ]);
-    set({ info, childrenByPath: { '': root }, expanded: {}, loading: {}, notes });
+    set({
+      info,
+      childrenByPath: { '': [...root].sort(compareEntries) },
+      expanded: {},
+      loading: {},
+      notes,
+    });
   },
 
   async toggleDir(path) {
@@ -52,7 +59,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     }
     set((s) => ({ loading: { ...s.loading, [path]: true } }));
     try {
-      const children = await tauriApi.vault.listDir(path);
+      const children = (await tauriApi.vault.listDir(path)).slice().sort(compareEntries);
       set((s) => {
         const loading = { ...s.loading };
         delete loading[path];

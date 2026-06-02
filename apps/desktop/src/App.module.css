@@ -29,6 +29,13 @@
   white-space: nowrap;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+
 .openBtn {
   display: inline-flex;
   align-items: center;

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronRight, File as FileIcon, Folder } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import styles from './FileTree.module.css';
@@ -20,6 +21,7 @@ export function FileTree() {
   const selectedPath = useWorkspaceStore(activePath);
   const toggleDir = useVaultStore((s) => s.toggleDir);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  const { t } = useTranslation();
 
   const nodes = useMemo(
     () => flattenVisible(childrenByPath, expanded, loading),
@@ -41,7 +43,7 @@ export function FileTree() {
   if (nodes.length === 0) {
     return (
       <div className={styles.empty} role="note">
-        Пусто
+        {t('tree.empty')}
       </div>
     );
   }
@@ -95,7 +97,7 @@ export function FileTree() {
       ref={parentRef}
       className={styles.tree}
       role="tree"
-      aria-label="Vault files"
+      aria-label={t('tree.label')}
       tabIndex={0}
       aria-activedescendant={`treeitem-${active}`}
       onKeyDown={onKeyDown}

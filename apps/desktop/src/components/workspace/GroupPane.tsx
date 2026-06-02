@@ -1,4 +1,5 @@
 import { Columns2, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Editor } from '../editor/Editor';
@@ -11,6 +12,7 @@ function basename(path: string): string {
 
 /** Одна группа (сплит): панель вкладок + редактор активной вкладки + backlinks-бар. */
 export function GroupPane({ groupId }: { groupId: string }) {
+  const { t } = useTranslation();
   const group = useWorkspaceStore((s) => s.groups.find((g) => g.id === groupId));
   const buffers = useWorkspaceStore((s) => s.buffers);
   const isActive = useWorkspaceStore((s) => s.activeGroupId === groupId);
@@ -47,14 +49,16 @@ export function GroupPane({ groupId }: { groupId: string }) {
               title={path}
             >
               <span className={styles.tabName}>{basename(path)}</span>
-              {buffers[path]?.dirty && <span className={styles.dot} aria-label="несохранено" />}
+              {buffers[path]?.dirty && (
+                <span className={styles.dot} aria-label={t('editor.unsaved')} />
+              )}
               <button
                 className={styles.close}
                 onClick={(e) => {
                   e.stopPropagation();
                   closeTab(groupId, path);
                 }}
-                aria-label={`Закрыть ${basename(path)}`}
+                aria-label={t('editor.close', { name: basename(path) })}
               >
                 <X size={12} aria-hidden />
               </button>
@@ -64,8 +68,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
         <button
           className={styles.split}
           onClick={() => splitRight()}
-          title="Разделить вправо"
-          aria-label="Разделить вправо"
+          title={t('editor.splitRight')}
+          aria-label={t('editor.splitRight')}
         >
           <Columns2 size={14} aria-hidden />
         </button>
@@ -90,7 +94,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
           <BacklinksBar path={active.path} />
         </>
       ) : (
-        <p className={styles.empty}>Пустая группа</p>
+        <p className={styles.empty}>{t('editor.emptyGroup')}</p>
       )}
     </section>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { tauriApi, type BacklinkEntry } from '../../lib/tauri-api';
 import { useWorkspaceStore } from '../../stores/workspace';
 import styles from './BacklinksBar.module.css';
@@ -10,6 +11,7 @@ import styles from './BacklinksBar.module.css';
  * своей группы (Б12).
  */
 export function BacklinksBar({ path }: { path: string }) {
+  const { t } = useTranslation();
   const openFile = useWorkspaceStore((s) => s.openFile);
 
   const [loading, setLoading] = useState(false);
@@ -41,15 +43,15 @@ export function BacklinksBar({ path }: { path: string }) {
   if (!path) return null;
 
   return (
-    <section className={styles.bar} aria-label="Backlinks">
+    <section className={styles.bar} aria-label={t('backlinks.title')}>
       <header className={styles.header}>
         <Link2 size={13} aria-hidden />
-        <span>Беклинки{items.length ? ` · ${items.length}` : ''}</span>
+        <span>{items.length ? t('backlinks.count', { count: items.length }) : t('backlinks.title')}</span>
       </header>
       {loading ? (
-        <p className={styles.state}>Загрузка…</p>
+        <p className={styles.state}>{t('backlinks.loading')}</p>
       ) : items.length === 0 ? (
-        <p className={styles.state}>Нет обратных ссылок</p>
+        <p className={styles.state}>{t('backlinks.empty')}</p>
       ) : (
         <ul className={styles.list}>
           {items.map((b, i) => (

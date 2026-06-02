@@ -1,0 +1,41 @@
+{
+  "app": {
+    "name": "Nexus",
+    "openVault": "Open vault…"
+  },
+  "sidebar": {
+    "searchPlaceholder": "Search…",
+    "searchLabel": "Search the vault",
+    "clearSearch": "Clear search",
+    "noResults": "Nothing found"
+  },
+  "tree": {
+    "label": "Vault files",
+    "empty": "Empty"
+  },
+  "editor": {
+    "selectFile": "Pick a file in the tree, or press {{shortcut}}",
+    "emptyGroup": "Empty group",
+    "splitRight": "Split right",
+    "close": "Close {{name}}",
+    "unsaved": "unsaved"
+  },
+  "backlinks": {
+    "title": "Backlinks",
+    "loading": "Loading…",
+    "empty": "No backlinks",
+    "count_one": "{{count, number}} backlink",
+    "count_other": "{{count, number}} backlinks"
+  },
+  "palette": {
+    "placeholder": "Command…",
+    "label": "Command palette",
+    "empty": "No commands"
+  },
+  "commands": {
+    "palette.open": "Command palette",
+    "vault.open": "Open vault…",
+    "file.save": "Save file",
+    "view.splitRight": "Split right"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "app": {
+    "name": "Nexus",
+    "openVault": "Открыть vault…"
+  },
+  "sidebar": {
+    "searchPlaceholder": "Поиск…",
+    "searchLabel": "Поиск по vault",
+    "clearSearch": "Очистить поиск",
+    "noResults": "Ничего не найдено"
+  },
+  "tree": {
+    "label": "Файлы vault",
+    "empty": "Пусто"
+  },
+  "editor": {
+    "selectFile": "Выберите файл в дереве слева или нажмите {{shortcut}}",
+    "emptyGroup": "Пустая группа",
+    "splitRight": "Разделить вправо",
+    "close": "Закрыть {{name}}",
+    "unsaved": "несохранено"
+  },
+  "backlinks": {
+    "title": "Беклинки",
+    "loading": "Загрузка…",
+    "empty": "Нет обратных ссылок",
+    "count_one": "{{count, number}} беклинк",
+    "count_few": "{{count, number}} беклинка",
+    "count_many": "{{count, number}} беклинков"
+  },
+  "palette": {
+    "placeholder": "Команда…",
+    "label": "Палитра команд",
+    "empty": "Нет команд"
+  },
+  "commands": {
+    "palette.open": "Палитра команд",
+    "vault.open": "Открыть vault…",
+    "file.save": "Сохранить файл",
+    "view.splitRight": "Разделить вправо"
+  }
+}

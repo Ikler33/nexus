@@ -106,3 +106,15 @@
     FileTree/Sidebar/App/BacklinksBar. Дока: `docs/dev/workspace.md`.
 
   Закрывает **AC-Б12-1**, **AC-Б12-2**.
+
+- **Ф0-10 — i18n RU/EN.**
+  - i18next + react-i18next; ru/en ресурсы; детекция локали (navigator.language), `changeLocale`
+    с сохранением выбора; переключатель языка в шапке.
+  - Плюралы `_one/_few/_many` (ru); `Intl.NumberFormat` (`formatNumber`); `Intl.Collator`
+    (`compareEntries` — сортировка дерева: каталоги выше, кириллица).
+  - Все UI-строки переведены в ключи (App/Sidebar/FileTree/Editor area/BacklinksBar/CommandPalette);
+    команды через `titleKey`.
+  - Тесты: AC-I18N-1 (паритет ключей), AC-I18N-2 (ru-плюралы), AC-I18N-3 (Intl-числа),
+    AC-I18N-4 (Collator), AC-I18N-5 (детекция/смена). Дока: `docs/dev/i18n.md`.
+
+  Закрывает **AC-I18N-1…5** (бэкенд-i18n AC-I18N-6 и плагины AC-I18N-7 — позже).

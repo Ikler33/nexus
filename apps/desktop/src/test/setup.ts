@@ -1,4 +1,8 @@
 import '@testing-library/jest-dom/vitest';
+import i18n from '../i18n/setup';
+
+// Детерминируем локаль тестов (jsdom navigator.language = en): под ru написаны ассерты строк.
+void i18n.changeLanguage('ru');
 
 // --- Полифиллы/моки для @tanstack/react-virtual в jsdom ---
 // virtual-core снимает размер контейнера через element.offsetWidth/offsetHeight (в jsdom = 0)

@@ -24,7 +24,7 @@ describe('CommandPalette (Ф0-8)', () => {
     render(<CommandPalette />);
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    const input = screen.getByLabelText('Команда');
+    const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: 'Beta' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -36,7 +36,7 @@ describe('CommandPalette (Ф0-8)', () => {
     commands.register({ id: 'a', title: 'Alpha', run: () => {} });
     useUIStore.getState().openPalette();
     render(<CommandPalette />);
-    fireEvent.keyDown(screen.getByLabelText('Команда'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
     expect(useUIStore.getState().paletteOpen).toBe(false);
   });
 });

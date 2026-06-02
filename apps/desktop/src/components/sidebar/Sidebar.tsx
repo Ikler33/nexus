@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Search, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
@@ -10,6 +11,7 @@ import styles from './Sidebar.module.css';
  * непустой → результаты по title/path/tags (debounce 150 мс). Клик по результату открывает файл.
  */
 export function Sidebar() {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NoteRef[]>([]);
   const openFile = useWorkspaceStore((s) => s.openFile);
@@ -46,14 +48,14 @@ export function Sidebar() {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Поиск…"
-          aria-label="Поиск по vault"
+          placeholder={t('sidebar.searchPlaceholder')}
+          aria-label={t('sidebar.searchLabel')}
         />
         {query && (
           <button
             className={styles.clear}
             onClick={() => setQuery('')}
-            aria-label="Очистить поиск"
+            aria-label={t('sidebar.clearSearch')}
           >
             <X size={14} aria-hidden />
           </button>
@@ -63,7 +65,7 @@ export function Sidebar() {
       {q ? (
         <ul className={styles.results} aria-label="Результаты поиска">
           {results.length === 0 ? (
-            <li className={styles.empty}>Ничего не найдено</li>
+            <li className={styles.empty}>{t('sidebar.noResults')}</li>
           ) : (
             results.map((r) => (
               <li key={r.path}>

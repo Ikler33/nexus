@@ -1,8 +1,10 @@
 import { useEffect } from 'react';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Languages } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { isTauri } from './lib/tauri-api';
 import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
+import { changeLocale } from './i18n/setup';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
@@ -11,10 +13,11 @@ import styles from './App.module.css';
 
 /**
  * Оболочка приложения: sidebar (поиск + дерево) + область редактора со вкладками/сплитами
- * (Б12) + Command Palette. Вне Tauri открывается мок-vault. Глобальные хоткеи — через keymap.
+ * (Б12) + Command Palette. Вне Tauri открывается мок-vault. Хоткеи — через keymap. i18n RU/EN.
  */
 export function App() {
   const info = useVaultStore((s) => s.info);
+  const { t, i18n } = useTranslation();
 
   useKeymap();
 
@@ -34,15 +37,26 @@ export function App() {
       <aside className={styles.sidebar}>
         <header className={styles.sidebarHeader}>
           <span className={styles.vaultName} title={info?.root}>
-            {info?.name ?? 'Nexus'}
+            {info?.name ?? t('app.name')}
           </span>
-          <button
-            className={styles.openBtn}
-            onClick={() => void openVaultFlow()}
-            title="Открыть vault…"
-          >
-            <FolderOpen size={16} aria-hidden />
-          </button>
+          <div className={styles.headerActions}>
+            <button
+              className={styles.openBtn}
+              onClick={() => changeLocale(i18n.language === 'ru' ? 'en' : 'ru')}
+              title="Язык / Language"
+              aria-label="Язык / Language"
+            >
+              <Languages size={16} aria-hidden />
+            </button>
+            <button
+              className={styles.openBtn}
+              onClick={() => void openVaultFlow()}
+              title={t('app.openVault')}
+              aria-label={t('app.openVault')}
+            >
+              <FolderOpen size={16} aria-hidden />
+            </button>
+          </div>
         </header>
         <Sidebar />
       </aside>

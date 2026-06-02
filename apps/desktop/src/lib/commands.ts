@@ -15,7 +15,10 @@ export interface CommandCtx {
 
 export interface Command {
   id: string;
+  /** Человекочитаемое название (fallback, если нет `titleKey`). */
   title: string;
+  /** Ключ i18n для названия (предпочтительнее `title` в UI). */
+  titleKey?: string;
   source?: CommandSource;
   /** Хоткей по умолчанию, напр. `"mod+p"` (`mod` = ⌘ на macOS, Ctrl иначе). */
   defaultKey?: string;

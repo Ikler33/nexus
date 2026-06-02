@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { commands, formatCombo } from '../../lib/commands';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { commands, type Command, formatCombo } from '../../lib/commands';
 import { useUIStore } from '../../stores/ui';
 import styles from './CommandPalette.module.css';
 
@@ -10,12 +11,12 @@ import styles from './CommandPalette.module.css';
 export function CommandPalette() {
   const open = useUIStore((s) => s.paletteOpen);
   const close = useUIStore((s) => s.closePalette);
+  const { t } = useTranslation();
 
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const [version, setVersion] = useState(0);
 
-  // Перерисовка при изменении набора команд (register/dispose).
   useEffect(() => commands.subscribe(() => setVersion((v) => v + 1)), []);
   useEffect(() => {
     if (open) {
@@ -24,12 +25,14 @@ export function CommandPalette() {
     }
   }, [open]);
 
+  const label = useCallback((c: Command) => (c.titleKey ? t(c.titleKey) : c.title), [t]);
+
   const filtered = useMemo(() => {
     void version; // пересчёт при register/dispose
     const q = query.trim().toLowerCase();
-    const all = commands.list().sort((a, b) => a.title.localeCompare(b.title));
-    return q ? all.filter((c) => c.title.toLowerCase().includes(q)) : all;
-  }, [query, version]);
+    const all = commands.list().sort((a, b) => label(a).localeCompare(label(b)));
+    return q ? all.filter((c) => label(c).toLowerCase().includes(q)) : all;
+  }, [query, version, label]);
 
   if (!open) return null;
 
@@ -66,7 +69,7 @@ export function CommandPalette() {
       <div
         className={styles.palette}
         role="dialog"
-        aria-label="Палитра команд"
+        aria-label={t('palette.label')}
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -78,15 +81,15 @@ export function CommandPalette() {
             setActive(0);
           }}
           onKeyDown={onKeyDown}
-          placeholder="Команда…"
-          aria-label="Команда"
+          placeholder={t('palette.placeholder')}
+          aria-label={t('palette.label')}
           role="combobox"
           aria-expanded
           aria-controls="command-list"
         />
         <ul className={styles.list} id="command-list" role="listbox">
           {filtered.length === 0 ? (
-            <li className={styles.empty}>Нет команд</li>
+            <li className={styles.empty}>{t('palette.empty')}</li>
           ) : (
             filtered.map((cmd, i) => (
               <li
@@ -98,7 +101,7 @@ export function CommandPalette() {
                 onMouseEnter={() => setActive(i)}
                 onClick={() => runAt(i)}
               >
-                <span className={styles.title}>{cmd.title}</span>
+                <span className={styles.title}>{label(cmd)}</span>
                 {cmd.defaultKey && <kbd className={styles.kbd}>{formatCombo(cmd.defaultKey)}</kbd>}
               </li>
             ))
