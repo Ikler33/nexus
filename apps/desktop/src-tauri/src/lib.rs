@@ -25,6 +25,8 @@ pub mod plugin;
 pub mod search;
 /// Глобальное состояние (managed state).
 pub mod state;
+/// Предложения связей (режим 1 max-sim) — §6.
+pub mod suggest;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
 /// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.
@@ -67,6 +69,7 @@ pub fn run() {
             commands::search::search_content,
             commands::chat::chat_rag,
             commands::chat::chat_cancel,
+            commands::suggest::get_link_suggestions,
             commands::plugin::list_plugins,
         ])
         .run(tauri::generate_context!())

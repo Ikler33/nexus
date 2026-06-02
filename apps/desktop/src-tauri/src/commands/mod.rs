@@ -5,4 +5,5 @@ pub mod chat;
 pub mod graph;
 pub mod plugin;
 pub mod search;
+pub mod suggest;
 pub mod vault;

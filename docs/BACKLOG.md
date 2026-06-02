@@ -26,6 +26,8 @@
 | ✂️ **Виртуализация ленты чата** (DESIGN §«лента виртуализирована») | сейчас простой скролл | при длинной истории | `chat.md`, DESIGN |
 | 🧩 Индикатор «☁ облако» + cloud-fallback chat-only (opt-in) | сейчас бейдж всегда «локально» | реализация cloud-fallback | ADR-005, `chat.md` |
 | ✂️ Throttling рендера токенов + персист истории сессий (`ChatSession`) | MVP-чат держит сессию в памяти | при росте использования | DESIGN, `chat.md` |
+| 🔬 **Suggest режим 2** (LLM-обоснование связи по действию) + калибровка `MIN_SCORE`/соседей | режим 1 (max-sim) закрыт; веса «с потолка» нельзя | Ф1-10 (eval) | §6, DESIGN, `suggest.md` |
+| ⏳ Кэш `link_suggestions` (score/reason/dismissed/generated_at) + персист dismiss между сессиями | режим 1 считает на лету; dismiss — сессия | при росте vault | §5, `suggest.md` |
 
 ## Фаза 2 — плагины / broker / безопасность рантайма
 

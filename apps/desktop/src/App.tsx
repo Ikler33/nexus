@@ -9,7 +9,7 @@ import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
-import { ChatPanel } from './components/chat/ChatPanel';
+import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import styles from './App.module.css';
 
@@ -91,7 +91,7 @@ export function App() {
         <EditorArea />
       </main>
 
-      {chatOpen && <ChatPanel />}
+      {chatOpen && <AiPanel />}
 
       <CommandPalette />
       {graphOpen && (

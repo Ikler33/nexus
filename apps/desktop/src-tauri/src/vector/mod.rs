@@ -144,6 +144,17 @@ impl VectorIndex {
         Ok(hits_of(matches))
     }
 
+    /// Возвращает сохранённый вектор по `chunk_id` (для suggest: переиспользуем уже посчитанные
+    /// эмбеддинги, без обращения к серверу). `None`, если ключа нет в индексе.
+    pub fn get_vector(&self, chunk_id: u64) -> VectorResult<Option<Vec<f32>>> {
+        if !self.index.contains(chunk_id) {
+            return Ok(None);
+        }
+        let mut buf = vec![0f32; self.dim];
+        let n = self.index.get(chunk_id, &mut buf).map_err(usearch_err)?;
+        Ok((n >= 1).then_some(buf))
+    }
+
     /// Сохраняет индекс на диск (sibling-файл).
     pub fn save(&self) -> VectorResult<()> {
         let path_str = self

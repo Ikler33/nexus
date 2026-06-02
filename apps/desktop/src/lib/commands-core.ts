@@ -67,7 +67,20 @@ export function registerCoreCommands(): Disposable {
       titleKey: 'commands.view.chat',
       source: 'core',
       defaultKey: 'mod+j',
-      run: () => useUIStore.getState().toggleChat(),
+      run: () => {
+        useUIStore.getState().setAiTab('chat');
+        useUIStore.getState().openChat();
+      },
+    }),
+    commands.register({
+      id: 'view.suggest',
+      title: 'Link suggestions',
+      titleKey: 'commands.view.suggest',
+      source: 'core',
+      run: () => {
+        useUIStore.getState().setAiTab('suggest');
+        useUIStore.getState().openChat();
+      },
     }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };

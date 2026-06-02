@@ -45,6 +45,16 @@ export interface SearchHit {
   score: number;
 }
 
+/** Предложенная связь (зеркалит Rust `suggest::LinkSuggestion`). */
+export interface LinkSuggestion {
+  path: string;
+  title: string | null;
+  /** max-sim score (косинус, относительный — для сортировки/порога). */
+  score: number;
+  /** «Причина» — сниппет лучшего совпавшего чанка целевой заметки. */
+  reason: string;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -156,6 +166,14 @@ export const tauriApi = {
             center: opts?.center,
           })
         : mockVault.searchContent(query, opts),
+  },
+
+  suggest: {
+    /** Предложения связей для файла (режим 1 max-sim, Ф1-9). Вне Tauri — мок. */
+    forFile: (path: string, limit?: number) =>
+      isTauri()
+        ? invoke<LinkSuggestion[]>('get_link_suggestions', { path, limit })
+        : mockVault.getLinkSuggestions(path, limit),
   },
 
   chat: {

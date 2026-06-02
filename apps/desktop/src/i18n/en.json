@@ -37,7 +37,9 @@
     "empty": "Open a file to see its graph"
   },
   "chat": {
-    "title": "AI chat",
+    "title": "AI panel",
+    "tabChat": "Chat",
+    "tabSuggest": "Links",
     "local": "local",
     "localHint": "Answers run on your local model",
     "empty": "Ask something about your notes — the answer cites the sources it used.",
@@ -47,8 +49,17 @@
     "thinking": "Searching notes…",
     "sources": "Sources",
     "clear": "Clear chat",
-    "close": "Close chat",
+    "close": "Close panel",
     "error": "Error: {{message}}"
+  },
+  "suggest": {
+    "title": "Suggested links",
+    "noFile": "Open a note to see suggested links.",
+    "loading": "Finding similar notes…",
+    "empty": "No similar unlinked notes found.",
+    "accept": "Add",
+    "dismiss": "Dismiss",
+    "recompute": "Recompute"
   },
   "commands": {
     "palette.open": "Command palette",
@@ -56,6 +67,7 @@
     "file.save": "Save file",
     "view.splitRight": "Split right",
     "view.graph": "Local graph",
-    "view.chat": "AI chat"
+    "view.chat": "AI chat",
+    "view.suggest": "Link suggestions"
   }
 }

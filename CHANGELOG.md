@@ -260,3 +260,19 @@
 
   Закрывает **AC-DOD-Ф1** (видимый поток «вопрос → ответ с источниками»). Виртуализация ленты,
   индикатор облака, персист сессий — в `docs/BACKLOG.md`.
+
+- **Ф1-9 — Предложения связей (режим 1, max-sim).**
+  - `suggest::get_link_suggestions`: на лету из готовых usearch-векторов (без embedder-сервера) — соседи
+    каждого чанка файла → агрегация по целевому файлу по МАКСИМУМУ similarity → исключение уже связанных
+    и самого файла → порог `MIN_SCORE` → топ-`limit`. `VectorIndex::get_vector`. `LinkSuggestion`.
+    Команда `get_link_suggestions(path, limit?)`. Режим 1 — тихий (REVIEW С-8: на save LLM не дёргаем).
+  - Фронт: `AiPanel` с вкладками **Чат**/**Связи** (рефактор правой панели; `ChatView`+`SuggestView`),
+    `stores/suggest` (load/«пересчитать», dismiss-сессия, accept → дописывает `[[wikilink]]` в буфер),
+    карточки score%/причина/Добавить/Скрыть. Команда `view.suggest`; i18n; `tauriApi.suggest.forFile`+мок.
+  - **Фикс Ф0-5:** `Editor` теперь синкает внешнее изменение того же файла (accept/watcher), не только
+    смену файла — `externalSync`, без ложного dirty; + регресс-тест.
+  - Тесты: suggest (max-sim / исключение связанных / пусто) + **живой** nomic (топ — близкая заметка);
+    стор+`SuggestView`+`Editor`-регресс. Фронт **64 теста**, Rust **+4** (incl. живой). Дока `docs/dev/suggest.md`.
+
+  Закрывает Ф1-9 (suggest режим 1, max-sim — пункт AC-DOD-Ф1). Режим 2 (LLM), кэш `link_suggestions`,
+  персист dismiss, калибровка порога — в `docs/BACKLOG.md`.
