@@ -61,6 +61,14 @@ export function registerCoreCommands(): Disposable {
       defaultKey: 'mod+g',
       run: () => useUIStore.getState().toggleGraph(),
     }),
+    commands.register({
+      id: 'view.chat',
+      title: 'AI chat',
+      titleKey: 'commands.view.chat',
+      source: 'core',
+      defaultKey: 'mod+j',
+      run: () => useUIStore.getState().toggleChat(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

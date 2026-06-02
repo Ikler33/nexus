@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { FolderOpen, Languages, Share2 } from 'lucide-react';
+import { FolderOpen, Languages, MessageSquare, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from './lib/tauri-api';
 import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
@@ -9,6 +9,7 @@ import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
+import { ChatPanel } from './components/chat/ChatPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import styles from './App.module.css';
 
@@ -23,6 +24,8 @@ export function App() {
   const info = useVaultStore((s) => s.info);
   const graphOpen = useUIStore((s) => s.graphOpen);
   const toggleGraph = useUIStore((s) => s.toggleGraph);
+  const chatOpen = useUIStore((s) => s.chatOpen);
+  const toggleChat = useUIStore((s) => s.toggleChat);
   const { t, i18n } = useTranslation();
 
   useKeymap();
@@ -39,13 +42,22 @@ export function App() {
   }, [info]);
 
   return (
-    <div className={styles.layout}>
+    <div className={`${styles.layout} ${chatOpen ? styles.withChat : ''}`}>
       <aside className={styles.sidebar}>
         <header className={styles.sidebarHeader}>
           <span className={styles.vaultName} title={info?.root}>
             {info?.name ?? t('app.name')}
           </span>
           <div className={styles.headerActions}>
+            <button
+              className={styles.openBtn}
+              onClick={() => toggleChat()}
+              title={t('commands.view.chat')}
+              aria-label={t('commands.view.chat')}
+              aria-pressed={chatOpen}
+            >
+              <MessageSquare size={16} aria-hidden />
+            </button>
             <button
               className={styles.openBtn}
               onClick={() => toggleGraph()}
@@ -78,6 +90,8 @@ export function App() {
       <main className={styles.main}>
         <EditorArea />
       </main>
+
+      {chatOpen && <ChatPanel />}
 
       <CommandPalette />
       {graphOpen && (

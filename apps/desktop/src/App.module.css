@@ -4,6 +4,11 @@
   height: 100%;
 }
 
+/* Открытый RAG-чат добавляет правую колонку (DESIGN: FileTree | Editor | Chat). */
+.withChat {
+  grid-template-columns: 280px 1fr 360px;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
