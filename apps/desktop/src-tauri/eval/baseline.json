@@ -4,6 +4,7 @@
   "conditions": {
     "embedding_model": "nomic-embed-text",
     "embedding_server": "http://127.0.0.1:8081",
+    "embedding_dim": 768,
     "k": 8,
     "golden": "eval/golden.json"
   },

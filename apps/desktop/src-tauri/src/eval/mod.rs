@@ -93,8 +93,18 @@ pub struct BaselineMetrics {
     pub mrr: f32,
 }
 
+/// Условия прогона (AC-EVAL-4): сравнение метрик валидно только при их совпадении.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Conditions {
+    pub embedding_model: String,
+    pub embedding_server: String,
+    pub embedding_dim: usize,
+    pub k: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Baseline {
+    pub conditions: Conditions,
     pub metrics: BaselineMetrics,
 }
 
@@ -291,36 +301,53 @@ mod tests {
     /// Живой прогон на nomic :8081 (`cargo test -- --ignored`): печатает отчёт и проверяет, что
     /// метрики НЕ ниже baseline (AC-EVAL-2/3). Условия — в выводе (AC-EVAL-4).
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 127.0.0.1:8081 (AC-EVAL прогон)"]
+    #[ignore = "нужен embedding-сервер из baseline.json (AC-EVAL прогон)"]
     async fn live_eval_meets_baseline() {
         use crate::ai::default_prefixes;
         let golden = load_golden();
         let baseline = load_baseline();
+        let cond = &baseline.conditions;
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
+        // Эмбеддер и k — строго из условий baseline (AC-EVAL-4: прогон в зафиксированных условиях).
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                "http://127.0.0.1:8081",
-                "nomic-embed-text",
-                768,
-                default_prefixes("nomic-embed-text"),
+                &cond.embedding_server,
+                &cond.embedding_model,
+                cond.embedding_dim,
+                default_prefixes(&cond.embedding_model),
             )
             .unwrap(),
         );
-        let vectors =
-            Arc::new(VectorIndex::open(root.join(".nexus/vectors.usearch"), 768).unwrap());
+        let vectors = Arc::new(
+            VectorIndex::open(root.join(".nexus/vectors.usearch"), cond.embedding_dim).unwrap(),
+        );
         let db = index_corpus(&root, &golden.corpus, embedder.clone(), vectors.clone())
             .await
             .unwrap();
 
-        let report = run_eval(db.reader(), &vectors, embedder.as_ref(), &golden.cases, 8)
-            .await
-            .unwrap();
+        let report = run_eval(
+            db.reader(),
+            &vectors,
+            embedder.as_ref(),
+            &golden.cases,
+            cond.k,
+        )
+        .await
+        .unwrap();
 
         eprintln!(
-            "\n=== RAG EVAL (nomic-embed-text @ :8081, k={}, n={}) ===\nrecall@8={:.3} nDCG@8={:.3} MRR={:.3}",
-            report.k, report.n_cases, report.recall_at_k, report.ndcg_at_k, report.mrr
+            "\n=== RAG EVAL ({} @ {}, k={}, n={}) ===\nrecall@{}={:.3} nDCG@{}={:.3} MRR={:.3}",
+            cond.embedding_model,
+            cond.embedding_server,
+            report.k,
+            report.n_cases,
+            report.k,
+            report.recall_at_k,
+            report.k,
+            report.ndcg_at_k,
+            report.mrr
         );
         for c in &report.cases {
             eprintln!(
