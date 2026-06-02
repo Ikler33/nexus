@@ -126,3 +126,12 @@
   - Тесты: Rust (N-hop по глубине, пустой центр), фронт (`computeLayout`, мок графа). Дока: `docs/dev/graph.md`.
 
   Закрывает граф-часть **AC-DOD-Ф0**; layout в Worker — **AC-PERF-6**.
+
+- **Ф0-12 — Безопасность каркаса (CSP + capabilities).**
+  - Строгий CSP без `unsafe-inline`/`unsafe-eval` (+ `object-src 'none'`, `base-uri 'self'`,
+    `frame-ancestors 'none'`, `worker-src`).
+  - Минимальные capabilities: `core:default` + `dialog:default`; нет `fs:`/`shell:`/`http:` —
+    vault-доступ через собственные команды (`resolve_vault_path`).
+  - Регресс-тест `csp_and_capabilities_are_hardened`. Дока: `docs/dev/security.md`.
+
+  Закрывает каркасную часть **AC-SEC-5** (broker/iframe-изоляция — Ф2; рантайм-CSP — на упаковке).

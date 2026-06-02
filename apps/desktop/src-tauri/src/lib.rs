@@ -69,4 +69,33 @@ mod tests {
     fn app_version_matches_cargo_pkg_version() {
         assert_eq!(app_version(), env!("CARGO_PKG_VERSION"));
     }
+
+    /// AC-SEC-5 (каркас): строгий CSP без unsafe-inline/eval + минимальные capabilities
+    /// (никаких широких fs/shell/http прав — vault-доступ идёт через собственные команды,
+    /// не через fs-плагин). Регрессия: ужесточение каркаса не должно молча откатываться.
+    #[test]
+    fn csp_and_capabilities_are_hardened() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"]
+            .as_str()
+            .expect("CSP должен быть задан");
+        assert!(
+            !csp.contains("unsafe-inline"),
+            "CSP: запрещён unsafe-inline"
+        );
+        assert!(!csp.contains("unsafe-eval"), "CSP: запрещён unsafe-eval");
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("object-src 'none'"));
+
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let perms = caps["permissions"].as_array().expect("permissions");
+        for p in perms {
+            let s = p.as_str().unwrap_or("");
+            assert!(!s.starts_with("fs:"), "широкое fs-право запрещено: {s}");
+            assert!(!s.starts_with("shell:"), "shell-право запрещено: {s}");
+            assert!(!s.starts_with("http:"), "http-право запрещено: {s}");
+        }
+    }
 }
