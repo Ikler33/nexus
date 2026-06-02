@@ -139,11 +139,23 @@ export const tauriApi = {
     searchVault: (query: string) =>
       isTauri() ? invoke<NoteRef[]>('search_vault', { query }) : mockVault.searchVault(query),
 
-    /** Гибридный поиск по ТЕЛУ (вектор + FTS5 → RRF, Ф1-6). `limit` по умолчанию 10. */
-    searchContent: (query: string, limit?: number) =>
+    /**
+     * Гибридный поиск по ТЕЛУ (вектор + FTS5 (+граф) → RRF, §6.2). `limit` по умолчанию 10.
+     * `folder`/`tag` — префильтр по метаданным ДО KNN; `center` — открытый файл (граф-ранг).
+     */
+    searchContent: (
+      query: string,
+      opts?: { limit?: number; folder?: string; tag?: string; center?: string },
+    ) =>
       isTauri()
-        ? invoke<SearchHit[]>('search_content', { query, limit })
-        : mockVault.searchContent(query, limit),
+        ? invoke<SearchHit[]>('search_content', {
+            query,
+            limit: opts?.limit,
+            folder: opts?.folder,
+            tag: opts?.tag,
+            center: opts?.center,
+          })
+        : mockVault.searchContent(query, opts),
   },
 
   chat: {
@@ -154,14 +166,17 @@ export const tauriApi = {
     streamRag: (
       question: string,
       onEvent: (event: ChatStreamEvent) => void,
-      opts?: { k?: number },
+      opts?: { k?: number; center?: string },
     ): (() => void) => {
       if (!isTauri()) return mockVault.streamChat(question, onEvent, opts?.k);
       const channel = new Channel<ChatStreamEvent>();
       channel.onmessage = onEvent;
-      invoke<void>('chat_rag', { question, k: opts?.k, channel }).catch((e: unknown) =>
-        onEvent({ type: 'error', message: String(e) }),
-      );
+      invoke<void>('chat_rag', {
+        question,
+        k: opts?.k,
+        center: opts?.center,
+        channel,
+      }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
       return () => {
         void invoke<void>('chat_cancel');
       };

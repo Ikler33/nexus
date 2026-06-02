@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+use usearch::ffi::Matches;
 use usearch::{new_index, Index, IndexOptions, MetricKind, ScalarKind};
 
 #[derive(Debug, Error)]
@@ -38,6 +39,19 @@ pub struct VectorIndex {
 
 fn usearch_err<E: std::fmt::Display>(e: E) -> VectorError {
     VectorError::Usearch(e.to_string())
+}
+
+/// usearch `Matches` → `Vec<VectorHit>` (similarity = 1 − cos-distance).
+fn hits_of(matches: Matches) -> Vec<VectorHit> {
+    matches
+        .keys
+        .into_iter()
+        .zip(matches.distances)
+        .map(|(chunk_id, dist)| VectorHit {
+            chunk_id,
+            score: 1.0 - dist,
+        })
+        .collect()
 }
 
 impl VectorIndex {
@@ -105,15 +119,29 @@ impl VectorIndex {
             });
         }
         let matches = self.index.search(query, k).map_err(usearch_err)?;
-        Ok(matches
-            .keys
-            .into_iter()
-            .zip(matches.distances)
-            .map(|(chunk_id, dist)| VectorHit {
-                chunk_id,
-                score: 1.0 - dist,
-            })
-            .collect())
+        Ok(hits_of(matches))
+    }
+
+    /// ANN-поиск top-`k` с предикатом `allow(chunk_id)`: фильтр применяется ВНУТРИ обхода HNSW
+    /// (настоящий префильтр ДО отбора результатов — usearch `filtered_search`), а не пост-фильтром
+    /// (тот терял бы recall при селективном фильтре). База для метаданного префильтра (AC-Б6-2).
+    pub fn search_filtered(
+        &self,
+        query: &[f32],
+        k: usize,
+        allow: impl Fn(u64) -> bool,
+    ) -> VectorResult<Vec<VectorHit>> {
+        if query.len() != self.dim {
+            return Err(VectorError::DimMismatch {
+                expected: self.dim,
+                got: query.len(),
+            });
+        }
+        let matches = self
+            .index
+            .filtered_search(query, k, allow)
+            .map_err(usearch_err)?;
+        Ok(hits_of(matches))
     }
 
     /// Сохраняет индекс на диск (sibling-файл).

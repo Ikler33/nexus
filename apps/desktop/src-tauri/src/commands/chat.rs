@@ -8,7 +8,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::build_rag_messages;
-use crate::search::{self, SearchHit};
+use crate::search::{self, SearchHit, SearchOptions};
 use crate::state::AppState;
 
 /// Событие чат-стрима для фронта (дискриминированное по `type`, camelCase).
@@ -35,6 +35,7 @@ pub async fn chat_rag(
     channel: Channel<ChatStreamEvent>,
     question: String,
     k: Option<usize>,
+    center: Option<String>,
 ) -> Result<(), String> {
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
     let (reader, vectors, embedder, chat) = {
@@ -52,13 +53,18 @@ pub async fn chat_rag(
     };
     let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
 
-    // 1) Retrieve: гибридный поиск → источники.
+    // 1) Retrieve: гибридный поиск (с граф-рангом от открытого файла, если задан) → источники.
+    let opts = SearchOptions {
+        limit: k,
+        filter: None,
+        center,
+    };
     let hits = match search::hybrid_search(
         &reader,
         vectors.as_deref(),
         embedder.as_deref(),
         question.clone(),
-        k,
+        opts,
     )
     .await
     {

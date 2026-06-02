@@ -1,12 +1,16 @@
-//! Поиск: по метаданным (Ф0: title/path/tags) и гибридный по ТЕЛУ (Ф1-6).
+//! Поиск: по метаданным (Ф0: title/path/tags) и гибридный по ТЕЛУ (Ф1-6 + доработка §6.2).
 //!
-//! **Гибрид (§6.2):** две независимые выдачи кандидатов — вектор (usearch, семантика) и FTS5/BM25
-//! (`fts_chunks`, лексика) — сливаются через **Reciprocal Rank Fusion** (RRF), не по «сырым» score
-//! (они в разных шкалах). Деградация изящная: нет эмбеддера → только FTS; обе пусты → пусто.
+//! **Гибрид (§6.2):** до ТРЁХ независимых выдач кандидатов — вектор (usearch, семантика), FTS5/BM25
+//! (`fts_chunks`, лексика) и граф (соседи открытого файла) — сливаются через **Reciprocal Rank
+//! Fusion** (RRF), не по «сырым» score (разные шкалы). Граф входит ТРЕТЬИМ РАНГОМ в саму RRF-формулу,
+//! а НЕ аддитивным `+0.2` (REVIEW С-4). Префильтр по метаданным (папка/тег) применяется ДО KNN
+//! (usearch `filtered_search`, AC-Б6-2). Перекрывающиеся соседние чанки одного файла дедуплицируются.
+//! Деградация изящная: нет эмбеддера → FTS(+граф); нет центра → без граф-ранга; всё пусто → пусто.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use serde::Serialize;
+use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 
 use crate::ai::EmbeddingProvider;
 use crate::db::{DbError, DbResult, ReadPool};
@@ -19,6 +23,10 @@ const CANDIDATES: usize = 50;
 const RRF_K: f32 = 60.0;
 /// Потолок длины сниппета (символы исходного чанка).
 const SNIPPET_CHARS: usize = 240;
+/// Глубина графового обхода для граф-ранга (соседи открытого файла).
+const GRAPH_HOPS: u32 = 2;
+/// Во сколько раз пере-выбираем кандидатов из RRF до dedup overlap (чтобы добрать `limit` после схлопа).
+const OVERFETCH: usize = 3;
 
 /// Результат поиска по содержимому: чанк + его файл + слитый RRF-score.
 #[derive(Debug, Clone, Serialize)]
@@ -30,6 +38,29 @@ pub struct SearchHit {
     pub heading_path: Option<String>,
     pub snippet: String,
     pub score: f32,
+}
+
+/// Префильтр по метаданным (применяется ДО KNN — AC-Б6-2). Все поля опциональны (AND по заданным).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SearchFilter {
+    /// Ограничить папкой (префикс пути, рекурсивно): `path == folder || path LIKE folder||'/%'`.
+    pub folder: Option<String>,
+    /// Ограничить заметками с этим тегом.
+    pub tag: Option<String>,
+}
+
+impl SearchFilter {
+    fn is_empty(&self) -> bool {
+        self.folder.is_none() && self.tag.is_none()
+    }
+}
+
+/// Параметры гибридного поиска. `center` (открытый файл) включает граф-ранг 3-м источником RRF.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOptions {
+    pub limit: usize,
+    pub filter: Option<SearchFilter>,
+    pub center: Option<String>,
 }
 
 /// Ищет заметки по подстроке в пути, заголовке или имени тега. Спецсимволы LIKE экранируются.
@@ -100,82 +131,270 @@ fn fts_query(raw: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
-/// Гибридный поиск по телу заметок: вектор (если есть эмбеддер+индекс) + FTS5/BM25 → RRF → топ-`limit`
-/// с резолвом метаданных файла и сниппетом. Запрос эмбеддится ВНЕ блокировки read-пула.
+/// Гибридный поиск по телу заметок (§6.2): вектор + FTS5/BM25 (+ граф соседей центра) → RRF →
+/// dedup overlap → топ-`limit` с резолвом метаданных и сниппетом. Запрос эмбеддится ВНЕ лока пула.
 pub async fn hybrid_search(
     reader: &ReadPool,
     vectors: Option<&VectorIndex>,
     embedder: Option<&dyn EmbeddingProvider>,
     query: String,
-    limit: usize,
+    opts: SearchOptions,
 ) -> DbResult<Vec<SearchHit>> {
     let q = query.trim();
-    if q.is_empty() || limit == 0 {
+    if q.is_empty() || opts.limit == 0 {
         return Ok(Vec::new());
     }
+    let filter = opts.filter.filter(|f| !f.is_empty());
 
-    // Выдача 1 — векторная (семантика). Запрос эмбеддится → KNN в usearch.
+    // Префильтр по метаданным (AC-Б6-2): множество допустимых chunk_id вычисляется ДО KNN.
+    let allowed: Option<HashSet<i64>> = match &filter {
+        Some(f) => Some(allowed_chunk_ids(reader, f).await?),
+        None => None,
+    };
+    if matches!(&allowed, Some(a) if a.is_empty()) {
+        return Ok(Vec::new()); // фильтр не оставил кандидатов
+    }
+
+    // Выдача 1 — векторная (семантика). Префильтр — ВНУТРИ обхода HNSW (filtered_search).
     let mut vec_ranked: Vec<i64> = Vec::new();
     if let (Some(index), Some(embedder)) = (vectors, embedder) {
         let qvec = embedder
             .embed_query(q)
             .await
             .map_err(|e| DbError::External(e.to_string()))?;
-        let hits = index
-            .search(&qvec, CANDIDATES)
-            .map_err(|e| DbError::External(e.to_string()))?;
+        let hits = match &allowed {
+            Some(a) => index.search_filtered(&qvec, CANDIDATES, |id| a.contains(&(id as i64))),
+            None => index.search(&qvec, CANDIDATES),
+        }
+        .map_err(|e| DbError::External(e.to_string()))?;
         vec_ranked = hits.into_iter().map(|h| h.chunk_id as i64).collect();
     }
 
-    // Выдача 2 — лексическая (FTS5/BM25). `rank` возрастает = релевантнее.
-    let mut fts_ranked: Vec<i64> = Vec::new();
-    if let Some(match_q) = fts_query(q) {
-        fts_ranked = reader
-            .query(move |c| {
-                let mut stmt = c.prepare(
-                    "SELECT rowid FROM fts_chunks WHERE fts_chunks MATCH ?1 \
-                     ORDER BY rank LIMIT ?2",
-                )?;
-                let ids = stmt
-                    .query_map(rusqlite::params![match_q, CANDIDATES as i64], |r| {
-                        r.get::<_, i64>(0)
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(ids)
-            })
-            .await?;
-    }
+    // Выдача 2 — лексическая (FTS5/BM25) с тем же префильтром (через JOIN files).
+    let fts_ranked = match fts_query(q) {
+        Some(match_q) => fts_candidates(reader, match_q, filter.clone()).await?,
+        None => Vec::new(),
+    };
 
-    // Слияние и отбор топ-`limit`.
-    let fused = rrf_fuse(&[vec_ranked, fts_ranked], RRF_K);
-    let top: Vec<(i64, f32)> = fused.into_iter().take(limit).collect();
-    if top.is_empty() {
+    // Выдача 3 — графовая: чанки соседей открытого файла, ТРЕТИЙ РАНГ RRF (не +0.2, REVIEW С-4).
+    let graph_ranked = match &opts.center {
+        Some(center) if !center.is_empty() => {
+            graph_rank(reader, center.clone(), GRAPH_HOPS, allowed.clone()).await?
+        }
+        _ => Vec::new(),
+    };
+
+    // Слияние трёх рангов; пере-выбор кандидатов под dedup; резолв + схлоп соседних + усечение.
+    let fused = rrf_fuse(&[vec_ranked, fts_ranked, graph_ranked], RRF_K);
+    if fused.is_empty() {
         return Ok(Vec::new());
     }
-    let score_of: HashMap<i64, f32> = top.iter().copied().collect();
-    let ids: Vec<i64> = top.iter().map(|(id, _)| *id).collect();
+    let candidates: Vec<(i64, f32)> = fused.into_iter().take(opts.limit * OVERFETCH).collect();
+    resolve_and_dedup(reader, candidates, opts.limit).await
+}
 
-    // Резолв метаданных + содержимого чанков одним запросом (IN-список).
-    let mut hits = reader
+/// Множество `chunk_id`, проходящих метаданный префильтр (папка-префикс и/или тег). Для AC-Б6-2.
+async fn allowed_chunk_ids(reader: &ReadPool, filter: &SearchFilter) -> DbResult<HashSet<i64>> {
+    let folder = filter.folder.clone();
+    let tag = filter.tag.clone();
+    reader
         .query(move |c| {
-            let placeholders = vec!["?"; ids.len()].join(",");
+            let mut sql = String::from(
+                "SELECT ch.id FROM chunks ch JOIN files f ON f.id = ch.file_id WHERE f.is_deleted = 0",
+            );
+            let mut params: Vec<String> = Vec::new();
+            if let Some(folder) = &folder {
+                sql.push_str(" AND (f.path = ? OR f.path LIKE ? || '/%')");
+                params.push(folder.clone());
+                params.push(folder.clone());
+            }
+            if let Some(tag) = &tag {
+                sql.push_str(
+                    " AND EXISTS (SELECT 1 FROM file_tags ft JOIN tags t ON t.id = ft.tag_id \
+                       WHERE ft.file_id = f.id AND t.name = ?)",
+                );
+                params.push(tag.clone());
+            }
+            let mut stmt = c.prepare(&sql)?;
+            let ids = stmt
+                .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+                    r.get::<_, i64>(0)
+                })?
+                .collect::<rusqlite::Result<HashSet<_>>>()?;
+            Ok(ids)
+        })
+        .await
+}
+
+/// FTS5/BM25-кандидаты (`chunk_id` по возрастанию `rank`) с метаданным префильтром через JOIN.
+async fn fts_candidates(
+    reader: &ReadPool,
+    match_q: String,
+    filter: Option<SearchFilter>,
+) -> DbResult<Vec<i64>> {
+    reader
+        .query(move |c| {
+            let mut sql = String::from(
+                "SELECT ch.id FROM fts_chunks \
+                 JOIN chunks ch ON ch.id = fts_chunks.rowid \
+                 JOIN files f ON f.id = ch.file_id \
+                 WHERE fts_chunks MATCH ? AND f.is_deleted = 0",
+            );
+            let mut params: Vec<String> = vec![match_q];
+            if let Some(filter) = &filter {
+                if let Some(folder) = &filter.folder {
+                    sql.push_str(" AND (f.path = ? OR f.path LIKE ? || '/%')");
+                    params.push(folder.clone());
+                    params.push(folder.clone());
+                }
+                if let Some(tag) = &filter.tag {
+                    sql.push_str(
+                        " AND EXISTS (SELECT 1 FROM file_tags ft JOIN tags t ON t.id = ft.tag_id \
+                           WHERE ft.file_id = f.id AND t.name = ?)",
+                    );
+                    params.push(tag.clone());
+                }
+            }
+            sql.push_str(&format!(" ORDER BY fts_chunks.rank LIMIT {CANDIDATES}"));
+            let mut stmt = c.prepare(&sql)?;
+            let ids = stmt
+                .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+                    r.get::<_, i64>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(ids)
+        })
+        .await
+}
+
+/// Граф-ранг: чанки файлов-соседей `center` (BFS по `links` до `hops`), упорядоченные по (дистанция
+/// хопа, `chunk_index`). Третий источник RRF — близость по графу ссылок (§6.2). Центр исключён.
+async fn graph_rank(
+    reader: &ReadPool,
+    center: String,
+    hops: u32,
+    allowed: Option<HashSet<i64>>,
+) -> DbResult<Vec<i64>> {
+    reader
+        .query(move |c| {
+            let center_id: Option<i64> = c
+                .query_row(
+                    "SELECT id FROM files WHERE path = ?1 AND is_deleted = 0",
+                    [&center],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(center_id) = center_id else {
+                return Ok(Vec::new());
+            };
+
+            // BFS: соседние file_id в порядке расширения (ближе по хопам — раньше), центр исключаем.
+            let mut seen: HashSet<i64> = HashSet::from([center_id]);
+            let mut frontier = vec![center_id];
+            let mut ordered_files: Vec<i64> = Vec::new();
+            for _ in 0..hops {
+                if frontier.is_empty() {
+                    break;
+                }
+                let ph = vec!["?"; frontier.len()].join(",");
+                let sql = format!(
+                    "SELECT source_id, target_id FROM links \
+                     WHERE target_id IS NOT NULL AND (source_id IN ({ph}) OR target_id IN ({ph}))"
+                );
+                let mut stmt = c.prepare(&sql)?;
+                let params: Vec<&dyn rusqlite::ToSql> = frontier
+                    .iter()
+                    .chain(frontier.iter())
+                    .map(|x| x as &dyn rusqlite::ToSql)
+                    .collect();
+                let pairs = stmt
+                    .query_map(params.as_slice(), |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut next = Vec::new();
+                for (s, t) in pairs {
+                    for n in [s, t] {
+                        if seen.insert(n) {
+                            next.push(n);
+                            ordered_files.push(n);
+                        }
+                    }
+                }
+                frontier = next;
+            }
+            if ordered_files.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let file_rank: HashMap<i64, usize> = ordered_files
+                .iter()
+                .enumerate()
+                .map(|(i, &f)| (f, i))
+                .collect();
+            let ph = vec!["?"; ordered_files.len()].join(",");
+            let sql =
+                format!("SELECT id, file_id, chunk_index FROM chunks WHERE file_id IN ({ph})");
+            let mut stmt = c.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::ToSql> = ordered_files
+                .iter()
+                .map(|x| x as &dyn rusqlite::ToSql)
+                .collect();
+            let mut rows: Vec<(i64, i64, i64)> = stmt
+                .query_map(params.as_slice(), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if let Some(a) = &allowed {
+                rows.retain(|(id, _, _)| a.contains(id));
+            }
+            rows.sort_by_key(|(_, fid, cidx)| {
+                (file_rank.get(fid).copied().unwrap_or(usize::MAX), *cidx)
+            });
+            Ok(rows.into_iter().map(|(id, _, _)| id).collect())
+        })
+        .await
+}
+
+/// Строка резолва (внутренняя): несёт `file_id`/`chunk_index` для dedup overlap.
+struct RawHit {
+    chunk_id: i64,
+    file_id: i64,
+    chunk_index: i64,
+    path: String,
+    title: Option<String>,
+    heading_path: Option<String>,
+    content: String,
+}
+
+/// Резолвит метаданные кандидатов (в порядке RRF), схлопывает перекрывающиеся соседние чанки одного
+/// файла (|Δchunk_index| ≤ 1 — overlap чанкера) и обрезает до `limit`. Порядок RRF сохраняется.
+async fn resolve_and_dedup(
+    reader: &ReadPool,
+    candidates: Vec<(i64, f32)>,
+    limit: usize,
+) -> DbResult<Vec<SearchHit>> {
+    let score_of: HashMap<i64, f32> = candidates.iter().copied().collect();
+    let order: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
+    let ids = order.clone();
+
+    let rows = reader
+        .query(move |c| {
+            let ph = vec!["?"; ids.len()].join(",");
             let sql = format!(
-                "SELECT ch.id, f.path, f.title, ch.heading_path, ch.content \
+                "SELECT ch.id, ch.file_id, ch.chunk_index, f.path, f.title, ch.heading_path, ch.content \
                  FROM chunks ch JOIN files f ON f.id = ch.file_id \
-                 WHERE f.is_deleted = 0 AND ch.id IN ({placeholders})"
+                 WHERE f.is_deleted = 0 AND ch.id IN ({ph})"
             );
             let mut stmt = c.prepare(&sql)?;
             let rows = stmt
                 .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
-                    let chunk_id: i64 = r.get(0)?;
-                    let content: String = r.get(4)?;
-                    Ok(SearchHit {
-                        chunk_id,
-                        path: r.get(1)?,
-                        title: r.get(2)?,
-                        heading_path: r.get(3)?,
-                        snippet: snippet_of(&content),
-                        score: 0.0, // проставим из RRF ниже
+                    Ok(RawHit {
+                        chunk_id: r.get(0)?,
+                        file_id: r.get(1)?,
+                        chunk_index: r.get(2)?,
+                        path: r.get(3)?,
+                        title: r.get(4)?,
+                        heading_path: r.get(5)?,
+                        content: r.get(6)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -183,17 +402,34 @@ pub async fn hybrid_search(
         })
         .await?;
 
-    // Проставляем RRF-score и сортируем по нему (IN не сохраняет порядок).
-    for h in &mut hits {
-        h.score = score_of.get(&h.chunk_id).copied().unwrap_or(0.0);
+    let mut by_id: HashMap<i64, RawHit> = rows.into_iter().map(|h| (h.chunk_id, h)).collect();
+    let mut kept_idx_by_file: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut out: Vec<SearchHit> = Vec::with_capacity(limit);
+    for id in order {
+        let Some(h) = by_id.remove(&id) else { continue };
+        let overlaps = kept_idx_by_file
+            .get(&h.file_id)
+            .is_some_and(|idxs| idxs.iter().any(|&ci| (ci - h.chunk_index).abs() <= 1));
+        if overlaps {
+            continue; // соседний чанк того же файла уже взят — это overlap чанкера
+        }
+        kept_idx_by_file
+            .entry(h.file_id)
+            .or_default()
+            .push(h.chunk_index);
+        out.push(SearchHit {
+            score: score_of.get(&h.chunk_id).copied().unwrap_or(0.0),
+            chunk_id: h.chunk_id,
+            path: h.path,
+            title: h.title,
+            heading_path: h.heading_path,
+            snippet: snippet_of(&h.content),
+        });
+        if out.len() >= limit {
+            break;
+        }
     }
-    hits.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.chunk_id.cmp(&b.chunk_id))
-    });
-    Ok(hits)
+    Ok(out)
 }
 
 /// Полное содержимое чанков по id (для сборки RAG-контекста чата). Ключ — `chunk_id`, значение —
@@ -298,6 +534,14 @@ mod tests {
         Database::open(root.join(".nexus/nexus.db")).await.unwrap()
     }
 
+    /// Опции поиска только с лимитом (без фильтра/центра).
+    fn opts(limit: usize) -> SearchOptions {
+        SearchOptions {
+            limit,
+            ..Default::default()
+        }
+    }
+
     /// Индексирует файлы с RAG (mock-эмбеддер) и возвращает эмбеддер + векторный индекс.
     async fn index_rag(
         db: &Database,
@@ -374,7 +618,7 @@ mod tests {
         )
         .await;
 
-        let hits = hybrid_search(db.reader(), None, None, "sourdough".into(), 10)
+        let hits = hybrid_search(db.reader(), None, None, "sourdough".into(), opts(10))
             .await
             .unwrap();
         assert!(!hits.is_empty(), "FTS-ветвь работает без эмбеддера");
@@ -410,7 +654,7 @@ mod tests {
             Some(vectors.as_ref()),
             Some(emb.as_ref()),
             "rocket orbit".into(),
-            10,
+            opts(10),
         )
         .await
         .unwrap();
@@ -430,12 +674,14 @@ mod tests {
         let db = open_db(&root).await;
         index_rag(&db, &root, &[("A.md", "# A\n\nalpha beta gamma\n")], 16).await;
 
-        assert!(hybrid_search(db.reader(), None, None, "   ".into(), 10)
-            .await
-            .unwrap()
-            .is_empty());
         assert!(
-            hybrid_search(db.reader(), None, None, "zzzneverappears".into(), 10)
+            hybrid_search(db.reader(), None, None, "   ".into(), opts(10))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            hybrid_search(db.reader(), None, None, "zzzneverappears".into(), opts(10))
                 .await
                 .unwrap()
                 .is_empty()
@@ -481,11 +727,146 @@ mod tests {
             Some(vectors.as_ref()),
             Some(embedder.as_ref()),
             "пушистый питомец мурлычет".into(),
-            5,
+            opts(5),
         )
         .await
         .unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].path, "cat.md", "семантический топ — про кошку");
+    }
+
+    /// AC-Б6-2: префильтр по папке/тегу применяется ДО KNN — выдача ограничена подпапкой.
+    #[tokio::test]
+    async fn prefilter_by_folder_restricts_results() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::create_dir_all(root.join("Work")).unwrap();
+        fs::create_dir_all(root.join("Personal")).unwrap();
+        let db = open_db(&root).await;
+        let (emb, vectors) = index_rag(
+            &db,
+            &root,
+            &[
+                ("Work/Plan.md", "# Plan\n\nDeploy the rocket to orbit.\n"),
+                (
+                    "Personal/Diary.md",
+                    "# Diary\n\nThe rocket launch was loud.\n",
+                ),
+            ],
+            16,
+        )
+        .await;
+
+        let folder_opts = SearchOptions {
+            limit: 10,
+            filter: Some(SearchFilter {
+                folder: Some("Work".into()),
+                tag: None,
+            }),
+            center: None,
+        };
+        let hits = hybrid_search(
+            db.reader(),
+            Some(vectors.as_ref()),
+            Some(emb.as_ref()),
+            "rocket".into(),
+            folder_opts,
+        )
+        .await
+        .unwrap();
+        assert!(!hits.is_empty());
+        assert!(
+            hits.iter().all(|h| h.path.starts_with("Work/")),
+            "префильтр по папке исключил Personal/* (AC-Б6-2)"
+        );
+    }
+
+    /// Граф-ранг (изолированно): без эмбеддера и без лексических совпадений выдачу формирует ТОЛЬКО
+    /// граф — сосед центра попадает, несвязанный файл — нет. Подтверждает 3-й источник RRF (§6.2).
+    #[tokio::test]
+    async fn graph_rank_surfaces_neighbor_of_center() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = open_db(&root).await;
+        index_rag(
+            &db,
+            &root,
+            &[
+                (
+                    "Hub.md",
+                    "# Hub\n\nГлавная заметка ссылается на [[Neighbor]].\n",
+                ),
+                ("Neighbor.md", "# Neighbor\n\nкварки глюоны адроны бозоны\n"),
+                ("Far.md", "# Far\n\nрецепт борща со сметаной\n"),
+            ],
+            16,
+        )
+        .await;
+
+        // Вектор off (None), запрос без лексических совпадений → FTS пуст. Центр = Hub → выдачу
+        // даёт ТОЛЬКО граф-ранг: сосед Neighbor есть, несвязанный Far отсутствует.
+        let with_center = SearchOptions {
+            limit: 10,
+            filter: None,
+            center: Some("Hub.md".into()),
+        };
+        let hits = hybrid_search(db.reader(), None, None, "zzqphysics".into(), with_center)
+            .await
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.path == "Neighbor.md"),
+            "сосед центра попал в выдачу через граф-ранг"
+        );
+        assert!(
+            hits.iter().all(|h| h.path != "Far.md"),
+            "несвязанный файл не подтянут графом"
+        );
+
+        // Без центра (и без вектора/FTS-совпадений) — выдача пуста.
+        let hits_no_center = hybrid_search(db.reader(), None, None, "zzqphysics".into(), opts(10))
+            .await
+            .unwrap();
+        assert!(hits_no_center.is_empty(), "без центра граф-ранга нет");
+    }
+
+    /// Dedup overlap: соседние перекрывающиеся чанки одного файла схлопываются (≤1 на регион).
+    #[tokio::test]
+    async fn dedup_collapses_adjacent_chunks() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = open_db(&root).await;
+        // Длинный текст с повторяющимся термином → чанкер нарежет несколько СОСЕДНИХ чанков.
+        let body = format!("# Doc\n\n{}", "vector ".repeat(2000));
+        let (emb, vectors) = index_rag(&db, &root, &[("Big.md", &body)], 16).await;
+
+        // Чанков должно быть >1 (иначе тест бессмыслен).
+        let n: i64 = db
+            .reader()
+            .query(|c| c.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        assert!(n > 1, "ожидаем несколько чанков (их {n})");
+
+        let hits = hybrid_search(
+            db.reader(),
+            Some(vectors.as_ref()),
+            Some(emb.as_ref()),
+            "vector".into(),
+            opts(10),
+        )
+        .await
+        .unwrap();
+        // Все из одного файла Big.md, но соседние (Δindex≤1) схлопнуты → не подряд идущие индексы.
+        assert!(!hits.is_empty());
+        assert!(
+            hits.iter().all(|h| h.path == "Big.md"),
+            "все попадания из одного файла"
+        );
+        // Дедуп должен оставить меньше, чем всего чанков (схлопнул хотя бы пару соседних).
+        assert!(
+            (hits.len() as i64) < n,
+            "overlap соседних чанков схлопнут ({} из {n})",
+            hits.len()
+        );
     }
 }

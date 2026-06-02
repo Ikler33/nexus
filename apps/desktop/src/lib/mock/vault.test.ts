@@ -19,7 +19,7 @@ describe('mock searchContent (контракт Ф1-6)', () => {
   });
 
   it('сортирует по score↓ и режет по limit', async () => {
-    const hits = await searchContent('проект план alpha', 2);
+    const hits = await searchContent('проект план alpha', { limit: 2 });
     expect(hits.length).toBeLessThanOrEqual(2);
     for (let i = 1; i < hits.length; i++) {
       expect(hits[i - 1].score).toBeGreaterThanOrEqual(hits[i].score);

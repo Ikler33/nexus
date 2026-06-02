@@ -112,7 +112,11 @@ export async function searchVault(query: string): Promise<NoteRef[]> {
   });
 }
 
-export async function searchContent(query: string, limit = 10): Promise<SearchHit[]> {
+export async function searchContent(
+  query: string,
+  opts?: { limit?: number; folder?: string; tag?: string; center?: string },
+): Promise<SearchHit[]> {
+  const limit = opts?.limit ?? 10;
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const terms = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
@@ -120,6 +124,7 @@ export async function searchContent(query: string, limit = 10): Promise<SearchHi
 
   const hits: SearchHit[] = [];
   for (const [path, content] of Object.entries(CONTENT)) {
+    if (opts?.folder && path !== opts.folder && !path.startsWith(`${opts.folder}/`)) continue;
     const lower = content.toLowerCase();
     // Псевдо-RRF-score: число вхождений терминов (приближение релевантности для превью).
     const score = terms.reduce((s, t) => s + lower.split(t).length - 1, 0);
@@ -139,7 +144,7 @@ export function streamChat(
 ): () => void {
   let cancelled = false;
   void (async () => {
-    const sources = await searchContent(question, k);
+    const sources = await searchContent(question, { limit: k });
     if (cancelled) return;
     onEvent({ type: 'sources', sources });
     const answer = sources.length

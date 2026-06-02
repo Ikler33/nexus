@@ -231,3 +231,17 @@
     фронт — мок streamChat (порядок событий, отмена). Дока: `docs/dev/chat.md`.
 
   Закрывает **AC-Б10** (стриминг через Channel + финализация в `Done` + отмена). UI чата — Ф1-8.
+
+- **Ф1-6 доработка — префильтр (AC-Б6-2) + граф-ранг + dedup overlap (§6.2).**
+  - **AC-Б6-2 (префильтр ДО KNN):** `SearchFilter { folder, tag }` → `allowed_chunk_ids`; вектор-ветвь
+    через usearch `filtered_search` (фильтр ВНУТРИ обхода HNSW — `VectorIndex::search_filtered`, не
+    пост-фильтр), FTS-ветвь через `JOIN files`, граф-ветвь — пересечением. Закрывает AC-Б6-2.
+  - **Граф — 3-й ранг RRF (§6.2, REVIEW С-4):** `center` (открытый файл) → BFS по `links` (`GRAPH_HOPS=2`)
+    → чанки соседей по (хоп, `chunk_index`) третьим списком в `rrf_fuse` — **в шкале RRF, БЕЗ `+0.2`**.
+  - **Dedup overlap:** пере-выбор `limit×OVERFETCH` → схлоп соседних чанков одного файла (|Δindex|≤1).
+  - `SearchOptions`; `search_content(query, limit?, folder?, tag?, center?)`; `chat_rag` передаёт `center`.
+    Фронт: `searchContent(query, {limit,folder,tag,center})`, `streamRag(.., {center})`, мок учитывает `folder`.
+  - Тесты: префильтр по папке, граф-ранг (изолированно), dedup overlap (+ живые зелёные). 63 Rust + 4 живых.
+
+  Закрывает **AC-Б6-2**; граф-ранг — пункт DoD-Ф1 «hybrid+RRF без +0.2». Остаётся (осознанно): реранкер
+  (опц., ADR-005, под eval-гейтом AC-EVAL-3 после Ф1-10), фильтр по дате, калибровка весов на eval.
