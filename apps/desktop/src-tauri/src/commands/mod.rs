@@ -2,4 +2,5 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1).
 
 pub mod graph;
+pub mod search;
 pub mod vault;

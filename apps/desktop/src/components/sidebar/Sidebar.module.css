@@ -1,0 +1,98 @@
+.sidebar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.searchBox:focus-within {
+  border-color: var(--color-accent);
+}
+
+.searchIcon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.clear {
+  display: inline-flex;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.clear:hover {
+  color: var(--color-text);
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-1);
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.empty {
+  padding: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.result:hover {
+  background: var(--color-bg-elevated);
+}
+
+.result:focus-visible {
+  outline: 2px solid var(--color-accent);
+}
+
+.resultName {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+
+.resultPath {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

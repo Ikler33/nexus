@@ -92,6 +92,17 @@ export async function getBacklinks(path: string): Promise<BacklinkEntry[]> {
   return out.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
 }
 
+export async function searchVault(query: string): Promise<NoteRef[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const notes = await listNotes();
+  return notes.filter((n) => {
+    if (n.path.toLowerCase().includes(q)) return true;
+    const content = (CONTENT[n.path] ?? '').toLowerCase();
+    return content.includes(`#${q}`); // совпадение по тегу
+  });
+}
+
 export async function listNotes(): Promise<NoteRef[]> {
   const files = Object.values(TREE)
     .flat()

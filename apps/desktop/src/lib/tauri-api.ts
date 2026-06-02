@@ -91,6 +91,12 @@ export const tauriApi = {
         ? invoke<BacklinkEntry[]>('get_backlinks', { path })
         : mockVault.getBacklinks(path),
   },
+
+  search: {
+    /** Поиск по title/path/tags (Ф0; полнотекст по телу — Ф1). */
+    searchVault: (query: string) =>
+      isTauri() ? invoke<NoteRef[]>('search_vault', { query }) : mockVault.searchVault(query),
+  },
 };
 
 export type TauriApi = typeof tauriApi;

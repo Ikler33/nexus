@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { isTauri, tauriApi } from './lib/tauri-api';
 import { useVaultStore } from './stores/vault';
-import { FileTree } from './components/sidebar/FileTree';
+import { Sidebar } from './components/sidebar/Sidebar';
 import { Editor } from './components/editor/Editor';
 import { BacklinksBar } from './components/editor/BacklinksBar';
 import styles from './App.module.css';
@@ -46,7 +46,7 @@ export function App() {
             <FolderOpen size={16} aria-hidden />
           </button>
         </header>
-        <FileTree />
+        <Sidebar />
       </aside>
 
       <main className={styles.main}>

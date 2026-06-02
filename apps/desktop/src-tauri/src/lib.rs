@@ -15,6 +15,8 @@ pub mod graph;
 pub mod indexer;
 /// Markdown-парсер (frontmatter, ссылки, теги).
 pub mod parser;
+/// Поиск по метаданным (title/path/tags) — Ф0.
+pub mod search;
 /// Глобальное состояние (managed state).
 pub mod state;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
@@ -52,6 +54,7 @@ pub fn run() {
             commands::vault::write_file,
             commands::vault::list_notes,
             commands::graph::get_backlinks,
+            commands::search::search_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");
