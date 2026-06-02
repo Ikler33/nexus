@@ -13,6 +13,8 @@ pub mod chunker;
 mod commands;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
+pub mod eval;
 /// Граф ссылок: беклинки из SQLite (ADR-004).
 pub mod graph;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.

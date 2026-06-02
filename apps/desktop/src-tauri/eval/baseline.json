@@ -1,0 +1,15 @@
+{
+  "_comment": "Baseline метрик RAG-эвала (AC-EVAL-2). Зафиксирован в Фазе 1 по фактическому прогону на указанных условиях (AC-EVAL-4). Регресс ниже этих значений блокирует merge (AC-EVAL-3). Обновлять только осознанно при улучшении модели/пайплайна.",
+  "_measured": "Фактический прогон nomic-embed-text @ :8081: recall@8=nDCG@8=MRR=0.800 (8/10 кейсов идеально). 2 промаха — кросс-язычные (EN→RU, RU→EN): nomic англоцентричен (риск ADR-005). AC-EVAL-6 закроет мультиязычный эмбеддер (bge-m3/e5) — тогда baseline поднять.",
+  "conditions": {
+    "embedding_model": "nomic-embed-text",
+    "embedding_server": "http://127.0.0.1:8081",
+    "k": 8,
+    "golden": "eval/golden.json"
+  },
+  "metrics": {
+    "recall_at_k": 0.8,
+    "ndcg_at_k": 0.8,
+    "mrr": 0.8
+  }
+}

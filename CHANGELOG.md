@@ -276,3 +276,18 @@
 
   Закрывает Ф1-9 (suggest режим 1, max-sim — пункт AC-DOD-Ф1). Режим 2 (LLM), кэш `link_suggestions`,
   персист dismiss, калибровка порога — в `docs/BACKLOG.md`.
+
+- **Ф1-10 — Eval-харнесс качества RAG (§6.6, AC-EVAL-1..6).**
+  - `eval/golden.json` — корпус (RU/EN) + кейсы `query→файлы`, включая **кросс-язычные** (AC-EVAL-6);
+    `eval/baseline.json` — пороги + условия (модель/сервер/k/набор, AC-EVAL-4).
+  - `eval::{recall_at_k, reciprocal_rank, ndcg_at_k}` (чистые) + `run_eval` (через `hybrid_search`,
+    файловая релевантность) + `EvalReport`/`CaseResult` + `index_corpus` + `load_golden/baseline`.
+  - Раннер-гейт: `#[ignore]`-тест `live_eval_meets_baseline` — печатает отчёт и падает при метриках ниже
+    baseline (**AC-EVAL-3**). Запуск: `cargo test live_eval_meets_baseline -- --ignored --nocapture`.
+  - **Фактический baseline** (nomic @ :8081, k=8, 10 кейсов): recall@8 = nDCG@8 = MRR = **0.800**; 8/10
+    идеальны, **2 промаха — кросс-язычные** → количественно подтверждён риск ADR-005 (AC-EVAL-6 ждёт
+    мультиязычный эмбеддер). Тесты: математика метрик + парс + e2e на mock + живой ≥ baseline. Дока `docs/dev/eval.md`.
+
+  Закрывает **AC-EVAL-1..5** (golden, метрики, baseline-гейт, условия в отчёте; suggest-порог per-model).
+  **AC-EVAL-6** измерен и зафиксирован как недостигнутый на nomic (нужен мультиязычный эмбеддер — BACKLOG).
+  **🏁 Фаза 1 (AI Core) завершена** — RAG end-to-end + видимый UI + suggest + измеримое качество.
