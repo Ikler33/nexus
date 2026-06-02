@@ -14,11 +14,18 @@ struct Migration {
 /// FTS5 (`fts_chunks`) и usearch нельзя `ALTER` — они появятся отдельными миграциями
 /// в Ф1 (с пересозданием/переиндексацией из `chunks`); chat/link_suggestions — там же
 /// по мере надобности. Здесь — ядро для Ф0 (см. `001_initial.sql`).
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial",
-    sql: include_str!("migrations/001_initial.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial",
+        sql: include_str!("migrations/001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "chunks_fts",
+        sql: include_str!("migrations/002_chunks_fts.sql"),
+    },
+];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
 pub fn latest_version() -> u32 {

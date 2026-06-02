@@ -275,4 +275,59 @@ mod tests {
             .unwrap();
         assert_eq!(total, 50);
     }
+
+    /// Число чанков, найденных FTS по слову `vector`.
+    async fn fts_vector_hits(db: &Database) -> i64 {
+        db.reader()
+            .query(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM fts_chunks WHERE fts_chunks MATCH 'vector'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .await
+            .unwrap()
+    }
+
+    /// AC-Б8-1/8-2 (схема v2): FTS5 поверх chunks синхронизируется триггерами — текст
+    /// находится сразу после вставки и исчезает после удаления чанка (нет «призраков»).
+    #[tokio::test]
+    async fn fts_chunks_synced_via_triggers() {
+        let (db, _dir) = temp_db().await;
+
+        db.writer()
+            .call(|c| {
+                c.execute(
+                    "INSERT INTO files (path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                     VALUES ('A.md','h',0,0,0,1)",
+                    [],
+                )?;
+                let fid: i64 =
+                    c.query_row("SELECT id FROM files WHERE path='A.md'", [], |r| r.get(0))?;
+                c.execute(
+                    "INSERT INTO chunks (file_id,chunk_index,content,char_start,char_end,token_count) \
+                     VALUES (?1,0,'hello vector search world',0,25,5)",
+                    [fid],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            fts_vector_hits(&db).await,
+            1,
+            "FTS находит текст чанка сразу (AC-Б8-1)"
+        );
+
+        db.writer()
+            .call(|c| c.execute("DELETE FROM chunks", []).map(|_| ()))
+            .await
+            .unwrap();
+        assert_eq!(
+            fts_vector_hits(&db).await,
+            0,
+            "после удаления чанка FTS чист (AC-Б8-2)"
+        );
+    }
 }

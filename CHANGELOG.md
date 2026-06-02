@@ -143,3 +143,13 @@
   - Тесты: совместимость/`TooNew`/`TooOld`/каретка-`BadVersion`/битый json/scan. Дока: `docs/dev/plugins.md`.
 
   Закрывает каркас плагинов части **AC-DOD-Ф0** (С-13).
+
+### Added — Фаза 1 (AI Core)
+
+- **Ф1-1 — Схема v2: chunks + FTS5 + триггеры.**
+  - Миграция `002_chunks_fts.sql`: таблица `chunks` (+`idx_chunks_file`) + `fts_chunks` (FTS5
+    external-content поверх `chunks.content`) + триггеры синхронизации `chunks_ai/ad/au` (§5).
+  - Тест `fts_chunks_synced_via_triggers` (AC-Б8-1/8-2): текст находится сразу после вставки,
+    исчезает после удаления чанка. Дока: `docs/dev/db.md` (schema v2).
+
+  Закрывает **AC-Б8-1/8-2** (FTS-синхронизация), готовит почву под чанкер/эмбеддинги.
