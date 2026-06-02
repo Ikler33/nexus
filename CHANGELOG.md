@@ -153,3 +153,11 @@
     исчезает после удаления чанка. Дока: `docs/dev/db.md` (schema v2).
 
   Закрывает **AC-Б8-1/8-2** (FTS-синхронизация), готовит почву под чанкер/эмбеддинги.
+
+- **Ф1-2 — Чанкер (markdown-aware).**
+  - `chunk_document`: frontmatter вырезан; разбиение по ATX-заголовкам (heading_path); sliding window
+    с overlap ВНУТРИ окна (по словам), fenced-code атомарен; `char_start/end` — в исходном файле;
+    `token_count` по тексту чанка. `Tokenizer` (placeholder `WordTokenizer`; реальный — Ф1-3).
+  - Тесты: короткий/frontmatter/заголовки/overlap/код-атомарен. Дока: `docs/dev/chunker.md`.
+
+  Готовит **AC-Б4-1** (эмбеддинг по чанкам — замкнётся в Ф1-5).

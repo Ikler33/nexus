@@ -5,6 +5,8 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1 ARCHITECTURE). По мере роста (срезы Ф0-2+)
 //! команды разъезжаются по модулю `commands/` (vault / search / graph / …).
 
+/// Markdown-чанкер для RAG (§6.1).
+pub mod chunker;
 /// Tauri IPC-команды.
 mod commands;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).

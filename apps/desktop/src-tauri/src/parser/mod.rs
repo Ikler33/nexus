@@ -187,7 +187,9 @@ fn scan_wiki_and_tags(
     (links, tags)
 }
 
-fn split_frontmatter(content: &str) -> (Option<&str>, &str, usize) {
+/// Отделяет YAML-frontmatter от тела: `(frontmatter, body, число строк до тела)`.
+/// Переиспользуется чанкером (Ф1-2), чтобы тело шло в чанки без frontmatter.
+pub(crate) fn split_frontmatter(content: &str) -> (Option<&str>, &str, usize) {
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
         return (None, content, 0);
     }
