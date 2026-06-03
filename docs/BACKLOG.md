@@ -48,7 +48,7 @@
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
 | ⏳ **i18n бэкенда** (Rust-ошибки, fluent/rust-i18n) | фронт-i18n закрыт (AC-I18N-1…5) | Ф3 | AC-I18N-6, `i18n.md` |
-| ⏳ **git-sync** + конфликт «диск vs грязный буфер»; secret-scan коммитов | нет слоя синхронизации | Ф3 | `editor.md`, `security.md` |
+| ⏳ git-sync: **разрешение конфликтов** при `merge-required` (3-way / диск vs грязный буфер) + pull плагина → `needs-review` (AC-Б3-2) | ядро git-sync (Ф3-1…3b-3) + secret-scan **сделаны**; конфликты — отдельно, needs-review завязан на marketplace | доводка Ф3 | `git.md`, `editor.md`, AC-Б3-2 |
 | ⏳ Анти-SSRF валидация `*.url`; опц. at-rest шифрование (SQLCipher) | локальные доверенные эндпоинты на dev | Ф3 / релиз | §11, `security.md` |
 | ⏳ Рантайм-CSP-проверка на упаковке | каркас CSP/capabilities закрыт | упаковка/релиз | AC-SEC-5, `security.md` |
 | ✂️ Workspace: drag вкладок между группами, вертикальный сплит, персист раскладки | базовая модель групп/вкладок есть | — | DESIGN §3, `workspace.md` |
@@ -65,6 +65,7 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **Ф3-3b-3 — git-sync UI (финиш git-sync)** — панель «Синхронизация»: remote (URL) + токен (→ keychain) + кнопка sync (pull-ff/push) с исходом; `tauriApi.git` (setRemote/getRemote/sync) + мок + i18n. Проверено в превью. **git-sync функционально готов.**
 - **Ф3-3b-2 — git-sync remote + pull/push по https** — git2 https + vendored-openssl; `set_remote`/`get_remote`/`push`/`pull` (ff/up-to-date/merge-required), токен из keychain в credentials-callback; команды `git_set_remote`/`git_get_remote`/`git_sync`. UI + конфликты — Ф3-3b-3.
 - **Ф3-3b-1 — git-credentials в системном keychain (AC-SEC-3)** — `keyring` 3 (Keychain/Cred Manager/Secret Service), токен на диск не пишется; `creds::{set,get,delete,has}_token` + команды + контракт + мок. pull/push (Ф3-3b-2) + конфликты/UI (Ф3-3b-3) — далее.
 - **Ф3-3a — git-sync команды + UI + sync-lock** — `git_status`/`git_commit` (spawn_blocking + `git_lock`), `tauriApi.git` + `SyncPanel` (изменения, коммит, исход вкл. blocked-by-secrets), `view.sync`, i18n. Проверено в превью. Pull/push+конфликты — Ф3-3b.

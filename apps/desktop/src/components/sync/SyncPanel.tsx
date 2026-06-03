@@ -2,13 +2,21 @@ import { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { type GitCommitOutcome, type GitStatusEntry, tauriApi } from '../../lib/tauri-api';
+import {
+  type GitCommitOutcome,
+  type GitPullOutcome,
+  type GitStatusEntry,
+  tauriApi,
+} from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import styles from './SyncPanel.module.css';
 
+type SyncResult = GitPullOutcome | { status: 'error'; message: string };
+
 /**
- * Панель синхронизации (Ф3, git-sync): показывает изменения рабочего дерева и коммитит их через
- * `git_commit` (secret-scan на бэке — при находке секрета коммит блокируется). pull/push — Ф3-3b.
+ * Панель синхронизации (Ф3, git-sync): изменения рабочего дерева + коммит (secret-scan на бэке),
+ * настройка remote (URL + токен в системный keychain) и sync (pull-ff → push). Конфликт
+ * (`merge-required`) пока только сигналим — ручное разрешение в BACKLOG (завязано на marketplace).
  */
 export function SyncPanel() {
   const { t } = useTranslation();
@@ -17,6 +25,13 @@ export function SyncPanel() {
   const [outcome, setOutcome] = useState<GitCommitOutcome | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // remote-конфиг
+  const [remoteUrl, setRemoteUrl] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+
   const load = useCallback(() => {
     setOutcome(null);
     setChanges(null);
@@ -24,6 +39,14 @@ export function SyncPanel() {
       .status()
       .then(setChanges)
       .catch(() => setChanges([]));
+    tauriApi.git
+      .getRemote()
+      .then((r) => setRemoteUrl(r ?? ''))
+      .catch(() => {});
+    tauriApi.git
+      .hasToken()
+      .then(setConnected)
+      .catch(() => {});
   }, []);
   useEffect(() => load(), [load]);
 
@@ -32,7 +55,6 @@ export function SyncPanel() {
     try {
       const o = await tauriApi.git.commit();
       setOutcome(o);
-      // Обновляем список файлов (после коммита обычно пусто), но СОХРАНЯЕМ сообщение об исходе.
       if (o.status !== 'blocked-by-secrets') {
         await tauriApi.git
           .status()
@@ -40,9 +62,38 @@ export function SyncPanel() {
           .catch(() => setChanges([]));
       }
     } catch {
-      /* ошибки команды показываем как пустой исход — UI остаётся рабочим */
+      /* ошибки команды не ломают UI */
     } finally {
       setBusy(false);
+    }
+  };
+
+  const saveRemote = async () => {
+    try {
+      if (remoteUrl.trim()) await tauriApi.git.setRemote(remoteUrl.trim());
+      if (tokenInput.trim()) {
+        await tauriApi.git.setToken(tokenInput.trim());
+        setTokenInput('');
+      }
+      setConnected(await tauriApi.git.hasToken());
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const sync = async () => {
+    setSyncBusy(true);
+    setSyncResult(null);
+    try {
+      setSyncResult(await tauriApi.git.sync());
+      await tauriApi.git
+        .status()
+        .then(setChanges)
+        .catch(() => {});
+    } catch (e) {
+      setSyncResult({ status: 'error', message: String(e) });
+    } finally {
+      setSyncBusy(false);
     }
   };
 
@@ -91,10 +142,49 @@ export function SyncPanel() {
             </ul>
           )}
 
-          {outcome && <Outcome outcome={outcome} />}
+          {outcome && <CommitResult outcome={outcome} />}
+
+          <section className={styles.remote}>
+            <label className={styles.remoteRow}>
+              <span className={styles.remoteLabel}>{t('git.remote')}</span>
+              <input
+                className={styles.input}
+                value={remoteUrl}
+                onChange={(e) => setRemoteUrl(e.target.value)}
+                placeholder={t('git.remotePlaceholder')}
+                spellCheck={false}
+              />
+            </label>
+            <label className={styles.remoteRow}>
+              <span className={styles.remoteLabel}>{t('git.token')}</span>
+              <input
+                className={styles.input}
+                type="password"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder={connected ? t('git.tokenSaved') : t('git.tokenPlaceholder')}
+              />
+            </label>
+            <div className={styles.remoteActions}>
+              <span className={connected ? styles.connected : styles.muted}>
+                {connected ? `✓ ${t('git.connected')}` : t('git.notConnected')}
+              </span>
+              <button className={styles.secondaryBtn} onClick={() => void saveRemote()}>
+                {t('git.connect')}
+              </button>
+            </div>
+            {syncResult && <SyncResultView result={syncResult} />}
+          </section>
         </div>
 
         <footer className={styles.footer}>
+          <button
+            className={styles.secondaryBtn}
+            onClick={() => void sync()}
+            disabled={syncBusy || !remoteUrl.trim()}
+          >
+            {syncBusy ? t('git.syncing') : t('git.syncBtn')}
+          </button>
           <button
             className={styles.commitBtn}
             onClick={() => void commit()}
@@ -108,7 +198,7 @@ export function SyncPanel() {
   );
 }
 
-function Outcome({ outcome }: { outcome: GitCommitOutcome }) {
+function CommitResult({ outcome }: { outcome: GitCommitOutcome }) {
   const { t } = useTranslation();
   if (outcome.status === 'committed') {
     return <p className={styles.ok}>✓ {outcome.message}</p>;
@@ -116,7 +206,6 @@ function Outcome({ outcome }: { outcome: GitCommitOutcome }) {
   if (outcome.status === 'nothing-to-commit') {
     return <p className={styles.muted}>{t('git.clean')}</p>;
   }
-  // blocked-by-secrets
   return (
     <div className={styles.blocked} role="alert">
       <p className={styles.blockedTitle}>✋ {t('git.blocked')}</p>
@@ -131,4 +220,13 @@ function Outcome({ outcome }: { outcome: GitCommitOutcome }) {
       </ul>
     </div>
   );
+}
+
+function SyncResultView({ result }: { result: SyncResult }) {
+  const { t } = useTranslation();
+  if (result.status === 'up-to-date') return <p className={styles.muted}>↕ {t('git.upToDate')}</p>;
+  if (result.status === 'fast-forward') return <p className={styles.ok}>↓↑ {t('git.synced')}</p>;
+  if (result.status === 'merge-required')
+    return <p className={styles.warn}>⚠ {t('git.mergeRequired')}</p>;
+  return <p className={styles.errorMsg}>✋ {result.message}</p>;
 }

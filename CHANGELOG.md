@@ -457,6 +457,16 @@
   set/get/overwrite; push/pull — сеть, не юнит-тестятся) + 1 фронт-тест. Rust 106 / фронт 82. UI
   настройки remote + разрешение конфликтов (`merge-required`) + plugin pull → `needs-review` — Ф3-3b-3 (закроет AC-Б3).
 
+- **Ф3-3b-3 — git-sync UI: настройка remote + sync (финиш git-sync).** Панель «Синхронизация»
+  расширена: поле **Remote** (URL) + **Токен** (пароль → в системный keychain через `git_set_token`),
+  индикатор подключения (`git_has_token`), кнопка **Синхр.** (`git_sync` = pull-ff → push) с исходом
+  (`up-to-date` / `synced` / `merge-required` → «разрешите вручную» / ошибка). Контракт `tauriApi.git`
+  (setRemote/getRemote/sync) + мок; i18n RU/EN. **Проверено в превью:** remote + токен → keychain
+  («✓ токен в keychain») → sync → «↓↑ Синхронизировано». Фронт 82. **git-sync функционально готов**
+  (локально + credentials + remote pull/push + UI). Полное разрешение конфликтов (`merge-required`) и
+  plugin pull → `needs-review` — в BACKLOG (завязано на marketplace); git-exclusion кода плагинов
+  (ядро AC-Б3) закрыт `.gitignore` ещё в Ф3-1.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

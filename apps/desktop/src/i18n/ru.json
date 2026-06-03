@@ -77,7 +77,20 @@
     "changes": "Изменения",
     "commit": "Закоммитить",
     "committing": "Коммичу…",
-    "blocked": "Найдены секреты — коммит заблокирован"
+    "blocked": "Найдены секреты — коммит заблокирован",
+    "remote": "Remote",
+    "remotePlaceholder": "https://github.com/you/vault.git",
+    "token": "Токен",
+    "tokenPlaceholder": "токен доступа (PAT)",
+    "tokenSaved": "токен сохранён в keychain",
+    "connect": "Подключить",
+    "connected": "токен в keychain",
+    "notConnected": "нет токена",
+    "syncBtn": "Синхр.",
+    "syncing": "Синхр…",
+    "upToDate": "Актуально",
+    "synced": "Синхронизировано",
+    "mergeRequired": "Конфликт — разрешите вручную"
   },
   "commands": {
     "palette.open": "Палитра команд",
