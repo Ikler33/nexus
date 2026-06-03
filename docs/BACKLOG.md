@@ -65,6 +65,7 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **Ф3-3a — git-sync команды + UI + sync-lock** — `git_status`/`git_commit` (spawn_blocking + `git_lock`), `tauriApi.git` + `SyncPanel` (изменения, коммит, исход вкл. blocked-by-secrets), `view.sync`, i18n. Проверено в превью. Pull/push+конфликты — Ф3-3b.
 - **Ф3-2 — git-sync коммит + secret-scan (AC-SEC-3)** — `commit_all` (add_all+update_all, авто-сообщение), `scan_secrets` (PEM/sk-/ghp_/AKIA/xox-, мало ложных); находка секрета → коммит блокируется. Команды/UI/sync-lock/pull-push — Ф3-3.
 - **Ф3-1 — git-sync фундамент** — `GitSync` (git2/vendored libgit2): open/init, управляемый `.gitignore` (`.nexus/*` вне git, `!config.json` — фундамент AC-Б3-1/AC-SEC-3), `status`. Коммит+secret-scan (Ф3-2), pull/push+конфликты (Ф3-3) — далее.
 - **`net.fetch` + SSRF-гард для плагинов (Ф2-3, AC-SEC-4)** — egress по net-allowlist + `is_private_host` (приватные/loopback/metadata запрещены), без редиректов. DNS-rebinding — в активном беклоге.

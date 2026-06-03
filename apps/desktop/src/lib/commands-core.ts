@@ -89,6 +89,13 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().togglePlugins(),
     }),
+    commands.register({
+      id: 'view.sync',
+      title: 'Sync (git)',
+      titleKey: 'commands.view.sync',
+      source: 'core',
+      run: () => useUIStore.getState().toggleSync(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

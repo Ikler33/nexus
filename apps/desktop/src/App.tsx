@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { FolderOpen, Languages, MessageSquare, Puzzle, Share2 } from 'lucide-react';
+import { FolderOpen, GitBranch, Languages, MessageSquare, Puzzle, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from './lib/tauri-api';
 import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
@@ -18,6 +18,9 @@ const GraphView = lazy(() => import('./components/graph/GraphView'));
 const PluginsPanel = lazy(() =>
   import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
 );
+const SyncPanel = lazy(() =>
+  import('./components/sync/SyncPanel').then((m) => ({ default: m.SyncPanel })),
+);
 
 /**
  * Оболочка приложения: sidebar (поиск + дерево) + область редактора со вкладками/сплитами
@@ -31,6 +34,8 @@ export function App() {
   const toggleChat = useUIStore((s) => s.toggleChat);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   const togglePlugins = useUIStore((s) => s.togglePlugins);
+  const syncOpen = useUIStore((s) => s.syncOpen);
+  const toggleSync = useUIStore((s) => s.toggleSync);
   const { t, i18n } = useTranslation();
 
   useKeymap();
@@ -82,6 +87,15 @@ export function App() {
             </button>
             <button
               className={styles.openBtn}
+              onClick={() => toggleSync()}
+              title={t('commands.view.sync')}
+              aria-label={t('commands.view.sync')}
+              aria-pressed={syncOpen}
+            >
+              <GitBranch size={16} aria-hidden />
+            </button>
+            <button
+              className={styles.openBtn}
               onClick={() => changeLocale(i18n.language === 'ru' ? 'en' : 'ru')}
               title="Язык / Language"
               aria-label="Язык / Language"
@@ -116,6 +130,11 @@ export function App() {
       {pluginsOpen && (
         <Suspense fallback={null}>
           <PluginsPanel />
+        </Suspense>
+      )}
+      {syncOpen && (
+        <Suspense fallback={null}>
+          <SyncPanel />
         </Suspense>
       )}
     </div>

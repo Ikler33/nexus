@@ -1,5 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import * as mockGit from './mock/git';
 import * as mockPlugins from './mock/plugins';
 import * as mockVault from './mock/vault';
 
@@ -44,6 +45,29 @@ export interface PluginInfo {
   compatible: boolean;
   error: string | null;
 }
+
+/** git-sync: статус файла (зеркалит Rust `git::StatusEntry`/`ChangeKind`). */
+export type GitChangeKind = 'new' | 'modified' | 'deleted' | 'renamed' | 'other';
+export interface GitStatusEntry {
+  path: string;
+  kind: GitChangeKind;
+}
+/** Тип найденного секрета (зеркалит Rust `git::SecretKind`). */
+export type GitSecretKind =
+  | 'private-key'
+  | 'openai-key'
+  | 'github-token'
+  | 'aws-access-key'
+  | 'slack-token';
+export interface GitFileSecret {
+  path: string;
+  findings: { line: number; kind: GitSecretKind }[];
+}
+/** Исход авто-коммита (зеркалит Rust `git::CommitOutcome`, тег `status`). */
+export type GitCommitOutcome =
+  | { status: 'nothing-to-commit' }
+  | { status: 'blocked-by-secrets'; findings: GitFileSecret[] }
+  | { status: 'committed'; oid: string; message: string; files: number };
 
 /** Результат гибридного поиска по телу (зеркалит Rust `search::SearchHit`). */
 export interface SearchHit {
@@ -236,6 +260,16 @@ export const tauriApi = {
     /** Закрывает сессию плагина (отзыв токена в брокере). Зовётся при размонтировании плагина. */
     closeSession: (token: string): Promise<void> =>
       isTauri() ? invoke<void>('plugin_close_session', { token }) : mockPlugins.closeSession(token),
+  },
+
+  git: {
+    /** Статус рабочего дерева vault (изменённые/новые/удалённые, без игнорируемых). Ф3. */
+    status: (): Promise<GitStatusEntry[]> =>
+      isTauri() ? invoke<GitStatusEntry[]>('git_status') : mockGit.status(),
+
+    /** Авто-коммит изменений: secret-scan → при находке блокировка; иначе коммит с авто-сообщением. */
+    commit: (): Promise<GitCommitOutcome> =>
+      isTauri() ? invoke<GitCommitOutcome>('git_commit') : mockGit.commit(),
   },
 };
 

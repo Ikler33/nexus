@@ -432,6 +432,14 @@
   (детект форматов без ложных на URL/тексте; коммит→nothing→блокировка секрета). Rust 105. Команды/UI +
   sync-lock + pull/push — Ф3-3.
 
+- **Ф3-3a — git-sync: команды + UI + sync-lock.** Tauri-команды `git_status`/`git_commit` (libgit2 в
+  `spawn_blocking`, под **sync-локом** `AppState::git_lock` — один git-вызов за раз; репозиторий
+  открывается per-вызов, т.к. git2 `!Send`). Фронт: контракт `tauriApi.git` (status/commit) + мок;
+  панель **`SyncPanel`** (список изменений с бейджами A/M/D/R, кнопка коммита, исход —
+  committed/nothing/**blocked-by-secrets** с файлами+строками), кнопка/команда `view.sync`, i18n RU/EN.
+  +1 фронт-тест (мок status→commit→nothing). Rust 105 / фронт 80. **Проверено в превью:** изменения →
+  коммит → «✓ Vault sync: ~2 changed», список очищен. pull/push + детект конфликтов — Ф3-3b.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
