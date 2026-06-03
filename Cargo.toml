@@ -26,6 +26,9 @@ blake3 = "1"
 # AI-слой (§4.3, ADR-005): HTTP к chat/embedding серверам. rustls — без системного OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-trait = "0.1"
+# Конкурентная обработка потоков (§10): buffer_unordered для перекрытия embed-вызовов при скане.
+# Кооперативная конкуренция в одной задаче (не параллелизм) → синхронные секции usearch/БД без гонок.
+futures = "0.3"
 # Векторный ANN (§3): usearch HNSW, mmap, sibling-файл .nexus/vectors.usearch
 usearch = "2"
 # Криптослучайные capability-токены плагинов (§7.9, ADR-002)

@@ -29,6 +29,7 @@ pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 usearch = { workspace = true }
 getrandom = { workspace = true }
 # git-sync (Ф3): локальные + сетевые (pull/push по https). vendored libgit2 + vendored openssl →

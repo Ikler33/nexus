@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures::stream::{self, StreamExt};
 use rusqlite::{params, OptionalExtension, Transaction};
 use tokio::sync::Semaphore;
 
@@ -27,8 +28,13 @@ use crate::watcher::{self, VaultEvent, VaultWatcher};
 
 /// Максимум входов в одном запросе к embedding-серверу (страхует от слишком больших батчей).
 const EMBED_BATCH: usize = 64;
-/// Параллельные embedding-вызовы (для инкрементального пути; начальный скан — последовательный).
-const EMBED_CONCURRENCY: usize = 4;
+/// Одновременные embedding-вызовы к серверу (семафор). Перекрытие сетевой латентности — главный
+/// рычаг throughput первичного скана (бенч: последовательно ~40 эмб/с → ×N с конкуренцией).
+const EMBED_CONCURRENCY: usize = 8;
+/// Сколько файлов скана держим «в полёте» одновременно (`buffer_unordered`). Кооперативная
+/// конкуренция в ОДНОЙ задаче (не параллелизм): перекрывает embed-/IO-ожидания, но синхронные
+/// секции usearch/БД не исполняются параллельно → без гонок. Реальный потолок embed — `EMBED_CONCURRENCY`.
+const SCAN_CONCURRENCY: usize = 16;
 /// Как часто персистить usearch и логировать прогресс во время начального скана (в файлах).
 const SCAN_CHECKPOINT: usize = 256;
 
@@ -349,16 +355,27 @@ impl Indexer {
                 "принудительная полная переиндексация (RAG / смена модели)"
             );
         }
-        for (i, rel) in rels.into_iter().enumerate() {
-            if let Err(e) = self.index_file(&rel).await {
-                tracing::warn!(file = %rel, error = %e, "index_file failed during scan");
-            }
+        // Конкурентный скан (§10): держим до `SCAN_CONCURRENCY` файлов «в полёте» — embed-/IO-ожидания
+        // перекрываются (потолок embed — семафор `EMBED_CONCURRENCY`). Кооперативно в ОДНОЙ задаче:
+        // синхронные секции usearch/БД не исполняются параллельно (между `.next()` ни одна future не
+        // поллится) → `persist_vectors()` в теле цикла и upsert'ы векторов без гонок.
+        let mut done = 0usize;
+        let mut stream = stream::iter(rels)
+            .map(|rel| async move {
+                if let Err(e) = self.index_file(&rel).await {
+                    tracing::warn!(file = %rel, error = %e, "index_file failed during scan");
+                }
+            })
+            .buffer_unordered(SCAN_CONCURRENCY);
+        while stream.next().await.is_some() {
+            done += 1;
             // Периодический чекпойнт usearch + прогресс N/M (AC-PERF-5).
-            if rag_on && (i + 1) % SCAN_CHECKPOINT == 0 {
+            if rag_on && done % SCAN_CHECKPOINT == 0 {
                 self.persist_vectors();
-                tracing::info!(done = i + 1, total, "indexing progress");
+                tracing::info!(done, total, "indexing progress");
             }
         }
+        drop(stream);
         self.writer.transaction(resolve_all_dangling).await?;
         // §5.1: дочинить векторы, потерянные при крахе между commit и save (на force-скане no-op).
         if let Err(e) = self.reconcile_vectors().await {
