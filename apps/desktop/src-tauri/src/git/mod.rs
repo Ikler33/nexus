@@ -5,6 +5,8 @@
 //! Весь libgit2-I/O синхронный → из Tauri-команд вызывается в `spawn_blocking` (как §8 «всё в
 //! spawn_blocking»). git-sync — **core module**, НЕ sandbox-плагин (ADR/§8).
 
+pub mod creds;
+
 use std::path::{Path, PathBuf};
 
 use git2::{Repository, StatusOptions};

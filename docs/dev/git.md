@@ -35,7 +35,15 @@ open существующего. Ф3-2 (2): детект форматов сек
   бейджами A/M/D/R, кнопка коммита, исход committed/nothing/**blocked-by-secrets** с файлами+строками),
   кнопка/команда `view.sync`, i18n RU/EN. Проверено в превью.
 
-## Дальше — Ф3-3b
-- pull/push (нужны сетевые фичи `git2`: https/ssh + credentials callback; решить хранение токена) +
-  детект конфликтов + UI (диск vs грязный буфер редактора); pull нового/изменённого плагина (точнее —
-  `config.json`) → состояние `needs-review` (AC-Б3-2, завязано на marketplace).
+## Сделано — Ф3-3b-1 (credentials в keychain, AC-SEC-3)
+`git/creds.rs` (на `keyring` 3): токен доступа к remote — в системном keychain ОС (macOS Keychain /
+Windows Cred Manager / Linux Secret Service через zbus, pure-Rust), **на диск не пишется**.
+`set_token`/`get_token`/`delete_token`/`has_token` (`service=nexus-git`, `account=<путь vault>`). Команды
+`git_set_token`/`git_clear_token`/`git_has_token` (`spawn_blocking`) + `tauriApi.git` + мок. Тесты: guarded
+роундтрип (`#[ignore]`, реальный keychain) + мок-токен на фронте. Используется в pull/push (Ф3-3b-2).
+
+## Дальше — Ф3-3b-2 / Ф3-3b-3
+- **Ф3-3b-2** — pull/push: сетевые фичи `git2` (https) + credentials-callback (токен из `creds::get_token`)
+  + конфиг remote (URL/ветка). Сборка: openssl на CI → vendored (как libgit2).
+- **Ф3-3b-3** — детект конфликтов (диск vs грязный буфер) + UI (настройка remote, pull/push); pull
+  изменённого `config.json` плагина → `needs-review` (AC-Б3-2, завязано на marketplace). Закрывает AC-Б3.

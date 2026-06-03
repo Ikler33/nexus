@@ -20,3 +20,15 @@ export async function commit(): Promise<GitCommitOutcome> {
   dirty = [];
   return { status: 'committed', oid: 'mock0a1b2c3', message: `Vault sync: ~${files} changed`, files };
 }
+
+// Мок keychain-токена (в реальности — системный keychain через Rust `keyring`).
+let token: string | null = null;
+export async function setToken(t: string): Promise<void> {
+  token = t;
+}
+export async function clearToken(): Promise<void> {
+  token = null;
+}
+export async function hasToken(): Promise<boolean> {
+  return token !== null;
+}
