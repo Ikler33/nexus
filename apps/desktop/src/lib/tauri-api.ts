@@ -75,6 +75,23 @@ export type GitPullOutcome =
   | { status: 'fast-forward'; oid: string }
   | { status: 'merge-required' };
 
+/** Конфликтный файл 3-way (зеркалит Rust `git::ConflictFile`). `null` = файла нет в этой версии. */
+export interface GitConflictFile {
+  path: string;
+  base: string | null;
+  ours: string | null;
+  theirs: string | null;
+}
+
+/** Превью merge (зеркалит Rust `git::MergePreview`). */
+export type GitMergePreview =
+  | { status: 'up-to-date' }
+  | { status: 'clean'; theirs: string }
+  | { status: 'conflicts'; theirs: string; files: GitConflictFile[] };
+
+/** Резолв одного файла: путь + итоговое содержимое (для `git_resolve_conflicts`). */
+export type GitResolution = [path: string, content: string];
+
 /** Результат гибридного поиска по телу (зеркалит Rust `search::SearchHit`). */
 export interface SearchHit {
   chunkId: number;
@@ -315,6 +332,16 @@ export const tauriApi = {
     /** Синхронизация с remote: pull (ff) → push. Токен берётся из keychain. */
     sync: (): Promise<GitPullOutcome> =>
       isTauri() ? invoke<GitPullOutcome>('git_sync') : mockGit.sync(),
+
+    /** Превью merge с origin (in-memory): up-to-date / clean / конфликты (3-way). Ф4-8. */
+    mergePreview: (): Promise<GitMergePreview> =>
+      isTauri() ? invoke<GitMergePreview>('git_merge_preview') : mockGit.mergePreview(),
+
+    /** Применить разрешённый merge (resolutions: [path, content]) + push. Возвращает oid коммита. */
+    resolveConflicts: (theirs: string, resolutions: GitResolution[]): Promise<string> =>
+      isTauri()
+        ? invoke<string>('git_resolve_conflicts', { theirs, resolutions })
+        : mockGit.resolveConflicts(theirs, resolutions),
   },
 };
 

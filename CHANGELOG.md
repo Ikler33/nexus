@@ -574,6 +574,17 @@
   (завязан на marketplace, в BACKLOG). Чистый рестайл на токенах. Сборка зелёная (Фронт 85).
   **Рестайл существующих экранов завершён** (chrome · сайдбар · вкладки · граф · palette · ai · plugins).
 
+- **Ф4-8a — conflict resolver: бэкенд 3-way merge (закрывает git-хвост Ф3).** libgit2 **in-memory**
+  merge (`merge_commits`) — репозиторий и рабочее дерево НЕ трогаются до явного применения (атомарно,
+  безопасно: при отмене ничего не изменилось). `merge_preview(token)` — fetch + merge →
+  `up-to-date` / `clean` / `conflicts` (на каждый файл base/ours/theirs). `apply_merge(theirs,
+  resolutions)` — накладывает резолвы (path→содержимое) на in-memory индекс, проверяет отсутствие
+  остаточных конфликтов, создаёт **merge-коммит (2 родителя)**, двигает ветку + force-checkout, затем
+  push. Команды `git_merge_preview` / `git_resolve_conflicts` (`spawn_blocking`, sync-лок, токен из
+  keychain). Контракт `tauriApi.git.mergePreview/resolveConflicts` + типы (`GitMergePreview`/
+  `GitConflictFile`) + мок. **+1 Rust-тест** (реальный конфликт base→ours/theirs → превью с 3 версиями
+  → резолв → merge-коммит 2 родителя → повторно up-to-date). Rust 108. UI-панель resolver — Ф4-8b.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

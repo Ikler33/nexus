@@ -111,6 +111,33 @@ pub enum PullOutcome {
     MergeRequired,
 }
 
+/// Один конфликтный файл (3-way). Содержимое — текст (markdown); `None` = файла нет в этой версии
+/// (новый/удалённый). Бинарь представляем как пустую строку (UI покажет «бинарный»).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFile {
+    pub path: String,
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+}
+
+/// Превью merge при расхождении истории. **In-memory** (`merge_commits`) — репозиторий и рабочее
+/// дерево НЕ трогаются до явного `apply_merge`. `theirs` — oid их коммита (нужен для apply).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum MergePreview {
+    /// Уже актуально — сливать нечего.
+    UpToDate,
+    /// Чистый merge без конфликтов — можно применить сразу (`apply_merge` с пустыми resolutions).
+    Clean { theirs: String },
+    /// Конфликты — нужен resolver.
+    Conflicts {
+        theirs: String,
+        files: Vec<ConflictFile>,
+    },
+}
+
 /// vault как git-репозиторий. Держит открытый `Repository` (libgit2).
 pub struct GitSync {
     repo: Repository,
@@ -327,6 +354,112 @@ impl GitSync {
             });
         }
         Ok(PullOutcome::MergeRequired)
+    }
+
+    /// Превью merge с уже известным «их» коммитом — **in-memory** (`merge_commits`), без сети и без
+    /// мутаций репозитория/рабочего дерева. Ядро для теста и `merge_preview`.
+    fn merge_with(&self, their: &git2::Commit) -> GitResult<MergePreview> {
+        let our = self.repo.head()?.peel_to_commit()?;
+        if our.id() == their.id() || self.repo.graph_descendant_of(our.id(), their.id())? {
+            return Ok(MergePreview::UpToDate);
+        }
+        let index = self.repo.merge_commits(&our, their, None)?;
+        let theirs = their.id().to_string();
+        if !index.has_conflicts() {
+            return Ok(MergePreview::Clean { theirs });
+        }
+        let blob_text = |entry: Option<&git2::IndexEntry>| -> Option<String> {
+            let e = entry?;
+            let blob = self.repo.find_blob(e.id).ok()?;
+            Some(String::from_utf8_lossy(blob.content()).into_owned())
+        };
+        let mut files = Vec::new();
+        for c in index.conflicts()? {
+            let c = c?;
+            let path_bytes = c
+                .our
+                .as_ref()
+                .or(c.their.as_ref())
+                .or(c.ancestor.as_ref())
+                .map(|e| e.path.clone())
+                .unwrap_or_default();
+            files.push(ConflictFile {
+                path: String::from_utf8_lossy(&path_bytes).into_owned(),
+                base: blob_text(c.ancestor.as_ref()),
+                ours: blob_text(c.our.as_ref()),
+                theirs: blob_text(c.their.as_ref()),
+            });
+        }
+        Ok(MergePreview::Conflicts { theirs, files })
+    }
+
+    /// Превью merge с `origin/<branch>`: fetch + `merge_with`. Ничего не применяет (это `apply_merge`).
+    pub fn merge_preview(&self, token: &str) -> GitResult<MergePreview> {
+        let branch = self.current_branch()?;
+        let mut remote = self.repo.find_remote("origin")?;
+        let mut fo = git2::FetchOptions::new();
+        fo.remote_callbacks(Self::auth_callbacks(token));
+        remote.fetch(&[&branch], Some(&mut fo), None)?;
+        let fetch_head = self.repo.find_reference("FETCH_HEAD")?;
+        let their = fetch_head.peel_to_commit()?;
+        self.merge_with(&their)
+    }
+
+    /// Применяет merge: пере-сливает (in-memory) HEAD с `their_oid`, накладывает `resolutions`
+    /// (`path` → итоговое содержимое) на конфликтные файлы, проверяет отсутствие остаточных
+    /// конфликтов, создаёт merge-коммит (2 родителя), двигает ветку и форс-чекаутит рабочее дерево.
+    /// Возвращает oid коммита. **Атомарно** — до этого вызова репозиторий не в состоянии merge.
+    pub fn apply_merge(
+        &self,
+        their_oid: &str,
+        resolutions: &[(String, String)],
+    ) -> GitResult<String> {
+        let their = self.repo.find_commit(git2::Oid::from_str(their_oid)?)?;
+        let our = self.repo.head()?.peel_to_commit()?;
+        let mut index = self.repo.merge_commits(&our, &their, None)?;
+
+        for (path, content) in resolutions {
+            let blob = self.repo.blob(content.as_bytes())?;
+            // Снимаем все стадии конфликта (1/2/3) для пути, затем кладём разрешённую стадию 0.
+            index.remove_path(Path::new(path)).ok();
+            let entry = git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: blob,
+                flags: 0,
+                flags_extended: 0,
+                path: path.clone().into_bytes(),
+            };
+            index.add(&entry)?;
+        }
+
+        if index.has_conflicts() {
+            return Err(GitError::Git(git2::Error::from_str(
+                "остались неразрешённые конфликты",
+            )));
+        }
+
+        let tree = self.repo.find_tree(index.write_tree_to(&self.repo)?)?;
+        let sig = self.signature()?;
+        let branch = self.current_branch()?;
+        let refname = format!("refs/heads/{branch}");
+        let message = format!(
+            "Merge origin/{branch} (resolved {} conflict(s))",
+            resolutions.len()
+        );
+        let oid = self
+            .repo
+            .commit(Some(&refname), &sig, &sig, &message, &tree, &[&our, &their])?;
+        self.repo.set_head(&refname)?;
+        self.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+        Ok(oid.to_string())
     }
 }
 
@@ -555,6 +688,81 @@ mod tests {
         assert_eq!(
             git.get_remote().unwrap().as_deref(),
             Some("https://example.com/other.git")
+        );
+    }
+
+    /// Ф4-8: 3-way merge resolver. Строим реальный конфликт (base→ours / base→theirs по одной строке),
+    /// проверяем превью (ours/theirs/base) и применение резолва (merge-коммит, рабочий файл, 2 родителя).
+    #[test]
+    fn merge_conflict_preview_and_resolve() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let gs = GitSync::open_or_init(&root).unwrap();
+        let repo = &gs.repo;
+        let sig = git2::Signature::now("T", "t@t").unwrap();
+
+        let commit_head = |content: &str, parents: &[&git2::Commit], msg: &str| -> git2::Oid {
+            std::fs::write(root.join("a.md"), content).unwrap();
+            let mut idx = repo.index().unwrap();
+            idx.add_path(Path::new("a.md")).unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, parents)
+                .unwrap()
+        };
+
+        // base → ours (HEAD движется по ветке).
+        let base = repo
+            .find_commit(commit_head("line1\n", &[], "base"))
+            .unwrap();
+        commit_head("OUR\n", &[&base], "ours");
+
+        // theirs — сиблинг от base, БЕЗ мутаций рабочего дерева (treebuilder).
+        let their_blob = repo.blob("THEIR\n".as_bytes()).unwrap();
+        let mut tb = repo.treebuilder(Some(&base.tree().unwrap())).unwrap();
+        tb.insert("a.md", their_blob, 0o100644).unwrap();
+        let their_tree = repo.find_tree(tb.write().unwrap()).unwrap();
+        let their_oid = repo
+            .commit(None, &sig, &sig, "theirs", &their_tree, &[&base])
+            .unwrap();
+        let their_commit = repo.find_commit(their_oid).unwrap();
+
+        // Превью → конфликт по a.md с тремя версиями.
+        match gs.merge_with(&their_commit).unwrap() {
+            MergePreview::Conflicts { files, .. } => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].path, "a.md");
+                assert_eq!(files[0].base.as_deref(), Some("line1\n"));
+                assert_eq!(files[0].ours.as_deref(), Some("OUR\n"));
+                assert_eq!(files[0].theirs.as_deref(), Some("THEIR\n"));
+            }
+            other => panic!("ожидали Conflicts, получили {other:?}"),
+        }
+
+        // Резолв → merge-коммит, рабочий файл = RESOLVED, 2 родителя, без остаточных конфликтов.
+        let oid = gs
+            .apply_merge(
+                &their_oid.to_string(),
+                &[("a.md".to_string(), "RESOLVED\n".to_string())],
+            )
+            .unwrap();
+        // Нормализуем CRLF: на Windows-раннере git core.autocrlf переписывает рабочий файл при
+        // checkout (это политика git, не баг merge) → сверяем содержимое независимо от EOL.
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "RESOLVED\n"
+        );
+        let merged = repo
+            .find_commit(git2::Oid::from_str(&oid).unwrap())
+            .unwrap();
+        assert_eq!(merged.parent_count(), 2);
+
+        // Теперь мы содержим их коммит → повторное превью «уже актуально».
+        assert_eq!(
+            gs.merge_with(&their_commit).unwrap(),
+            MergePreview::UpToDate
         );
     }
 }
