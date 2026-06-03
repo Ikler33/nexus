@@ -161,6 +161,88 @@ pub async fn get_local_graph(reader: &ReadPool, center: String, hops: u32) -> Db
         .await
 }
 
+/// Единый граф всего vault (AC-DOD-Ф3). В отличие от `GraphData`, несёт мета:
+/// `total_files` (сколько всего файлов в vault) и `truncated` (показаны не все).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FullGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub total_files: i64,
+    pub truncated: bool,
+}
+
+/// Единый граф всего vault (AC-DOD-Ф3 «единый граф»). Узлы — топ-`limit` файлов по
+/// **степени связности** (хабы наверх): на 50k это даёт осмысленный обзор, не перегружая
+/// рендер (sigma + forceatlas2 в воркере). Рёбра — разрешённые связи внутри выбранных узлов.
+pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGraph> {
+    let limit = limit.max(1) as i64;
+    reader
+        .query(move |c| {
+            let total_files: i64 =
+                c.query_row("SELECT COUNT(*) FROM files WHERE is_deleted = 0", [], |r| {
+                    r.get(0)
+                })?;
+
+            // Топ-N файлов по степени (число инцидентных разрешённых связей), хабы первыми.
+            let mut nstmt = c.prepare(
+                "SELECT f.id, f.path, f.title \
+                 FROM files f \
+                 LEFT JOIN ( \
+                     SELECT id, COUNT(*) AS deg FROM ( \
+                         SELECT source_id AS id FROM links WHERE target_id IS NOT NULL \
+                         UNION ALL \
+                         SELECT target_id AS id FROM links WHERE target_id IS NOT NULL \
+                     ) GROUP BY id \
+                 ) d ON d.id = f.id \
+                 WHERE f.is_deleted = 0 \
+                 ORDER BY COALESCE(d.deg, 0) DESC, f.id \
+                 LIMIT ?1",
+            )?;
+            let nodes = nstmt
+                .query_map([limit], |r| {
+                    Ok(GraphNode {
+                        id: r.get(0)?,
+                        path: r.get(1)?,
+                        title: r.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let ids: BTreeSet<i64> = nodes.iter().map(|n| n.id).collect();
+            let mut edges: Vec<GraphEdge> = Vec::new();
+            if !ids.is_empty() {
+                let id_ph = vec!["?"; ids.len()].join(",");
+                let edge_params: Vec<&dyn rusqlite::ToSql> = ids
+                    .iter()
+                    .chain(ids.iter())
+                    .map(|x| x as &dyn rusqlite::ToSql)
+                    .collect();
+                let mut estmt = c.prepare(&format!(
+                    "SELECT DISTINCT source_id, target_id FROM links \
+                     WHERE target_id IS NOT NULL AND source_id IN ({id_ph}) AND target_id IN ({id_ph})"
+                ))?;
+                edges = estmt
+                    .query_map(edge_params.as_slice(), |r| {
+                        Ok(GraphEdge {
+                            source: r.get(0)?,
+                            target: r.get(1)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+            }
+
+            let truncated = total_files > nodes.len() as i64;
+            Ok(FullGraph {
+                nodes,
+                edges,
+                total_files,
+                truncated,
+            })
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +317,39 @@ mod tests {
             .await
             .unwrap();
         assert!(empty.nodes.is_empty() && empty.edges.is_empty());
+    }
+
+    /// AC-DOD-Ф3 (единый граф): полный граф отдаёт все файлы + мету;
+    /// маленький лимит обрезает по степени связности (хабы наверх).
+    #[tokio::test]
+    async fn full_graph_returns_all_then_truncates_by_degree() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(root.join("A.md"), "[[B]] [[D]]\n").unwrap();
+        fs::write(root.join("B.md"), "[[C]]\n").unwrap();
+        fs::write(root.join("C.md"), "# C\n").unwrap();
+        fs::write(root.join("D.md"), "# D\n").unwrap();
+
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let idx = Indexer::new(&db, root.clone());
+        for f in ["A.md", "B.md", "C.md", "D.md"] {
+            idx.index_file(f).await.unwrap();
+        }
+
+        // Лимит с запасом → все 4 файла, не обрезано, мета честная.
+        let full = get_full_graph(db.reader(), 100).await.unwrap();
+        assert_eq!(full.total_files, 4);
+        assert!(!full.truncated);
+        let paths: BTreeSet<_> = full.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(paths, BTreeSet::from(["A.md", "B.md", "C.md", "D.md"]));
+        assert!(full.edges.len() >= 3); // A-B, A-D, B-C
+
+        // Маленький лимит → обрезано до хабов (степень: A=2, B=2, C=1, D=1).
+        let top = get_full_graph(db.reader(), 2).await.unwrap();
+        assert_eq!(top.nodes.len(), 2);
+        assert_eq!(top.total_files, 4);
+        assert!(top.truncated);
+        let tp: BTreeSet<_> = top.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(tp, BTreeSet::from(["A.md", "B.md"]), "топ-2 по степени");
     }
 }

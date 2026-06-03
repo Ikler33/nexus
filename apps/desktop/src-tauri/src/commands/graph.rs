@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use crate::graph::{self, BacklinkEntry, GraphData};
+use crate::graph::{self, BacklinkEntry, FullGraph, GraphData};
 use crate::state::AppState;
 
 /// Беклинки файла (источник истины — SQLite, запрос по idx_links_target).
@@ -26,6 +26,15 @@ pub async fn get_local_graph(
 ) -> Result<GraphData, String> {
     let reader = reader(&state).await?;
     graph::get_local_graph(&reader, center, hops)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Единый граф всего vault (AC-DOD-Ф3): топ-`limit` файлов по связности + рёбра.
+#[tauri::command]
+pub async fn get_full_graph(state: State<'_, AppState>, limit: usize) -> Result<FullGraph, String> {
+    let reader = reader(&state).await?;
+    graph::get_full_graph(&reader, limit)
         .await
         .map_err(|e| e.to_string())
 }

@@ -33,8 +33,12 @@
     "empty": "No commands"
   },
   "graph": {
-    "title": "Local graph",
-    "empty": "Open a file to see its graph"
+    "title": "Graph",
+    "empty": "Open a file to see its graph",
+    "modeLocal": "Local",
+    "modeFull": "Whole vault",
+    "truncated": "showing {{shown}} of {{total}} nodes",
+    "nodeCount": "{{count}} nodes"
   },
   "chat": {
     "title": "AI panel",
@@ -96,7 +100,7 @@
     "vault.open": "Open vault…",
     "file.save": "Save file",
     "view.splitRight": "Split right",
-    "view.graph": "Local graph",
+    "view.graph": "Graph",
     "view.chat": "AI chat",
     "view.suggest": "Link suggestions",
     "view.plugins": "Plugins",

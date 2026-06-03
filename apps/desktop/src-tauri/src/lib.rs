@@ -69,6 +69,7 @@ pub fn run() {
             commands::vault::list_notes,
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
+            commands::graph::get_full_graph,
             commands::search::search_vault,
             commands::search::search_content,
             commands::chat::chat_rag,
