@@ -15,6 +15,8 @@ mod commands;
 pub mod db;
 /// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
 pub mod eval;
+/// git-sync (Фаза 3, §8): vault как git-репозиторий — фундамент (open/init, .gitignore, status).
+pub mod git;
 /// Граф ссылок: беклинки из SQLite (ADR-004).
 pub mod graph;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
