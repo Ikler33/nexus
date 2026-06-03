@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import i18n from '../i18n/setup';
 import { commands } from './commands';
 import { attachPlugin } from './plugin-host';
 import { tauriApi } from './tauri-api';
@@ -125,6 +126,30 @@ describe('plugin-host транспорт (attachPlugin)', () => {
     // dispose снимает команду из реестра
     handle.dispose();
     expect(commands.get('plugin:hello:sayhi')).toBeUndefined();
+  });
+
+  it('ui.addTranslations + titleKey: заголовок команды локализуется (namespace plugin:<id>)', async () => {
+    const ch = new MessageChannel();
+    const handle = await attachPlugin('hello', ch.port1);
+
+    const tr = await rpc(ch.port2, {
+      id: 1,
+      method: 'ui.addTranslations',
+      translations: { ru: { greetKey: 'Привет' }, en: { greetKey: 'Hi' } },
+    });
+    expect(tr.ok).toBe(true);
+    expect(i18n.t('plugin:hello:greetKey', { lng: 'ru' })).toBe('Привет');
+    expect(i18n.t('plugin:hello:greetKey', { lng: 'en' })).toBe('Hi');
+
+    const reg = await rpc(ch.port2, {
+      id: 2,
+      method: 'ui.registerCommand',
+      command: { id: 'greet', title: 'fallback', titleKey: 'greetKey' },
+    });
+    expect(reg.ok).toBe(true);
+    expect(commands.get('plugin:hello:greet')?.titleKey).toBe('plugin:hello:greetKey');
+
+    handle.dispose();
   });
 });
 

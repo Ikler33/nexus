@@ -129,7 +129,14 @@ impl Permissions {
                     Err(Denied::NotGranted("ui:command"))
                 }
             }
-            m if m.starts_with("ui.") => Ok(()), // прочие ui-точки проверяются при регистрации
+            // Прочие ui.* (напр. `ui.addTranslations`) — требуют объявленной хотя бы одной ui-точки.
+            m if m.starts_with("ui.") => {
+                if self.ui.is_empty() {
+                    Err(Denied::NotGranted("ui"))
+                } else {
+                    Ok(())
+                }
+            }
             other => Err(Denied::UnknownMethod(other.to_string())),
         }
     }
@@ -420,6 +427,18 @@ mod tests {
             perms(r#"{"vault:read":["**"]}"#).check(&req),
             Err(Denied::NotGranted("ui:command"))
         );
+        assert!(perms(r#"{"ui":["command"]}"#).check(&req).is_ok());
+    }
+
+    #[test]
+    fn check_other_ui_method_needs_some_ui_point() {
+        let req = ApiRequest {
+            method: "ui.addTranslations",
+            path: None,
+            host: None,
+        };
+        // Без объявленной ui-точки — отказ; с любой — ок.
+        assert_eq!(perms(r#"{}"#).check(&req), Err(Denied::NotGranted("ui")));
         assert!(perms(r#"{"ui":["command"]}"#).check(&req).is_ok());
     }
 

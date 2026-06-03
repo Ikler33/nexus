@@ -135,6 +135,11 @@ export async function invoke(
       if (!s.ui.includes('command')) throw new Error('нет права ui:command');
       return true;
     }
+    case 'ui.addTranslations': {
+      // Любая объявленная ui-точка достаточна; сами строки кладёт фронт-релей в i18n.
+      if (s.ui.length === 0) throw new Error('нет права ui');
+      return true;
+    }
     default:
       throw new Error(`метод не поддержан host-стороной: ${method}`);
   }

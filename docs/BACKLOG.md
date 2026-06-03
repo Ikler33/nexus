@@ -31,7 +31,7 @@
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
 | ⏳ **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) + **iframe-CSP упакованного app** (`frame-src`/`child-src`, origin ассетов) + доверенный JS в **Worker** (сейчас UI-JS в iframe) | транспорт+sandbox готовы (Ф2-2b·4); загрузка/CSP/Worker — отдельный кусок | доводка Ф2 | ADR-001/002, §7.5, `plugins.md`, `security.md` |
-| ⏳ Плагинные i18n-namespace `plugin:<id>:<key>` (сам `registerCommand(source:'plugin')` уже сделан) | i18n готов принять плагины; сейчас заголовок команды плагина — как есть | Ф2-3 | AC-I18N-7, `i18n.md` |
+| ⏳ Host-API для плагинов: `ai.embed/complete/searchSemantic`, `net.fetch` (allowlist) | транспорт+права готовы; нужен доступ dispatch к эмбеддеру/поиску из `AppState` + reqwest по allowlist | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
 | ⏳ Миграции схемы `chat_*` / `link_suggestions` (FTS5/usearch нельзя `ALTER`) | не нужны до соответствующих фич | при их реализации | `db.md` |
 
 ## Фаза 3 / позже — sync, надёжность, доводка
@@ -56,6 +56,7 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **Плагинные i18n-namespace `plugin:<id>:<key>` (Ф2-3, AC-I18N-7)** — `ui.addTranslations` → i18next ns `plugin` (вложенно); `registerCommand` с `titleKey` → заголовок локализован и реагирует на смену языка. Проверено в превью (EN↔RU).
 - **`registerCommand(source:'plugin')` (Ф2-3)** — плагин добавляет команду в палитру через брокер (право `ui:command`); двунаправленный транспорт (палитра → событие плагину → его обработчик). Проверено в превью.
 - **Фронт-транспорт плагинов (Ф2-2b·4)** — sandbox-iframe + `MessagePort`-релей (`plugin-host.ts`), токен host-side, confused-deputy закрыт и на фронте; `tauriApi.plugins` + мок-брокер + `PluginsPanel` (демо + аудит-лог); `plugin_close_session` (отзыв). Проверено в превью.
 - **Dispatch брокера vault read/list/write (Ф2-2b·3)** — `dispatch_vault` + `plugin_invoke(content?)`, scoped + defense-in-depth граница.

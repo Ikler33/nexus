@@ -1,3 +1,4 @@
+import i18n from '../i18n/setup';
 import { commands, type Disposable } from './commands';
 import { tauriApi } from './tauri-api';
 
@@ -18,7 +19,9 @@ interface PluginRequest {
   path?: string;
   content?: string;
   /** Для `ui.registerCommand`: команда, которую плагин добавляет в палитру. */
-  command?: { id: string; title: string };
+  command?: { id: string; title: string; titleKey?: string };
+  /** Для `ui.addTranslations`: `{ локаль → { ключ → строка } }` (namespace `plugin:<id>`). */
+  translations?: Record<string, Record<string, string>>;
 }
 
 /** Ответ хост → плагин (по порту). */
@@ -70,6 +73,33 @@ export async function attachPlugin(
     const id = msg.id;
     const method = msg.method;
 
+    // ui.addTranslations: плагин добавляет локализованные строки в namespace `plugin:<dir>` (AC-I18N-7).
+    // Ключи кладём как `<dir>:<key>` → итоговый i18n-ключ `plugin:<dir>:<key>` (nsSeparator ':').
+    if (method === 'ui.addTranslations') {
+      const tr = msg.translations;
+      if (!tr || typeof tr !== 'object') {
+        reply({ id, ok: false, error: 'некорректные переводы' });
+        return;
+      }
+      void tauriApi.plugins
+        .invoke(token, 'ui.addTranslations')
+        .then(() => {
+          // i18next: ключ `plugin:<dir>:<key>` → ns 'plugin' + вложенный путь `<dir>.<key>`,
+          // поэтому кладём вложенно `{ <dir>: { <key>: value } }` (не плоской строкой `<dir>:<key>`).
+          for (const [locale, dict] of Object.entries(tr)) {
+            i18n.addResourceBundle(locale, 'plugin', { [dir]: { ...dict } }, true, true);
+          }
+          hooks?.onCall?.({ method, ok: true });
+          reply({ id, ok: true, result: { locales: Object.keys(tr) } });
+        })
+        .catch((err: unknown) => {
+          const error = err instanceof Error ? err.message : String(err);
+          hooks?.onCall?.({ method, ok: false, error });
+          reply({ id, ok: false, error });
+        });
+      return;
+    }
+
     // ui.registerCommand: авторизуем через брокер (право ui:command), регистрируем команду в реестре.
     // run() шлёт событие назад плагину (host→plugin) → плагин исполняет свой обработчик. Снимется в dispose.
     if (method === 'ui.registerCommand') {
@@ -84,6 +114,8 @@ export async function attachPlugin(
           const disp = commands.register({
             id: `plugin:${dir}:${cmd.id}`,
             title: cmd.title,
+            // Локализованный заголовок из namespace плагина (если плагин прислал переводы).
+            titleKey: cmd.titleKey ? `plugin:${dir}:${cmd.titleKey}` : undefined,
             source: 'plugin',
             run: () => {
               const ev: PluginEvent = { type: 'command', commandId: cmd.id };
@@ -191,9 +223,12 @@ export function demoPluginSrcdoc(): string {
       return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
         port.postMessage({ id, method, path, content }); });
     }
-    function register(cmdId, title, fn){ handlers[cmdId] = fn;
+    function register(cmdId, title, fn, titleKey){ handlers[cmdId] = fn;
       return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
-        port.postMessage({ id, method:'ui.registerCommand', command:{ id: cmdId, title } }); }); }
+        port.postMessage({ id, method:'ui.registerCommand', command:{ id: cmdId, title, titleKey } }); }); }
+    function addI18n(translations){
+      return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
+        port.postMessage({ id, method:'ui.addTranslations', translations }); }); }
     function onMsg(e){ const m = e.data;
       if(m && m.type === 'command'){ const h = handlers[m.commandId]; if(h) h(); return; }
       const p = pending[m.id]; if(!p) return; delete pending[m.id];
@@ -234,12 +269,14 @@ export function demoPluginSrcdoc(): string {
         // Регистрируем команду в палитре приложения (право ui:command). При запуске из палитры хост
         // шлёт событие назад плагину → исполняется этот обработчик (host→plugin раунд-трип).
         const hint = document.createElement('p'); hint.className='sub';
-        hint.textContent='⌘P → «Hello Reader: прочитать Inbox.md» — команда зарегистрирована плагином';
+        hint.textContent='⌘P → команда плагина (заголовок локализован: переключи язык 🇷🇺/🇬🇧)';
         app.appendChild(hint);
-        await register('read-inbox', 'Hello Reader: прочитать Inbox.md', async () => {
+        // Локализованные строки плагина (namespace plugin:hello) + команда с titleKey (AC-I18N-7).
+        await addI18n({ ru:{ readInbox:'Hello Reader: прочитать Inbox.md' }, en:{ readInbox:'Hello Reader: read Inbox.md' } });
+        await register('read-inbox', 'Hello Reader: read Inbox.md', async () => {
           try { out.textContent = '▶ команда плагина → Inbox.md\\n\\n'+await call('vault.readFile','Inbox.md'); out.className=''; }
           catch(err){ out.textContent = '✋ '+err.message; out.className='err'; }
-        });
+        }, 'readInbox');
       } catch(err){ const e=document.createElement('p'); e.className='err'; e.textContent=err.message; app.appendChild(e); }
     }
     // Повторяем «ready», пока хост не пришлёт порт: openSession на host-стороне асинхронен,

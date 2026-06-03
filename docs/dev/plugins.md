@@ -73,6 +73,11 @@
   (host→plugin) → плагин исполняет свой обработчик. `dispose()` снимает команды плагина. `plugin_invoke`
   для `ui.*` — только авторизация (host-I/O нет). **Проверено в превью:** команда плагина в палитре → запуск
   → плагин читает Inbox.md через брокер (аудит фиксирует `vault.readFile`).
+- **Плагинные i18n (Ф2-3, AC-I18N-7):** `ui.addTranslations {локаль→{ключ→строка}}` → релей кладёт строки
+  в i18next namespace `plugin` **вложенно** (`{<dir>:{<key>:value}}` → ключ `plugin:<dir>:<key>`; i18next
+  режет ключ по `:` на ns + вложенный путь). `registerCommand` принимает `titleKey` → заголовок команды
+  локализован и меняется при смене языка (палитра резолвит `titleKey` через `t()`). `ui.*` требует
+  объявленной хотя бы одной ui-точки (fail-closed). **Проверено в превью:** EN↔RU меняет заголовок команды.
 
 ## Тесты
 - Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
@@ -84,15 +89,16 @@
   дотянется до прав широкого), ревокация, handle→dispatch.
 - Dispatch (4, `commands/plugin.rs`): read/list/write в пределах vault; path-escape (read+write)
   отклонён; неизвестный метод / нет аргумента → ошибка; **E2E** «scope (broker) → dispatch I/O» + аудит.
-- Фронт-транспорт (12, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
+- Фронт-транспорт (13, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
   write-в-scope/write-отказ, **confused-deputy** (payload-токен игнорируется), мусор → без ответа, dispose;
-  **`ui.registerCommand`** (команда в реестре → запуск шлёт событие плагину → dispose снимает).
+  **`ui.registerCommand`** (команда в реестре → запуск шлёт событие плагину → dispose снимает);
+  **`ui.addTranslations`** (строки резолвятся в namespace `plugin`, `titleKey` формируется).
 
 ## Дальше (Ф2-3 + доводка транспорта)
 - **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) +
   **iframe-CSP упакованного приложения** (`frame-src`/`child-src`, origin ассетов плагина). Доверенный JS
   в Worker + редакторные расширения в main-контексте (сейчас UI-JS прямо в iframe). См. BACKLOG.
 - Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~ (сделано) → `ai.embed/complete/searchSemantic`,
-  `net.fetch` (allowlist). ~~`registerCommand(source:'plugin')`~~ (сделано) → плагинные i18n-namespace
-  `plugin:<id>:<key>` (Ф2-3).
+  `net.fetch` (allowlist). ~~`registerCommand(source:'plugin')`~~ (сделано), ~~плагинные
+  i18n-namespace `plugin:<id>:<key>`~~ (сделано, AC-I18N-7). Осталось из Ф2-3: AI/сеть для плагинов.
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.
