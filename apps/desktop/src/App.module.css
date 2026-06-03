@@ -1,10 +1,19 @@
-.layout {
+/* Оболочка дизайн-системы: titlebar (38px) / тело (1fr) / status bar (26px). */
+.app {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-rows: 38px 1fr 26px;
   height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
-/* Открытый RAG-чат добавляет правую колонку (DESIGN: FileTree | Editor | Chat). */
+.appBody {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 0;
+}
+
+/* Открытый RAG-чат добавляет правую колонку (sidebar | editor | chat). */
 .withChat {
   grid-template-columns: 280px 1fr 360px;
 }
@@ -14,54 +23,7 @@
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--color-border);
-  background: var(--color-bg-elevated);
-}
-
-.sidebarHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.vaultName {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: none;
-}
-
-.openBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  padding: var(--space-1);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.openBtn:hover {
-  color: var(--color-text);
-  border-color: var(--color-accent);
-}
-
-.openBtn:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  background: var(--color-chrome);
 }
 
 .main {
@@ -70,5 +32,3 @@
   min-width: 0;
   min-height: 0;
 }
-
-/* Область редактора (вкладки/сплиты) и подсказки — в EditorArea/GroupPane (Ф0-9). */

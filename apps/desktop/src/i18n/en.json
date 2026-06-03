@@ -3,6 +3,9 @@
     "name": "Nexus",
     "openVault": "Open vault…"
   },
+  "chrome": {
+    "search": "Search or ask…"
+  },
   "sidebar": {
     "searchPlaceholder": "Search…",
     "searchLabel": "Search the vault",
