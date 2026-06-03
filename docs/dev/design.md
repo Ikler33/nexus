@@ -59,5 +59,7 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
   Пульс/halo активной ноты — отдельно (кастомный node-renderer).
 - [x] Ф4-5 — рестайл Command Palette: glass-модал (blur-скрим + стеклянная палитра, accent-soft
   активная, kbd-хинты) + staggered-раскрытие строк (--cmd-i).
-- [ ] рестайл ai-panel · plugins.
+- [x] Ф4-6 — рестайл AI-панели: провайдер-пилюля + прозрачные кнопки, пузырь юзера accent-soft,
+  источники-карточки с AI-бейджем, композер — плавающий бокс с accent-soft focus-кольцом.
+- [ ] рестайл plugins.
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.
