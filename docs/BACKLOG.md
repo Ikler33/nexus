@@ -126,6 +126,7 @@
 | ✂️ Резолв ссылок через `aliases` (frontmatter `aliases:`) | нет разбора frontmatter в JSON | при разборе frontmatter | `indexer.md` |
 | ✂️ Rename как перемещение записи с сохранением `file_id` | сейчас delete+create | — | `indexer.md` |
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
+| ✂️ **Coverage-доводка** (после V1.2): per-path пороги критичных модулей (indexer/chunker/search/broker/permission/watcher/eval ≥70%, TESTING_STRATEGY §6); `coverage-baseline.json` + дельта-комментарий в PR (авто-bump при росте); единый `scripts/test-all.sh` (strategy §7 шаг 1) | базовый глобальный храповик (frontend vitest + Rust `--fail-under-lines`) поставлен в V1.2; per-path / baseline-bump / test-all — доводка | после V1.2 | TESTING_STRATEGY §6-7 |
 
 ## Закрыто (история — для сверки, не для работы)
 - **Ф3-3b-3 — git-sync UI (финиш git-sync)** — панель «Синхронизация»: remote (URL) + токен (→ keychain) + кнопка sync (pull-ff/push) с исходом; `tauriApi.git` (setRemote/getRemote/sync) + мок + i18n. Проверено в превью. **git-sync функционально готов.**

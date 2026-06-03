@@ -64,9 +64,14 @@
 
 ### 🌊 Волна 2 — Прогон + фикс выявленных багов (каждый баг едет со своим тестом)
 
-- **V2.1 — Core SSRF / redirect** (ревью C5/H11, AC-SEC-4b). `redirect(Policy::none())` на core-reqwest
-  клиентах (chat/embedding) + `is_private_host`-валидация `base_url` при загрузке конфига. _Тест:_
-  приватный/loopback-metadata адрес отклонён, 30x не следуется. _Offline._
+- **V2.1 — Core SSRF / redirect** (ревью C5/H11, AC-SEC-4b). `redirect(Policy::none())` на 3 core-reqwest
+  клиентах: `ai/embedder.rs` (`new` + `probe_dim`) и `ai/chat.rs` (`new`). _Тест:_ 30x-редирект не
+  следуется. _Offline._
+  ⚠️ **ВАЖНО (рекон V1.2):** `is_private_host` к core-клиентам НЕ применять — LLM-серверы локальные
+  by design (`127.0.0.1:8081`, `192.168.0.172:8080`); блок приватных хостов сломал бы local-first.
+  Различие: core = локальный + redirect-guard; plugin `net.fetch` = allowlist + `is_private_host`
+  (уже есть, `plugin/permission.rs:243`). Consent на смену `base_url` при git-pull — это пункт
+  «Единый egress-контроль ядра» (Фундамент), не здесь.
 - **V2.2 — Rename-as-move** (ревью L6, AC-Б9). `VaultEvent::Renamed` → обновить `files.path` с
   сохранением `file_id` (сейчас delete+create рвёт беклинки/чанки). _Тест:_ rename → file_id жив,
   беклинки целы. _Offline._
@@ -140,8 +145,13 @@
   `deny.toml` + `.gitleaks.toml`. Гейт сразу сработал: нашёл и закрыл **RUSTSEC-2026-0008** (unsound в
   git2 0.19 — прямая зависимость) бампом git2 0.19→0.20.4 (libgit2 1.9.4, git-тесты зелёные); 16
   транзитивных unmaintained (gtk-rs/unic via Tauri) → `unmaintained = "workspace"`. Локально зелёные:
-  fmt · clippy · test · licenses · bans · sources · advisories · gitleaks. PR открыт, мерж на зелёном
-  CI. Следующий: **V1.2 (coverage + ratchet)**.
+  fmt · clippy · test · licenses · bans · sources · advisories · gitleaks. **PR #34 смержен** (CI зелёный;
+  потребовался fix `fetch-depth: 0` для gitleaks — shallow checkout не давал diff-диапазон).
+- ✅ **V1.2 — Coverage-ратчет** (TESTING_STRATEGY §6). Frontend: `@vitest/coverage-v8` + блок coverage в
+  `vitest.config.ts` (пороги 63/63/60/75, baseline 64.3/62.1/77.3%), CI `pnpm test:coverage`. Rust: job
+  `coverage-rust` (`cargo-llvm-cov --fail-under-lines 65`, baseline строк 71.8%), параллельно матрице.
+  Локально зелёные оба замера. Отложено в BACKLOG: per-path пороги, baseline.json-bump, test-all.sh.
+  PR открыт, мерж на зелёном CI. Следующий: **V1.3 (traceability AC↔тест)**.
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;

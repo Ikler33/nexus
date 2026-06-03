@@ -31,6 +31,16 @@
   advisories-срезом cargo-deny. Локально проверено: licenses/bans/sources/gitleaks — зелёные.
   - Отложено (no silent caps): выделенный прогон именно security-*тестов* (а не supply-chain) отдельным
     шагом требует конвенции тегирования тестов — записано в BACKLOG.
+- **V1.2 — Coverage-ратчет** (TESTING_STRATEGY §6). Гейт покрытия «не ниже» на оба слоя:
+  - **Frontend:** `@vitest/coverage-v8` + блок `coverage` в `vitest.config.ts` (provider v8, `all: true`
+    по `src/**`); пороги lines/statements 63 · functions 60 · branches 75 (baseline 64.3/62.1/77.3%).
+    CI-шаг `pnpm test:coverage`.
+  - **Rust:** job `coverage-rust` (`cargo-llvm-cov --fail-under-lines 65`, baseline строк **71.8%**),
+    параллельно rust-матрице — не добавляет wall-clock. Критичные модули сильны: parser 96.6%,
+    permission 98%, broker 93%, search 85.5%, graph 95.8%, vault 92.6%.
+  - Механика «тест на каждую новую функцию»: непокрытый код роняет % → CI краснеет.
+  - Отложено (no silent caps): per-path пороги ≥70% критичных модулей, `coverage-baseline.json` +
+    дельта-комментарий в PR, единый `scripts/test-all.sh` — BACKLOG «Coverage-доводка».
 
 ### Added — Фаза 0
 

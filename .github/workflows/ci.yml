@@ -23,7 +23,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm test
+      - run: pnpm test:coverage  # тесты + coverage-гейт (V1.2): пороги в vitest.config.ts (храповик «не ниже»)
       - run: pnpm build
 
   rust:
@@ -79,3 +79,33 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Coverage-ратчет Rust (V1.2, TESTING_STRATEGY §6): cargo-llvm-cov, глобальный floor по строкам.
+  # Бежит параллельно rust-матрице (не добавляет wall-clock). Floor — мягкий старт ниже baseline
+  # (локально 71.8% строк); ужесточение + per-path пороги критичных модулей — после подтверждения
+  # CI-Linux baseline (см. BACKLOG «Coverage-доводка»). Frontend-покрытие — в job frontend (vitest).
+  coverage-rust:
+    name: Coverage (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system deps (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - run: cargo llvm-cov --locked --workspace --summary-only --fail-under-lines 65
