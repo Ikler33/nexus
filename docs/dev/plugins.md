@@ -29,14 +29,27 @@
 - `glob_match`: сегментный glob — `**` (0..N сегментов), `*` (внутри сегмента, не пересекает `/`).
 > Identity плагина и capability-токен проверяются РАНТАЙМОМ по порту (§7.9), не из payload (Ф2-2).
 
+## Брокер, host-сторона (Ф2-2a, `broker.rs`) — §7.4
+`PluginBroker { sessions: HashMap<PortId, PluginSession>, audit: AuditLog }`:
+- **identity по порту** (`register(port, session)`): права берутся из сессии ПОРТА, а не из payload —
+  закрывает confused-deputy/capability-laundering (плагин A не может назваться B).
+- `authorize(port, req)`: порт→сессия (нет → `UnknownSession`, fail-closed) → `Permissions::check` →
+  запись в **audit** (и успех, и отказ). `handle(port, req, &mut dyn HostDispatch)` = authorize → dispatch.
+- **`AuditLog`** — только добавление (неотключаемый, §7.9); `revoke(port)` мгновенно лишает прав (ревокация).
+- Реальный I/O (vault/ai) — за трейтом `HostDispatch` (Ф2-2b: через `vault::resolve_vault_path` + db/ai).
+> Capability-токены, MessagePort/iframe-транспорт, генерация секретов — Ф2-2b (нужна фронт-сторона).
+
 ## Тесты
 - Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
 - Права (13): glob (`**`/`*`/exact/регистр), scope с deny-override (любой порядок), vault read/write,
   path-escape (`..`,`/abs`,`\`,пустой сегмент), ai+local_only, `ai:complete:false`, net-allowlist,
   unknown-method fail-closed, пустые права = deny-all.
+- Брокер (6): неизвестный порт → deny+audit, scope allow+audit, out-of-scope deny+audit,
+  **identity-по-порту** (confused-deputy: узкий плагин не дотянется до прав широкого), ревокация, handle→dispatch.
 
-## Дальше (Ф2-2+)
-- Рантайм-брокер: сессии по `MessagePort` (identity по порту), capability-токены + ревокация, audit-log,
-  `dispatch` к vault/ai через `resolve_vault_path`. Исполнение: доверенный JS в Worker + редакторные
-  расширения в main-контексте; опц. WASM (epoch/fuel + StoreLimits). `registerCommand(source:'plugin')`,
-  плагинные i18n-namespace. Подпись `id@version#sha256`, marketplace. Код плагинов НЕ в git (ADR-002).
+## Дальше (Ф2-2b+)
+- **Транспорт + токены (фронт):** доверенный JS в Worker + редакторные расширения в main-контексте;
+  UI-вью в sandbox-iframe; один `MessagePort` на плагин (identity по порту); capability-токены (генерация
+  секретов + проверка на каждый вызов + ревокация); реальный `HostDispatch` (vault/ai через
+  `resolve_vault_path`). `registerCommand(source:'plugin')`, плагинные i18n-namespace (Ф2-3).
+- Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

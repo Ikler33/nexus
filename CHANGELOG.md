@@ -325,3 +325,13 @@
 
   Фундамент **AC-SEC-*** (path-scoped права, fail-closed). Рантайм-брокер (порты/токены/audit/iframe,
   исполнение JS/WASM) — Ф2-2+.
+
+- **Ф2-2a — Capability-broker, host-сторона (§7.4).** `plugin/broker.rs`: `PluginBroker { sessions:
+  HashMap<PortId, PluginSession>, audit }` — **identity по порту** (не из payload → закрывает
+  confused-deputy/capability-laundering), `authorize(port, req)` = порт→сессия → `Permissions::check`
+  → запись в **неотключаемый `AuditLog`** (и успех, и отказ), `revoke` (мгновенная ревокация),
+  `handle(.., &mut dyn HostDispatch)` = authorize→dispatch. Реальный I/O — за трейтом `HostDispatch`
+  (Ф2-2b). 6 тестов (unknown-port deny+audit, scope, confused-deputy по порту, ревокация, handle).
+  Rust 91 тест. Дока `docs/dev/plugins.md`.
+
+  Транспорт MessagePort/iframe + capability-токены + реальный dispatch — Ф2-2b (нужна фронт-сторона).

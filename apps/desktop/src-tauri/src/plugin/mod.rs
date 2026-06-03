@@ -3,7 +3,11 @@
 //! ловится ДО загрузки. **Ф2-1**: манифест несёт scoped-`permissions` (ADR-002); проверка scope —
 //! в [`mod@permission`] (security-ядро брокера). Рантайм-брокер (порты/токены/audit/iframe) — Ф2-2.
 
+mod broker;
 mod permission;
+pub use broker::{
+    AuditEntry, AuditLog, BrokerError, HostDispatch, PluginBroker, PluginSession, PortId,
+};
 pub use permission::{ApiRequest, Denied, Permissions};
 
 use std::fmt;
