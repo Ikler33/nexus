@@ -43,7 +43,11 @@ const TREE: Record<string, FileEntry[]> = {
     file('Projects/Alpha/Spec.md', 2400),
     file('Projects/Alpha/Notes.md', 560),
   ],
-  Notes: [file('Notes/Idea.md', 210), file('Notes/Meeting.md', 980)],
+  Notes: [
+    file('Notes/Idea.md', 210),
+    file('Notes/Meeting.md', 980),
+    file('Notes/diagram.png', 4096),
+  ],
   Empty: [],
 };
 

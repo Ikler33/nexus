@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Editor } from '../editor/Editor';
+import { FileViewer } from '../editor/FileViewer';
+import { isViewable } from '../../lib/file-kind';
 import { BacklinksBar } from '../editor/BacklinksBar';
 import styles from './GroupPane.module.css';
 
@@ -78,20 +80,24 @@ export function GroupPane({ groupId }: { groupId: string }) {
       {active ? (
         <>
           <div className={styles.scroll}>
-            <Editor
-              key={groupId}
-              path={active.path}
-              initialDoc={active.doc}
-              onChange={(doc) => updateBufferDoc(active.path, doc)}
-              onSave={(doc) => {
-                updateBufferDoc(active.path, doc);
-                void saveBuffer(active.path);
-              }}
-              onOpenLink={(t) => void openLink(t)}
-              getNotes={() => useVaultStore.getState().notes}
-            />
+            {isViewable(active.path) ? (
+              <FileViewer path={active.path} />
+            ) : (
+              <Editor
+                key={groupId}
+                path={active.path}
+                initialDoc={active.doc}
+                onChange={(doc) => updateBufferDoc(active.path, doc)}
+                onSave={(doc) => {
+                  updateBufferDoc(active.path, doc);
+                  void saveBuffer(active.path);
+                }}
+                onOpenLink={(t) => void openLink(t)}
+                getNotes={() => useVaultStore.getState().notes}
+              />
+            )}
           </div>
-          <BacklinksBar path={active.path} />
+          {!isViewable(active.path) && <BacklinksBar path={active.path} />}
         </>
       ) : (
         <p className={styles.empty}>{t('editor.emptyGroup')}</p>

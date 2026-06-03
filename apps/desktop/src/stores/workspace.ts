@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
 import { resolveLink, useVaultStore } from './vault';
 
@@ -56,7 +57,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const gid = groupId ?? get().activeGroupId;
     let buffers = get().buffers;
     if (!buffers[path]) {
-      const doc = await tauriApi.vault.readFile(path);
+      // Бинарь (картинка/PDF) не читаем как текст — его покажет FileViewer (asset-URL).
+      const doc = isViewable(path) ? '' : await tauriApi.vault.readFile(path);
       buffers = { ...buffers, [path]: { path, doc, dirty: false } };
     }
     set((s) => ({

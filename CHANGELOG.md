@@ -601,6 +601,15 @@
   в превью:** переключение прячет сайдбар, редактор full-width. Центрирование документа узким measure
   (~62ch) — рефайнмент (CM6-контент), в BACKLOG. Фронт 85.
 
+- **Ф4-10 — просмотр не-md вложений (картинки/PDF во вкладке).** `FileViewer` (`components/editor`):
+  открытие картинки (png/jpg/gif/svg/webp/…) или PDF показывает её во вкладке вместо CM6 — URL через
+  **asset-протокол Tauri** (`convertFileSrc`, CSP `img-src asset:`). Бинарь больше НЕ читается как текст
+  (`openFile` пропускает `readFile` для viewable → нет ошибки UTF-8); backlinks-бар скрыт для вложений.
+  Вне Tauri (браузер) — плейсхолдер «просмотр в приложении». Утилита `lib/file-kind`
+  (isImage/isPdf/isViewable). i18n RU/EN. **Проверено в превью** (png → вьюер-плейсхолдер, не редактор).
+  Фронт 85. **Inline-рендер в markdown** (`![[embeds]]`, **Mermaid**, **LaTeX**) — эпик **Live Preview**
+  (§13, отдельный; в BACKLOG — нужен markdown-renderer + mermaid + katex).
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
