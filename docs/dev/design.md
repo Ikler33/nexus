@@ -51,5 +51,8 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
 - [x] Ф4-2 — рестайл сайдбара: tree-rows (фирменное выделение: selected-фон + 3px акцент-полоса +
   акцентная иконка) + поле поиска (radius-md + accent-soft focus). Rail (files/search/tags/starred) —
   отдельно (нужны панели tags/starred = новые фичи).
-- [ ] рестайл редактора (tabs/edit-preview) · graph · ai-panel · palette · plugins.
+- [x] Ф4-3 — рестайл вкладок редактора: floating tabs (активная приподнята до холста + `--tab-shadow`
+  + 2px акцент-полоса сверху; фокус-группа = акцент, иначе приглушённая). Edit/Preview-pill +
+  центр-measure редактора — отдельно (нужен preview-режим = фича).
+- [ ] рестайл graph · ai-panel · palette · plugins.
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.
