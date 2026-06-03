@@ -10,6 +10,7 @@ import { EditorArea } from './components/workspace/EditorArea';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { Onboarding } from './components/onboarding/Onboarding';
+import { TweaksPanel } from './components/tweaks/TweaksPanel';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
@@ -32,6 +33,7 @@ export function App() {
   const chatOpen = useUIStore((s) => s.chatOpen);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   const syncOpen = useUIStore((s) => s.syncOpen);
+  const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
   useKeymap();
@@ -93,6 +95,7 @@ export function App() {
           <SyncPanel />
         </Suspense>
       )}
+      {tweaksOpen && <TweaksPanel />}
     </div>
   );
 }

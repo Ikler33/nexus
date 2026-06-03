@@ -10,6 +10,8 @@ interface UIState {
   pluginsOpen: boolean;
   /** Открыта ли панель синхронизации (git-sync, Ф3). */
   syncOpen: boolean;
+  /** Открыта ли панель настроек оформления (tweaks: тема/акцент/плотность, Ф4). */
+  tweaksOpen: boolean;
   /** Режим чтения (⌘R): прячет сайдбар/AI-панель, центрирует документ (distraction-free). */
   reading: boolean;
   /** Активная вкладка AI-панели (чат / связи). */
@@ -30,6 +32,8 @@ interface UIState {
   toggleSync: () => void;
   toggleReading: () => void;
   closeReading: () => void;
+  toggleTweaks: () => void;
+  closeTweaks: () => void;
   setAiTab: (tab: AiTab) => void;
 }
 
@@ -40,6 +44,7 @@ export const useUIStore = create<UIState>((set) => ({
   chatOpen: false,
   pluginsOpen: false,
   syncOpen: false,
+  tweaksOpen: false,
   reading: false,
   aiTab: 'chat',
   openPalette: () => set({ paletteOpen: true }),
@@ -58,5 +63,7 @@ export const useUIStore = create<UIState>((set) => ({
   toggleSync: () => set((s) => ({ syncOpen: !s.syncOpen })),
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
+  toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),
+  closeTweaks: () => set({ tweaksOpen: false }),
   setAiTab: (tab) => set({ aiTab: tab }),
 }));

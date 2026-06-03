@@ -6,6 +6,7 @@ import {
   Puzzle,
   Search,
   Share2,
+  SlidersHorizontal,
   Sun,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -34,6 +35,8 @@ export function Titlebar() {
   const togglePlugins = useUIStore((s) => s.togglePlugins);
   const syncOpen = useUIStore((s) => s.syncOpen);
   const toggleSync = useUIStore((s) => s.toggleSync);
+  const tweaksOpen = useUIStore((s) => s.tweaksOpen);
+  const toggleTweaks = useUIStore((s) => s.toggleTweaks);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggle);
   const lang = i18n.language === 'ru' ? 'ru' : 'en';
@@ -104,6 +107,16 @@ export function Titlebar() {
           aria-label={t('commands.theme.toggle')}
         >
           {theme === 'dark' ? <Sun size={16} aria-hidden /> : <Moon size={16} aria-hidden />}
+        </button>
+        <button
+          type="button"
+          className={`${styles.tbBtn} ${tweaksOpen ? styles.active : ''}`}
+          onClick={() => toggleTweaks()}
+          title={t('commands.view.tweaks')}
+          aria-label={t('commands.view.tweaks')}
+          aria-pressed={tweaksOpen}
+        >
+          <SlidersHorizontal size={16} aria-hidden />
         </button>
         <button
           type="button"

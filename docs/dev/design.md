@@ -73,5 +73,8 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
   текст). **Inline-рендер/Mermaid/LaTeX → эпик Live Preview (BACKLOG).**
 - [x] Ф4-11 — онбординг (первый запуск): приветственный экран при отсутствии vault (бренд + CTA «Открыть
   vault» + язык/тема); авто-открытие убрано. Многошаговый flow — рефайнмент.
-- [ ] tweaks-панель. Затем инфра (C). (**Home-дашборд → BACKLOG**: концепция дозревает.)
+- [x] Ф4-12 — панель оформления (tweaks): тема / акцент (amber/teal/sage/clay → data-accent) / плотность
+  (--row-h). Стор оформления + titlebar-кнопка + команда. Проверено в превью (teal перетинтовал апп).
+- [x] **Рестайл + новые экраны Ф4 завершены** (Home — в BACKLOG).
+- [ ] Инфра релиз-препа (C): PDF/Print экспорт · auto-updater · crash-reporter · `nexus-md-parser` пакет · скелет `apps/mobile/`.
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.
