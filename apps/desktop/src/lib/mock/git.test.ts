@@ -12,4 +12,12 @@ describe('mock git-sync (превью)', () => {
     expect(await git.status()).toHaveLength(0);
     expect((await git.commit()).status).toBe('nothing-to-commit');
   });
+
+  it('token: setToken → hasToken=true → clearToken → false', async () => {
+    expect(await git.hasToken()).toBe(false);
+    await git.setToken('ghp_demo');
+    expect(await git.hasToken()).toBe(true);
+    await git.clearToken();
+    expect(await git.hasToken()).toBe(false);
+  });
 });

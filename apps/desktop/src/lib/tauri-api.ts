@@ -270,6 +270,18 @@ export const tauriApi = {
     /** Авто-коммит изменений: secret-scan → при находке блокировка; иначе коммит с авто-сообщением. */
     commit: (): Promise<GitCommitOutcome> =>
       isTauri() ? invoke<GitCommitOutcome>('git_commit') : mockGit.commit(),
+
+    /** Сохранить токен доступа к remote в системном keychain (на диск не пишется). Ф3-3b. */
+    setToken: (token: string): Promise<void> =>
+      isTauri() ? invoke<void>('git_set_token', { token }) : mockGit.setToken(token),
+
+    /** Удалить токен из keychain. */
+    clearToken: (): Promise<void> =>
+      isTauri() ? invoke<void>('git_clear_token') : mockGit.clearToken(),
+
+    /** Есть ли сохранённый токен (для UI «подключено»). */
+    hasToken: (): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('git_has_token') : mockGit.hasToken(),
   },
 };
 

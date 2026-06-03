@@ -440,6 +440,14 @@
   +1 фронт-тест (мок status→commit→nothing). Rust 105 / фронт 80. **Проверено в превью:** изменения →
   коммит → «✓ Vault sync: ~2 changed», список очищен. pull/push + детект конфликтов — Ф3-3b.
 
+- **Ф3-3b-1 — git-credentials в системном keychain (AC-SEC-3).** Токен доступа к remote хранится в
+  keychain ОС (macOS Keychain / Windows Credential Manager / Linux Secret Service через `keyring` 3,
+  zbus — pure-Rust, без системного libdbus при сборке), **на диск НЕ пишется** и не в git. `git/creds.rs`:
+  `set_token`/`get_token`/`delete_token`/`has_token` (запись `service=nexus-git`, `account=<путь vault>`).
+  Команды `git_set_token`/`git_clear_token`/`git_has_token` (keychain-I/O в `spawn_blocking`) +
+  `tauriApi.git` + мок. +1 guarded Rust-тест (`#[ignore]`, реальный keychain) + 1 фронт-тест (мок-токен).
+  Rust 105/8ign · фронт 81. Используется credentials-callback'ом git2 в pull/push — Ф3-3b-2.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

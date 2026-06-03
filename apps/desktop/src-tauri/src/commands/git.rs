@@ -4,7 +4,7 @@
 
 use tauri::State;
 
-use crate::git::{CommitOutcome, GitSync, StatusEntry};
+use crate::git::{creds, CommitOutcome, GitSync, StatusEntry};
 use crate::state::AppState;
 
 /// Корень открытого vault или ошибка «vault не открыт».
@@ -41,4 +41,34 @@ pub async fn git_commit(state: State<'_, AppState>) -> Result<CommitOutcome, Str
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Сохранить токен доступа к remote в системном keychain (Ф3-3b, AC-SEC-3): на диск НЕ пишется.
+/// Аккаунт записи — путь vault (разные vault → разные токены). keychain-I/O синхронный → spawn_blocking.
+#[tauri::command]
+pub async fn git_set_token(state: State<'_, AppState>, token: String) -> Result<(), String> {
+    let account = vault_root(&state).await?.to_string_lossy().into_owned();
+    tokio::task::spawn_blocking(move || {
+        creds::set_token(&account, &token).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Удалить токен доступа из keychain (идемпотентно).
+#[tauri::command]
+pub async fn git_clear_token(state: State<'_, AppState>) -> Result<(), String> {
+    let account = vault_root(&state).await?.to_string_lossy().into_owned();
+    tokio::task::spawn_blocking(move || creds::delete_token(&account).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Есть ли сохранённый токен для текущего vault (для UI: показать «подключено»).
+#[tauri::command]
+pub async fn git_has_token(state: State<'_, AppState>) -> Result<bool, String> {
+    let account = vault_root(&state).await?.to_string_lossy().into_owned();
+    tokio::task::spawn_blocking(move || creds::has_token(&account).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
