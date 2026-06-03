@@ -1,4 +1,5 @@
 import { commands, type Disposable } from './commands';
+import { printActiveNote } from './print';
 import { isTauri, tauriApi } from './tauri-api';
 import { useThemeStore } from '../stores/theme';
 import { useUIStore } from '../stores/ui';
@@ -45,6 +46,13 @@ export function registerCoreCommands(): Disposable {
         const buffer = activeBuffer(useWorkspaceStore.getState());
         if (buffer) return useWorkspaceStore.getState().saveBuffer(buffer.path);
       },
+    }),
+    commands.register({
+      id: 'file.print',
+      title: 'Print / Export PDF',
+      titleKey: 'commands.file.print',
+      source: 'core',
+      run: () => printActiveNote(),
     }),
     commands.register({
       id: 'view.splitRight',

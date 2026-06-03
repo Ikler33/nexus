@@ -76,5 +76,7 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
 - [x] Ф4-12 — панель оформления (tweaks): тема / акцент (amber/teal/sage/clay → data-accent) / плотность
   (--row-h). Стор оформления + titlebar-кнопка + команда. Проверено в превью (teal перетинтовал апп).
 - [x] **Рестайл + новые экраны Ф4 завершены** (Home — в BACKLOG).
-- [ ] Инфра релиз-препа (C): PDF/Print экспорт · auto-updater · crash-reporter · `nexus-md-parser` пакет · скелет `apps/mobile/`.
+- [x] Ф4-13 — печать / экспорт PDF активной заметки (`file.print` + print-CSS; печатает исходник, рендер → Live Preview эпик).
+- [ ] Инфра C (выполнимое): `nexus-md-parser` пакет · скелет `apps/mobile/` · локальный crash-лог.
+  auto-updater (подпись) и crash-backend → BACKLOG (релиз-время).
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.
