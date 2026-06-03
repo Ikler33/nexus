@@ -550,6 +550,14 @@
   в превью:** центр терракотовый, соседи приглушённые, обе темы. Фронт 85. Пульс/halo активной ноты —
   отдельно (нужен кастомный node-renderer sigma).
 
+- **Ф4-5 — рестайл Command Palette (glass-модал + staggered-раскрытие).** Скрим — затемнение +
+  `blur(2px)`; палитра — «стекло» (`color-mix` bg-elevated 88% + `blur(28px) saturate`),
+  `--color-border-strong`, radius-lg, elevation-2, pop-in. Активная строка — `--color-accent-soft`;
+  плейсхолдер `--color-text-faint`; kbd-хинты в дизайн-стиле. **Staggered-раскрытие** первых строк
+  (`animation-delay` по индексу `--cmd-i`, проброшен из компонента). Анимации gated
+  `prefers-reduced-motion` (глобально). **Проверено в превью:** стекло поверх размытого фона, активная
+  в accent-soft, kbd-хинты, обе темы. Фронт 85.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

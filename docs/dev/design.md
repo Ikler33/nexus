@@ -57,5 +57,7 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
 - [x] Ф4-4 — рестайл графа: цвета узлов/рёбер из токенов (центр = accent, соседи = text-muted, рёбра =
   border-strong) через 1×1-canvas readback (sigma WebGL не парсит oklch) + радиальный фон холста.
   Пульс/halo активной ноты — отдельно (кастомный node-renderer).
-- [ ] рестайл ai-panel · palette · plugins.
+- [x] Ф4-5 — рестайл Command Palette: glass-модал (blur-скрим + стеклянная палитра, accent-soft
+  активная, kbd-хинты) + staggered-раскрытие строк (--cmd-i).
+- [ ] рестайл ai-panel · plugins.
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.

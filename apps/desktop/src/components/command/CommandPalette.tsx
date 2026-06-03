@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { commands, type Command, formatCombo } from '../../lib/commands';
 import { useUIStore } from '../../stores/ui';
@@ -98,6 +98,7 @@ export function CommandPalette() {
                 aria-selected={i === active}
                 data-active={i === active || undefined}
                 className={styles.item}
+                style={{ '--cmd-i': i } as CSSProperties}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => runAt(i)}
               >

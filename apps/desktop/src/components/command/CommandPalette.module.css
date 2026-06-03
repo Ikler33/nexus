@@ -5,20 +5,26 @@
   justify-content: center;
   align-items: flex-start;
   padding-top: 12vh;
-  background: rgba(0, 0, 0, 0.32);
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   z-index: 100;
+  animation: palette-fade var(--motion-base) var(--ease-standard);
 }
 
 .palette {
-  width: min(560px, 90vw);
+  width: min(600px, 92vw);
   max-height: 60vh;
   display: flex;
   flex-direction: column;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: color-mix(in oklch, var(--color-bg-elevated) 88%, transparent);
+  backdrop-filter: blur(28px) saturate(1.5);
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--elevation-2);
   overflow: hidden;
+  animation: palette-pop var(--motion-base) var(--ease-standard);
 }
 
 .input {
@@ -26,21 +32,26 @@
   border-bottom: 1px solid var(--color-border);
   background: none;
   color: var(--color-text);
+  font-family: var(--font-ui);
   font-size: var(--text-lg);
   padding: var(--space-3) var(--space-4);
   outline: none;
 }
 
+.input::placeholder {
+  color: var(--color-text-faint);
+}
+
 .list {
   list-style: none;
   margin: 0;
-  padding: var(--space-1);
+  padding: 6px;
   overflow: auto;
 }
 
 .empty {
   padding: var(--space-3) var(--space-4);
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
 }
 
 .item {
@@ -48,14 +59,25 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 9px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  color: var(--color-text);
+  color: var(--color-text-muted);
+  animation: palette-rise 240ms var(--ease-standard) backwards;
+}
+
+/* Staggered-раскрытие первых строк (по индексу --cmd-i из компонента). */
+.item:nth-child(-n + 8) {
+  animation-delay: calc(18ms * var(--cmd-i, 0));
 }
 
 .item[data-active] {
-  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.title {
+  flex: 1;
 }
 
 .kbd {
@@ -65,4 +87,35 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 1px 6px;
+}
+
+@keyframes palette-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes palette-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes palette-rise {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
