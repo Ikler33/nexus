@@ -4,7 +4,7 @@
 
 use tauri::State;
 
-use crate::git::{creds, CommitOutcome, GitSync, StatusEntry};
+use crate::git::{creds, CommitOutcome, GitSync, PullOutcome, StatusEntry};
 use crate::state::AppState;
 
 /// Корень открытого vault или ошибка «vault не открыт».
@@ -71,4 +71,56 @@ pub async fn git_has_token(state: State<'_, AppState>) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || creds::has_token(&account).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Устанавливает URL remote `origin`.
+#[tauri::command]
+pub async fn git_set_remote(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    let root = vault_root(&state).await?;
+    let _lock = state.git_lock.lock().await;
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        GitSync::open_or_init(&root)
+            .map_err(|e| e.to_string())?
+            .set_remote(&url)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// URL remote `origin` (если задан).
+#[tauri::command]
+pub async fn git_get_remote(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let root = vault_root(&state).await?;
+    let _lock = state.git_lock.lock().await;
+    tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+        GitSync::open_or_init(&root)
+            .map_err(|e| e.to_string())?
+            .get_remote()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Синхронизация с remote: pull (fast-forward) → push (если не конфликт). Токен берётся из keychain.
+/// `MergeRequired` (расхождение истории) → НЕ пушим, сигналим для ручного разрешения (Ф3-3b-3).
+#[tauri::command]
+pub async fn git_sync(state: State<'_, AppState>) -> Result<PullOutcome, String> {
+    let root = vault_root(&state).await?;
+    let _lock = state.git_lock.lock().await;
+    tokio::task::spawn_blocking(move || -> Result<PullOutcome, String> {
+        let account = root.to_string_lossy();
+        let token = creds::get_token(&account)
+            .map_err(|e| e.to_string())?
+            .ok_or("нет токена доступа — сохрани его (keychain)")?;
+        let git = GitSync::open_or_init(&root).map_err(|e| e.to_string())?;
+        let pulled = git.pull(&token).map_err(|e| e.to_string())?;
+        if pulled != PullOutcome::MergeRequired {
+            git.push(&token).map_err(|e| e.to_string())?;
+        }
+        Ok(pulled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

@@ -83,6 +83,9 @@ pub fn run() {
             commands::git::git_set_token,
             commands::git::git_clear_token,
             commands::git::git_has_token,
+            commands::git::git_set_remote,
+            commands::git::git_get_remote,
+            commands::git::git_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");

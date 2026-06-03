@@ -1,4 +1,4 @@
-import type { GitCommitOutcome, GitStatusEntry } from '../tauri-api';
+import type { GitCommitOutcome, GitPullOutcome, GitStatusEntry } from '../tauri-api';
 
 /**
  * Мок git-sync для превью/тестов: набор «изменённых» файлов, `commit` их «коммитит» (очищает).
@@ -31,4 +31,16 @@ export async function clearToken(): Promise<void> {
 }
 export async function hasToken(): Promise<boolean> {
   return token !== null;
+}
+
+let remote: string | null = null;
+export async function setRemote(url: string): Promise<void> {
+  remote = url;
+}
+export async function getRemote(): Promise<string | null> {
+  return remote;
+}
+export async function sync(): Promise<GitPullOutcome> {
+  // Мок: успешный fast-forward (реально — pull+push через git2 по токену из keychain).
+  return { status: 'fast-forward', oid: 'mockff1234567' };
 }

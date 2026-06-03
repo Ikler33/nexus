@@ -448,6 +448,15 @@
   `tauriApi.git` + мок. +1 guarded Rust-тест (`#[ignore]`, реальный keychain) + 1 фронт-тест (мок-токен).
   Rust 105/8ign · фронт 81. Используется credentials-callback'ом git2 в pull/push — Ф3-3b-2.
 
+- **Ф3-3b-2 — git-sync: remote + pull/push по https (§8).** git2 с `https` + **vendored-openssl**
+  (компилит OpenSSL из исходников → кросс-платформенно без системных зависимостей; +время сборки CI).
+  `GitSync`: `set_remote`/`get_remote` (origin), `push` (текущая ветка), `pull` (fetch + merge-analysis →
+  `up-to-date` / `fast-forward` (применяется) / `merge-required`). credentials-callback берёт токен из
+  keychain (Ф3-3b-1) как https-пароль. Команды `git_set_remote`/`git_get_remote`/`git_sync` (pull-ff →
+  push, под sync-локом). `tauriApi.git` (setRemote/getRemote/sync) + мок. +1 Rust-тест (remote
+  set/get/overwrite; push/pull — сеть, не юнит-тестятся) + 1 фронт-тест. Rust 106 / фронт 82. UI
+  настройки remote + разрешение конфликтов (`merge-required`) + plugin pull → `needs-review` — Ф3-3b-3 (закроет AC-Б3).
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
