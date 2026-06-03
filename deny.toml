@@ -1,0 +1,56 @@
+# cargo-deny — supply-chain gate ядра (V1.1, ревью B6 / AC-Q-5).
+# Проверяет 4 среза: advisories (RUSTSEC-уязвимости), лицензии, дубли/баны, источники.
+# Запуск локально: `cargo deny check` (из корня воркспейса). В CI — job `security`.
+# Принцип «no silent caps»: любое `ignore`/`exceptions`/allow-list — с комментарием-обоснованием.
+
+[graph]
+# Проверяем все таргеты (как clippy --all-targets); фичи по умолчанию из манифеста.
+all-features = false
+
+[advisories]
+version = 2
+# Уязвимости (RUSTSEC vulnerability) и unsound → ошибка (дефолт v2). Отозванные крейты — блокируем.
+yanked = "deny"
+# unmaintained-адвизори: флагуем только для ПРЯМЫХ зависимостей воркспейса (на них можем повлиять).
+# Глубокие транзитивные (gtk-rs/unic/proc-macro-error через Tauri/usearch) — вне нашего контроля,
+# апстрим Tauri ещё на GTK3; «no silent caps»: политика осознанная, см. docs/dev/security.md.
+unmaintained = "workspace"
+# Точечные исключения известных адвизори — добавлять ТОЛЬКО с обоснованием (no silent caps).
+ignore = []
+
+[licenses]
+version = 2
+# Permissive-набор. Проект — MIT; зависимости — стандартные пермиссивные лицензии.
+# Список выверяется по фактическому дереву (см. журнал V1.1); расширяем только осознанно.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",            # cssparser/selectors — weak (file-level) copyleft, разрешено
+    "CDLA-Permissive-2.0", # webpki-roots: данные CA-бандла Mozilla, permissive data-лицензия
+]
+confidence-threshold = 0.8
+# Крейты с нестандартным SPDX (напр. `ring`) уточняются через [[licenses.clarify]] ниже по факту.
+exceptions = []
+
+[bans]
+# Дубли версий — предупреждение (норма для большого дерева; не блокируем на старте).
+multiple-versions = "warn"
+wildcards = "warn"
+# Явные баны/разрешения добавляются по необходимости.
+allow = []
+deny = []
+
+[sources]
+# Только crates.io. Любой неизвестный реестр/git-источник → ошибка (анти-supply-chain).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

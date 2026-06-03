@@ -60,3 +60,22 @@ jobs:
       - run: cargo build --locked
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
+
+  # Security-gate (ревью B6 / AC-Q-5): supply-chain + secret-scan отдельным required-job,
+  # чтобы проверки безопасности не тонули в общем cargo test. Дёшево, без матрицы ОС.
+  security:
+    name: Security (supply-chain · secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks нужна полная история для diff-диапазона <sha>^..<sha> (shallow → unknown revision)
+      - name: cargo-deny (advisories · licenses · bans · sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: Cargo.toml
+      - name: gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
