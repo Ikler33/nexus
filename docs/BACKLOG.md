@@ -65,6 +65,7 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **Ф3-3b-2 — git-sync remote + pull/push по https** — git2 https + vendored-openssl; `set_remote`/`get_remote`/`push`/`pull` (ff/up-to-date/merge-required), токен из keychain в credentials-callback; команды `git_set_remote`/`git_get_remote`/`git_sync`. UI + конфликты — Ф3-3b-3.
 - **Ф3-3b-1 — git-credentials в системном keychain (AC-SEC-3)** — `keyring` 3 (Keychain/Cred Manager/Secret Service), токен на диск не пишется; `creds::{set,get,delete,has}_token` + команды + контракт + мок. pull/push (Ф3-3b-2) + конфликты/UI (Ф3-3b-3) — далее.
 - **Ф3-3a — git-sync команды + UI + sync-lock** — `git_status`/`git_commit` (spawn_blocking + `git_lock`), `tauriApi.git` + `SyncPanel` (изменения, коммит, исход вкл. blocked-by-secrets), `view.sync`, i18n. Проверено в превью. Pull/push+конфликты — Ф3-3b.
 - **Ф3-2 — git-sync коммит + secret-scan (AC-SEC-3)** — `commit_all` (add_all+update_all, авто-сообщение), `scan_secrets` (PEM/sk-/ghp_/AKIA/xox-, мало ложных); находка секрета → коммит блокируется. Команды/UI/sync-lock/pull-push — Ф3-3.

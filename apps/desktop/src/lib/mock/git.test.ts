@@ -20,4 +20,11 @@ describe('mock git-sync (превью)', () => {
     await git.clearToken();
     expect(await git.hasToken()).toBe(false);
   });
+
+  it('remote+sync: setRemote → getRemote; sync → fast-forward', async () => {
+    expect(await git.getRemote()).toBeNull();
+    await git.setRemote('https://example.com/v.git');
+    expect(await git.getRemote()).toBe('https://example.com/v.git');
+    expect((await git.sync()).status).toBe('fast-forward');
+  });
 });

@@ -31,9 +31,13 @@ reqwest = { workspace = true }
 async-trait = { workspace = true }
 usearch = { workspace = true }
 getrandom = { workspace = true }
-# git-sync (Ф3): локальные операции; vendored libgit2 → кросс-платформенно без системной зависимости.
-# Сетевые фичи (https/ssh для push/pull) — добавим в Ф3-3.
-git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+# git-sync (Ф3): локальные + сетевые (pull/push по https). vendored libgit2 + vendored openssl →
+# кросс-платформенно без системных зависимостей (как usearch; +время сборки CI). ssh не включаем.
+git2 = { version = "0.19", default-features = false, features = [
+    "vendored-libgit2",
+    "https",
+    "vendored-openssl",
+] }
 # git-credentials в системном keychain (Ф3-3b): macOS Keychain / Windows Cred Manager / Linux Secret
 # Service (zbus — pure-Rust, без системного libdbus при сборке). Токен НЕ пишется на диск (AC-SEC-3).
 keyring = { version = "3", default-features = false, features = [

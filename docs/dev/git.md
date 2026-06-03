@@ -42,8 +42,14 @@ Windows Cred Manager / Linux Secret Service через zbus, pure-Rust), **на 
 `git_set_token`/`git_clear_token`/`git_has_token` (`spawn_blocking`) + `tauriApi.git` + мок. Тесты: guarded
 роундтрип (`#[ignore]`, реальный keychain) + мок-токен на фронте. Используется в pull/push (Ф3-3b-2).
 
-## Дальше — Ф3-3b-2 / Ф3-3b-3
-- **Ф3-3b-2** — pull/push: сетевые фичи `git2` (https) + credentials-callback (токен из `creds::get_token`)
-  + конфиг remote (URL/ветка). Сборка: openssl на CI → vendored (как libgit2).
-- **Ф3-3b-3** — детект конфликтов (диск vs грязный буфер) + UI (настройка remote, pull/push); pull
-  изменённого `config.json` плагина → `needs-review` (AC-Б3-2, завязано на marketplace). Закрывает AC-Б3.
+## Сделано — Ф3-3b-2 (remote + pull/push по https)
+git2 с `https` + **vendored-openssl** (кросс-платформенно). `set_remote`/`get_remote` (origin); `push`
+(текущая ветка); `pull` = fetch + merge-analysis → `up-to-date` / `fast-forward` (применяется) /
+`merge-required`. credentials-callback берёт токен из keychain (Ф3-3b-1) как https-пароль. Команды
+`git_set_remote`/`git_get_remote`/`git_sync` (pull-ff→push под sync-локом) + `tauriApi.git` + мок.
+Тесты: remote set/get/overwrite (юнит); push/pull — сеть, не юнит-тестятся.
+
+## Дальше — Ф3-3b-3 (UI + конфликты)
+- UI настройки remote (URL + токен в keychain) + кнопка sync + индикатор подключения.
+- Разрешение конфликтов при `merge-required` (диск vs грязный буфер редактора).
+- pull изменённого `config.json` плагина → `needs-review` (AC-Б3-2, завязано на marketplace). **Закрывает AC-Б3.**

@@ -69,6 +69,12 @@ export type GitCommitOutcome =
   | { status: 'blocked-by-secrets'; findings: GitFileSecret[] }
   | { status: 'committed'; oid: string; message: string; files: number };
 
+/** Исход pull/sync (зеркалит Rust `git::PullOutcome`, тег `status`). */
+export type GitPullOutcome =
+  | { status: 'up-to-date' }
+  | { status: 'fast-forward'; oid: string }
+  | { status: 'merge-required' };
+
 /** Результат гибридного поиска по телу (зеркалит Rust `search::SearchHit`). */
 export interface SearchHit {
   chunkId: number;
@@ -282,6 +288,18 @@ export const tauriApi = {
     /** Есть ли сохранённый токен (для UI «подключено»). */
     hasToken: (): Promise<boolean> =>
       isTauri() ? invoke<boolean>('git_has_token') : mockGit.hasToken(),
+
+    /** Установить URL remote `origin`. */
+    setRemote: (url: string): Promise<void> =>
+      isTauri() ? invoke<void>('git_set_remote', { url }) : mockGit.setRemote(url),
+
+    /** URL remote `origin` (или null). */
+    getRemote: (): Promise<string | null> =>
+      isTauri() ? invoke<string | null>('git_get_remote') : mockGit.getRemote(),
+
+    /** Синхронизация с remote: pull (ff) → push. Токен берётся из keychain. */
+    sync: (): Promise<GitPullOutcome> =>
+      isTauri() ? invoke<GitPullOutcome>('git_sync') : mockGit.sync(),
   },
 };
 

@@ -99,6 +99,18 @@ pub enum CommitOutcome {
     },
 }
 
+/// Исход pull (fetch + merge-analysis). Разрешение конфликта (нормальный merge) — Ф3-3b-3.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum PullOutcome {
+    /// Локально уже актуально.
+    UpToDate,
+    /// Fast-forward применён (рабочее дерево обновлено).
+    FastForward { oid: String },
+    /// Нужен настоящий merge (расхождение истории) — возможен конфликт; решается отдельно (Ф3-3b-3).
+    MergeRequired,
+}
+
 /// vault как git-репозиторий. Держит открытый `Repository` (libgit2).
 pub struct GitSync {
     repo: Repository,
@@ -239,6 +251,82 @@ impl GitSync {
             return Ok(sig);
         }
         Ok(git2::Signature::now("Nexus", "nexus@local")?)
+    }
+
+    /// Устанавливает URL remote `origin` (создаёт или переписывает).
+    pub fn set_remote(&self, url: &str) -> GitResult<()> {
+        if self.repo.find_remote("origin").is_ok() {
+            self.repo.remote_set_url("origin", url)?;
+        } else {
+            self.repo.remote("origin", url)?;
+        }
+        Ok(())
+    }
+
+    /// URL remote `origin`, если задан.
+    pub fn get_remote(&self) -> GitResult<Option<String>> {
+        match self.repo.find_remote("origin") {
+            Ok(r) => Ok(r.url().map(str::to_string)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Имя текущей ветки (shorthand HEAD). Ошибка, если HEAD «unborn» (нет коммитов).
+    fn current_branch(&self) -> GitResult<String> {
+        let head = self.repo.head()?;
+        Ok(head.shorthand().unwrap_or("main").to_string())
+    }
+
+    /// credentials-callback: токен как пароль https (GitHub PAT: username игнорируется). Замыкание
+    /// владеет токеном → `'static`.
+    fn auth_callbacks(token: &str) -> git2::RemoteCallbacks<'static> {
+        let token = token.to_string();
+        let mut cbs = git2::RemoteCallbacks::new();
+        cbs.credentials(move |_url, _username, _allowed| {
+            git2::Cred::userpass_plaintext("x-access-token", &token)
+        });
+        cbs
+    }
+
+    /// Push текущей ветки в `origin` по https-токену. Требует хотя бы один коммит.
+    pub fn push(&self, token: &str) -> GitResult<()> {
+        let branch = self.current_branch()?;
+        let mut remote = self.repo.find_remote("origin")?;
+        let mut opts = git2::PushOptions::new();
+        opts.remote_callbacks(Self::auth_callbacks(token));
+        let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+        remote.push(&[&refspec], Some(&mut opts))?;
+        Ok(())
+    }
+
+    /// Pull: fetch `origin/<branch>` + merge-analysis → up-to-date / fast-forward (применяется) /
+    /// merge-required (расхождение истории — разрешение в Ф3-3b-3, тут только сигнал).
+    pub fn pull(&self, token: &str) -> GitResult<PullOutcome> {
+        let branch = self.current_branch()?;
+        let mut remote = self.repo.find_remote("origin")?;
+        let mut fo = git2::FetchOptions::new();
+        fo.remote_callbacks(Self::auth_callbacks(token));
+        remote.fetch(&[&branch], Some(&mut fo), None)?;
+
+        let fetch_head = self.repo.find_reference("FETCH_HEAD")?;
+        let fetch_commit = self.repo.reference_to_annotated_commit(&fetch_head)?;
+        let (analysis, _) = self.repo.merge_analysis(&[&fetch_commit])?;
+
+        if analysis.is_up_to_date() {
+            return Ok(PullOutcome::UpToDate);
+        }
+        if analysis.is_fast_forward() {
+            let refname = format!("refs/heads/{branch}");
+            let mut reference = self.repo.find_reference(&refname)?;
+            reference.set_target(fetch_commit.id(), "fast-forward")?;
+            self.repo.set_head(&refname)?;
+            self.repo
+                .checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+            return Ok(PullOutcome::FastForward {
+                oid: fetch_commit.id().to_string(),
+            });
+        }
+        Ok(PullOutcome::MergeRequired)
     }
 }
 
@@ -448,5 +536,25 @@ mod tests {
         }
         // Секрет не закоммичен → всё ещё в статусе.
         assert!(git.status().unwrap().iter().any(|e| e.path == "leak.md"));
+    }
+
+    #[test]
+    fn set_and_get_remote_origin() {
+        let dir = TempDir::new().unwrap();
+        let git = GitSync::open_or_init(dir.path()).unwrap();
+        assert_eq!(git.get_remote().unwrap(), None);
+
+        git.set_remote("https://example.com/vault.git").unwrap();
+        assert_eq!(
+            git.get_remote().unwrap().as_deref(),
+            Some("https://example.com/vault.git")
+        );
+
+        // Повторный set — переписывает (не дублирует remote).
+        git.set_remote("https://example.com/other.git").unwrap();
+        assert_eq!(
+            git.get_remote().unwrap().as_deref(),
+            Some("https://example.com/other.git")
+        );
     }
 }
