@@ -112,6 +112,13 @@ export function registerCoreCommands(): Disposable {
       defaultKey: 'mod+r',
       run: () => useUIStore.getState().toggleReading(),
     }),
+    commands.register({
+      id: 'view.tweaks',
+      title: 'Appearance settings',
+      titleKey: 'commands.view.tweaks',
+      source: 'core',
+      run: () => useUIStore.getState().toggleTweaks(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

@@ -16,6 +16,16 @@
     "light": "Светлая тема",
     "dark": "Тёмная тема"
   },
+  "tweaks": {
+    "title": "Оформление",
+    "theme": "Тема",
+    "light": "Светлая",
+    "dark": "Тёмная",
+    "accent": "Акцент",
+    "density": "Плотность",
+    "comfortable": "Просторно",
+    "compact": "Компактно"
+  },
   "sidebar": {
     "searchPlaceholder": "Поиск…",
     "searchLabel": "Поиск по vault",
@@ -133,6 +143,7 @@
     "view.plugins": "Плагины",
     "view.sync": "Синхронизация (git)",
     "theme.toggle": "Тема: светлая / тёмная",
-    "view.reading": "Режим чтения"
+    "view.reading": "Режим чтения",
+    "view.tweaks": "Оформление"
   }
 }
