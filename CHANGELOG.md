@@ -423,6 +423,15 @@
   идемпотентность + сохранение правил; open существующего). Rust 103. Коммит+secret-scan — Ф3-2;
   pull/push+конфликты — Ф3-3.
 
+- **Ф3-2 — git-sync: выборочный коммит + secret-scan + авто-сообщение (AC-SEC-3).** `commit_all`:
+  стейджит все не-игнорируемые изменения (`add_all` + `update_all` для удалений), **сканирует их
+  содержимое на секреты** — при находке коммит НЕ делается (`BlockedBySecrets`), иначе коммит с
+  авто-сообщением (`Vault sync: +N new, ~M changed, -K deleted`). `scan_secrets` — высокоточные форматы
+  (PEM private key, `sk-…` OpenAI, `ghp_…`/`github_pat_` GitHub, `AKIA…` AWS, `xox…` Slack), без
+  «high-entropy»-шума → мало ложных. Подпись из git-config, иначе дефолт `Nexus <nexus@local>`. +2 теста
+  (детект форматов без ложных на URL/тексте; коммит→nothing→блокировка секрета). Rust 105. Команды/UI +
+  sync-lock + pull/push — Ф3-3.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
