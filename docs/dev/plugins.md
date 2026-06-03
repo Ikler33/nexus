@@ -67,24 +67,32 @@
   границу прав, включая отказы).
 - UI: `PluginsPanel` (демо-плагин «Hello Reader» в песочнице + лог брокерских вызовов ✓/✋), команда/кнопка
   `view.plugins`, i18n RU/EN. **Проверено в превью:** листинг + чтение через брокер, аудит фиксирует вызовы.
+- **`registerCommand(source:'plugin')` (Ф2-3, двунаправленно):** плагин шлёт `ui.registerCommand {id,title}`
+  → брокер авторизует (право **`ui:command`** в манифесте) → релей регистрирует команду (`plugin:<dir>:<id>`,
+  `source:'plugin'`) в реестре (§4.6). Запуск из палитры → хост шлёт плагину событие `command` по порту
+  (host→plugin) → плагин исполняет свой обработчик. `dispose()` снимает команды плагина. `plugin_invoke`
+  для `ui.*` — только авторизация (host-I/O нет). **Проверено в превью:** команда плагина в палитре → запуск
+  → плагин читает Inbox.md через брокер (аудит фиксирует `vault.readFile`).
 
 ## Тесты
 - Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
-- Права (13): glob (`**`/`*`/exact/регистр), scope с deny-override (любой порядок), vault read/write,
+- Права (14): glob (`**`/`*`/exact/регистр), scope с deny-override (любой порядок), vault read/write,
   path-escape (`..`,`/abs`,`\`,пустой сегмент), ai+local_only, `ai:complete:false`, net-allowlist,
-  unknown-method fail-closed, пустые права = deny-all.
+  unknown-method fail-closed, пустые права = deny-all, `ui.registerCommand` требует `ui:command`.
 - Брокер (7): токены уникальны/неугадываемы (64 hex), неизвестный/отозванный токен → deny+audit,
   scope allow+audit, out-of-scope deny+audit, **identity-по-токену** (confused-deputy: узкий плагин не
   дотянется до прав широкого), ревокация, handle→dispatch.
 - Dispatch (4, `commands/plugin.rs`): read/list/write в пределах vault; path-escape (read+write)
   отклонён; неизвестный метод / нет аргумента → ошибка; **E2E** «scope (broker) → dispatch I/O» + аудит.
-- Фронт-транспорт (11, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
-  write-в-scope/write-отказ, **confused-deputy** (payload-токен игнорируется), мусор → без ответа, dispose.
+- Фронт-транспорт (12, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
+  write-в-scope/write-отказ, **confused-deputy** (payload-токен игнорируется), мусор → без ответа, dispose;
+  **`ui.registerCommand`** (команда в реестре → запуск шлёт событие плагину → dispose снимает).
 
 ## Дальше (Ф2-3 + доводка транспорта)
 - **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) +
   **iframe-CSP упакованного приложения** (`frame-src`/`child-src`, origin ассетов плагина). Доверенный JS
   в Worker + редакторные расширения в main-контексте (сейчас UI-JS прямо в iframe). См. BACKLOG.
 - Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~ (сделано) → `ai.embed/complete/searchSemantic`,
-  `net.fetch` (allowlist). `registerCommand(source:'plugin')`, плагинные i18n-namespace (Ф2-3).
+  `net.fetch` (allowlist). ~~`registerCommand(source:'plugin')`~~ (сделано) → плагинные i18n-namespace
+  `plugin:<id>:<key>` (Ф2-3).
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

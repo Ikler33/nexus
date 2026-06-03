@@ -121,7 +121,15 @@ impl Permissions {
                     Err(Denied::HostNotAllowed(host.to_string()))
                 }
             }
-            m if m.starts_with("ui.") => Ok(()), // ui:* точки проверяются при регистрации (Ф2-3)
+            // Регистрация команды требует объявленной ui-точки `command` (Ф2-3).
+            "ui.registerCommand" => {
+                if self.ui.iter().any(|p| p == "command") {
+                    Ok(())
+                } else {
+                    Err(Denied::NotGranted("ui:command"))
+                }
+            }
+            m if m.starts_with("ui.") => Ok(()), // прочие ui-точки проверяются при регистрации
             other => Err(Denied::UnknownMethod(other.to_string())),
         }
     }
@@ -398,6 +406,21 @@ mod tests {
             }),
             Err(Denied::UnknownMethod(_))
         ));
+    }
+
+    #[test]
+    fn check_register_command_needs_ui_point() {
+        let req = ApiRequest {
+            method: "ui.registerCommand",
+            path: None,
+            host: None,
+        };
+        // Без ui-точки `command` — отказ; с ней — ок.
+        assert_eq!(
+            perms(r#"{"vault:read":["**"]}"#).check(&req),
+            Err(Denied::NotGranted("ui:command"))
+        );
+        assert!(perms(r#"{"ui":["command"]}"#).check(&req).is_ok());
     }
 
     #[test]
