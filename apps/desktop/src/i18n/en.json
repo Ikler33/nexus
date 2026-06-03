@@ -68,6 +68,16 @@
     "auditTitle": "Broker calls",
     "auditEmpty": "No host calls yet — interact with the plugin."
   },
+  "git": {
+    "title": "Sync",
+    "close": "Close",
+    "loading": "Loading…",
+    "clean": "No changes",
+    "changes": "Changes",
+    "commit": "Commit",
+    "committing": "Committing…",
+    "blocked": "Secrets found — commit blocked"
+  },
   "commands": {
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
@@ -76,6 +86,7 @@
     "view.graph": "Local graph",
     "view.chat": "AI chat",
     "view.suggest": "Link suggestions",
-    "view.plugins": "Plugins"
+    "view.plugins": "Plugins",
+    "view.sync": "Sync (git)"
   }
 }

@@ -8,6 +8,8 @@ interface UIState {
   chatOpen: boolean;
   /** Открыта ли панель плагинов (sandbox-iframe, Ф2). */
   pluginsOpen: boolean;
+  /** Открыта ли панель синхронизации (git-sync, Ф3). */
+  syncOpen: boolean;
   /** Активная вкладка AI-панели (чат / связи). */
   aiTab: AiTab;
   openPalette: () => void;
@@ -22,6 +24,8 @@ interface UIState {
   openPlugins: () => void;
   closePlugins: () => void;
   togglePlugins: () => void;
+  closeSync: () => void;
+  toggleSync: () => void;
   setAiTab: (tab: AiTab) => void;
 }
 
@@ -31,6 +35,7 @@ export const useUIStore = create<UIState>((set) => ({
   graphOpen: false,
   chatOpen: false,
   pluginsOpen: false,
+  syncOpen: false,
   aiTab: 'chat',
   openPalette: () => set({ paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),
@@ -44,5 +49,7 @@ export const useUIStore = create<UIState>((set) => ({
   openPlugins: () => set({ pluginsOpen: true }),
   closePlugins: () => set({ pluginsOpen: false }),
   togglePlugins: () => set((s) => ({ pluginsOpen: !s.pluginsOpen })),
+  closeSync: () => set({ syncOpen: false }),
+  toggleSync: () => set((s) => ({ syncOpen: !s.syncOpen })),
   setAiTab: (tab) => set({ aiTab: tab }),
 }));

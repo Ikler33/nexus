@@ -27,7 +27,15 @@
 open существующего. Ф3-2 (2): детект форматов секретов без ложных (URL/текст); коммит → nothing →
 блокировка секрета (не закоммичен).
 
-## Дальше
-- **Ф3-3** — pull/push (нужны сетевые фичи `git2`: https/ssh) + детект конфликтов + UI (диск vs грязный
-  буфер редактора); pull нового/изменённого плагина → состояние `needs-review` (AC-Б3-2).
-- Tauri-команды (`git_status`/`git_sync`) + **sync-lock** (один синк за раз) + UI статуса синка — Ф3-3.
+## Сделано — Ф3-3a (команды + UI + sync-lock)
+- Tauri-команды `git_status` / `git_commit` (`commands/git.rs`): libgit2 в `spawn_blocking`, под
+  **sync-локом** `AppState::git_lock` (tokio Mutex — один git-вызов за раз). Репозиторий открывается
+  per-вызов (git2 `!Send`); `ensure_gitignore` гарантируется на каждом вызове.
+- Фронт: `tauriApi.git` (status/commit) + мок (`lib/mock/git.ts`); панель `SyncPanel` (изменения с
+  бейджами A/M/D/R, кнопка коммита, исход committed/nothing/**blocked-by-secrets** с файлами+строками),
+  кнопка/команда `view.sync`, i18n RU/EN. Проверено в превью.
+
+## Дальше — Ф3-3b
+- pull/push (нужны сетевые фичи `git2`: https/ssh + credentials callback; решить хранение токена) +
+  детект конфликтов + UI (диск vs грязный буфер редактора); pull нового/изменённого плагина (точнее —
+  `config.json`) → состояние `needs-review` (AC-Б3-2, завязано на marketplace).

@@ -78,6 +78,8 @@ pub fn run() {
             commands::plugin::plugin_open_session,
             commands::plugin::plugin_invoke,
             commands::plugin::plugin_close_session,
+            commands::git::git_status,
+            commands::git::git_commit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");

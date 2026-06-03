@@ -20,6 +20,9 @@ pub struct AppState {
     /// Capability-брокер плагинов (ADR-002, §7.4): токен→сессия + audit. `std::Mutex` — захват только
     /// на синхронную авторизацию (без await; реальный I/O dispatch — после освобождения лока).
     pub plugins: Mutex<crate::plugin::PluginBroker>,
+    /// sync-lock git-операций (§8): один синк/коммит за раз. `tokio::Mutex` — держится через `await`
+    /// (захват до `spawn_blocking` с libgit2-I/O и до его завершения).
+    pub git_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -28,6 +31,7 @@ impl AppState {
             vault: RwLock::new(None),
             chat_cancel: Mutex::new(None),
             plugins: Mutex::new(crate::plugin::PluginBroker::new()),
+            git_lock: tokio::sync::Mutex::new(()),
         }
     }
 
