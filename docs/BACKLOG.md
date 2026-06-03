@@ -34,6 +34,14 @@
 | ⏳ Host-API плагинов: `ai.complete` (стрим ответа по порту) | embed/search/net.fetch сделаны; стрим чата по MessagePort (события host→plugin) — отдельным срезом | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
 | 🔬 SSRF: DNS-rebinding для `net.fetch` (резолв хоста + проверка адреса) | литеральные приватные адреса + allowlist уже закрыты; резолв домена в приватный IP — глубже | при усилении | AC-SEC-4, `security.md` |
 | ⏳ Миграции схемы `chat_*` / `link_suggestions` (FTS5/usearch нельзя `ALTER`) | не нужны до соответствующих фич | при их реализации | `db.md` |
+| ⏳ **`registerEditorExtension` (AC-Б1-1)** — живое CodeMirror-расширение от плагина | CM-расширение не сериализуется через `MessagePort` → нужна модель **доверенного JS в main-контексте/Worker** (ADR), это другая граница исполнения, не sandbox-iframe | после ADR | AC-Б1-1, ADR-001, `plugins.md`, `editor.md` |
+| ⏳ **Marketplace: подпись `id@version#sha256` + реестр + lifecycle** (install/update/rollback/uninstall, матрица §7.7) | ядро рантайма готово; дистрибуция/подпись/жизненный цикл — отдельная подсистема | после рантайма | AC-DOD-Ф2, AC-Б3-3, §7.7 |
+| ⏳ **AC-Б3-1/2: код плагинов вне git** (auto-commit исключает `.nexus/plugins/**`; в коммит только `id@version#sha256`; pull → `needs-review`) | **зависит от слоя git-sync** | **Фаза 3** (git-sync) | AC-Б3-1/2, AC-SEC-3, `security.md` |
+| ⏳ **Плагин-SDK + доки для сторонних разработчиков** (часть AC-DOD-Ф2) | host-API готов; нужен публикуемый SDK-пакет + dev-доки | после рантайма | AC-DOD-Ф2, `plugins.md` |
+
+> **Итог Фазы 2:** ядро (рантайм плагинов: права→брокер→токены→sandbox-транспорт→host-API vault/ai/ui/net,
+> AC-Б2 / AC-SEC-1/2/4/5(dev) / AC-I18N-7) — **закрыто**. Полное AC-DOD-Ф2 (editor-extensions, marketplace,
+> SDK, git-exclusion) — отложено: одна зависимость кросс-фазная (AC-Б3 ↔ Фаза 3 git-sync), одна требует ADR.
 
 ## Фаза 3 / позже — sync, надёжность, доводка
 
