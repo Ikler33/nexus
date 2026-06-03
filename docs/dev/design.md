@@ -48,5 +48,8 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
 - [x] Ф4-0 — токены/шрифты/тема (фундамент). Существующий апп в новом облике, тоггл свет/тёмная.
 - [x] Ф4-1 — chrome shell: titlebar (бренд + поисковая пилюля→палитра + группа инструментов) +
   status bar + сетка `38/1fr/26` (вариант A — бар в обычном OS-окне; frameless/traffic-lights позже).
-- [ ] рестайл сайдбара (rail + tree-rows) · редактора (tabs) · graph · ai-panel · palette · plugins.
+- [x] Ф4-2 — рестайл сайдбара: tree-rows (фирменное выделение: selected-фон + 3px акцент-полоса +
+  акцентная иконка) + поле поиска (radius-md + accent-soft focus). Rail (files/search/tags/starred) —
+  отдельно (нужны панели tags/starred = новые фичи).
+- [ ] рестайл редактора (tabs/edit-preview) · graph · ai-panel · palette · plugins.
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.
