@@ -49,7 +49,14 @@ git2 с `https` + **vendored-openssl** (кросс-платформенно). `s
 `git_set_remote`/`git_get_remote`/`git_sync` (pull-ff→push под sync-локом) + `tauriApi.git` + мок.
 Тесты: remote set/get/overwrite (юнит); push/pull — сеть, не юнит-тестятся.
 
-## Дальше — Ф3-3b-3 (UI + конфликты)
-- UI настройки remote (URL + токен в keychain) + кнопка sync + индикатор подключения.
-- Разрешение конфликтов при `merge-required` (диск vs грязный буфер редактора).
-- pull изменённого `config.json` плагина → `needs-review` (AC-Б3-2, завязано на marketplace). **Закрывает AC-Б3.**
+## Сделано — Ф3-3b-3 (UI настройки remote + sync) ✓
+Панель «Синхронизация» (`SyncPanel`): поле Remote (URL) + Токен (→ keychain через `git_set_token`),
+индикатор подключения (`git_has_token`), кнопка Синхр. (`git_sync`) с исходом (up-to-date / synced /
+`merge-required` → «разрешите вручную» / ошибка). `tauriApi.git` (setRemote/getRemote/sync) + мок + i18n.
+**git-sync функционально готов:** локально + credentials + remote pull/push + UI.
+
+## Отложено (BACKLOG)
+- Полное **разрешение конфликтов** при `merge-required` (3-way merge / диск vs грязный буфер редактора) —
+  сейчас только сигнал в UI.
+- pull изменённого `config.json` плагина → `needs-review` (AC-Б3-2) — завязано на marketplace/lifecycle.
+- Git-exclusion кода плагинов (ядро **AC-Б3-1**) уже закрыт `.gitignore` (Ф3-1).

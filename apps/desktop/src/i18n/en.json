@@ -76,7 +76,20 @@
     "changes": "Changes",
     "commit": "Commit",
     "committing": "Committing…",
-    "blocked": "Secrets found — commit blocked"
+    "blocked": "Secrets found — commit blocked",
+    "remote": "Remote",
+    "remotePlaceholder": "https://github.com/you/vault.git",
+    "token": "Token",
+    "tokenPlaceholder": "access token (PAT)",
+    "tokenSaved": "token saved in keychain",
+    "connect": "Connect",
+    "connected": "token in keychain",
+    "notConnected": "no token",
+    "syncBtn": "Sync",
+    "syncing": "Syncing…",
+    "upToDate": "Up to date",
+    "synced": "Synced",
+    "mergeRequired": "Conflict — resolve manually"
   },
   "commands": {
     "palette.open": "Command palette",

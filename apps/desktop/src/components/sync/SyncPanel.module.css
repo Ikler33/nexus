@@ -138,11 +138,102 @@
   padding-left: var(--space-3);
 }
 
+.remote {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.remoteRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.remoteLabel {
+  flex: none;
+  width: 56px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.remoteActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.connected {
+  color: var(--color-ai, #9ece6a);
+  font-size: var(--text-xs);
+}
+
+.warn {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-warning, #e0af68);
+}
+
+.errorMsg {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+
 .footer {
   display: flex;
   justify-content: flex-end;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--color-border);
+}
+
+.secondaryBtn {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondaryBtn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.secondaryBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.secondaryBtn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .commitBtn {
