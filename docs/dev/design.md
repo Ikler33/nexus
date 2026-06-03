@@ -46,4 +46,7 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
 
 ## Прогресс
 - [x] Ф4-0 — токены/шрифты/тема (фундамент). Существующий апп в новом облике, тоггл свет/тёмная.
-- [ ] рестайл экранов · новые экраны (см. выше).
+- [x] Ф4-1 — chrome shell: titlebar (бренд + поисковая пилюля→палитра + группа инструментов) +
+  status bar + сетка `38/1fr/26` (вариант A — бар в обычном OS-окне; frameless/traffic-lights позже).
+- [ ] рестайл сайдбара (rail + tree-rows) · редактора (tabs) · graph · ai-panel · palette · plugins.
+- [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.

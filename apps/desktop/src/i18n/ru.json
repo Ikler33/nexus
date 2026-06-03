@@ -3,6 +3,9 @@
     "name": "Nexus",
     "openVault": "Открыть vault…"
   },
+  "chrome": {
+    "search": "Поиск или вопрос…"
+  },
   "sidebar": {
     "searchPlaceholder": "Поиск…",
     "searchLabel": "Поиск по vault",
