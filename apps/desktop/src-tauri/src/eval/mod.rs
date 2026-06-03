@@ -462,4 +462,130 @@ mod tests {
         }
         assert!(ok >= 3, "ожидали ≥3/4 проб найденными, получили {ok}/4");
     }
+
+    /// **Нагрузочный бенчмарк полного пайплайна** (индексация С ЭМБЕДДИНГАМИ) на синтетическом
+    /// vault — реальные числа AC-PERF: throughput индексации, латентность поиска и графа,
+    /// проекция времени полной индексации на 50k. Требует живой bge-m3 :8083.
+    /// Размер задаётся `NEXUS_BENCH_FILES` (по умолчанию 500):
+    ///   `NEXUS_BENCH_FILES=2000 cargo test bench_index_scale -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn bench_index_scale() {
+        use crate::ai::default_prefixes;
+        use std::time::Instant;
+
+        let n: usize = std::env::var("NEXUS_BENCH_FILES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(500);
+        let target = 50_000usize;
+
+        // 1) Синтетический vault: N заметок (RU+EN тело → реальные чанки) + 3 вики-ссылки на соседей.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let gen0 = Instant::now();
+        for i in 0..n {
+            let body = format!(
+                "# Note {i}\n\n\
+                 Синтетическая заметка номер {i} для нагрузочного теста. Немного русского текста и \
+                 some English text про vector search, knowledge base и retrieval augmented generation. \
+                 Второй параграф: индексация, эмбеддинги, гибридный поиск, граф связей, чанкинг.\n\n\
+                 Связи: [[Note-{}]] [[Note-{}]] [[Note-{}]]\n\n#bench #note{}\n",
+                (i + 1) % n,
+                (i + 7) % n,
+                (i + 53) % n,
+                i % 20,
+            );
+            std::fs::write(root.join(format!("Note-{i}.md")), body).unwrap();
+        }
+        let gen_ms = gen0.elapsed().as_millis();
+
+        // 2) Полный пайплайн с живым эмбеддером bge-m3.
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            OpenAiEmbedder::new(
+                "http://127.0.0.1:8083",
+                "bge-m3",
+                1024,
+                default_prefixes("bge-m3"),
+            )
+            .unwrap(),
+        );
+        let vectors =
+            Arc::new(VectorIndex::open(root.join(".nexus/vectors.usearch"), 1024).unwrap());
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let indexer = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
+
+        let idx0 = Instant::now();
+        indexer.scan_vault().await.unwrap();
+        let idx_s = idx0.elapsed().as_secs_f64();
+
+        let chunks: i64 = db
+            .reader()
+            .query(|c| c.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get::<_, i64>(0)))
+            .await
+            .unwrap();
+        let files_per_s = n as f64 / idx_s;
+        let emb_per_s = chunks as f64 / idx_s;
+        let proj_50k_s = target as f64 / files_per_s;
+
+        // 3) Латентность поиска (гибрид + эмбеддинг запроса).
+        let q0 = Instant::now();
+        let hits = search::hybrid_search(
+            db.reader(),
+            Some(&vectors),
+            Some(embedder.as_ref()),
+            "vector search и граф связей".to_string(),
+            SearchOptions {
+                limit: 8,
+                filter: None,
+                center: None,
+            },
+        )
+        .await
+        .unwrap();
+        let search_ms = q0.elapsed().as_millis();
+
+        // 4) Латентность графа (единый топ-2000 + локальный 2-hop).
+        let fg0 = Instant::now();
+        let full = crate::graph::get_full_graph(db.reader(), 2000)
+            .await
+            .unwrap();
+        let full_ms = fg0.elapsed().as_millis();
+        let lg0 = Instant::now();
+        let local = crate::graph::get_local_graph(db.reader(), "Note-0.md".to_string(), 2)
+            .await
+            .unwrap();
+        let local_ms = lg0.elapsed().as_millis();
+
+        eprintln!("\n=== NEXUS bench: полный пайплайн (с эмбеддингами bge-m3 :8083) ===");
+        eprintln!("файлов: {n}  (генерация {gen_ms} мс), чанков: {chunks}");
+        eprintln!(
+            "ИНДЕКСАЦИЯ: {idx_s:.1} с → {files_per_s:.1} файлов/с, {emb_per_s:.0} эмбеддингов/с"
+        );
+        eprintln!(
+            "ПРОЕКЦИЯ на 50k: ~{:.0} с (~{:.1} мин) фоновой индексации",
+            proj_50k_s,
+            proj_50k_s / 60.0
+        );
+        eprintln!(
+            "ПОИСК (гибрид+эмбеддинг запроса): {search_ms} мс, hits={}",
+            hits.len()
+        );
+        eprintln!(
+            "ГРАФ единый (топ-2000): {full_ms} мс — узлов {} рёбер {} truncated {}",
+            full.nodes.len(),
+            full.edges.len(),
+            full.truncated
+        );
+        eprintln!(
+            "ГРАФ локальный (2-hop): {local_ms} мс — узлов {}",
+            local.nodes.len()
+        );
+        eprintln!("==================================================================\n");
+
+        // Санити (числа выше — главный артефакт; жёстких порогов нет, окружение-зависимо).
+        assert!(files_per_s > 0.0);
+        assert!(!hits.is_empty(), "поиск должен находить на синтетике");
+        assert!(!full.nodes.is_empty());
+    }
 }
