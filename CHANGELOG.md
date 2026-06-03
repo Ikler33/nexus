@@ -342,3 +342,10 @@
   Токен — источник identity на границе фронт↔Rust (порт-релей — на фронте). Закрывает confused-deputy
   по токену. Зависимость `getrandom`. 7 тестов брокера (уникальность токенов, ревокация, identity).
   Rust 92 теста. Транспорт MessagePort/iframe + `plugin_invoke` + реальный `HostDispatch` — далее.
+
+- **Ф2-2b (часть 2) — Брокер live: Tauri-команды.** `AppState.plugins: Mutex<PluginBroker>`.
+  `plugin_open_session(dir)` — манифест→совместимость→сессия с правами→**токен**; `plugin_invoke(token,
+  method, path?)` — `authorize` (scoped + audit) → dispatch (`vault.readFile` через
+  `vault::resolve_vault_path`, read-only). Лок брокера — только на синхронную авторизацию, async-I/O
+  после освобождения. Зарегистрированы в `lib.rs`. Фронт-транспорт (iframe/MessagePort) + остальные
+  методы (write/list/ai/net) — далее.

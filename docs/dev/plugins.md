@@ -39,8 +39,15 @@
 - **`AuditLog`** — только добавление (неотключаемый); `revoke(&token)` мгновенно инвалидирует сессию.
 - Реальный I/O (vault/ai) — за трейтом `HostDispatch` (через `vault::resolve_vault_path` + db/ai).
 > На фронте каждому плагину — один `MessagePort` (§7.5); хост-релей привязывает к порту правильный
-> токен и передаёт его в Tauri-вызов. Фронт-транспорт (iframe/MessagePort) + Tauri-команда `plugin_invoke`
-> + реальный `HostDispatch` — следующий срез (нужна фронт-сторона).
+> токен и передаёт его в Tauri-вызов.
+
+## Команды брокера (live, Ф2-2b·2)
+- `plugin_open_session(dir)` → читает `.nexus/plugins/<dir>/manifest.json`, проверяет совместимость,
+  заводит сессию с правами манифеста в `AppState.plugins` (брокер) → возвращает **capability-токен**.
+- `plugin_invoke(token, method, path?)` → брокер `authorize(token, req)` (scoped + audit) → dispatch.
+  Сейчас dispatch поддерживает `vault.readFile` (через `vault::resolve_vault_path`, read-only).
+  Лок брокера держится только на синхронную авторизацию; реальный async-I/O — после освобождения.
+> Брокер в `AppState` (`std::Mutex<PluginBroker>`). End-to-end через эти команды проверяется фронтом (ниже).
 
 ## Тесты
 - Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
@@ -51,9 +58,10 @@
   scope allow+audit, out-of-scope deny+audit, **identity-по-токену** (confused-deputy: узкий плагин не
   дотянется до прав широкого), ревокация, handle→dispatch.
 
-## Дальше (Ф2-2b+)
-- **Транспорт + токены (фронт):** доверенный JS в Worker + редакторные расширения в main-контексте;
-  UI-вью в sandbox-iframe; один `MessagePort` на плагин (identity по порту); capability-токены (генерация
-  секретов + проверка на каждый вызов + ревокация); реальный `HostDispatch` (vault/ai через
-  `resolve_vault_path`). `registerCommand(source:'plugin')`, плагинные i18n-namespace (Ф2-3).
+## Дальше (Ф2-2b·3 фронт + Ф2-3)
+- **Фронт-транспорт:** UI-вью плагина в sandbox-iframe; один `MessagePort` на плагин (хост-релей
+  привязывает токен); `tauriApi.plugins.openSession/invoke`; доверенный JS в Worker + редакторные
+  расширения в main-контексте. Демо-плагин для проверки end-to-end. **Нужна визуальная проверка.**
+- Расширить dispatch: `vault.writeFile`/`listFiles` (scoped), `ai.embed/complete/searchSemantic`,
+  `net.fetch` (allowlist). `registerCommand(source:'plugin')`, плагинные i18n-namespace (Ф2-3).
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

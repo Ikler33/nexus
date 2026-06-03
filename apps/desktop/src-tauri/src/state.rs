@@ -17,6 +17,9 @@ pub struct AppState {
     /// Флаг отмены активного чат-стрима (UI ведёт один чат за раз). `chat_rag` ставит новый
     /// токен (отменяя предыдущий), `chat_cancel` его взводит. `std::Mutex` — держим коротко, без await.
     pub chat_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Capability-брокер плагинов (ADR-002, §7.4): токен→сессия + audit. `std::Mutex` — захват только
+    /// на синхронную авторизацию (без await; реальный I/O dispatch — после освобождения лока).
+    pub plugins: Mutex<crate::plugin::PluginBroker>,
 }
 
 impl AppState {
@@ -24,6 +27,7 @@ impl AppState {
         Self {
             vault: RwLock::new(None),
             chat_cancel: Mutex::new(None),
+            plugins: Mutex::new(crate::plugin::PluginBroker::new()),
         }
     }
 
