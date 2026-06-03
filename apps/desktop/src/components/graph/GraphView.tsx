@@ -64,21 +64,46 @@ export default function GraphView() {
         setMeta(null);
       }
 
+      // Цвета из токенов активной темы. sigma рендерит в WebGL → нужен конкретный rgb
+      // (CSS-переменную и oklch шейдер не разберёт). getComputedStyle нынче возвращает oklch
+      // как есть, поэтому конвертируем реальный пиксель через 1×1 canvas (readback даёт rgb).
+      const resolveColor = (varName: string): string => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(${varName})`;
+        document.body.appendChild(probe);
+        const css = getComputedStyle(probe).color;
+        probe.remove();
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = 1;
+        const ctx = cv.getContext('2d');
+        if (!ctx) return css;
+        ctx.fillStyle = css;
+        ctx.fillRect(0, 0, 1, 1);
+        const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+        return `rgb(${r}, ${g}, ${b})`;
+      };
+      const cAccent = resolveColor('--color-accent');
+      const cNode = resolveColor('--color-text-muted');
+      const cEdge = resolveColor('--color-border-strong');
+
       const graph = new Graph();
       for (const n of data.nodes) {
         if (graph.hasNode(String(n.id))) continue;
+        const isCenter = mode === 'local' && n.path === center;
         graph.addNode(String(n.id), {
           label: n.title ?? basename(n.path),
           path: n.path,
           x: 0,
           y: 0,
-          size: mode === 'local' && n.path === center ? 9 : 5,
+          size: isCenter ? 9 : 5,
+          color: isCenter ? cAccent : cNode,
         });
       }
       for (const e of data.edges) {
         const s = String(e.source);
         const tt = String(e.target);
-        if (graph.hasNode(s) && graph.hasNode(tt) && !graph.hasEdge(s, tt)) graph.addEdge(s, tt);
+        if (graph.hasNode(s) && graph.hasNode(tt) && !graph.hasEdge(s, tt))
+          graph.addEdge(s, tt, { color: cEdge, size: 1 });
       }
       // В едином графе масштабируем узлы по степени — хабы крупнее.
       if (mode === 'full') {
@@ -96,7 +121,10 @@ export default function GraphView() {
             graph.setNodeAttribute(id, 'y', p.y);
           }
         }
-        sigma = new Sigma(graph, containerRef.current);
+        sigma = new Sigma(graph, containerRef.current, {
+          labelColor: { color: cNode },
+          labelFont: 'Onest Variable, sans-serif',
+        });
         sigma.on('clickNode', ({ node }) => {
           const path = graph.getNodeAttribute(node, 'path') as string | undefined;
           if (path) {
