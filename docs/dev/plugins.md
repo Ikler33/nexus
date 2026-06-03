@@ -44,9 +44,11 @@
 ## Команды брокера (live, Ф2-2b·2)
 - `plugin_open_session(dir)` → читает `.nexus/plugins/<dir>/manifest.json`, проверяет совместимость,
   заводит сессию с правами манифеста в `AppState.plugins` (брокер) → возвращает **capability-токен**.
-- `plugin_invoke(token, method, path?)` → брокер `authorize(token, req)` (scoped + audit) → dispatch.
-  Сейчас dispatch поддерживает `vault.readFile` (через `vault::resolve_vault_path`, read-only).
-  Лок брокера держится только на синхронную авторизацию; реальный async-I/O — после освобождения.
+- `plugin_invoke(token, method, path?, content?)` → брокер `authorize(token, req)` (scoped + audit) →
+  `dispatch_vault` (вынесен отдельной тестируемой функцией). Методы: `vault.readFile`/`vault.listFiles`
+  (право `vault:read`), `vault.writeFile` (`vault:write`, через `resolve_vault_path_for_write`).
+  Результат — JSON: строка-контент / массив записей каталога / `{ok,bytes}`. Лок брокера держится только
+  на синхронную авторизацию; async-I/O и резолв пути (та же граница, defense-in-depth) — после освобождения.
 > Брокер в `AppState` (`std::Mutex<PluginBroker>`). End-to-end через эти команды проверяется фронтом (ниже).
 
 ## Тесты
@@ -57,11 +59,13 @@
 - Брокер (7): токены уникальны/неугадываемы (64 hex), неизвестный/отозванный токен → deny+audit,
   scope allow+audit, out-of-scope deny+audit, **identity-по-токену** (confused-deputy: узкий плагин не
   дотянется до прав широкого), ревокация, handle→dispatch.
+- Dispatch (4, `commands/plugin.rs`): read/list/write в пределах vault; path-escape (read+write)
+  отклонён; неизвестный метод / нет аргумента → ошибка; **E2E** «scope (broker) → dispatch I/O» + аудит.
 
 ## Дальше (Ф2-2b·3 фронт + Ф2-3)
 - **Фронт-транспорт:** UI-вью плагина в sandbox-iframe; один `MessagePort` на плагин (хост-релей
   привязывает токен); `tauriApi.plugins.openSession/invoke`; доверенный JS в Worker + редакторные
   расширения в main-контексте. Демо-плагин для проверки end-to-end. **Нужна визуальная проверка.**
-- Расширить dispatch: `vault.writeFile`/`listFiles` (scoped), `ai.embed/complete/searchSemantic`,
+- Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~ (сделано) → `ai.embed/complete/searchSemantic`,
   `net.fetch` (allowlist). `registerCommand(source:'plugin')`, плагинные i18n-namespace (Ф2-3).
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

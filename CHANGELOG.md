@@ -350,6 +350,15 @@
   после освобождения. Зарегистрированы в `lib.rs`. Фронт-транспорт (iframe/MessagePort) + остальные
   методы (write/list/ai/net) — далее.
 
+- **Ф2-2b (часть 3) — Расширение dispatch брокера: vault read/list/write.** `plugin_invoke` получил
+  аргумент `content?` и возвращает JSON; реальный I/O вынесен в тестируемую `dispatch_vault`. Методы:
+  `vault.readFile`/`vault.listFiles` (право `vault:read`), `vault.writeFile` (`vault:write`, через
+  `resolve_vault_path_for_write`). Листинг/запись проходят ту же анти-traversal границу
+  (defense-in-depth) уже ПОСЛЕ авторизации брокером по scope. +4 теста: read/list/write в пределах
+  vault; path-escape (read+write) отклонён; unknown-метод / нет аргумента → ошибка; **E2E**
+  «scope (broker) → dispatch I/O» с проверкой аудита (allow+deny). Rust 96 тестов. `ai.*`/`net.fetch`
+  + фронт-транспорт — далее.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
