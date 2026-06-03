@@ -104,6 +104,14 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useThemeStore.getState().toggle(),
     }),
+    commands.register({
+      id: 'view.reading',
+      title: 'Reading mode',
+      titleKey: 'commands.view.reading',
+      source: 'core',
+      defaultKey: 'mod+r',
+      run: () => useUIStore.getState().toggleReading(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

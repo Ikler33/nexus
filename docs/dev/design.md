@@ -68,5 +68,6 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
   apply→merge-коммит; команды + api + мок + Rust-тест). Закрывает git-хвост Ф3 (бэк).
 - [x] Ф4-8b — conflict resolver **UI** (3-way панель: НАШЕ/ИХ + редактируемый результат → merge-коммит
   + push). **git-хвост Ф3 закрыт.** Проверено в превью (полный поток).
-- [ ] reading mode · вложения/Mermaid/LaTeX · onboarding · tweaks-панель · Home-дашборд. Затем инфра (C).
+- [x] Ф4-9 — режим чтения (⌘R): прячет сайдбар/AI, редактор full-width; команда + Esc-выход. Центр-measure — рефайнмент.
+- [ ] вложения/Mermaid/LaTeX · onboarding · tweaks-панель · Home-дашборд. Затем инфра (C).
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.

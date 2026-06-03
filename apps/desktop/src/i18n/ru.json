@@ -122,6 +122,7 @@
     "view.suggest": "Предложения связей",
     "view.plugins": "Плагины",
     "view.sync": "Синхронизация (git)",
-    "theme.toggle": "Тема: светлая / тёмная"
+    "theme.toggle": "Тема: светлая / тёмная",
+    "view.reading": "Режим чтения"
   }
 }
