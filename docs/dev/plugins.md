@@ -52,6 +52,14 @@
 > Брокер в `AppState` (`std::Mutex<PluginBroker>`). End-to-end через эти команды проверяется фронтом (ниже).
 - `plugin_close_session(token)` → `broker.revoke` (мгновенный отзыв токена при размонтировании плагина —
   иначе сессии копятся; идемпотентно).
+- **AI host-API (Ф2-3, право `ai:embed`):** `ai.embed` (текст→вектор) и `ai.searchSemantic` (запрос→
+  гибридный поиск по vault, топ-8) — текст/запрос в `content`. `plugin_invoke` снимает
+  `reader/vectors/embedder` из `VaultContext` под read-локом и отпускает его ДО сети (как `search_content`);
+  сам вызов — в тестируемой `dispatch_ai`. `ai.complete` (стрим) — позже (BACKLOG).
+- **`net.fetch` (Ф2-3, право `net` + SSRF-гард, AC-SEC-4):** GET по URL (в `path`); хост извлекается и
+  проверяется брокером против `net`-allowlist. Поверх — `is_private_host`: приватные/loopback/link-local/
+  metadata-адреса (`169.254.169.254` и пр.) запрещены даже если в allowlist. Без редиректов
+  (анти-redirect-SSRF) + таймаут → `{status, body}`. DNS-rebinding — доработка.
 
 ## Фронт-транспорт (Ф2-2b·4, `lib/plugin-host.ts` + `components/plugins/PluginsPanel.tsx`) — §7.5
 Плагин живёт в `<iframe sandbox="allow-scripts">` (opaque origin — нет доступа к родителю/storage/cookies)
@@ -89,6 +97,10 @@
   дотянется до прав широкого), ревокация, handle→dispatch.
 - Dispatch (4, `commands/plugin.rs`): read/list/write в пределах vault; path-escape (read+write)
   отклонён; неизвестный метод / нет аргумента → ошибка; **E2E** «scope (broker) → dispatch I/O» + аудит.
+- AI (1, `dispatch_ai`): `ai.embed` → вектор (len=dim), `ai.searchSemantic` → непустая выдача
+  (MockEmbedder + temp-индекс); нет аргумента / неизвестный ai-метод → ошибка.
+- SSRF (1, `is_private_host`): localhost/`127.*`/`10/172.16/192.168`/`169.254.169.254`/`::1`/`fc00::`/
+  `fe80::` → блок; публичные домены/IP → пропуск. Net-allowlist — в правах (14).
 - Фронт-транспорт (13, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
   write-в-scope/write-отказ, **confused-deputy** (payload-токен игнорируется), мусор → без ответа, dispose;
   **`ui.registerCommand`** (команда в реестре → запуск шлёт событие плагину → dispose снимает);
@@ -98,7 +110,7 @@
 - **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) +
   **iframe-CSP упакованного приложения** (`frame-src`/`child-src`, origin ассетов плагина). Доверенный JS
   в Worker + редакторные расширения в main-контексте (сейчас UI-JS прямо в iframe). См. BACKLOG.
-- Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~ (сделано) → `ai.embed/complete/searchSemantic`,
-  `net.fetch` (allowlist). ~~`registerCommand(source:'plugin')`~~ (сделано), ~~плагинные
-  i18n-namespace `plugin:<id>:<key>`~~ (сделано, AC-I18N-7). Осталось из Ф2-3: AI/сеть для плагинов.
+- Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~, ~~`ai.embed`/`ai.searchSemantic`~~,
+  ~~`net.fetch`+SSRF~~, ~~`registerCommand`~~, ~~плагинные i18n `plugin:<id>:<key>`~~ (всё сделано).
+  Осталось из Ф2-3: **`ai.complete`** (стрим ответа по порту).
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

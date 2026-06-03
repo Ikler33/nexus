@@ -253,6 +253,8 @@ export function demoPluginSrcdoc(): string {
         // Авто-демо: сразу читаем первый файл (read-only) — видно работу брокера без клика.
         const firstFile = entries.find((f) => !f.isDir);
         if(firstFile){ try { out.textContent = '— '+firstFile.path+' —\\n\\n'+await call('vault.readFile', firstFile.path); } catch(_){} }
+        // Авто-демо ai.searchSemantic (read-only) — чтобы вызов был виден в аудите.
+        try { await call('ai.searchSemantic', undefined, 'roadmap'); } catch(_){}
         const btn = document.createElement('button');
         btn.textContent = 'Проверить границу записи (Notes/ ✓ vs README.md ✗)';
         btn.onclick = async () => {
@@ -266,6 +268,15 @@ export function demoPluginSrcdoc(): string {
           out.textContent = log; out.className='ok';
         };
         app.appendChild(btn);
+        // ai.searchSemantic через брокер (право ai:embed) — RAG-поиск из плагина.
+        const aiBtn = document.createElement('button');
+        aiBtn.textContent = 'ai.searchSemantic: найти «roadmap»';
+        aiBtn.onclick = async () => {
+          try { const hits = await call('ai.searchSemantic', undefined, 'roadmap');
+            out.textContent = '🔎 «roadmap» →\\n'+hits.map(function(h){return '• '+h.path;}).join('\\n'); out.className=''; }
+          catch(err){ out.textContent = '✋ '+err.message; out.className='err'; }
+        };
+        app.appendChild(aiBtn);
         // Регистрируем команду в палитре приложения (право ui:command). При запуске из палитры хост
         // шлёт событие назад плагину → исполняется этот обработчик (host→plugin раунд-трип).
         const hint = document.createElement('p'); hint.className='sub';

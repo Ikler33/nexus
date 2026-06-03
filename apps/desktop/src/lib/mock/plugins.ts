@@ -15,6 +15,8 @@ interface MockManifest {
   read: string[];
   write: string[];
   ui: string[];
+  ai: boolean;
+  net: string[];
 }
 
 /** «Установленные» плагины превью-vault (соответствуют `.nexus/plugins/<dir>`). */
@@ -26,6 +28,8 @@ const MANIFESTS: Record<string, MockManifest> = {
     read: ['**'], // читает весь vault
     write: ['Notes/**'], // пишет только в Notes/ (демонстрация границы)
     ui: ['command'], // право регистрировать команды в палитре
+    ai: true, // право ai:embed (эмбеддинг + семантический поиск)
+    net: ['api.github.com'], // net-allowlist (egress только на эти хосты)
   },
 };
 
@@ -33,6 +37,8 @@ interface MockSession {
   read: string[];
   write: string[];
   ui: string[];
+  ai: boolean;
+  net: string[];
 }
 const sessions = new Map<string, MockSession>();
 let seq = 0;
@@ -94,7 +100,7 @@ export async function openSession(dir: string): Promise<string> {
   const m = MANIFESTS[dir];
   if (!m) throw new Error(`плагин '${dir}' не найден`);
   const token = `mock-tok-${++seq}`;
-  sessions.set(token, { read: m.read, write: m.write, ui: m.ui });
+  sessions.set(token, { read: m.read, write: m.write, ui: m.ui, ai: m.ai, net: m.net });
   return token;
 }
 
@@ -139,6 +145,29 @@ export async function invoke(
       // Любая объявленная ui-точка достаточна; сами строки кладёт фронт-релей в i18n.
       if (s.ui.length === 0) throw new Error('нет права ui');
       return true;
+    }
+    case 'ai.embed': {
+      if (!s.ai) throw new Error('нет права ai:embed');
+      if (content == null) throw new Error('нет аргумента content');
+      // Детерминированный фейковый вектор (dim 16) для превью.
+      const text = content;
+      return Array.from({ length: 16 }, (_, i) => ((text.length * (i + 1)) % 17) / 17);
+    }
+    case 'ai.searchSemantic': {
+      if (!s.ai) throw new Error('нет права ai:embed');
+      if (content == null) throw new Error('нет аргумента content');
+      return vault.searchContent(content, { limit: 8 });
+    }
+    case 'net.fetch': {
+      if (path == null) throw new Error('нет аргумента path (url)');
+      let host: string;
+      try {
+        host = new URL(path).host;
+      } catch {
+        throw new Error('некорректный URL');
+      }
+      if (!s.net.includes(host)) throw new Error(`хост не в allowlist: ${host}`);
+      return { status: 200, body: `(mock fetch ${host})` };
     }
     default:
       throw new Error(`метод не поддержан host-стороной: ${method}`);

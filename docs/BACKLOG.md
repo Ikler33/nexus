@@ -31,8 +31,17 @@
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
 | ⏳ **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) + **iframe-CSP упакованного app** (`frame-src`/`child-src`, origin ассетов) + доверенный JS в **Worker** (сейчас UI-JS в iframe) | транспорт+sandbox готовы (Ф2-2b·4); загрузка/CSP/Worker — отдельный кусок | доводка Ф2 | ADR-001/002, §7.5, `plugins.md`, `security.md` |
-| ⏳ Host-API для плагинов: `ai.embed/complete/searchSemantic`, `net.fetch` (allowlist) | транспорт+права готовы; нужен доступ dispatch к эмбеддеру/поиску из `AppState` + reqwest по allowlist | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
+| ⏳ Host-API плагинов: `ai.complete` (стрим ответа по порту) | embed/search/net.fetch сделаны; стрим чата по MessagePort (события host→plugin) — отдельным срезом | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
+| 🔬 SSRF: DNS-rebinding для `net.fetch` (резолв хоста + проверка адреса) | литеральные приватные адреса + allowlist уже закрыты; резолв домена в приватный IP — глубже | при усилении | AC-SEC-4, `security.md` |
 | ⏳ Миграции схемы `chat_*` / `link_suggestions` (FTS5/usearch нельзя `ALTER`) | не нужны до соответствующих фич | при их реализации | `db.md` |
+| ⏳ **`registerEditorExtension` (AC-Б1-1)** — живое CodeMirror-расширение от плагина | CM-расширение не сериализуется через `MessagePort` → нужна модель **доверенного JS в main-контексте/Worker** (ADR), это другая граница исполнения, не sandbox-iframe | после ADR | AC-Б1-1, ADR-001, `plugins.md`, `editor.md` |
+| ⏳ **Marketplace: подпись `id@version#sha256` + реестр + lifecycle** (install/update/rollback/uninstall, матрица §7.7) | ядро рантайма готово; дистрибуция/подпись/жизненный цикл — отдельная подсистема | после рантайма | AC-DOD-Ф2, AC-Б3-3, §7.7 |
+| ⏳ **AC-Б3-1/2: код плагинов вне git** (auto-commit исключает `.nexus/plugins/**`; в коммит только `id@version#sha256`; pull → `needs-review`) | **зависит от слоя git-sync** | **Фаза 3** (git-sync) | AC-Б3-1/2, AC-SEC-3, `security.md` |
+| ⏳ **Плагин-SDK + доки для сторонних разработчиков** (часть AC-DOD-Ф2) | host-API готов; нужен публикуемый SDK-пакет + dev-доки | после рантайма | AC-DOD-Ф2, `plugins.md` |
+
+> **Итог Фазы 2:** ядро (рантайм плагинов: права→брокер→токены→sandbox-транспорт→host-API vault/ai/ui/net,
+> AC-Б2 / AC-SEC-1/2/4/5(dev) / AC-I18N-7) — **закрыто**. Полное AC-DOD-Ф2 (editor-extensions, marketplace,
+> SDK, git-exclusion) — отложено: одна зависимость кросс-фазная (AC-Б3 ↔ Фаза 3 git-sync), одна требует ADR.
 
 ## Фаза 3 / позже — sync, надёжность, доводка
 
@@ -56,6 +65,8 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **`net.fetch` + SSRF-гард для плагинов (Ф2-3, AC-SEC-4)** — egress по net-allowlist + `is_private_host` (приватные/loopback/metadata запрещены), без редиректов. DNS-rebinding — в активном беклоге.
+- **AI host-API для плагинов: `ai.embed` + `ai.searchSemantic` (Ф2-3)** — RAG из плагина через брокер (право `ai:embed`), `dispatch_ai` + read-лок `VaultContext`. Проверено в превью (аудит фиксирует `ai.searchSemantic`).
 - **Плагинные i18n-namespace `plugin:<id>:<key>` (Ф2-3, AC-I18N-7)** — `ui.addTranslations` → i18next ns `plugin` (вложенно); `registerCommand` с `titleKey` → заголовок локализован и реагирует на смену языка. Проверено в превью (EN↔RU).
 - **`registerCommand(source:'plugin')` (Ф2-3)** — плагин добавляет команду в палитру через брокер (право `ui:command`); двунаправленный транспорт (палитра → событие плагину → его обработчик). Проверено в превью.
 - **Фронт-транспорт плагинов (Ф2-2b·4)** — sandbox-iframe + `MessagePort`-релей (`plugin-host.ts`), токен host-side, confused-deputy закрыт и на фронте; `tauriApi.plugins` + мок-брокер + `PluginsPanel` (демо + аудит-лог); `plugin_close_session` (отзыв). Проверено в превью.

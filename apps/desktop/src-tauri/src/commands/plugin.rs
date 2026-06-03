@@ -6,9 +6,12 @@ use std::path::Path;
 
 use tauri::State;
 
+use crate::ai::EmbeddingProvider;
 use crate::plugin::{self, ApiRequest, CapToken, PluginInfo, PluginSession};
+use crate::search;
 use crate::state::AppState;
 use crate::vault;
+use crate::vector::VectorIndex;
 
 /// Список установленных плагинов vault (`.nexus/plugins/*`) с их статусом совместимости.
 #[tauri::command]
@@ -73,8 +76,10 @@ pub async fn plugin_close_session(state: State<'_, AppState>, token: String) -> 
 }
 
 /// Host-функция плагина через брокер (§7.4): авторизация по токену + scoped-проверка + audit, затем
-/// dispatch. Поддержаны `vault.readFile`/`vault.listFiles` (право `vault:read`) и `vault.writeFile`
-/// (`vault:write`). Результат — JSON: строка-контент / массив записей каталога / `{ok,bytes}`.
+/// dispatch. Методы: `vault.readFile`/`listFiles` (`vault:read`), `vault.writeFile` (`vault:write`),
+/// `ui.*` (только авторизация — регистрацию делает фронт), `ai.embed`/`ai.searchSemantic` (`ai:embed`),
+/// `net.fetch` (`net`-allowlist + SSRF-гард; URL в `path`). `content` несёт текст/запрос для `ai.*`.
+/// Результат — JSON (контент / записи / `{ok}` / вектор / хиты / `{status,body}`).
 #[tauri::command]
 pub async fn plugin_invoke(
     state: State<'_, AppState>,
@@ -85,13 +90,22 @@ pub async fn plugin_invoke(
 ) -> Result<serde_json::Value, String> {
     let token = CapToken::from_ipc(token);
 
+    // Для `net.fetch` хост берём из URL (в `path`) — он нужен брокеру для allowlist-проверки.
+    let net_host = if method == "net.fetch" {
+        path.as_deref()
+            .and_then(|u| reqwest::Url::parse(u).ok())
+            .and_then(|u| u.host_str().map(str::to_string))
+    } else {
+        None
+    };
+
     // Авторизация (синхронно, под локом) → достаём vault_root, лок отпускаем до async I/O.
     let vault_root = {
         let mut broker = state.plugins.lock().map_err(|_| "broker lock")?;
         let req = ApiRequest {
             method: &method,
             path: path.as_deref(),
-            host: None,
+            host: net_host.as_deref(),
         };
         broker.authorize(&token, &req).map_err(|e| e.to_string())?;
         broker
@@ -106,8 +120,95 @@ pub async fn plugin_invoke(
         return Ok(serde_json::Value::Bool(true));
     }
 
+    // `ai.*` — нужен открытый vault с эмбеддером. Снимаем reader/vectors/embedder под read-локом и
+    // отпускаем его ДО сетевого эмбеддинга (как в `search_content`). Текст/запрос — в `content`.
+    if method.starts_with("ai.") {
+        let (reader, vectors, embedder) = {
+            let guard = state.vault.read().await;
+            let ctx = guard.as_ref().ok_or("vault не открыт")?;
+            (
+                ctx.db.reader().clone(),
+                ctx.vectors.clone(),
+                ctx.embedder.clone(),
+            )
+        };
+        let embedder = embedder.ok_or("эмбеддер не сконфигурирован")?;
+        return dispatch_ai(
+            &reader,
+            vectors.as_deref(),
+            embedder.as_ref(),
+            &method,
+            content.as_deref(),
+        )
+        .await;
+    }
+
+    // `net.fetch` — egress по allowlist (проверен брокером выше) + SSRF-гард: даже разрешённый хост
+    // не должен указывать на приватный/loopback/metadata-адрес.
+    if method == "net.fetch" {
+        let url = path.as_deref().ok_or("нет аргумента path (url)")?;
+        let host = net_host.ok_or("некорректный URL")?;
+        if crate::plugin::is_private_host(&host) {
+            return Err(format!("SSRF: приватный/loopback хост запрещён: {host}"));
+        }
+        return dispatch_net(url).await;
+    }
+
     // Реальный I/O — вне лока, через тестируемый dispatch.
     dispatch_vault(&vault_root, &method, path.as_deref(), content.as_deref()).await
+}
+
+/// `net.fetch`: GET по уже авторизованному (allowlist) + SSRF-проверенному URL. Без следования
+/// редиректам (анти-redirect-SSRF) и с таймаутом. Возвращает `{status, body}`.
+async fn dispatch_net(url: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "status": status, "body": body }))
+}
+
+/// ai-вызовы плагина (право `ai:embed`): эмбеддинг текста (`ai.embed`) и семантический поиск по vault
+/// (`ai.searchSemantic`). Текст/запрос — в `content`. Тестируется напрямую (MockEmbedder + temp-индекс).
+/// `ai.complete` (стрим) — отдельным срезом (стриминг по порту). См. BACKLOG.
+async fn dispatch_ai(
+    reader: &crate::db::ReadPool,
+    vectors: Option<&VectorIndex>,
+    embedder: &dyn EmbeddingProvider,
+    method: &str,
+    input: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let text = input.ok_or("нет аргумента content")?;
+    match method {
+        "ai.embed" => {
+            let vec = embedder
+                .embed_query(text)
+                .await
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(vec).map_err(|e| e.to_string())
+        }
+        "ai.searchSemantic" => {
+            let hits = search::hybrid_search(
+                reader,
+                vectors,
+                Some(embedder),
+                text.to_string(),
+                search::SearchOptions {
+                    limit: 8,
+                    filter: None,
+                    center: None,
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            serde_json::to_value(hits).map_err(|e| e.to_string())
+        }
+        other => Err(format!("ai-метод пока не поддержан host-стороной: {other}")),
+    }
 }
 
 /// Реальный I/O авторизованного vault-вызова. Отдельная (тестируемая) функция: брокер уже проверил
@@ -315,5 +416,74 @@ mod tests {
         let audit = broker.audit().entries();
         assert!(audit.iter().any(|e| e.allowed));
         assert!(audit.iter().any(|e| !e.allowed));
+    }
+
+    #[tokio::test]
+    async fn dispatch_ai_embed_and_search() {
+        use crate::ai::MockEmbedder;
+        use crate::eval::{index_corpus, GoldenDoc};
+        use std::sync::Arc;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbedder { dim: 16 });
+        let vectors = Arc::new(VectorIndex::open(root.join(".nexus/v.usearch"), 16).unwrap());
+        let docs = vec![
+            GoldenDoc {
+                path: "a.md".into(),
+                body: "# Кошки\nкошки и собаки".into(),
+            },
+            GoldenDoc {
+                path: "b.md".into(),
+                body: "# Rust\nownership and borrow".into(),
+            },
+        ];
+        let db = index_corpus(&root, &docs, embedder.clone(), vectors.clone())
+            .await
+            .unwrap();
+
+        // ai.embed → вектор длины dim.
+        let v = dispatch_ai(
+            db.reader(),
+            Some(&vectors),
+            embedder.as_ref(),
+            "ai.embed",
+            Some("hi"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 16);
+
+        // ai.searchSemantic → непустая выдача (лексический хвост FTS5 ловит «кошки»).
+        let hits = dispatch_ai(
+            db.reader(),
+            Some(&vectors),
+            embedder.as_ref(),
+            "ai.searchSemantic",
+            Some("кошки"),
+        )
+        .await
+        .unwrap();
+        assert!(!hits.as_array().unwrap().is_empty());
+
+        // нет аргумента / неизвестный ai-метод → ошибка.
+        assert!(dispatch_ai(
+            db.reader(),
+            Some(&vectors),
+            embedder.as_ref(),
+            "ai.embed",
+            None
+        )
+        .await
+        .is_err());
+        assert!(dispatch_ai(
+            db.reader(),
+            Some(&vectors),
+            embedder.as_ref(),
+            "ai.summarize",
+            Some("x")
+        )
+        .await
+        .is_err());
     }
 }
