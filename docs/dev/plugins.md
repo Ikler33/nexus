@@ -1,7 +1,8 @@
-# Plugin loader (минимум, Ф0-13) — `src-tauri/src/plugin`
+# Plugin loader + модель прав — `src-tauri/src/plugin`
 
-> §7.2, **С-13**. Только чтение манифеста + совместимость версии API. Broker, исполнение
-> (JS/WASM), path-scoped права, подпись, marketplace — Фаза 2 (§7, ADR-001/002).
+> Ф0-13 (§7.2, С-13): манифест + совместимость API. **Ф2-1 (ADR-002, §7.4/§7.9): scoped-права +
+> `check_scoped_permission`** — security-ядро брокера. Рантайм-брокер (порты/токены/audit/iframe),
+> исполнение (JS/WASM), подпись, marketplace — далее в Фазе 2.
 
 ## Версии API
 - `ApiVersion { major, minor }`, `ApiVersion::parse("1.2")`; ядро — `CORE_API_VERSION` (1.0, Приложение B).
@@ -15,13 +16,27 @@
 - `scan_plugins(dir)` → `Vec<PluginInfo { dir, id, name, version, compatible, error }>` по
   `.nexus/plugins/*/manifest.json` (НЕ исполняет код). Команда `list_plugins`.
 
-## Тесты
-Совместимый грузится; нужно новее ядра → `TooNew` (С-13); `max < ядро` → `TooOld`; в диапазоне → ok;
-`^1.0` → `BadVersion`; битый json → `Parse`; `scan` различает compatible/incompatible/broken;
-нет каталога → пусто.
+## Модель прав (Ф2-1, `permission.rs`) — security-ядро брокера
+Манифест несёт `permissions` (§7.2): `vault:read`/`vault:write` (path-glob со scoped-правами и `!`-deny),
+`ai:embed` (bool), `ai:complete` (`true`/`{local_only}`), `net` (host-allowlist), `ui` (точки расширения).
+Отсутствие ключа = право не выдано (**fail-closed**, deny-all по умолчанию).
 
-## Дальше (Ф2)
-- Capability-broker (граница прав), MessagePort-identity, path-scoped permissions, audit-log.
-- Подпись `id@version#sha256`, реестр/marketplace, hot enable/disable, миграция настроек.
-- Исполнение: доверенный JS в Worker + редакторные расширения в main-контексте; опц. WASM
-  (epoch/fuel + StoreLimits). Код плагинов НЕ в git (ADR-002).
+`Permissions::check(ApiRequest{method,path?,host?}) -> Result<(), Denied>` (§7.4 `check_scoped_permission`):
+- метод → требуемое право (`vault.readFile`→`vault:read`, `vault.writeFile`→`vault:write`, `ai.*`, `net.fetch`, `ui.*`);
+- **path-scoped**: `path_in_scope` — совпал с allow-glob И ни с одним `!`-deny (**deny перекрывает allow**);
+- **анти-traversal** (защита в глубину поверх `vault::resolve_vault_path`): `..`/`.`/абсолютный/`\`/пустой сегмент → `PathEscape`;
+- `net` — только по allowlist; `ai:complete` несёт `local_only`; **неизвестный метод → `UnknownMethod`** (fail-closed).
+- `glob_match`: сегментный glob — `**` (0..N сегментов), `*` (внутри сегмента, не пересекает `/`).
+> Identity плагина и capability-токен проверяются РАНТАЙМОМ по порту (§7.9), не из payload (Ф2-2).
+
+## Тесты
+- Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
+- Права (13): glob (`**`/`*`/exact/регистр), scope с deny-override (любой порядок), vault read/write,
+  path-escape (`..`,`/abs`,`\`,пустой сегмент), ai+local_only, `ai:complete:false`, net-allowlist,
+  unknown-method fail-closed, пустые права = deny-all.
+
+## Дальше (Ф2-2+)
+- Рантайм-брокер: сессии по `MessagePort` (identity по порту), capability-токены + ревокация, audit-log,
+  `dispatch` к vault/ai через `resolve_vault_path`. Исполнение: доверенный JS в Worker + редакторные
+  расширения в main-контексте; опц. WASM (epoch/fuel + StoreLimits). `registerCommand(source:'plugin')`,
+  плагинные i18n-namespace. Подпись `id@version#sha256`, marketplace. Код плагинов НЕ в git (ADR-002).

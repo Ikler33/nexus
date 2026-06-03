@@ -54,5 +54,7 @@
 - (старт ночи) PR #1 «Phase 1: AI Core» открыт (`phase1/12` → `main`). Rust 71+6 live, front 64 — зелёные. Eval baseline 0.8 (nomic), AC-EVAL-6 открыт. bge-m3 качается.
 - ✅ **Пункт #2 — Crash-reconcile usearch (§5.1)**: `reconcile_vectors` в `scan_vault` + тест (`27f5e0c`). Rust 72 теста зелёные.
 - ✅ **Ф1-12 — bge-m3 (AC-EVAL-6 закрыт)**: bge-m3 Q4_K_M докачан, сервер :8083 поднят (dim 1024), `start_servers.sh` обновлён. baseline.json → bge-m3; **eval recall@8=1.0, nDCG@8=0.883, MRR=0.848** (оба кросс-язычных кейса найдены, было 0.8/провал на nomic). Доки/BACKLOG/CHANGELOG обновлены. Коммичу.
-- ⏭ Следующее (новый контекст крона предпочтительно): пункт #3 (виртуализация ленты чата) → **Фаза 2 (плагины/broker)**.
-  - ⚠️ ВАЖНО при старте крон-сессии: проверь, поднят ли bge-m3 на :8083 (`curl :8083/health`); если нет — запусти `bash ~/Documents/llm-models/start_servers.sh` (после ребута мака сервера слетают).
+- (крон 03:33) Окружение проверено: git чист, серверы :8081/:8082/:8083 живы.
+- ⏭️ **Пункт #3 (виртуализация ленты чата) ОТЛОЖЕН** → BACKLOG: UI-скролл/виртуализация требует визуальной проверки человеком, ненадёжно автономно (jsdom не верифицирует скролл). Записано в раздел NEEDS-DECISION/BACKLOG.
+- ✅ **Ф2-1 — Модель прав плагина (capability-broker security-ядро, ADR-002)**: `plugin/permission.rs` — `Permissions` + `check_scoped_permission` (path-scoped glob с `!`-deny, анти-traversal, net-allowlist, fail-closed) + 13 security-тестов; манифест расширен `permissions`. Rust 85 тестов. Ветка `phase2/01-capability-model`. Доки/CHANGELOG обновлены. Коммичу.
+- ⏭ Следующее: **Ф2-2** (рантайм-брокер: сессии/порты/токены/audit/dispatch — но iframe/MessagePort = фронт, хуже автономно тестируется; начать с Rust-стороны брокера + audit-log) ИЛИ другой самодостаточный backend-пункт из BACKLOG. Перед стартом крон-сессии: `curl :8083/health`, при недоступности — `bash ~/Documents/llm-models/start_servers.sh`.

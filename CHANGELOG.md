@@ -309,3 +309,19 @@
     Оба кросс-язычных кейса (EN→RU, RU→EN) теперь в recall@8 → **AC-EVAL-6 закрыт**; baseline поднят и
     перепроверен живым прогоном. Риск ADR-005 (англоцентричность) снят.
   - Доки: `ai.md`/`eval.md` обновлены; `docs/BACKLOG.md` — мультиязычный эмбеддер + AC-EVAL-6 в «Закрыто».
+
+### Added — Фаза 2 (плагины / broker)
+
+- **Ф2-1 — Модель прав плагина (capability-broker, security-ядро; ADR-002, §7.2/§7.4/§7.9).**
+  - `plugin/permission.rs`: `Permissions` из `manifest.permissions` (vault:read/write — path-glob со
+    scoped-правами; ai:embed; ai:complete `true`/`{local_only}`; net-allowlist; ui-точки). Манифест
+    расширен полем `permissions` (отсутствие = deny-all, **fail-closed**).
+  - `Permissions::check(ApiRequest) -> Result<(), Denied>` = §7.4 `check_scoped_permission`: метод→право,
+    **path-scoped** (`path_in_scope`, `!`-deny перекрывает allow), анти-traversal в глубину
+    (`..`/abs/`\`/пустой сегмент → `PathEscape`), net-allowlist, неизвестный метод → `UnknownMethod`.
+    Сегментный `glob_match` (`**` 0..N сегментов, `*` внутри сегмента). Identity/токены — рантайм по порту (Ф2-2).
+  - 13 security-тестов (glob, deny-override в любом порядке, read≠write, path-escape, ai/local_only,
+    net, fail-closed). Rust 85 тестов зелёные. Дока `docs/dev/plugins.md`.
+
+  Фундамент **AC-SEC-*** (path-scoped права, fail-closed). Рантайм-брокер (порты/токены/audit/iframe,
+  исполнение JS/WASM) — Ф2-2+.

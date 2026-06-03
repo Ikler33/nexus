@@ -1,6 +1,10 @@
-//! Plugin loader (минимум, Ф0-13): чтение `manifest.json` + проверка совместимости версии
-//! Plugin API. **С-13**: `min_api_version` — это МИНИМУМ версии ядра (не `"^1.0"`), поэтому
-//! несовместимость ловится ДО загрузки. Broker, исполнение JS/WASM, права — Фаза 2 (§7).
+//! Plugin loader (Ф0-13) + модель прав (Ф2-1). Чтение `manifest.json` + проверка совместимости
+//! версии Plugin API. **С-13**: `min_api_version` — МИНИМУМ версии ядра (не `"^1.0"`), несовместимость
+//! ловится ДО загрузки. **Ф2-1**: манифест несёт scoped-`permissions` (ADR-002); проверка scope —
+//! в [`mod@permission`] (security-ядро брокера). Рантайм-брокер (порты/токены/audit/iframe) — Ф2-2.
+
+mod permission;
+pub use permission::{ApiRequest, Denied, Permissions};
 
 use std::fmt;
 use std::path::Path;
@@ -51,6 +55,9 @@ pub struct PluginManifest {
     pub max_api_version: Option<String>,
     #[serde(default)]
     pub entry: Option<String>,
+    /// Scoped-права (ADR-002, §7.2). Отсутствие ключа = пустые права (deny-all, fail-closed).
+    #[serde(default)]
+    pub permissions: Permissions,
 }
 
 /// Ошибки загрузки/совместимости плагина.
