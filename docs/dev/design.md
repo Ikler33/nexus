@@ -61,5 +61,9 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
   активная, kbd-хинты) + staggered-раскрытие строк (--cmd-i).
 - [x] Ф4-6 — рестайл AI-панели: провайдер-пилюля + прозрачные кнопки, пузырь юзера accent-soft,
   источники-карточки с AI-бейджем, композер — плавающий бокс с accent-soft focus-кольцом.
-- [ ] рестайл plugins.
+- [x] Ф4-7 — рестайл панели плагинов (демо+аудит): glass-бэкдроп, elevated-диалог, чип-пилюля,
+  прозрачный close, аудит на chrome (allowed→success/denied→danger). Менеджер+consent-sheet — post-v1.
+- [x] **Рестайл существующих экранов завершён.** Дальше — новые экраны:
+- [ ] conflict resolver (закрывает git-хвост Ф3) · reading mode · вложения/Mermaid/LaTeX · onboarding ·
+  tweaks-панель · Home-дашборд. Затем инфра-релиз-преп (C).
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.

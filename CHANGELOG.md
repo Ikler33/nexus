@@ -566,6 +566,14 @@
   bg-elevated, elevation-1) с мягким акцентным focus-кольцом; send/stop — пилюли. Чистый рестайл на
   токенах. Сборка зелёная (Фронт 85); превью-проверка отложена — порт 1420 занят tauri-сборкой.
 
+- **Ф4-7 — рестайл панели плагинов (демо + broker-аудит) под дизайн.** Бэкдроп — затемнение +
+  `blur(2px)`; диалог — `bg-elevated` + `border-strong` + radius-lg + elevation-2; чип «песочница» —
+  пилюля; close — прозрачная кнопка (hover surface-hover); аудит-лог на `--color-chrome`, строки hover
+  surface-hover, вердикт allowed→`--color-success` / denied→`--color-danger`, метод — моно. Полноценный
+  **менеджер плагинов** (карточки installed/marketplace + permission-chips + consent-sheet) — **post-v1**
+  (завязан на marketplace, в BACKLOG). Чистый рестайл на токенах. Сборка зелёная (Фронт 85).
+  **Рестайл существующих экранов завершён** (chrome · сайдбар · вкладки · граф · palette · ai · plugins).
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
