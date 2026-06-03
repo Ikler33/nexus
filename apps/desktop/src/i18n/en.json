@@ -6,6 +6,9 @@
   "chrome": {
     "search": "Search or ask…"
   },
+  "viewer": {
+    "appOnly": "Preview is available in the desktop app"
+  },
   "sidebar": {
     "searchPlaceholder": "Search…",
     "searchLabel": "Search the vault",

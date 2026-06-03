@@ -6,6 +6,9 @@
   "chrome": {
     "search": "Поиск или вопрос…"
   },
+  "viewer": {
+    "appOnly": "Просмотр доступен в десктоп-приложении"
+  },
   "sidebar": {
     "searchPlaceholder": "Поиск…",
     "searchLabel": "Поиск по vault",
