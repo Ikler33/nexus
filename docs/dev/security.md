@@ -36,8 +36,25 @@ vault идёт через СОБСТВЕННЫЕ команды (`read_file`/`wr
 - **Анти-SSRF для `net.fetch`** (AC-SEC-4): net-allowlist + `is_private_host` (приватные/loopback/
   link-local/metadata, напр. `169.254.169.254`, запрещены даже из allowlist), без следования редиректам.
 
+## CI security-gate (V1.1, ревью B6 / AC-Q-5)
+Отдельный job `security` в `.github/workflows/ci.yml` — проверки безопасности не тонут в общем
+`cargo test`:
+- **Supply-chain — `cargo-deny`** (`deny.toml`): advisories (RUSTSEC), лицензии (allow-list permissive,
+  выверен по фактическому дереву — 12 лицензий, вкл. `CDLA-Permissive-2.0` для webpki-roots), баны
+  дублей (warn), источники (только crates.io). `unmaintained = "workspace"` — неподдерживаемые крейты
+  флагуем только среди ПРЯМЫХ зависимостей; глубокие транзитивные (gtk-rs/unic-* через Tauri — апстрим
+  ещё на GTK3) вне нашего контроля. Уязвимости и **unsound** — блокируют.
+- **Secret-scan — `gitleaks`** (`.gitleaks.toml`): дефолт-правила + allowlist путей с плейсхолдерами
+  (доки/тесты) и заведомо-фейковых токенов (последовательные `0123…`). Реальные секреты в репозиторий
+  не попадают: git-токен и LLM-ключи — в системном keychain (AC-SEC-3), не на диске.
+- Гейт сразу сработал: cargo-deny вскрыл **RUSTSEC-2026-0008** (unsound `Buf`-deref в `git2` 0.19,
+  прямая зависимость) → закрыт бампом `git2` 0.19→**0.20.4** (libgit2 1.8→1.9.4); git-тесты зелёные.
+
 ## Дальше (Ф2-доводка / Ф3)
 - iframe-CSP **упакованного** app (`frame-src`/`child-src`, origin ассетов плагина) — проверяется
   `tauri build`; доверенный JS плагина в Worker (сейчас UI-JS в iframe).
 - SSRF: DNS-rebinding (резолв домена + проверка адреса) — поверх литеральной проверки.
-- secret-scan коммитов + исключение кода плагинов из git (Ф3 git-sync, AC-Б3); опц. at-rest шифрование.
+- **secret-scan коммитов** — сделано (gitleaks, см. выше); исключение кода плагинов из git (Ф3
+  git-sync, AC-Б3); опц. at-rest шифрование.
+- Выделенный прогон именно security-*тестов* отдельным required-шагом (а не общим `cargo test`) —
+  нужна конвенция тегирования тестов; см. BACKLOG.

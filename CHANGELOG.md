@@ -21,6 +21,17 @@
     брать автономно» над vision-секцией; снят ярлык «(текущая)» с Ф1; auto-updater переописан
     (AC-DOD-Ф4, расщеплён на автономное ядро / ручную подпись-нотаризацию).
 
+### Тестирование / CI (автономная очередь NIGHT-PLAN)
+
+- **V1.1 — CI security-job** (ревью B6 / AC-Q-5). Отдельный job `security` в CI: supply-chain через
+  `cargo-deny` (advisories RUSTSEC · лицензии · баны · источники — `deny.toml`) + secret-scan через
+  `gitleaks` (`.gitleaks.toml` с allowlist плейсхолдеров доков/тестов). Проверки безопасности больше
+  не тонут в общем `cargo test`. Лицензии выверены по фактическому дереву зависимостей (12 permissive,
+  включая `CDLA-Permissive-2.0` для webpki-roots — данные CA-бандла Mozilla). `cargo-audit` покрыт
+  advisories-срезом cargo-deny. Локально проверено: licenses/bans/sources/gitleaks — зелёные.
+  - Отложено (no silent caps): выделенный прогон именно security-*тестов* (а не supply-chain) отдельным
+    шагом требует конвенции тегирования тестов — записано в BACKLOG.
+
 ### Added — Фаза 0
 
 - **Ф0-1 — Каркас (monorepo + Tauri 2 + CI).**
