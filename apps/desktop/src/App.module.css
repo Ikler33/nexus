@@ -18,6 +18,11 @@
   grid-template-columns: 280px 1fr 360px;
 }
 
+/* Режим чтения (⌘R): прячем сайдбар/AI — только редактор на всю ширину (distraction-free). */
+.reading {
+  grid-template-columns: 1fr;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;

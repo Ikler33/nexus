@@ -32,6 +32,7 @@ export function App() {
   const chatOpen = useUIStore((s) => s.chatOpen);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   const syncOpen = useUIStore((s) => s.syncOpen);
+  const reading = useUIStore((s) => s.reading);
 
   useKeymap();
 
@@ -46,17 +47,36 @@ export function App() {
     }
   }, [info]);
 
+  // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
+  useEffect(() => {
+    if (!reading) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const s = useUIStore.getState();
+      if (s.paletteOpen || s.graphOpen || s.pluginsOpen || s.syncOpen) return;
+      s.closeReading();
+    };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, [reading]);
+
   return (
     <div className={styles.app}>
       <Titlebar />
-      <div className={`${styles.appBody} ${chatOpen ? styles.withChat : ''}`}>
-        <aside className={styles.sidebar}>
-          <Sidebar />
-        </aside>
+      <div
+        className={`${styles.appBody} ${
+          reading ? styles.reading : chatOpen ? styles.withChat : ''
+        }`}
+      >
+        {!reading && (
+          <aside className={styles.sidebar}>
+            <Sidebar />
+          </aside>
+        )}
         <main className={styles.main}>
           <EditorArea />
         </main>
-        {chatOpen && <AiPanel />}
+        {chatOpen && !reading && <AiPanel />}
       </div>
       <StatusBar />
 

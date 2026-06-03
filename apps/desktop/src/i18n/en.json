@@ -121,6 +121,7 @@
     "view.suggest": "Link suggestions",
     "view.plugins": "Plugins",
     "view.sync": "Sync (git)",
-    "theme.toggle": "Toggle theme (light/dark)"
+    "theme.toggle": "Toggle theme (light/dark)",
+    "view.reading": "Reading mode"
   }
 }
