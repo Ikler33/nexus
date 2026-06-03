@@ -236,6 +236,33 @@ fn wildcard_seg(pat: &str, s: &str) -> bool {
     pi == p.len()
 }
 
+/// SSRF-защита (AC-SEC-4): указывает ли хост-литерал на приватный/loopback/link-local/metadata-адрес.
+/// Для доменных имён возвращает `false` — основной контроль для них это net-allowlist; защита от
+/// DNS-rebinding (резолв + проверка адреса) — отдельная доработка. Применяется к `net.fetch` ПОВЕРХ
+/// allowlist (даже разрешённый хост не должен указывать внутрь сети/на metadata).
+pub fn is_private_host(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if h.eq_ignore_ascii_case("localhost") || h.to_ascii_lowercase().ends_with(".localhost") {
+        return true;
+    }
+    match h.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local() // 169.254/16, incl. 169.254.169.254 (cloud metadata)
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+        }
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+        }
+        Err(_) => false, // домен — контролируется allowlist
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +467,29 @@ mod tests {
         // Без объявленной ui-точки — отказ; с любой — ок.
         assert_eq!(perms(r#"{}"#).check(&req), Err(Denied::NotGranted("ui")));
         assert!(perms(r#"{"ui":["command"]}"#).check(&req).is_ok());
+    }
+
+    #[test]
+    fn ssrf_blocks_private_loopback_metadata() {
+        for h in [
+            "localhost",
+            "app.localhost",
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.5.4",
+            "192.168.1.5",
+            "169.254.169.254", // cloud metadata
+            "0.0.0.0",
+            "::1",
+            "[::1]",
+            "fe80::1",
+            "fc00::1",
+        ] {
+            assert!(is_private_host(h), "{h} должен быть заблокирован (SSRF)");
+        }
+        for h in ["example.com", "93.184.216.34", "api.openai.com", "8.8.8.8"] {
+            assert!(!is_private_host(h), "{h} НЕ должен блокироваться");
+        }
     }
 
     #[test]

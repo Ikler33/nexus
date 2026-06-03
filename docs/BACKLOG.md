@@ -31,7 +31,8 @@
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
 | ⏳ **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) + **iframe-CSP упакованного app** (`frame-src`/`child-src`, origin ассетов) + доверенный JS в **Worker** (сейчас UI-JS в iframe) | транспорт+sandbox готовы (Ф2-2b·4); загрузка/CSP/Worker — отдельный кусок | доводка Ф2 | ADR-001/002, §7.5, `plugins.md`, `security.md` |
-| ⏳ Host-API плагинов: `ai.complete` (стрим по порту) + `net.fetch` (allowlist) | `ai.embed`/`ai.searchSemantic` сделаны; стрим чата по MessagePort и сетевой egress по allowlist — отдельным срезом | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
+| ⏳ Host-API плагинов: `ai.complete` (стрим ответа по порту) | embed/search/net.fetch сделаны; стрим чата по MessagePort (события host→plugin) — отдельным срезом | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
+| 🔬 SSRF: DNS-rebinding для `net.fetch` (резолв хоста + проверка адреса) | литеральные приватные адреса + allowlist уже закрыты; резолв домена в приватный IP — глубже | при усилении | AC-SEC-4, `security.md` |
 | ⏳ Миграции схемы `chat_*` / `link_suggestions` (FTS5/usearch нельзя `ALTER`) | не нужны до соответствующих фич | при их реализации | `db.md` |
 
 ## Фаза 3 / позже — sync, надёжность, доводка
@@ -56,6 +57,7 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **`net.fetch` + SSRF-гард для плагинов (Ф2-3, AC-SEC-4)** — egress по net-allowlist + `is_private_host` (приватные/loopback/metadata запрещены), без редиректов. DNS-rebinding — в активном беклоге.
 - **AI host-API для плагинов: `ai.embed` + `ai.searchSemantic` (Ф2-3)** — RAG из плагина через брокер (право `ai:embed`), `dispatch_ai` + read-лок `VaultContext`. Проверено в превью (аудит фиксирует `ai.searchSemantic`).
 - **Плагинные i18n-namespace `plugin:<id>:<key>` (Ф2-3, AC-I18N-7)** — `ui.addTranslations` → i18next ns `plugin` (вложенно); `registerCommand` с `titleKey` → заголовок локализован и реагирует на смену языка. Проверено в превью (EN↔RU).
 - **`registerCommand(source:'plugin')` (Ф2-3)** — плагин добавляет команду в палитру через брокер (право `ui:command`); двунаправленный транспорт (палитра → событие плагину → его обработчик). Проверено в превью.

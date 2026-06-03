@@ -50,4 +50,14 @@ describe('mock capability-брокер (превью)', () => {
     const hits = await plugins.invoke(token, 'ai.searchSemantic', undefined, 'roadmap');
     expect(Array.isArray(hits)).toBe(true);
   });
+
+  it('net.fetch: allowlisted host → ok, прочий → отказ', async () => {
+    const token = await plugins.openSession('hello');
+    await expect(
+      plugins.invoke(token, 'net.fetch', 'https://api.github.com/repos/x'),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(plugins.invoke(token, 'net.fetch', 'https://evil.example.com/x')).rejects.toThrow(
+      /allowlist/,
+    );
+  });
 });

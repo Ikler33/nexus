@@ -402,6 +402,15 @@
   в превью:** аудит фиксирует `ai.searchSemantic` (полный host-API: vault read/list/write · ai
   embed/search · ui registerCommand/addTranslations). `ai.complete` (стрим) + `net.fetch` — см. BACKLOG.
 
+- **Ф2-3 — `net.fetch` для плагинов: egress по allowlist + SSRF-гард (закрыт AC-SEC-4).** Плагин делает
+  GET по URL (в `path`); хост извлекается и проверяется брокером против `net`-allowlist манифеста (нет в
+  списке → `HostNotAllowed`). Поверх — **SSRF-гард** `is_private_host`: даже разрешённый хост не должен
+  указывать на приватный/loopback/link-local/metadata-адрес (`127.*`, `10/172.16/192.168`,
+  `169.254.169.254`, `::1`, `fc00::/7`, `fe80::/10`, `localhost`). Клиент без следования редиректам
+  (анти-redirect-SSRF) + таймаут. Возвращает `{status, body}`. +1 Rust-тест (SSRF блокирует приватные,
+  пропускает публичные), +1 фронт-тест (мок allowlist). Rust 100 / фронт 79. DNS-rebinding (резолв +
+  проверка адреса) — доработка. `ai.complete` (стрим по порту) — остаётся (BACKLOG).
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

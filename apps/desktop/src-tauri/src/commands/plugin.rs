@@ -77,8 +77,9 @@ pub async fn plugin_close_session(state: State<'_, AppState>, token: String) -> 
 
 /// Host-функция плагина через брокер (§7.4): авторизация по токену + scoped-проверка + audit, затем
 /// dispatch. Методы: `vault.readFile`/`listFiles` (`vault:read`), `vault.writeFile` (`vault:write`),
-/// `ui.*` (только авторизация — регистрацию делает фронт), `ai.embed`/`ai.searchSemantic` (`ai:embed`).
-/// `content` несёт текст/запрос для `ai.*`. Результат — JSON (контент / записи / `{ok}` / вектор / хиты).
+/// `ui.*` (только авторизация — регистрацию делает фронт), `ai.embed`/`ai.searchSemantic` (`ai:embed`),
+/// `net.fetch` (`net`-allowlist + SSRF-гард; URL в `path`). `content` несёт текст/запрос для `ai.*`.
+/// Результат — JSON (контент / записи / `{ok}` / вектор / хиты / `{status,body}`).
 #[tauri::command]
 pub async fn plugin_invoke(
     state: State<'_, AppState>,
@@ -89,13 +90,22 @@ pub async fn plugin_invoke(
 ) -> Result<serde_json::Value, String> {
     let token = CapToken::from_ipc(token);
 
+    // Для `net.fetch` хост берём из URL (в `path`) — он нужен брокеру для allowlist-проверки.
+    let net_host = if method == "net.fetch" {
+        path.as_deref()
+            .and_then(|u| reqwest::Url::parse(u).ok())
+            .and_then(|u| u.host_str().map(str::to_string))
+    } else {
+        None
+    };
+
     // Авторизация (синхронно, под локом) → достаём vault_root, лок отпускаем до async I/O.
     let vault_root = {
         let mut broker = state.plugins.lock().map_err(|_| "broker lock")?;
         let req = ApiRequest {
             method: &method,
             path: path.as_deref(),
-            host: None,
+            host: net_host.as_deref(),
         };
         broker.authorize(&token, &req).map_err(|e| e.to_string())?;
         broker
@@ -133,8 +143,33 @@ pub async fn plugin_invoke(
         .await;
     }
 
+    // `net.fetch` — egress по allowlist (проверен брокером выше) + SSRF-гард: даже разрешённый хост
+    // не должен указывать на приватный/loopback/metadata-адрес.
+    if method == "net.fetch" {
+        let url = path.as_deref().ok_or("нет аргумента path (url)")?;
+        let host = net_host.ok_or("некорректный URL")?;
+        if crate::plugin::is_private_host(&host) {
+            return Err(format!("SSRF: приватный/loopback хост запрещён: {host}"));
+        }
+        return dispatch_net(url).await;
+    }
+
     // Реальный I/O — вне лока, через тестируемый dispatch.
     dispatch_vault(&vault_root, &method, path.as_deref(), content.as_deref()).await
+}
+
+/// `net.fetch`: GET по уже авторизованному (allowlist) + SSRF-проверенному URL. Без следования
+/// редиректам (анти-redirect-SSRF) и с таймаутом. Возвращает `{status, body}`.
+async fn dispatch_net(url: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "status": status, "body": body }))
 }
 
 /// ai-вызовы плагина (право `ai:embed`): эмбеддинг текста (`ai.embed`) и семантический поиск по vault

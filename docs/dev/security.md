@@ -27,8 +27,17 @@ vault идёт через СОБСТВЕННЫЕ команды (`read_file`/`wr
 `csp_and_capabilities_are_hardened` (`lib.rs`): CSP без unsafe-inline/eval, есть `object-src 'none'`;
 в permissions нет `fs:`/`shell:`/`http:`. Падает, если ужесточение каркаса молча откатили.
 
-## Дальше (Ф2/Ф3)
-- Capability-broker (реальная граница прав), MessagePort-identity, неотключаемый audit-log,
-  path-scoped permissions, `ai:complete {local_only}`.
-- iframe-изоляция UI-вью; Tauri-команды vault.*/git.* недостижимы из iframe (только через broker).
-- Анти-SSRF валидация `*.url`; secret-scan коммитов (Ф3 git-sync); опц. at-rest шифрование (SQLCipher).
+## Сделано (Ф2 — рантайм плагинов)
+- **Capability-broker** (реальная граница прав, §7.4): identity по capability-токену (не из payload),
+  неотключаемый audit-log, path-scoped permissions (glob с deny-override), `ai:complete {local_only}`.
+  Confused-deputy закрыт и в Rust, и на фронте (токен из привязки порта).
+- **Sandbox-iframe** UI-вью (`allow-scripts`, opaque origin): Tauri-команды `vault.*` недостижимы из
+  плагина — только через broker по `MessagePort` (AC-SEC-5). CSP без `unsafe-inline`/`unsafe-eval`.
+- **Анти-SSRF для `net.fetch`** (AC-SEC-4): net-allowlist + `is_private_host` (приватные/loopback/
+  link-local/metadata, напр. `169.254.169.254`, запрещены даже из allowlist), без следования редиректам.
+
+## Дальше (Ф2-доводка / Ф3)
+- iframe-CSP **упакованного** app (`frame-src`/`child-src`, origin ассетов плагина) — проверяется
+  `tauri build`; доверенный JS плагина в Worker (сейчас UI-JS в iframe).
+- SSRF: DNS-rebinding (резолв домена + проверка адреса) — поверх литеральной проверки.
+- secret-scan коммитов + исключение кода плагинов из git (Ф3 git-sync, AC-Б3); опц. at-rest шифрование.
