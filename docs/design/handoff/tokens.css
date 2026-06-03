@@ -1,20 +1,18 @@
 /* ============================================================
-   Nexus — Design Tokens (дизайн-система «Hermes», см. docs/dev/design.md
-   и docs/design/handoff/). Тёплый крем (light «old paper») · тёплый уголь
-   (dark «warm clay») · Onest + JetBrains Mono + Source Serif 4.
-   Терракота/янтарь акцент · sage/amber статусы · WCAG AA.
-   Семантические имена токенов стабильны; per-theme меняются только значения.
-   Темы — через data-theme, акцент — через data-accent (см. stores/theme.ts).
+   Nexus — Design Tokens  (aligned to SA Agent design system)
+   Warm cream (light) · warm charcoal (dark) · Onest + JetBrains Mono
+   Terracotta/amber accent · sage/amber status · WCAG AA.
+   Semantic var names are stable; only values change per theme.
    ============================================================ */
 
 :root {
-  /* ---- Шрифты (self-hosted через @fontsource, см. fonts.ts) ---- */
-  --font-ui: 'Onest Variable', 'Onest', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-editor: var(--font-ui);
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
-  --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  /* ---- Type families ---- */
+  --font-ui: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-editor: "Onest", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-serif: "Source Serif 4", Georgia, serif;
 
-  /* ---- Модульная шкала типографики ---- */
+  /* ---- Modular type scale ---- */
   --text-xs: 11px;
   --text-sm: 12px;
   --text-base: 13px;
@@ -26,56 +24,56 @@
   --leading-tight: 1.3;
   --leading-normal: 1.55;
 
-  /* ---- Типографика редактора (переопределяется через tweaks) ---- */
+  /* ---- Editor type (overridable via tweaks) ---- */
   --editor-font: var(--font-editor);
   --editor-size: 16px;
   --editor-leading: 1.7;
   --editor-measure: 760px;
 
-  /* ---- Сетка отступов 4px ---- */
+  /* ---- 4px spacing grid ---- */
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-7: 32px; --space-8: 48px;
 
-  /* плотность */
+  /* density knob */
   --density: 1;
   --row-h: 28px;
 
-  /* геометрия */
+  /* SA geometry */
   --radius-sm: 7px;
   --radius-md: 10px;
   --radius-lg: 14px;
 
   --chrome: 1;
 
-  /* движение */
+  /* motion */
   --motion-fast: 140ms;
   --motion-base: 220ms;
   --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
 
-  /* ---- пресеты акцента (числа; цвета считаются per-theme) ---- */
+  /* ---- accent presets (numbers only; colors computed per theme) ---- */
   --acc-l: 0.605; --acc-c: 0.135; --acc-h: 47; --acc-lh: 0.655;
-  /* ---- единый нейтральный hue — весь UI тонирован в тёплый тон логотипа ---- */
+  /* ---- unified neutral hue — the whole UI is tinted toward the logo's warm tone ---- */
   --ui-hue: 50;
 }
-:root[data-accent='amber'] { --acc-l: 0.605; --acc-c: 0.135; --acc-h: 47;  --acc-lh: 0.655; }
-:root[data-accent='teal']  { --acc-l: 0.56;  --acc-c: 0.075; --acc-h: 205; --acc-lh: 0.61;  }
-:root[data-accent='sage']  { --acc-l: 0.56;  --acc-c: 0.07;  --acc-h: 158; --acc-lh: 0.61;  }
-:root[data-accent='clay']  { --acc-l: 0.55;  --acc-c: 0.11;  --acc-h: 28;  --acc-lh: 0.60;  }
+:root[data-accent="amber"] { --acc-l: 0.605; --acc-c: 0.135; --acc-h: 47;  --acc-lh: 0.655; }
+:root[data-accent="teal"]  { --acc-l: 0.56;  --acc-c: 0.075; --acc-h: 205; --acc-lh: 0.61;  }
+:root[data-accent="sage"]  { --acc-l: 0.56;  --acc-c: 0.07;  --acc-h: 158; --acc-lh: 0.61;  }
+:root[data-accent="clay"]  { --acc-l: 0.55;  --acc-c: 0.11;  --acc-h: 28;  --acc-lh: 0.60;  }
 
-/* ===================== LIGHT (тёплый крем — основная) ===================== */
-:root, :root[data-theme='light'] {
+/* ===================== LIGHT (SA warm cream — primary) ===================== */
+:root, :root[data-theme="light"] {
   color-scheme: light;
 
-  /* old-paper / пергамент — желтее и мягче, чем clay тёмной темы */
+  /* old-paper / parchment tone — yellower & gentler than the dark theme's clay */
   --ui-hue: 85;
 
-  --color-bg: oklch(0.966 0.013 var(--ui-hue));            /* холст редактора — тёплая бумага */
-  --color-chrome: oklch(0.910 0.018 var(--ui-hue));        /* хром окна — тёплая рамка */
-  --color-chrome-2: oklch(0.884 0.021 var(--ui-hue));      /* акценты/разделители хрома */
-  --color-bg-elevated: oklch(0.996 0.005 var(--ui-hue));   /* меню, поповеры, карточки */
-  --color-surface: oklch(0.933 0.015 var(--ui-hue));       /* инпуты, утопленные чипы */
+  --color-bg: oklch(0.966 0.013 var(--ui-hue));            /* editor canvas — warm paper */
+  --color-chrome: oklch(0.910 0.018 var(--ui-hue));        /* window chrome — deeper warm frame */
+  --color-chrome-2: oklch(0.884 0.021 var(--ui-hue));      /* chrome accents / dividers bg */
+  --color-bg-elevated: oklch(0.996 0.005 var(--ui-hue));   /* floating menus, popovers, cards */
+  --color-surface: oklch(0.933 0.015 var(--ui-hue));       /* inputs, sunken chips */
   --color-surface-hover: oklch(0.893 0.020 var(--ui-hue)); /* hover */
-  --color-selected: oklch(0.875 0.018 80);                 /* выделение — единый тёплый taupe */
+  --color-selected: oklch(0.875 0.018 80);                 /* selected — deeper warm taupe, one unified color */
   --color-selected-hover: oklch(0.855 0.021 80);
 
   --color-text: oklch(0.30 0.014 var(--ui-hue));
@@ -91,9 +89,9 @@
   --color-accent-rim: oklch(0.84 calc(var(--acc-c) * 0.6) var(--acc-h));
   --color-on-accent: #ffffff;
 
-  --color-ai: oklch(0.56 0.066 205);          /* teal — спокойный info-слой */
+  --color-ai: oklch(0.56 0.066 205);          /* teal — calm info layer */
   --color-ai-soft: oklch(0.93 0.025 205);
-  --color-link: oklch(0.52 0.075 222);        /* wikilinks — глубокий teal-blue */
+  --color-link: oklch(0.52 0.075 222);        /* wikilinks — deep teal-blue */
   --color-link-soft: oklch(0.52 0.075 222 / 0.12);
   --color-tag: oklch(0.55 0.07 158);          /* sage */
   --color-tag-soft: oklch(0.93 0.03 158);
@@ -112,8 +110,8 @@
   --selection: oklch(var(--acc-l) var(--acc-c) var(--acc-h) / 0.18);
 }
 
-/* ===================== DARK (тёплый уголь — warm clay) ===================== */
-:root[data-theme='dark'] {
+/* ===================== DARK (warm charcoal — from SA terminal) ===================== */
+:root[data-theme="dark"] {
   color-scheme: dark;
 
   --color-bg: oklch(0.205 0.010 var(--ui-hue));
@@ -122,7 +120,7 @@
   --color-bg-elevated: oklch(0.258 0.013 var(--ui-hue));
   --color-surface: oklch(0.262 0.013 var(--ui-hue));
   --color-surface-hover: oklch(0.300 0.015 var(--ui-hue));
-  --color-selected: oklch(0.32 0.022 var(--acc-h));        /* выделение — clay-тон hue логотипа */
+  --color-selected: oklch(0.32 0.022 var(--acc-h));        /* selected — warm clay tint of the logo hue */
   --color-selected-hover: oklch(0.355 0.028 var(--acc-h));
 
   --color-text: oklch(0.905 0.012 var(--ui-hue));
@@ -159,13 +157,13 @@
   --selection: oklch(calc(var(--acc-l) + 0.1) var(--acc-c) var(--acc-h) / 0.30);
 }
 
-/* ===================== база ===================== */
+/* ===================== base ===================== */
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; }
 body {
   font-family: var(--font-ui);
   font-size: var(--text-md);
-  line-height: var(--leading-normal);
+  line-height: 1.55;
   color: var(--color-text);
   background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
@@ -183,14 +181,7 @@ button { font-family: inherit; color: inherit; }
   background: var(--color-border-strong);
   border-radius: 99px; border: 2px solid transparent; background-clip: padding-box;
 }
-*::-webkit-scrollbar-thumb:hover { background-color: var(--color-text-faint); }
-
-/* Кросс-фейд при смене темы (stores/theme.ts добавляет .theme-anim на <html> на 320ms). */
-html.theme-anim,
-html.theme-anim * {
-  transition: background-color 320ms var(--ease-standard), color 320ms var(--ease-standard),
-    border-color 320ms var(--ease-standard), box-shadow 320ms var(--ease-standard);
-}
+*::-webkit-scrollbar-thumb:hover { background-clip: padding-box; background-color: var(--color-text-faint); }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }

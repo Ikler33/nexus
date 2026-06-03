@@ -105,6 +105,7 @@
     "view.chat": "AI-чат",
     "view.suggest": "Предложения связей",
     "view.plugins": "Плагины",
-    "view.sync": "Синхронизация (git)"
+    "view.sync": "Синхронизация (git)",
+    "theme.toggle": "Тема: светлая / тёмная"
   }
 }

@@ -497,6 +497,21 @@
   даст больше. Главный оставшийся рычаг — **cross-file батчинг** (чанки попёрек файлов в запросы по 64),
   в BACKLOG. Новая зависимость: `futures` (pure-Rust). Регрессий нет (Rust 107).
 
+### Added — Фаза 4 (Polish — дизайн-система)
+
+- **Ф4-0 — дизайн-система «Hermes»: токены + темы + self-hosted шрифты (фундамент, ADR-006).**
+  Принят подготовленный дизайн-хендофф (вендорен в `docs/design/handoff/`). Порт **токенного слоя**
+  в `src/styles.css`: **OKLCH**-палитра, тёплый hue, темы через `data-theme` (light «old paper» /
+  dark «warm clay»), акцент через `data-accent` (amber/teal/sage/clay), elevation/focus-ring/моушн,
+  новые семантические токены (`--color-chrome/selected/text-faint/tag/*-soft`, `--space-5..8`,
+  `--radius-lg`, `--font-serif`). Имена совпадают с прежними → **весь существующий апп перекрасился
+  когерентно** без правок компонентов. **Тема** (`stores/theme.ts`): тоггл свет/тёмная (кнопка
+  sun/moon в шапке + команда `theme.toggle`), старт из `localStorage`/системной, применение до рендера
+  (без вспышки), 320ms кросс-фейд (gated `prefers-reduced-motion`), персист. **Шрифты self-hosted**
+  через `@fontsource` (Onest / JetBrains Mono / Source Serif 4 — offline/local-first, CSP уже
+  разрешает). i18n RU/EN. **Проверено в превью:** обе темы (OKLCH), Onest загружен, тоггл + кросс-фейд.
+  Док: ADR-006, `docs/dev/design.md`, §12. Фронт 85 (без регрессий). Дальше — порескринный рестайл.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
