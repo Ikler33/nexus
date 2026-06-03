@@ -11,6 +11,8 @@ pub mod ai;
 pub mod chunker;
 /// Tauri IPC-команды.
 mod commands;
+/// Локальный crash-reporter: panic-hook → scrubbed-лог в `~/.nexus/crashes/` (Ф4-14).
+pub mod crash;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
 /// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
@@ -48,6 +50,9 @@ fn app_version() -> String {
 
 /// Точка входа: настраивает логирование и запускает event loop Tauri.
 pub fn run() {
+    // Локальный crash-reporter до всего остального (Ф4-14): паники → scrubbed-лог в ~/.nexus/crashes/.
+    crash::install_hook();
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
