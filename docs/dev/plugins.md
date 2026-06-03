@@ -52,6 +52,10 @@
 > Брокер в `AppState` (`std::Mutex<PluginBroker>`). End-to-end через эти команды проверяется фронтом (ниже).
 - `plugin_close_session(token)` → `broker.revoke` (мгновенный отзыв токена при размонтировании плагина —
   иначе сессии копятся; идемпотентно).
+- **AI host-API (Ф2-3, право `ai:embed`):** `ai.embed` (текст→вектор) и `ai.searchSemantic` (запрос→
+  гибридный поиск по vault, топ-8) — текст/запрос в `content`. `plugin_invoke` снимает
+  `reader/vectors/embedder` из `VaultContext` под read-локом и отпускает его ДО сети (как `search_content`);
+  сам вызов — в тестируемой `dispatch_ai`. `ai.complete` (стрим) — позже (BACKLOG).
 
 ## Фронт-транспорт (Ф2-2b·4, `lib/plugin-host.ts` + `components/plugins/PluginsPanel.tsx`) — §7.5
 Плагин живёт в `<iframe sandbox="allow-scripts">` (opaque origin — нет доступа к родителю/storage/cookies)
@@ -89,6 +93,8 @@
   дотянется до прав широкого), ревокация, handle→dispatch.
 - Dispatch (4, `commands/plugin.rs`): read/list/write в пределах vault; path-escape (read+write)
   отклонён; неизвестный метод / нет аргумента → ошибка; **E2E** «scope (broker) → dispatch I/O» + аудит.
+- AI (1, `dispatch_ai`): `ai.embed` → вектор (len=dim), `ai.searchSemantic` → непустая выдача
+  (MockEmbedder + temp-индекс); нет аргумента / неизвестный ai-метод → ошибка.
 - Фронт-транспорт (13, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
   write-в-scope/write-отказ, **confused-deputy** (payload-токен игнорируется), мусор → без ответа, dispose;
   **`ui.registerCommand`** (команда в реестре → запуск шлёт событие плагину → dispose снимает);
@@ -98,7 +104,7 @@
 - **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) +
   **iframe-CSP упакованного приложения** (`frame-src`/`child-src`, origin ассетов плагина). Доверенный JS
   в Worker + редакторные расширения в main-контексте (сейчас UI-JS прямо в iframe). См. BACKLOG.
-- Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~ (сделано) → `ai.embed/complete/searchSemantic`,
-  `net.fetch` (allowlist). ~~`registerCommand(source:'plugin')`~~ (сделано), ~~плагинные
-  i18n-namespace `plugin:<id>:<key>`~~ (сделано, AC-I18N-7). Осталось из Ф2-3: AI/сеть для плагинов.
+- Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~, ~~`ai.embed`/`ai.searchSemantic`~~,
+  ~~`registerCommand`~~, ~~плагинные i18n `plugin:<id>:<key>`~~ (всё сделано). Осталось из Ф2-3:
+  **`ai.complete`** (стрим по порту) и **`net.fetch`** (allowlist).
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

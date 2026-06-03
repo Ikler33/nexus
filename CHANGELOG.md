@@ -393,6 +393,15 @@
   (ui без точки → отказ), +1 фронт-тест (addTranslations резолвится, titleKey формируется). Rust 98 /
   фронт 77. **Проверено в превью:** заголовок команды плагина меняется EN↔RU при переключении языка.
 
+- **Ф2-3 — AI host-API для плагинов: `ai.embed` + `ai.searchSemantic` (§7.2, право `ai:embed`).** Плагин
+  получает RAG: `ai.embed` (текст → вектор) и `ai.searchSemantic` (запрос → гибридный поиск по vault,
+  топ-8). Текст/запрос — в `content`. `plugin_invoke` снимает `reader/vectors/embedder` из `VaultContext`
+  под read-локом и отпускает его ДО сети (как `search_content`); реальный вызов — в тестируемой
+  `dispatch_ai`. Демо-плагин зовёт `ai.searchSemantic «roadmap»`. +1 Rust-тест (embed→вектор,
+  search→выдача, на MockEmbedder+temp-индексе), +1 фронт-тест (мок ai). Rust 99 / фронт 78. **Проверено
+  в превью:** аудит фиксирует `ai.searchSemantic` (полный host-API: vault read/list/write · ai
+  embed/search · ui registerCommand/addTranslations). `ai.complete` (стрим) + `net.fetch` — см. BACKLOG.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

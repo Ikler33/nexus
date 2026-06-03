@@ -43,4 +43,11 @@ describe('mock capability-брокер (превью)', () => {
     await plugins.closeSession(token);
     await expect(plugins.invoke(token, 'vault.listFiles', '')).rejects.toThrow();
   });
+
+  it('ai: embed → вектор, searchSemantic → выдача (право ai:embed)', async () => {
+    const token = await plugins.openSession('hello');
+    await expect(plugins.invoke(token, 'ai.embed', undefined, 'hi')).resolves.toHaveLength(16);
+    const hits = await plugins.invoke(token, 'ai.searchSemantic', undefined, 'roadmap');
+    expect(Array.isArray(hits)).toBe(true);
+  });
 });
