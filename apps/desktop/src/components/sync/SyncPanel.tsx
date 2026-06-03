@@ -9,6 +9,7 @@ import {
   tauriApi,
 } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
+import { ConflictResolver } from './ConflictResolver';
 import styles from './SyncPanel.module.css';
 
 type SyncResult = GitPullOutcome | { status: 'error'; message: string };
@@ -31,6 +32,7 @@ export function SyncPanel() {
   const [connected, setConnected] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [resolving, setResolving] = useState(false);
 
   const load = useCallback(() => {
     setOutcome(null);
@@ -98,6 +100,7 @@ export function SyncPanel() {
   };
 
   return (
+    <>
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
         className={styles.dialog}
@@ -174,6 +177,15 @@ export function SyncPanel() {
               </button>
             </div>
             {syncResult && <SyncResultView result={syncResult} />}
+            {syncResult?.status === 'merge-required' && (
+              <button
+                type="button"
+                className={styles.commitBtn}
+                onClick={() => setResolving(true)}
+              >
+                {t('conflict.resolve')}
+              </button>
+            )}
           </section>
         </div>
 
@@ -195,6 +207,15 @@ export function SyncPanel() {
         </footer>
       </div>
     </div>
+    {resolving && (
+      <ConflictResolver
+        onClose={() => {
+          setResolving(false);
+          setSyncResult(null);
+        }}
+      />
+    )}
+    </>
   );
 }
 

@@ -98,6 +98,19 @@
     "synced": "Synced",
     "mergeRequired": "Conflict — resolve manually"
   },
+  "conflict": {
+    "title": "Resolve conflicts",
+    "resolve": "Resolve conflicts",
+    "upToDate": "Nothing to merge — already up to date",
+    "clean": "Clean merge — no conflicts",
+    "applyClean": "Apply merge",
+    "apply": "Apply & push",
+    "applying": "Applying…",
+    "done": "Merged & pushed",
+    "ours": "Ours",
+    "theirs": "Theirs",
+    "result": "Result"
+  },
   "commands": {
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
