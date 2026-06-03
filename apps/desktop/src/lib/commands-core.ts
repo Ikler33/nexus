@@ -82,6 +82,13 @@ export function registerCoreCommands(): Disposable {
         useUIStore.getState().openChat();
       },
     }),
+    commands.register({
+      id: 'view.plugins',
+      title: 'Plugins',
+      titleKey: 'commands.view.plugins',
+      source: 'core',
+      run: () => useUIStore.getState().togglePlugins(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

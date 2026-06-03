@@ -1,5 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import * as mockPlugins from './mock/plugins';
 import * as mockVault from './mock/vault';
 
 /**
@@ -32,6 +33,16 @@ export interface VaultInfo {
 export interface NoteRef {
   path: string;
   title: string | null;
+}
+
+/** Статус установленного плагина (зеркалит Rust `plugin::PluginInfo`). */
+export interface PluginInfo {
+  dir: string;
+  id: string | null;
+  name: string | null;
+  version: string | null;
+  compatible: boolean;
+  error: string | null;
 }
 
 /** Результат гибридного поиска по телу (зеркалит Rust `search::SearchHit`). */
@@ -199,6 +210,32 @@ export const tauriApi = {
         void invoke<void>('chat_cancel');
       };
     },
+  },
+
+  plugins: {
+    /** Установленные плагины vault (`.nexus/plugins/*`) со статусом совместимости (Ф0-13/Ф2). */
+    list: (): Promise<PluginInfo[]> =>
+      isTauri() ? invoke<PluginInfo[]>('list_plugins') : mockPlugins.list(),
+
+    /**
+     * Открывает сессию плагина (`.nexus/plugins/<dir>`) → **capability-токен** (§7.9). Токен живёт
+     * на host-стороне (в релее), плагину НЕ передаётся (identity по порту/токену, ADR-002).
+     */
+    openSession: (dir: string): Promise<string> =>
+      isTauri() ? invoke<string>('plugin_open_session', { dir }) : mockPlugins.openSession(dir),
+
+    /**
+     * Host-функция плагина через брокер: `authorize` (scope + audit) → dispatch. `method` —
+     * `vault.readFile`/`vault.listFiles`/`vault.writeFile`. Результат — JSON (контент/записи/`{ok}`).
+     */
+    invoke: (token: string, method: string, path?: string, content?: string): Promise<unknown> =>
+      isTauri()
+        ? invoke<unknown>('plugin_invoke', { token, method, path, content })
+        : mockPlugins.invoke(token, method, path, content),
+
+    /** Закрывает сессию плагина (отзыв токена в брокере). Зовётся при размонтировании плагина. */
+    closeSession: (token: string): Promise<void> =>
+      isTauri() ? invoke<void>('plugin_close_session', { token }) : mockPlugins.closeSession(token),
   },
 };
 

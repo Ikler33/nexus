@@ -359,6 +359,20 @@
   «scope (broker) → dispatch I/O» с проверкой аудита (allow+deny). Rust 96 тестов. `ai.*`/`net.fetch`
   + фронт-транспорт — далее.
 
+- **Ф2-2b (часть 4) — Фронт-транспорт плагинов: sandbox-iframe + MessagePort (§7.5, ADR-001/002).**
+  Плагин крутится в `<iframe sandbox="allow-scripts">` (opaque origin — нет доступа к родителю/storage)
+  и общается с хостом ТОЛЬКО через свой `MessagePort`. `lib/plugin-host.ts`: `attachPlugin` открывает
+  сессию (токен **host-side**, плагину не передаётся), привязывает токен к ПОРТУ и обслуживает запросы
+  через `tauriApi.plugins.invoke`; токен берётся из привязки порта, а НЕ из payload → confused-deputy
+  закрыт и на фронте. `mountPlugin` — рукопожатие `nexus:ready`→`nexus:init` (порт через transfer, без
+  гонки). Контракт `tauriApi.plugins` (`list`/`openSession`/`invoke`/`closeSession`) + мок-брокер
+  (`lib/mock/plugins.ts`: токен→scope, glob с deny-override — зеркало Rust) → превью показывает РЕАЛЬНУЮ
+  границу прав. Новая команда `plugin_close_session` (отзыв токена при размонтировании — без утечки
+  сессий). UI: `PluginsPanel` (демо-плагин «Hello Reader» + лог брокерских вызовов ✓/✋), кнопка/команда
+  `view.plugins`, i18n RU/EN. +11 фронт-тестов (транспорт, confused-deputy, scope, revoke). **Проверено
+  в превью:** плагин в песочнице зовёт `vault.listFiles`/`readFile` через брокер, аудит фиксирует вызовы;
+  console чистая. Реальная загрузка кода плагина из `.nexus/plugins/<id>/` + iframe-CSP — см. BACKLOG.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

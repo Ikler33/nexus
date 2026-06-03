@@ -50,6 +50,23 @@
   Результат — JSON: строка-контент / массив записей каталога / `{ok,bytes}`. Лок брокера держится только
   на синхронную авторизацию; async-I/O и резолв пути (та же граница, defense-in-depth) — после освобождения.
 > Брокер в `AppState` (`std::Mutex<PluginBroker>`). End-to-end через эти команды проверяется фронтом (ниже).
+- `plugin_close_session(token)` → `broker.revoke` (мгновенный отзыв токена при размонтировании плагина —
+  иначе сессии копятся; идемпотентно).
+
+## Фронт-транспорт (Ф2-2b·4, `lib/plugin-host.ts` + `components/plugins/PluginsPanel.tsx`) — §7.5
+Плагин живёт в `<iframe sandbox="allow-scripts">` (opaque origin — нет доступа к родителю/storage/cookies)
+и общается с хостом ТОЛЬКО через свой `MessagePort`.
+- `attachPlugin(dir, hostPort)`: открывает сессию (токен **host-side**, плагину НЕ передаётся), привязывает
+  токен к ПОРТУ, обслуживает запросы `{id,method,path?,content?}` через `tauriApi.plugins.invoke` и шлёт
+  `{id,ok,result|error}`. **Токен — из привязки порта, не из payload** → даже подсунутый плагином `token`
+  игнорируется (confused-deputy/laundering закрыт и на фронте, как identity-по-токену в Rust).
+- `mountPlugin(dir, iframe)`: рукопожатие `nexus:ready` (iframe готов, повторяется) → `nexus:init` (порт
+  через `transfer`) — без гонки «порт раньше подписки». `dispose()` закрывает порт + `closeSession` (отзыв).
+- Контракт `tauriApi.plugins`: `list`/`openSession`/`invoke`/`closeSession` (вне Tauri — мок-брокер
+  `lib/mock/plugins.ts`: токен→scope, glob с deny-override — зеркало Rust → превью показывает РЕАЛЬНУЮ
+  границу прав, включая отказы).
+- UI: `PluginsPanel` (демо-плагин «Hello Reader» в песочнице + лог брокерских вызовов ✓/✋), команда/кнопка
+  `view.plugins`, i18n RU/EN. **Проверено в превью:** листинг + чтение через брокер, аудит фиксирует вызовы.
 
 ## Тесты
 - Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
@@ -61,11 +78,13 @@
   дотянется до прав широкого), ревокация, handle→dispatch.
 - Dispatch (4, `commands/plugin.rs`): read/list/write в пределах vault; path-escape (read+write)
   отклонён; неизвестный метод / нет аргумента → ошибка; **E2E** «scope (broker) → dispatch I/O» + аудит.
+- Фронт-транспорт (11, vitest): мок-брокер (scope/glob/revoke/unknown); `attachPlugin` — listFiles/read/
+  write-в-scope/write-отказ, **confused-deputy** (payload-токен игнорируется), мусор → без ответа, dispose.
 
-## Дальше (Ф2-2b·3 фронт + Ф2-3)
-- **Фронт-транспорт:** UI-вью плагина в sandbox-iframe; один `MessagePort` на плагин (хост-релей
-  привязывает токен); `tauriApi.plugins.openSession/invoke`; доверенный JS в Worker + редакторные
-  расширения в main-контексте. Демо-плагин для проверки end-to-end. **Нужна визуальная проверка.**
+## Дальше (Ф2-3 + доводка транспорта)
+- **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) +
+  **iframe-CSP упакованного приложения** (`frame-src`/`child-src`, origin ассетов плагина). Доверенный JS
+  в Worker + редакторные расширения в main-контексте (сейчас UI-JS прямо в iframe). См. BACKLOG.
 - Расширить dispatch: ~~`vault.writeFile`/`listFiles`~~ (сделано) → `ai.embed/complete/searchSemantic`,
   `net.fetch` (allowlist). `registerCommand(source:'plugin')`, плагинные i18n-namespace (Ф2-3).
 - Подпись `id@version#sha256`, marketplace; опц. WASM (epoch/fuel + StoreLimits). Код плагинов НЕ в git.

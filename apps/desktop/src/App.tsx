@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { FolderOpen, Languages, MessageSquare, Share2 } from 'lucide-react';
+import { FolderOpen, Languages, MessageSquare, Puzzle, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from './lib/tauri-api';
 import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
@@ -13,8 +13,11 @@ import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import styles from './App.module.css';
 
-// Граф грузится лениво (sigma.js — тяжёлый WebGL-движок, §10): чанк только при открытии.
+// Граф и панель плагинов грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
 const GraphView = lazy(() => import('./components/graph/GraphView'));
+const PluginsPanel = lazy(() =>
+  import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
+);
 
 /**
  * Оболочка приложения: sidebar (поиск + дерево) + область редактора со вкладками/сплитами
@@ -26,6 +29,8 @@ export function App() {
   const toggleGraph = useUIStore((s) => s.toggleGraph);
   const chatOpen = useUIStore((s) => s.chatOpen);
   const toggleChat = useUIStore((s) => s.toggleChat);
+  const pluginsOpen = useUIStore((s) => s.pluginsOpen);
+  const togglePlugins = useUIStore((s) => s.togglePlugins);
   const { t, i18n } = useTranslation();
 
   useKeymap();
@@ -68,6 +73,15 @@ export function App() {
             </button>
             <button
               className={styles.openBtn}
+              onClick={() => togglePlugins()}
+              title={t('commands.view.plugins')}
+              aria-label={t('commands.view.plugins')}
+              aria-pressed={pluginsOpen}
+            >
+              <Puzzle size={16} aria-hidden />
+            </button>
+            <button
+              className={styles.openBtn}
               onClick={() => changeLocale(i18n.language === 'ru' ? 'en' : 'ru')}
               title="Язык / Language"
               aria-label="Язык / Language"
@@ -97,6 +111,11 @@ export function App() {
       {graphOpen && (
         <Suspense fallback={null}>
           <GraphView />
+        </Suspense>
+      )}
+      {pluginsOpen && (
+        <Suspense fallback={null}>
+          <PluginsPanel />
         </Suspense>
       )}
     </div>

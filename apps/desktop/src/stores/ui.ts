@@ -6,6 +6,8 @@ interface UIState {
   paletteOpen: boolean;
   graphOpen: boolean;
   chatOpen: boolean;
+  /** Открыта ли панель плагинов (sandbox-iframe, Ф2). */
+  pluginsOpen: boolean;
   /** Активная вкладка AI-панели (чат / связи). */
   aiTab: AiTab;
   openPalette: () => void;
@@ -17,6 +19,9 @@ interface UIState {
   openChat: () => void;
   closeChat: () => void;
   toggleChat: () => void;
+  openPlugins: () => void;
+  closePlugins: () => void;
+  togglePlugins: () => void;
   setAiTab: (tab: AiTab) => void;
 }
 
@@ -25,6 +30,7 @@ export const useUIStore = create<UIState>((set) => ({
   paletteOpen: false,
   graphOpen: false,
   chatOpen: false,
+  pluginsOpen: false,
   aiTab: 'chat',
   openPalette: () => set({ paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),
@@ -35,5 +41,8 @@ export const useUIStore = create<UIState>((set) => ({
   openChat: () => set({ chatOpen: true }),
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
+  openPlugins: () => set({ pluginsOpen: true }),
+  closePlugins: () => set({ pluginsOpen: false }),
+  togglePlugins: () => set((s) => ({ pluginsOpen: !s.pluginsOpen })),
   setAiTab: (tab) => set({ aiTab: tab }),
 }));
