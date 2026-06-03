@@ -1,0 +1,88 @@
+/* ============================================================
+   Nexus — Graph view
+   ============================================================ */
+.graph-view { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--color-bg); }
+
+.graph-bar {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3); flex-wrap: wrap;
+  background: var(--color-bg-elevated); border-bottom: 1px solid var(--color-border);
+}
+.graph-spacer { flex: 1; }
+.graph-stat { font-size: var(--text-xs); color: var(--color-text-faint); }
+
+.seg { display: inline-flex; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 2px; }
+.seg-btn { border: none; background: transparent; color: var(--color-text-muted); font-size: var(--text-sm); font-weight: 600; padding: 4px 12px; border-radius: 7px; cursor: pointer; transition: all var(--motion-fast); }
+.seg-btn.on { background: var(--color-accent-soft); color: var(--color-accent); }
+
+.graph-depth { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--color-text-muted); }
+.graph-depth input[type="range"] { width: 80px; accent-color: var(--color-accent); }
+
+.graph-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.gt-chip { font-family: var(--font-mono); font-size: var(--text-xs); padding: 3px 9px; border-radius: 99px; cursor: pointer;
+  background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text-muted); transition: all var(--motion-fast); }
+.gt-chip:hover { border-color: var(--color-accent-rim); color: var(--color-text); }
+.gt-chip.on { background: var(--color-accent-soft); border-color: var(--color-accent-rim); color: var(--color-accent); }
+
+.graph-warn { display: flex; align-items: center; gap: 8px; padding: 8px var(--space-4); font-size: var(--text-sm);
+  color: var(--color-text-muted); background: oklch(0.8 0.13 75 / 0.10); border-bottom: 1px solid var(--color-warning); }
+.graph-warn svg { color: var(--color-warning); }
+
+.graph-stage { flex: 1; min-height: 0; position: relative; overflow: hidden;
+  background:
+    radial-gradient(circle at center, var(--color-bg-elevated) 0%, var(--color-bg) 70%);
+}
+.graph-svg { width: 100%; height: 100%; display: block; }
+
+.graph-loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  display: flex; align-items: center; gap: 10px; font-size: var(--text-sm); color: var(--color-text-muted);
+  background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 99px; padding: 8px 16px 8px 12px;
+  box-shadow: var(--elevation-1); z-index: 5; }
+
+.g-edge { stroke: var(--color-border-strong); stroke-width: 1.3; transition: opacity var(--motion-fast); }
+.g-edge.dim { opacity: 0.18; }
+
+.g-node .g-dot { stroke: var(--color-bg); stroke-width: 2; transition: opacity var(--motion-fast); cursor: grab; }
+.g-node .g-ring { fill: none; stroke: var(--color-accent); stroke-width: 1.6; opacity: 0.55; }
+.g-node .g-label { font-family: var(--font-ui); font-size: 11px; fill: var(--color-text-muted); pointer-events: none; paint-order: stroke; stroke: var(--color-bg); stroke-width: 3px; stroke-linejoin: round; }
+.g-node:hover .g-label, .g-node.active .g-label { fill: var(--color-text); font-weight: 600; }
+.g-node:hover .g-dot { stroke: var(--color-accent); }
+.g-node.faded { opacity: 0.28; }
+.g-node.active .g-label { fill: var(--color-accent); }
+/* grabbed node — lifts with a glow; neighbours chase via physics */
+.g-node.grabbing { cursor: grabbing; }
+.g-node.grabbing .g-dot { stroke: var(--color-accent); stroke-width: 2.5; filter: drop-shadow(0 2px 7px color-mix(in oklch, var(--color-accent) 55%, transparent)); transform: scale(1.2); transform-box: fill-box; transform-origin: center; }
+.g-node.grabbing .g-label { fill: var(--color-text); font-weight: 600; }
+.g-edge { transition: opacity var(--motion-fast); }
+.g-edge.lit { stroke: var(--color-accent); opacity: 0.85; stroke-width: 1.8; }
+/* current note's edges — solid accent line that glows and pulses */
+.g-edge.flow { stroke: var(--color-accent); stroke-linecap: round; opacity: 0.85; stroke-width: 2; transform-origin: center; animation: g-edge-pulse 1.8s var(--ease-inout, ease-in-out) infinite; filter: drop-shadow(0 0 3px color-mix(in oklch, var(--color-accent) 45%, transparent)); }
+.g-edge.flow.f1 { animation-delay: 0.16s; } .g-edge.flow.f2 { animation-delay: 0.32s; } .g-edge.flow.f3 { animation-delay: 0.48s; } .g-edge.flow.f4 { animation-delay: 0.64s; }
+@keyframes g-edge-pulse {
+  0%, 100% { opacity: 0.45; stroke-width: 1.5; filter: drop-shadow(0 0 1px color-mix(in oklch, var(--color-accent) 25%, transparent)); }
+  50% { opacity: 1; stroke-width: 2.6; filter: drop-shadow(0 0 5px color-mix(in oklch, var(--color-accent) 60%, transparent)); }
+}
+
+/* active node — continuous pulse halo + one-shot ripple on open */
+.g-pulse { fill: none; stroke: var(--color-accent); stroke-width: 1.4; transform-box: fill-box; transform-origin: center; opacity: 0; animation: g-pulse 2.2s var(--ease-out, ease-out) infinite; }
+@keyframes g-pulse { 0% { opacity: 0.55; transform: scale(1); } 70% { opacity: 0; transform: scale(2.4); } 100% { opacity: 0; transform: scale(2.4); } }
+.g-ripple { fill: none; stroke: var(--color-accent); stroke-width: 2; transform-box: fill-box; transform-origin: center; opacity: 0; animation: g-ripple 1.1s var(--ease-out, ease-out) 1 both; }
+@keyframes g-ripple { 0% { opacity: 0.7; transform: scale(0.6); } 100% { opacity: 0; transform: scale(4.2); } }
+.g-node.active .g-ring { animation: g-ring-breathe 2.2s var(--ease-inout, ease-in-out) infinite; }
+@keyframes g-ring-breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+.g-node.active .g-dot { filter: drop-shadow(0 0 6px color-mix(in oklch, var(--color-accent) 55%, transparent)); }
+
+/* kin of the current note — soft accent ring */
+.g-node.kin .g-kinring { fill: none; stroke: var(--color-accent); stroke-width: 1.4; opacity: 0; animation: g-kin-in 0.5s var(--ease-out, ease-out) both; }
+.g-node.kin .g-dot { stroke: var(--color-accent-rim); }
+@keyframes g-kin-in { from { opacity: 0; } to { opacity: 0.5; } }
+.g-node.kin:nth-of-type(2) .g-kinring { animation-delay: 0.12s; }
+.g-node.kin:nth-of-type(3) .g-kinring { animation-delay: 0.2s; }
+.g-node.kin:nth-of-type(4) .g-kinring { animation-delay: 0.28s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .g-edge.flow { animation: none; stroke-dasharray: none; }
+  .g-pulse, .g-ripple, .g-node.active .g-ring, .g-node.kin .g-kinring { animation: none; }
+  .g-pulse { display: none; }
+  .g-node.kin .g-kinring { opacity: 0.5; }
+}

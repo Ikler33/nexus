@@ -1,0 +1,152 @@
+/* ============================================================
+   Nexus — Motion layer  (iOS-like: springy, tactile, restrained)
+   Loaded last so it can layer transitions over component styles.
+   ============================================================ */
+
+:root {
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.5, 1);   /* gentle overshoot — entrances */
+  --ease-out:    cubic-bezier(0.22, 0.61, 0.36, 1);  /* decelerate — exits/most */
+  --ease-inout:  cubic-bezier(0.65, 0, 0.35, 1);     /* symmetric — color/theme */
+  --dur-1: 130ms; --dur-2: 220ms; --dur-3: 320ms; --dur-4: 440ms;
+}
+
+/* ── keyframes ─────────────────────────────────────────────── */
+@keyframes m-rise  { from { opacity: 0; transform: translateY(9px); }  to { opacity: 1; transform: none; } }
+@keyframes m-pop   { from { opacity: 0; transform: scale(0.965); }      to { opacity: 1; transform: none; } }
+@keyframes m-fade  { from { opacity: 0; }                               to { opacity: 1; } }
+@keyframes m-slide { from { opacity: 0; transform: translateX(10px); }  to { opacity: 1; transform: none; } }
+@keyframes m-tabin { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: none; } }
+
+/* ── tactile press feedback ────────────────────────────────── */
+.tb-btn, .rail-btn, .sg-btn, .suggest-pill, .src-card, .src-chip,
+.cmd-item, .send-btn, .seg-btn, .gt-chip, .result-ver, .tab-add,
+.proj-trigger, .sf-row, .chat-suggest button, .answers-blocker-toggle {
+  transition: transform var(--dur-1) var(--ease-out),
+              background-color var(--dur-1) var(--ease-out),
+              color var(--dur-1) var(--ease-out),
+              border-color var(--dur-1) var(--ease-out),
+              box-shadow var(--dur-1) var(--ease-out);
+}
+.tb-btn:active, .rail-btn:active, .sg-btn:active, .suggest-pill:active,
+.src-chip:active, .cmd-item:active, .send-btn:active, .seg-btn:active,
+.gt-chip:active, .tab-add:active, .sf-row:active {
+  transform: scale(0.94);
+}
+.src-card:active, .suggest-pill:active { transform: scale(0.985); }
+
+/* tree rows / tabs: quick highlight, gentle press */
+.tree-row, .tag-row, .bl-item, .wl-item, .ai-tab { transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.tree-row:active, .tag-row:active { transform: scale(0.99); }
+
+/* ── hover lift on cards ───────────────────────────────────── */
+.sg-card, .src-card, .bl-item, .suggest-pill {
+  transition: transform var(--dur-2) var(--ease-out), border-color var(--dur-1), box-shadow var(--dur-2) var(--ease-out), background-color var(--dur-1);
+}
+.sg-card:hover, .src-card:hover { transform: translateY(-2px); box-shadow: var(--elevation-1); }
+.suggest-pill:hover { transform: translateY(-1px); }
+
+/* ── content entrances ─────────────────────────────────────── */
+.editor-doc { animation: m-rise var(--dur-3) var(--ease-out); }
+.graph-view { animation: m-pop var(--dur-3) var(--ease-spring); }
+.ai-body    { animation: m-fade var(--dur-2) var(--ease-out); }
+.backlinks-bar { animation: m-fade var(--dur-2) var(--ease-out); }
+
+/* chat messages spring up from the composer */
+.msg { animation: m-rise var(--dur-3) var(--ease-spring); }
+
+/* tabs spring in */
+.tab { animation: m-tabin var(--dur-2) var(--ease-spring); }
+
+/* ── staggered list reveals ────────────────────────────────── */
+.chat-suggest .suggest-pill { animation: m-rise var(--dur-3) var(--ease-spring) backwards; }
+.chat-suggest .suggest-pill:nth-child(1) { animation-delay: 40ms; }
+.chat-suggest .suggest-pill:nth-child(2) { animation-delay: 90ms; }
+.chat-suggest .suggest-pill:nth-child(3) { animation-delay: 140ms; }
+
+.src-card, .src-chip { animation: m-rise var(--dur-2) var(--ease-out) backwards; }
+.src-cards .src-card:nth-child(1), .src-chips .src-chip:nth-child(1) { animation-delay: 30ms; }
+.src-cards .src-card:nth-child(2), .src-chips .src-chip:nth-child(2) { animation-delay: 80ms; }
+.src-cards .src-card:nth-child(3), .src-chips .src-chip:nth-child(3) { animation-delay: 130ms; }
+.src-cards .src-card:nth-child(n+4) { animation-delay: 180ms; }
+
+.sg-card { animation: m-rise var(--dur-3) var(--ease-spring) backwards; }
+.sg-card:nth-child(1) { animation-delay: 30ms; }
+.sg-card:nth-child(2) { animation-delay: 90ms; }
+.sg-card:nth-child(3) { animation-delay: 150ms; }
+.sg-card:nth-child(n+4) { animation-delay: 200ms; }
+
+.cmd-results .cmd-item { animation: m-rise 240ms var(--ease-out) backwards; }
+.cmd-results .cmd-item:nth-child(-n+8) { animation-delay: calc(18ms * var(--cmd-i, 0)); }
+
+.bl-list .bl-item { animation: m-fade var(--dur-2) var(--ease-out) backwards; }
+.bl-list .bl-item:nth-child(2) { animation-delay: 40ms; }
+.bl-list .bl-item:nth-child(3) { animation-delay: 80ms; }
+.bl-list .bl-item:nth-child(n+4) { animation-delay: 120ms; }
+
+/* ── command palette / overlay polish ──────────────────────── */
+.cmd-palette { animation: m-pop var(--dur-3) var(--ease-spring); }
+.cmd-scrim { animation: m-fade var(--dur-2) var(--ease-out); }
+.ai-overlay { animation: m-slide var(--dur-3) var(--ease-spring); }
+.ai-overlay-scrim { animation: m-fade var(--dur-2) var(--ease-out); }
+.proj-menu, .wl-pop, .attn-pop { animation: m-pop var(--dur-2) var(--ease-spring); }
+
+/* ── toasts spring in ──────────────────────────────────────── */
+.toast { animation: m-rise var(--dur-3) var(--ease-spring); }
+
+/* ── theme crossfade (added briefly on toggle via JS) ──────── */
+html.theme-anim, html.theme-anim * {
+  transition: background-color var(--dur-3) var(--ease-inout),
+              color var(--dur-3) var(--ease-inout),
+              border-color var(--dur-3) var(--ease-inout),
+              fill var(--dur-3) var(--ease-inout),
+              box-shadow var(--dur-3) var(--ease-inout) !important;
+}
+
+/* ── leaving animation helper (suggestion accept/dismiss) ──── */
+.m-leave { animation: m-collapse var(--dur-3) var(--ease-out) forwards; overflow: hidden; }
+@keyframes m-collapse {
+  from { opacity: 1; transform: none; max-height: 200px; }
+  to   { opacity: 0; transform: translateX(12px); max-height: 0; margin: 0; padding-top: 0; padding-bottom: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-doc, .graph-view, .ai-body, .msg, .tab, .chat-suggest .suggest-pill,
+  .src-card, .src-chip, .sg-card, .cmd-item, .bl-item, .cmd-palette, .ai-overlay,
+  .toast, .proj-menu, .backlinks-bar { animation: none !important; }
+}
+
+/* ── "Thinking" brand mark — constellation pulsing while the model works ──── */
+.brand-thinking {
+  color: var(--color-accent); overflow: visible; transform-origin: center;
+  animation: bt-breathe 2.6s var(--ease-inout) infinite;
+  filter: drop-shadow(0 0 5px color-mix(in oklch, var(--color-accent) 45%, transparent));
+}
+.brand-thinking .bt-edge { opacity: 0.2; transform-origin: center; animation: bt-edge 1.9s var(--ease-inout) infinite; }
+.brand-thinking .bt-edge.e1 { animation-delay: 0.15s; }
+.brand-thinking .bt-edge.e2 { animation-delay: 0.30s; }
+.brand-thinking .bt-edge.e3 { animation-delay: 0.45s; }
+.brand-thinking .bt-node { transform-box: fill-box; transform-origin: center; animation: bt-node 1.6s var(--ease-inout) infinite; }
+.brand-thinking .bt-node.n0 { animation-delay: 0s; }
+.brand-thinking .bt-node.n1 { animation-delay: 0.16s; }
+.brand-thinking .bt-node.n2 { animation-delay: 0.32s; }
+.brand-thinking .bt-node.n3 { animation-delay: 0.48s; }
+@keyframes bt-node { 0%, 100% { opacity: 0.42; transform: scale(0.7); } 45% { opacity: 1; transform: scale(1.18); } }
+@keyframes bt-edge { 0%, 100% { opacity: 0.14; } 45% { opacity: 0.62; } }
+@keyframes bt-breathe { 0%, 100% { transform: scale(0.95) rotate(-6deg); } 50% { transform: scale(1.05) rotate(6deg); } }
+
+/* thinking row + shimmering label */
+.msg-thinking { display: flex; align-items: center; gap: 11px; padding: 2px 0 6px; }
+.msg-thinking .mt-label {
+  font-size: var(--text-md); font-weight: 500;
+  background: linear-gradient(90deg, var(--color-text-faint) 35%, var(--color-text) 50%, var(--color-text-faint) 65%);
+  background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: mt-shimmer 1.9s linear infinite;
+}
+@keyframes mt-shimmer { to { background-position: -220% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-thinking, .brand-thinking .bt-node, .brand-thinking .bt-edge { animation: none !important; }
+  .brand-thinking .bt-node { opacity: 0.9; }
+  .brand-thinking .bt-edge { opacity: 0.3; }
+  .msg-thinking .mt-label { animation: none !important; color: var(--color-text-muted); }
+}

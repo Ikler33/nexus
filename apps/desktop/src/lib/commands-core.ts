@@ -1,5 +1,6 @@
 import { commands, type Disposable } from './commands';
 import { isTauri, tauriApi } from './tauri-api';
+import { useThemeStore } from '../stores/theme';
 import { useUIStore } from '../stores/ui';
 import { useVaultStore } from '../stores/vault';
 import { activeBuffer, useWorkspaceStore } from '../stores/workspace';
@@ -95,6 +96,13 @@ export function registerCoreCommands(): Disposable {
       titleKey: 'commands.view.sync',
       source: 'core',
       run: () => useUIStore.getState().toggleSync(),
+    }),
+    commands.register({
+      id: 'theme.toggle',
+      title: 'Toggle theme (light/dark)',
+      titleKey: 'commands.theme.toggle',
+      source: 'core',
+      run: () => useThemeStore.getState().toggle(),
     }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };

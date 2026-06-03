@@ -1,10 +1,20 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { FolderOpen, GitBranch, Languages, MessageSquare, Puzzle, Share2 } from 'lucide-react';
+import {
+  FolderOpen,
+  GitBranch,
+  Languages,
+  MessageSquare,
+  Moon,
+  Puzzle,
+  Share2,
+  Sun,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from './lib/tauri-api';
 import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { changeLocale } from './i18n/setup';
+import { useThemeStore } from './stores/theme';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { Sidebar } from './components/sidebar/Sidebar';
@@ -36,6 +46,8 @@ export function App() {
   const togglePlugins = useUIStore((s) => s.togglePlugins);
   const syncOpen = useUIStore((s) => s.syncOpen);
   const toggleSync = useUIStore((s) => s.toggleSync);
+  const theme = useThemeStore((s) => s.theme);
+  const toggleTheme = useThemeStore((s) => s.toggle);
   const { t, i18n } = useTranslation();
 
   useKeymap();
@@ -93,6 +105,14 @@ export function App() {
               aria-pressed={syncOpen}
             >
               <GitBranch size={16} aria-hidden />
+            </button>
+            <button
+              className={styles.openBtn}
+              onClick={() => toggleTheme()}
+              title={t('commands.theme.toggle')}
+              aria-label={t('commands.theme.toggle')}
+            >
+              {theme === 'dark' ? <Sun size={16} aria-hidden /> : <Moon size={16} aria-hidden />}
             </button>
             <button
               className={styles.openBtn}
