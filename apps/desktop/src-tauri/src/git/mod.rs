@@ -746,8 +746,12 @@ mod tests {
                 &[("a.md".to_string(), "RESOLVED\n".to_string())],
             )
             .unwrap();
+        // Нормализуем CRLF: на Windows-раннере git core.autocrlf переписывает рабочий файл при
+        // checkout (это политика git, не баг merge) → сверяем содержимое независимо от EOL.
         assert_eq!(
-            std::fs::read_to_string(root.join("a.md")).unwrap(),
+            std::fs::read_to_string(root.join("a.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "RESOLVED\n"
         );
         let merged = repo
