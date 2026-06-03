@@ -32,10 +32,7 @@ pub async fn get_local_graph(
 
 /// Единый граф всего vault (AC-DOD-Ф3): топ-`limit` файлов по связности + рёбра.
 #[tauri::command]
-pub async fn get_full_graph(
-    state: State<'_, AppState>,
-    limit: usize,
-) -> Result<FullGraph, String> {
+pub async fn get_full_graph(state: State<'_, AppState>, limit: usize) -> Result<FullGraph, String> {
     let reader = reader(&state).await?;
     graph::get_full_graph(&reader, limit)
         .await
