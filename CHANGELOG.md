@@ -628,6 +628,12 @@
   plugins · conflict resolver · reading mode · вложения-вьюер · onboarding · tweaks). Home — в BACKLOG;
   дальше — инфра релиз-препа (C).
 
+- **Ф4-13 — печать / экспорт PDF активной заметки (инфра C).** Команда `file.print` (палитра):
+  `printActiveNote` рендерит заметку в чистый print-контейнер и вызывает системный диалог печати
+  («Сохранить как PDF»); оболочка (titlebar/sidebar/…) скрыта через `@media print`. Печатает
+  **исходник markdown** (отрендеренный HTML/Mermaid/LaTeX — эпик Live Preview). Контейнер чистится по
+  `afterprint`. i18n RU/EN. Фронт 85.
+
 ### Added — UI-доводка
 
 - **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через

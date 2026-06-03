@@ -195,3 +195,28 @@ html.theme-anim * {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* Печать / экспорт PDF (Ф4-13): прячем оболочку, печатаем только заметку (lib/print.ts). */
+.nexus-print-root { display: none; }
+@media print {
+  body > *:not(.nexus-print-root) { display: none !important; }
+  .nexus-print-root {
+    display: block;
+    padding: 24px;
+    color: #111;
+    background: #fff;
+  }
+  .nexus-print-root h1 {
+    font-family: var(--font-serif);
+    font-size: 22px;
+    margin: 0 0 16px;
+  }
+  .nexus-print-root pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+  }
+}

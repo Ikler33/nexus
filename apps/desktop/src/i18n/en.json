@@ -135,6 +135,7 @@
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
     "file.save": "Save file",
+    "file.print": "Print / Export PDF",
     "view.splitRight": "Split right",
     "view.graph": "Graph",
     "view.chat": "AI chat",

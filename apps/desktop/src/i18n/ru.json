@@ -136,6 +136,7 @@
     "palette.open": "Палитра команд",
     "vault.open": "Открыть vault…",
     "file.save": "Сохранить файл",
+    "file.print": "Печать / Экспорт PDF",
     "view.splitRight": "Разделить вправо",
     "view.graph": "Граф",
     "view.chat": "AI-чат",
