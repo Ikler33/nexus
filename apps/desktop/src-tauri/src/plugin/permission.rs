@@ -121,7 +121,22 @@ impl Permissions {
                     Err(Denied::HostNotAllowed(host.to_string()))
                 }
             }
-            m if m.starts_with("ui.") => Ok(()), // ui:* точки проверяются при регистрации (Ф2-3)
+            // Регистрация команды требует объявленной ui-точки `command` (Ф2-3).
+            "ui.registerCommand" => {
+                if self.ui.iter().any(|p| p == "command") {
+                    Ok(())
+                } else {
+                    Err(Denied::NotGranted("ui:command"))
+                }
+            }
+            // Прочие ui.* (напр. `ui.addTranslations`) — требуют объявленной хотя бы одной ui-точки.
+            m if m.starts_with("ui.") => {
+                if self.ui.is_empty() {
+                    Err(Denied::NotGranted("ui"))
+                } else {
+                    Ok(())
+                }
+            }
             other => Err(Denied::UnknownMethod(other.to_string())),
         }
     }
@@ -398,6 +413,33 @@ mod tests {
             }),
             Err(Denied::UnknownMethod(_))
         ));
+    }
+
+    #[test]
+    fn check_register_command_needs_ui_point() {
+        let req = ApiRequest {
+            method: "ui.registerCommand",
+            path: None,
+            host: None,
+        };
+        // Без ui-точки `command` — отказ; с ней — ок.
+        assert_eq!(
+            perms(r#"{"vault:read":["**"]}"#).check(&req),
+            Err(Denied::NotGranted("ui:command"))
+        );
+        assert!(perms(r#"{"ui":["command"]}"#).check(&req).is_ok());
+    }
+
+    #[test]
+    fn check_other_ui_method_needs_some_ui_point() {
+        let req = ApiRequest {
+            method: "ui.addTranslations",
+            path: None,
+            host: None,
+        };
+        // Без объявленной ui-точки — отказ; с любой — ок.
+        assert_eq!(perms(r#"{}"#).check(&req), Err(Denied::NotGranted("ui")));
+        assert!(perms(r#"{"ui":["command"]}"#).check(&req).is_ok());
     }
 
     #[test]

@@ -101,6 +101,11 @@ pub async fn plugin_invoke(
             .clone()
     };
 
+    // `ui.*` — только авторизация (фактическую регистрацию делает фронт-реестр команд); host-I/O нет.
+    if method.starts_with("ui.") {
+        return Ok(serde_json::Value::Bool(true));
+    }
+
     // Реальный I/O — вне лока, через тестируемый dispatch.
     dispatch_vault(&vault_root, &method, path.as_deref(), content.as_deref()).await
 }

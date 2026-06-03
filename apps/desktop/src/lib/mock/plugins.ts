@@ -14,6 +14,7 @@ interface MockManifest {
   version: string;
   read: string[];
   write: string[];
+  ui: string[];
 }
 
 /** «Установленные» плагины превью-vault (соответствуют `.nexus/plugins/<dir>`). */
@@ -24,12 +25,14 @@ const MANIFESTS: Record<string, MockManifest> = {
     version: '0.1.0',
     read: ['**'], // читает весь vault
     write: ['Notes/**'], // пишет только в Notes/ (демонстрация границы)
+    ui: ['command'], // право регистрировать команды в палитре
   },
 };
 
 interface MockSession {
   read: string[];
   write: string[];
+  ui: string[];
 }
 const sessions = new Map<string, MockSession>();
 let seq = 0;
@@ -91,7 +94,7 @@ export async function openSession(dir: string): Promise<string> {
   const m = MANIFESTS[dir];
   if (!m) throw new Error(`плагин '${dir}' не найден`);
   const token = `mock-tok-${++seq}`;
-  sessions.set(token, { read: m.read, write: m.write });
+  sessions.set(token, { read: m.read, write: m.write, ui: m.ui });
   return token;
 }
 
@@ -126,6 +129,16 @@ export async function invoke(
       if (!inScope(s.write, path)) throw new Error(`нет права vault:write на «${path}»`);
       await vault.writeFile(path, content);
       return { ok: true, bytes: content.length };
+    }
+    case 'ui.registerCommand': {
+      // Брокер только авторизует (ui:command); саму команду регистрирует фронт-релей.
+      if (!s.ui.includes('command')) throw new Error('нет права ui:command');
+      return true;
+    }
+    case 'ui.addTranslations': {
+      // Любая объявленная ui-точка достаточна; сами строки кладёт фронт-релей в i18n.
+      if (s.ui.length === 0) throw new Error('нет права ui');
+      return true;
     }
     default:
       throw new Error(`метод не поддержан host-стороной: ${method}`);

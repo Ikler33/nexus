@@ -1,3 +1,5 @@
+import i18n from '../i18n/setup';
+import { commands, type Disposable } from './commands';
 import { tauriApi } from './tauri-api';
 
 /**
@@ -16,12 +18,19 @@ interface PluginRequest {
   method: string;
   path?: string;
   content?: string;
+  /** Для `ui.registerCommand`: команда, которую плагин добавляет в палитру. */
+  command?: { id: string; title: string; titleKey?: string };
+  /** Для `ui.addTranslations`: `{ локаль → { ключ → строка } }` (namespace `plugin:<id>`). */
+  translations?: Record<string, Record<string, string>>;
 }
 
 /** Ответ хост → плагин (по порту). */
 type PluginResponse =
   | { id: number; ok: true; result: unknown }
   | { id: number; ok: false; error: string };
+
+/** Событие хост → плагин (вне request/response): запуск зарегистрированной плагином команды. */
+type PluginEvent = { type: 'command'; commandId: string };
 
 /** Запись обслуженного вызова — для UI-аудита (видно, что и с каким исходом дёрнул плагин). */
 export interface PluginCall {
@@ -52,6 +61,10 @@ export async function attachPlugin(
 ): Promise<PluginHandle> {
   // Токен живёт ТОЛЬКО здесь (host-side). В iframe/плагин не уходит.
   const token = await tauriApi.plugins.openSession(dir);
+  // Команды, добавленные плагином в реестр (снимаются при dispose).
+  const registered: Disposable[] = [];
+
+  const reply = (resp: PluginResponse) => hostPort.postMessage(resp);
 
   hostPort.onmessage = (event: MessageEvent) => {
     const msg = event.data as Partial<PluginRequest> | null;
@@ -59,6 +72,68 @@ export async function attachPlugin(
     if (!msg || typeof msg.id !== 'number' || typeof msg.method !== 'string') return;
     const id = msg.id;
     const method = msg.method;
+
+    // ui.addTranslations: плагин добавляет локализованные строки в namespace `plugin:<dir>` (AC-I18N-7).
+    // Ключи кладём как `<dir>:<key>` → итоговый i18n-ключ `plugin:<dir>:<key>` (nsSeparator ':').
+    if (method === 'ui.addTranslations') {
+      const tr = msg.translations;
+      if (!tr || typeof tr !== 'object') {
+        reply({ id, ok: false, error: 'некорректные переводы' });
+        return;
+      }
+      void tauriApi.plugins
+        .invoke(token, 'ui.addTranslations')
+        .then(() => {
+          // i18next: ключ `plugin:<dir>:<key>` → ns 'plugin' + вложенный путь `<dir>.<key>`,
+          // поэтому кладём вложенно `{ <dir>: { <key>: value } }` (не плоской строкой `<dir>:<key>`).
+          for (const [locale, dict] of Object.entries(tr)) {
+            i18n.addResourceBundle(locale, 'plugin', { [dir]: { ...dict } }, true, true);
+          }
+          hooks?.onCall?.({ method, ok: true });
+          reply({ id, ok: true, result: { locales: Object.keys(tr) } });
+        })
+        .catch((err: unknown) => {
+          const error = err instanceof Error ? err.message : String(err);
+          hooks?.onCall?.({ method, ok: false, error });
+          reply({ id, ok: false, error });
+        });
+      return;
+    }
+
+    // ui.registerCommand: авторизуем через брокер (право ui:command), регистрируем команду в реестре.
+    // run() шлёт событие назад плагину (host→plugin) → плагин исполняет свой обработчик. Снимется в dispose.
+    if (method === 'ui.registerCommand') {
+      const cmd = msg.command;
+      if (!cmd || typeof cmd.id !== 'string' || typeof cmd.title !== 'string') {
+        reply({ id, ok: false, error: 'некорректная команда' });
+        return;
+      }
+      void tauriApi.plugins
+        .invoke(token, 'ui.registerCommand')
+        .then(() => {
+          const disp = commands.register({
+            id: `plugin:${dir}:${cmd.id}`,
+            title: cmd.title,
+            // Локализованный заголовок из namespace плагина (если плагин прислал переводы).
+            titleKey: cmd.titleKey ? `plugin:${dir}:${cmd.titleKey}` : undefined,
+            source: 'plugin',
+            run: () => {
+              const ev: PluginEvent = { type: 'command', commandId: cmd.id };
+              hostPort.postMessage(ev);
+            },
+          });
+          registered.push(disp);
+          hooks?.onCall?.({ method, path: cmd.id, ok: true });
+          reply({ id, ok: true, result: { registered: cmd.id } });
+        })
+        .catch((err: unknown) => {
+          const error = err instanceof Error ? err.message : String(err);
+          hooks?.onCall?.({ method, path: cmd.id, ok: false, error });
+          reply({ id, ok: false, error });
+        });
+      return;
+    }
+
     const path = typeof msg.path === 'string' ? msg.path : undefined;
     const content = typeof msg.content === 'string' ? msg.content : undefined;
 
@@ -75,15 +150,16 @@ export async function attachPlugin(
         hooks?.onCall?.({ method, path, ok: false, error });
         return { id, ok: false, error };
       })
-      .then((response) => hostPort.postMessage(response));
+      .then(reply);
   };
   hostPort.start();
 
   return {
     dispose() {
       hostPort.onmessage = null;
+      registered.forEach((d) => d.dispose()); // снять команды плагина из реестра
       hostPort.close();
-      void tauriApi.plugins.closeSession(token); // отзываем сессию в брокере (без утечки токенов)
+      void tauriApi.plugins.closeSession(token); // отзывать сессию в брокере (без утечки токенов)
     },
   };
 }
@@ -142,12 +218,20 @@ export function demoPluginSrcdoc(): string {
   <h1>🔌 Hello Reader</h1><p class="sub">демо-плагин в песочнице · вызовы идут через capability-брокер</p>
   <div id="app">загрузка…</div>
   <script>
-    let port, seq = 0; const pending = {};
+    let port, seq = 0; const pending = {}; const handlers = {};
     function call(method, path, content){
       return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
         port.postMessage({ id, method, path, content }); });
     }
-    function onMsg(e){ const m = e.data, p = pending[m.id]; if(!p) return; delete pending[m.id];
+    function register(cmdId, title, fn, titleKey){ handlers[cmdId] = fn;
+      return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
+        port.postMessage({ id, method:'ui.registerCommand', command:{ id: cmdId, title, titleKey } }); }); }
+    function addI18n(translations){
+      return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
+        port.postMessage({ id, method:'ui.addTranslations', translations }); }); }
+    function onMsg(e){ const m = e.data;
+      if(m && m.type === 'command'){ const h = handlers[m.commandId]; if(h) h(); return; }
+      const p = pending[m.id]; if(!p) return; delete pending[m.id];
       m.ok ? p.res(m.result) : p.rej(new Error(m.error)); }
     async function boot(){
       const app = document.getElementById('app'); app.textContent='';
@@ -182,6 +266,17 @@ export function demoPluginSrcdoc(): string {
           out.textContent = log; out.className='ok';
         };
         app.appendChild(btn);
+        // Регистрируем команду в палитре приложения (право ui:command). При запуске из палитры хост
+        // шлёт событие назад плагину → исполняется этот обработчик (host→plugin раунд-трип).
+        const hint = document.createElement('p'); hint.className='sub';
+        hint.textContent='⌘P → команда плагина (заголовок локализован: переключи язык 🇷🇺/🇬🇧)';
+        app.appendChild(hint);
+        // Локализованные строки плагина (namespace plugin:hello) + команда с titleKey (AC-I18N-7).
+        await addI18n({ ru:{ readInbox:'Hello Reader: прочитать Inbox.md' }, en:{ readInbox:'Hello Reader: read Inbox.md' } });
+        await register('read-inbox', 'Hello Reader: read Inbox.md', async () => {
+          try { out.textContent = '▶ команда плагина → Inbox.md\\n\\n'+await call('vault.readFile','Inbox.md'); out.className=''; }
+          catch(err){ out.textContent = '✋ '+err.message; out.className='err'; }
+        }, 'readInbox');
       } catch(err){ const e=document.createElement('p'); e.className='err'; e.textContent=err.message; app.appendChild(e); }
     }
     // Повторяем «ready», пока хост не пришлёт порт: openSession на host-стороне асинхронен,

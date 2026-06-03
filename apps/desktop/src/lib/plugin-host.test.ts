@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import i18n from '../i18n/setup';
+import { commands } from './commands';
 import { attachPlugin } from './plugin-host';
 import { tauriApi } from './tauri-api';
 
@@ -93,4 +95,65 @@ describe('plugin-host транспорт (attachPlugin)', () => {
     const res = await rpc(ch.port2, { id: 1, method: 'vault.listFiles', path: '' });
     expect(res).toEqual({ timeout: true });
   });
+
+  it('ui.registerCommand: команда в реестре, run шлёт событие плагину, dispose снимает', async () => {
+    const ch = new MessageChannel();
+    const handle = await attachPlugin('hello', ch.port1);
+
+    const events: PluginEvent[] = [];
+    ch.port2.addEventListener('message', (e: MessageEvent) => {
+      const d = e.data as PluginEvent;
+      if (d?.type === 'command') events.push(d);
+    });
+    ch.port2.start();
+
+    const res = await rpc(ch.port2, {
+      id: 1,
+      method: 'ui.registerCommand',
+      command: { id: 'sayhi', title: 'Hello: hi' },
+    });
+    expect(res.ok).toBe(true);
+
+    const cmd = commands.get('plugin:hello:sayhi');
+    expect(cmd?.source).toBe('plugin');
+    expect(cmd?.title).toBe('Hello: hi');
+
+    // запуск команды (как из палитры) → событие назад плагину
+    await commands.run('plugin:hello:sayhi');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events).toContainEqual({ type: 'command', commandId: 'sayhi' });
+
+    // dispose снимает команду из реестра
+    handle.dispose();
+    expect(commands.get('plugin:hello:sayhi')).toBeUndefined();
+  });
+
+  it('ui.addTranslations + titleKey: заголовок команды локализуется (namespace plugin:<id>)', async () => {
+    const ch = new MessageChannel();
+    const handle = await attachPlugin('hello', ch.port1);
+
+    const tr = await rpc(ch.port2, {
+      id: 1,
+      method: 'ui.addTranslations',
+      translations: { ru: { greetKey: 'Привет' }, en: { greetKey: 'Hi' } },
+    });
+    expect(tr.ok).toBe(true);
+    expect(i18n.t('plugin:hello:greetKey', { lng: 'ru' })).toBe('Привет');
+    expect(i18n.t('plugin:hello:greetKey', { lng: 'en' })).toBe('Hi');
+
+    const reg = await rpc(ch.port2, {
+      id: 2,
+      method: 'ui.registerCommand',
+      command: { id: 'greet', title: 'fallback', titleKey: 'greetKey' },
+    });
+    expect(reg.ok).toBe(true);
+    expect(commands.get('plugin:hello:greet')?.titleKey).toBe('plugin:hello:greetKey');
+
+    handle.dispose();
+  });
 });
+
+interface PluginEvent {
+  type: 'command';
+  commandId: string;
+}
