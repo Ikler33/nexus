@@ -77,6 +77,8 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
   (--row-h). Стор оформления + titlebar-кнопка + команда. Проверено в превью (teal перетинтовал апп).
 - [x] **Рестайл + новые экраны Ф4 завершены** (Home — в BACKLOG).
 - [x] Ф4-13 — печать / экспорт PDF активной заметки (`file.print` + print-CSS; печатает исходник, рендер → Live Preview эпик).
-- [ ] Инфра C (выполнимое): `nexus-md-parser` пакет · скелет `apps/mobile/` · локальный crash-лог.
-  auto-updater (подпись) и crash-backend → BACKLOG (релиз-время).
+- [x] Ф4-14 — локальный crash-reporter (panic-hook → scrubbed-лог `~/.nexus/crashes/`, без сети). Помогает на тестировании.
+- [x] **Инфра C — выполнимое сделано** (print-экспорт + локальный crash-лог). Остальное в BACKLOG:
+  auto-updater (подпись) · crash-backend (opt-in) · `nexus-md-parser` пакет · скелет `apps/mobile/`
+  (релиз-время / старт мобильного трека). **Разработка по A+B+C завершена → ручное тестирование.**
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.
