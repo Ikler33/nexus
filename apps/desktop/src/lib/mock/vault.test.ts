@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ChatStreamEvent } from '../tauri-api';
-import { searchContent, streamChat } from './vault';
+import { getFullGraph, getLocalGraph, searchContent, streamChat } from './vault';
 
 describe('mock searchContent (контракт Ф1-6)', () => {
   it('пустой запрос → пусто', async () => {
@@ -53,5 +53,32 @@ describe('mock streamChat (контракт Ф1-7)', () => {
     cancel(); // сразу отменяем
     await new Promise((r) => setTimeout(r, 80));
     expect(events.some((e) => e.type === 'done')).toBe(false);
+  });
+});
+
+describe('mock graph (контракт ADR-004 / AC-DOD-Ф3)', () => {
+  it('единый граф: с большим лимитом отдаёт все узлы и не обрезан', async () => {
+    const full = await getFullGraph(10_000);
+    expect(full.nodes.length).toBe(full.totalFiles);
+    expect(full.truncated).toBe(false);
+    // Узлы рёбер — внутри множества узлов графа.
+    const ids = new Set(full.nodes.map((n) => n.id));
+    for (const e of full.edges) {
+      expect(ids.has(e.source)).toBe(true);
+      expect(ids.has(e.target)).toBe(true);
+    }
+  });
+
+  it('единый граф: маленький лимит → truncated и не больше лимита узлов', async () => {
+    const top = await getFullGraph(2);
+    expect(top.nodes.length).toBeLessThanOrEqual(2);
+    expect(top.truncated).toBe(true);
+    expect(top.totalFiles).toBeGreaterThan(top.nodes.length);
+  });
+
+  it('локальный граф несуществующего центра → пусто', async () => {
+    const g = await getLocalGraph('Нет.md', 2);
+    expect(g.nodes).toEqual([]);
+    expect(g.edges).toEqual([]);
   });
 });

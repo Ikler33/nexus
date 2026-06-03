@@ -2,6 +2,7 @@ import type {
   BacklinkEntry,
   ChatStreamEvent,
   FileEntry,
+  FullGraph,
   GraphData,
   GraphEdge,
   LinkSuggestion,
@@ -198,11 +199,9 @@ export function streamChat(
   };
 }
 
-export async function getLocalGraph(center: string, hops: number): Promise<GraphData> {
-  if (!CONTENT[center]) return { nodes: [], edges: [] };
+/** Неориентированная смежность по `[[wikilink]]` во всём CONTENT (общая для local/full). */
+function buildAdjacency(): Map<string, Set<string>> {
   const paths = Object.keys(CONTENT);
-  const idOf = (p: string) => paths.indexOf(p);
-
   const resolveTarget = (t: string): string | null => {
     const want = t.endsWith('.md') ? t.slice(0, -3) : t;
     return (
@@ -214,7 +213,6 @@ export async function getLocalGraph(center: string, hops: number): Promise<Graph
       ) ?? null
     );
   };
-
   const adj = new Map<string, Set<string>>();
   const link = (a: string, b: string) => {
     (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
@@ -228,6 +226,34 @@ export async function getLocalGraph(center: string, hops: number): Promise<Graph
       if (tgt && tgt !== src) link(src, tgt);
     }
   }
+  return adj;
+}
+
+/** Рёбра среди множества узлов `inSet` (дедуп неориентированных пар). */
+function edgesAmong(
+  inSet: Set<string>,
+  adj: Map<string, Set<string>>,
+  idOf: (p: string) => number,
+): GraphEdge[] {
+  const edges: GraphEdge[] = [];
+  const seen = new Set<string>();
+  for (const a of inSet)
+    for (const b of adj.get(a) ?? [])
+      if (inSet.has(b)) {
+        const key = [a, b].sort().join('|');
+        if (!seen.has(key)) {
+          seen.add(key);
+          edges.push({ source: idOf(a), target: idOf(b) });
+        }
+      }
+  return edges;
+}
+
+export async function getLocalGraph(center: string, hops: number): Promise<GraphData> {
+  if (!CONTENT[center]) return { nodes: [], edges: [] };
+  const paths = Object.keys(CONTENT);
+  const idOf = (p: string) => paths.indexOf(p);
+  const adj = buildAdjacency();
 
   const inSet = new Set([center]);
   let frontier = [center];
@@ -243,18 +269,26 @@ export async function getLocalGraph(center: string, hops: number): Promise<Graph
   }
 
   const nodes = [...inSet].map((p) => ({ id: idOf(p), path: p, title: null }));
-  const edges: GraphEdge[] = [];
-  const seen = new Set<string>();
-  for (const a of inSet)
-    for (const b of adj.get(a) ?? [])
-      if (inSet.has(b)) {
-        const key = [a, b].sort().join('|');
-        if (!seen.has(key)) {
-          seen.add(key);
-          edges.push({ source: idOf(a), target: idOf(b) });
-        }
-      }
-  return { nodes, edges };
+  return { nodes, edges: edgesAmong(inSet, adj, idOf) };
+}
+
+/** Единый граф всего vault — топ-`limit` файлов по степени связности + рёбра (AC-DOD-Ф3). */
+export async function getFullGraph(limit: number): Promise<FullGraph> {
+  const paths = Object.keys(CONTENT);
+  const idOf = (p: string) => paths.indexOf(p);
+  const adj = buildAdjacency();
+  const byDegree = [...paths].sort(
+    (a, b) => (adj.get(b)?.size ?? 0) - (adj.get(a)?.size ?? 0),
+  );
+  const chosen = byDegree.slice(0, Math.max(1, limit));
+  const inSet = new Set(chosen);
+  const nodes = chosen.map((p) => ({ id: idOf(p), path: p, title: null }));
+  return {
+    nodes,
+    edges: edgesAmong(inSet, adj, idOf),
+    totalFiles: paths.length,
+    truncated: paths.length > chosen.length,
+  };
 }
 
 export async function listNotes(): Promise<NoteRef[]> {

@@ -118,6 +118,15 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
+/** Единый граф всего vault (зеркалит Rust `graph::FullGraph`). */
+export interface FullGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  /** Всего не-удалённых файлов в vault. */
+  totalFiles: number;
+  /** Показаны не все узлы (обрезано по степени связности). */
+  truncated: boolean;
+}
 
 /**
  * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`).
@@ -183,6 +192,12 @@ export const tauriApi = {
       isTauri()
         ? invoke<GraphData>('get_local_graph', { center, hops })
         : mockVault.getLocalGraph(center, hops),
+
+    /** Единый граф всего vault — топ-`limit` файлов по связности (AC-DOD-Ф3). */
+    getFullGraph: (limit: number) =>
+      isTauri()
+        ? invoke<FullGraph>('get_full_graph', { limit })
+        : mockVault.getFullGraph(limit),
   },
 
   search: {

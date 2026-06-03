@@ -34,8 +34,12 @@
     "empty": "Нет команд"
   },
   "graph": {
-    "title": "Локальный граф",
-    "empty": "Откройте файл, чтобы увидеть его граф"
+    "title": "Граф",
+    "empty": "Откройте файл, чтобы увидеть его граф",
+    "modeLocal": "Локальный",
+    "modeFull": "Весь vault",
+    "truncated": "показано {{shown}} из {{total}} узлов",
+    "nodeCount": "узлов: {{count}}"
   },
   "chat": {
     "title": "AI-панель",
@@ -97,7 +101,7 @@
     "vault.open": "Открыть vault…",
     "file.save": "Сохранить файл",
     "view.splitRight": "Разделить вправо",
-    "view.graph": "Локальный граф",
+    "view.graph": "Граф",
     "view.chat": "AI-чат",
     "view.suggest": "Предложения связей",
     "view.plugins": "Плагины",
