@@ -56,11 +56,14 @@ pub fn is_ignored(name: &str) -> bool {
 
 /// Канонизирует `rel` относительно `root` и проверяет, что результат ВНУТРИ vault.
 ///
-/// Резолвит `..` и симлинки (`canonicalize`), блокирует абсолютные пути и побег наружу
-/// (`../../.ssh`, симлинк за пределы). Единая граница для всех команд/host-функций (AC-SEC-1).
+/// Резолвит `..` и симлинки (`canonicalize`), блокирует абсолютные И root-anchored пути и побег
+/// наружу (`../../.ssh`, симлинк за пределы). Единая граница для всех команд/host-функций (AC-SEC-1).
 /// `root` должен быть уже канонизирован (это делает `open_vault`).
 pub fn resolve_vault_path(root: &Path, rel: &Path) -> VaultResult<PathBuf> {
-    if rel.is_absolute() {
+    // `is_absolute()` Windows-зависим: `/etc/passwd` там НЕ абсолютен, но root-anchored —
+    // `root.join("/etc/passwd")` даёт `C:\etc\passwd` (побег с диска). `has_root()` ловит это
+    // кросс-платформенно (Unix `/x`; Windows `/x`/`\x`/`C:\x`). canonicalize+starts_with — бэкстоп.
+    if rel.is_absolute() || rel.has_root() {
         return Err(VaultError::PathEscape);
     }
     let full = root.join(rel).canonicalize()?;
@@ -82,7 +85,7 @@ pub struct NoteRef {
 /// РОДИТЕЛЯ (он обязан существовать) и проверяем его принадлежность vault; имя добавляем
 /// после. Та же анти-traversal граница, что и [`resolve_vault_path`] (AC-SEC-1).
 pub fn resolve_vault_path_for_write(root: &Path, rel: &Path) -> VaultResult<PathBuf> {
-    if rel.is_absolute() {
+    if rel.is_absolute() || rel.has_root() {
         return Err(VaultError::PathEscape);
     }
     let full = root.join(rel);

@@ -356,3 +356,20 @@
   `@tanstack/react-virtual` (только видимые; переменная высота → `measureElement`, `initialRect` для
   jsdom). **Умный автоскролл**: следует за стримом только если пользователь у низа (`atBottom` по
   `onScroll`) — чтение истории не дёргается. Прозрачно (выглядит как было); проверено в превью. Фронт 64 теста.
+
+### Fixed / Hardening
+
+- **Кросс-платформенная анти-traversal граница (Windows; AC-SEC-1).** `resolve_vault_path` /
+  `resolve_vault_path_for_write` блокировали абсолютные пути через `is_absolute()`, но на Windows
+  `/etc/passwd` не абсолютен (нет диск-префикса) → `root.join("/etc/passwd")` даёт `C:\etc\passwd`
+  (побег с диска), что ловилось лишь бэкстопом (canonicalize+`starts_with`) и возвращало `Io` вместо
+  `PathEscape`. Добавлен явный отказ **root-anchored** путей (`rel.has_root()` — ловит `/x` и `\x` на
+  обеих ОС). Поймано Windows-джобом CI (тест `resolve_blocks_traversal_and_absolute`). Поведение на
+  Unix не изменилось; fail-closed усилен и сделан явным до файловых операций.
+
+### Tooling
+
+- **Живой smoke по реальному vault** (`eval::live_real_vault_smoke`, `#[ignore]`, env
+  `NEXUS_TEST_VAULT`): индексирует произвольный vault во временные db+usearch (реальный `.nexus/` не
+  трогается) и проверяет кросс-язычный гибридный поиск на живом контенте (bge-m3 :8083). Находка
+  (стоп-слова запроса + слабый IDF на малом корпусе теснят кросс-язычную семантику) — в `docs/BACKLOG.md`.
