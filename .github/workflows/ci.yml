@@ -30,8 +30,10 @@ jobs:
     name: Rust (build · clippy · test)
     strategy:
       fail-fast: false
+      # Экономия минут Actions: на PR — ubuntu+windows (macOS = ×10 минут на приватном репо!);
+      # на push в main — полная матрица ×3 ОС (ловим macOS-специфику до релиза).
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
