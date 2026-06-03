@@ -59,6 +59,19 @@ pub async fn plugin_open_session(
     Ok(token.as_str().to_string())
 }
 
+/// Закрывает сессию плагина: мгновенно отзывает токен в брокере (§7.9). Вызывается фронтом при
+/// размонтировании плагина (закрытие панели/iframe) — иначе сессии копятся в брокере. Идемпотентно.
+#[tauri::command]
+pub async fn plugin_close_session(state: State<'_, AppState>, token: String) -> Result<(), String> {
+    let token = CapToken::from_ipc(token);
+    state
+        .plugins
+        .lock()
+        .map_err(|_| "broker lock")?
+        .revoke(&token);
+    Ok(())
+}
+
 /// Host-функция плагина через брокер (§7.4): авторизация по токену + scoped-проверка + audit, затем
 /// dispatch. Поддержаны `vault.readFile`/`vault.listFiles` (право `vault:read`) и `vault.writeFile`
 /// (`vault:write`). Результат — JSON: строка-контент / массив записей каталога / `{ok,bytes}`.

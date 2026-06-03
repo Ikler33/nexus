@@ -1,0 +1,195 @@
+import { tauriApi } from './tauri-api';
+
+/**
+ * Фронт-сторона транспорта плагина (§7.5, ADR-001/002). Каждый плагин живёт в sandbox-iframe и
+ * общается с хостом ТОЛЬКО через свой `MessagePort`. Хост открывает сессию (capability-токен, §7.9),
+ * привязывает токен к ПОРТУ и обслуживает запросы плагина через `tauriApi.plugins.invoke`.
+ *
+ * Ключевое свойство безопасности: токен берётся из привязки порта (замыкание `attachPlugin`), а НЕ
+ * из payload сообщения. Плагин не знает свой токен и не может предъявить чужой → confused-deputy и
+ * capability-laundering закрыты на фронте так же, как identity-по-токену в Rust-брокере.
+ */
+
+/** Запрос плагина → хост (по порту). `token` сюда НЕ входит намеренно. */
+interface PluginRequest {
+  id: number;
+  method: string;
+  path?: string;
+  content?: string;
+}
+
+/** Ответ хост → плагин (по порту). */
+type PluginResponse =
+  | { id: number; ok: true; result: unknown }
+  | { id: number; ok: false; error: string };
+
+/** Запись обслуженного вызова — для UI-аудита (видно, что и с каким исходом дёрнул плагин). */
+export interface PluginCall {
+  method: string;
+  path?: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface PluginHostHooks {
+  onCall?(call: PluginCall): void;
+}
+
+export interface PluginHandle {
+  /** Остановить обслуживание плагина (закрыть порт). Вызовы после — игнорируются. */
+  dispose(): void;
+}
+
+/**
+ * Привязывает уже открытую сессию плагина к host-порту канала и обслуживает его запросы.
+ * `dir` — каталог плагина (`.nexus/plugins/<dir>`); `hostPort` — порт со стороны хоста (port1).
+ * Возвращает хэндл с `dispose()`. Тестируется напрямую (без iframe) через `MessageChannel`.
+ */
+export async function attachPlugin(
+  dir: string,
+  hostPort: MessagePort,
+  hooks?: PluginHostHooks,
+): Promise<PluginHandle> {
+  // Токен живёт ТОЛЬКО здесь (host-side). В iframe/плагин не уходит.
+  const token = await tauriApi.plugins.openSession(dir);
+
+  hostPort.onmessage = (event: MessageEvent) => {
+    const msg = event.data as Partial<PluginRequest> | null;
+    // Жёсткая валидация формы; мусор молча игнорируем (не отвечаем).
+    if (!msg || typeof msg.id !== 'number' || typeof msg.method !== 'string') return;
+    const id = msg.id;
+    const method = msg.method;
+    const path = typeof msg.path === 'string' ? msg.path : undefined;
+    const content = typeof msg.content === 'string' ? msg.content : undefined;
+
+    // Токен — из привязки порта, НЕ из msg: даже если плагин подсунет `token` в payload, он
+    // игнорируется (тип `PluginRequest` его не содержит, а здесь мы его и не читаем).
+    void tauriApi.plugins
+      .invoke(token, method, path, content)
+      .then((result): PluginResponse => {
+        hooks?.onCall?.({ method, path, ok: true });
+        return { id, ok: true, result };
+      })
+      .catch((err: unknown): PluginResponse => {
+        const error = err instanceof Error ? err.message : String(err);
+        hooks?.onCall?.({ method, path, ok: false, error });
+        return { id, ok: false, error };
+      })
+      .then((response) => hostPort.postMessage(response));
+  };
+  hostPort.start();
+
+  return {
+    dispose() {
+      hostPort.onmessage = null;
+      hostPort.close();
+      void tauriApi.plugins.closeSession(token); // отзываем сессию в брокере (без утечки токенов)
+    },
+  };
+}
+
+/**
+ * Поднимает плагин в sandbox-iframe: открывает сессию, привязывает токен к порту и передаёт парный
+ * порт в iframe. Рукопожатие: iframe шлёт `nexus:ready` (его слушатель готов) → хост передаёт порт
+ * сообщением `nexus:init` (с transfer). Так нет гонки «послали порт раньше, чем плагин подписался».
+ */
+export async function mountPlugin(
+  dir: string,
+  iframe: HTMLIFrameElement,
+  hooks?: PluginHostHooks,
+): Promise<PluginHandle> {
+  const channel = new MessageChannel();
+  const handle = await attachPlugin(dir, channel.port1, hooks);
+
+  const onReady = (event: MessageEvent) => {
+    if (event.source !== iframe.contentWindow) return; // только от ЭТОГО iframe
+    if ((event.data as { type?: unknown } | null)?.type !== 'nexus:ready') return;
+    window.removeEventListener('message', onReady);
+    // Передаём порт плагину. targetOrigin '*' — sandbox-iframe имеет opaque origin (named нельзя);
+    // безопасность держится на том, что порт получает только этот iframe (transfer), а не на origin.
+    iframe.contentWindow?.postMessage({ type: 'nexus:init' }, '*', [channel.port2]);
+  };
+  window.addEventListener('message', onReady);
+
+  const baseDispose = handle.dispose;
+  return {
+    dispose() {
+      window.removeEventListener('message', onReady);
+      baseDispose();
+    },
+  };
+}
+
+/**
+ * HTML демо-плагина (Ф2): крутится в sandbox-iframe (`allow-scripts`, opaque origin — нет доступа к
+ * родителю/storage). Через свой порт зовёт host-функции брокера: листинг vault, чтение по клику и
+ * демонстрацию ГРАНИЦЫ записи (Notes/ — в scope, README.md — отказ брокера). Реальные плагины будут
+ * грузиться из `.nexus/plugins/<id>/` — здесь демо встроено в хост (см. BACKLOG: загрузка ассетов+CSP).
+ */
+export function demoPluginSrcdoc(): string {
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><style>
+    body{font:13px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:12px;color:#dcdce0;background:#1b1b1f}
+    h1{font-size:13px;margin:0 0 4px}p.sub{margin:0 0 10px;color:#888}
+    ul{list-style:none;margin:0;padding:0}
+    li.file,li.dir{padding:3px 6px;border-radius:4px}
+    li.file{cursor:pointer}li.file:hover{background:#2d2d33}
+    li.dir{color:#7aa2f7}
+    pre{white-space:pre-wrap;word-break:break-word;background:#111;padding:8px;border-radius:6px;margin-top:10px;max-height:160px;overflow:auto}
+    .err{color:#ff7a7a}.ok{color:#9ece6a}
+    button{font:inherit;margin-top:10px;padding:5px 9px;background:#2a2a30;color:#dcdce0;border:1px solid #444;border-radius:5px;cursor:pointer}
+    button:hover{border-color:#7aa2f7}
+  </style></head><body>
+  <h1>🔌 Hello Reader</h1><p class="sub">демо-плагин в песочнице · вызовы идут через capability-брокер</p>
+  <div id="app">загрузка…</div>
+  <script>
+    let port, seq = 0; const pending = {};
+    function call(method, path, content){
+      return new Promise((res, rej) => { const id = ++seq; pending[id] = { res, rej };
+        port.postMessage({ id, method, path, content }); });
+    }
+    function onMsg(e){ const m = e.data, p = pending[m.id]; if(!p) return; delete pending[m.id];
+      m.ok ? p.res(m.result) : p.rej(new Error(m.error)); }
+    async function boot(){
+      const app = document.getElementById('app'); app.textContent='';
+      const out = document.createElement('pre'); out.textContent='(клик по файлу — прочитать через брокер)';
+      try {
+        const entries = await call('vault.listFiles', '');
+        const ul = document.createElement('ul');
+        for (const f of entries){
+          const li = document.createElement('li');
+          li.className = f.isDir ? 'dir' : 'file';
+          li.textContent = (f.isDir ? '📁 ' : '📄 ') + f.name;
+          if(!f.isDir) li.onclick = async () => {
+            try { out.textContent = await call('vault.readFile', f.path); out.className=''; }
+            catch(err){ out.textContent = '✋ ' + err.message; out.className='err'; }
+          };
+          ul.appendChild(li);
+        }
+        app.appendChild(ul); app.appendChild(out);
+        // Авто-демо: сразу читаем первый файл (read-only) — видно работу брокера без клика.
+        const firstFile = entries.find((f) => !f.isDir);
+        if(firstFile){ try { out.textContent = '— '+firstFile.path+' —\\n\\n'+await call('vault.readFile', firstFile.path); } catch(_){} }
+        const btn = document.createElement('button');
+        btn.textContent = 'Проверить границу записи (Notes/ ✓ vs README.md ✗)';
+        btn.onclick = async () => {
+          let log = '';
+          try { const r = await call('vault.writeFile','Notes/Idea.md','# Idea\\n\\nИзменено плагином ✍️\\n');
+            log += '✓ Notes/Idea.md записан брокером: '+JSON.stringify(r)+'\\n'; }
+          catch(err){ log += '✋ Notes/Idea.md: '+err.message+'\\n'; }
+          try { await call('vault.writeFile','README.md','hacked');
+            log += '✗ README.md ЗАПИСАН — этого быть не должно!\\n'; }
+          catch(err){ log += '✋ README.md отклонён (вне vault:write scope): '+err.message+'\\n'; }
+          out.textContent = log; out.className='ok';
+        };
+        app.appendChild(btn);
+      } catch(err){ const e=document.createElement('p'); e.className='err'; e.textContent=err.message; app.appendChild(e); }
+    }
+    // Повторяем «ready», пока хост не пришлёт порт: openSession на host-стороне асинхронен,
+    // и первый «ready» может уйти раньше, чем хост подпишется. После init — прекращаем.
+    const announce = setInterval(() => parent.postMessage({ type:'nexus:ready' }, '*'), 60);
+    window.addEventListener('message', (e) => {
+      if(e.data && e.data.type==='nexus:init'){ clearInterval(announce); port = e.ports[0]; port.onmessage = onMsg; port.start(); boot(); }
+    });
+    parent.postMessage({ type:'nexus:ready' }, '*');
+  </script></body></html>`;
+}

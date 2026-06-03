@@ -61,6 +61,13 @@
     "dismiss": "Dismiss",
     "recompute": "Recompute"
   },
+  "plugins": {
+    "title": "Plugins",
+    "sandbox": "sandbox",
+    "close": "Close",
+    "auditTitle": "Broker calls",
+    "auditEmpty": "No host calls yet — interact with the plugin."
+  },
   "commands": {
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
@@ -68,6 +75,7 @@
     "view.splitRight": "Split right",
     "view.graph": "Local graph",
     "view.chat": "AI chat",
-    "view.suggest": "Link suggestions"
+    "view.suggest": "Link suggestions",
+    "view.plugins": "Plugins"
   }
 }

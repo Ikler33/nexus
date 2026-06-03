@@ -62,6 +62,13 @@
     "dismiss": "Скрыть",
     "recompute": "Пересчитать"
   },
+  "plugins": {
+    "title": "Плагины",
+    "sandbox": "песочница",
+    "close": "Закрыть",
+    "auditTitle": "Вызовы брокера",
+    "auditEmpty": "Пока нет host-вызовов — повзаимодействуйте с плагином."
+  },
   "commands": {
     "palette.open": "Палитра команд",
     "vault.open": "Открыть vault…",
@@ -69,6 +76,7 @@
     "view.splitRight": "Разделить вправо",
     "view.graph": "Локальный граф",
     "view.chat": "AI-чат",
-    "view.suggest": "Предложения связей"
+    "view.suggest": "Предложения связей",
+    "view.plugins": "Плагины"
   }
 }

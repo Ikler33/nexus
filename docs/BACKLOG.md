@@ -30,9 +30,8 @@
 
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
-| ⏳ **Capability-broker + изоляция плагинов** (iframe/worker, path-scoped права) | каркас Ф0 (loader без исполнения) | Ф2 | ADR-001/002, AC-SEC-5, `plugins.md`, `security.md` |
-| ⏳ Исполнение плагинов + `registerCommand(source:'plugin')` | реестр команд Ф0 единый, готов принять плагины | Ф2 | `commands.md`, `plugins.md` |
-| ⏳ Плагинные i18n-namespace `plugin:<id>:<key>` | — | Ф2 | AC-I18N-7, `i18n.md` |
+| ⏳ **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) + **iframe-CSP упакованного app** (`frame-src`/`child-src`, origin ассетов) + доверенный JS в **Worker** (сейчас UI-JS в iframe) | транспорт+sandbox готовы (Ф2-2b·4); загрузка/CSP/Worker — отдельный кусок | доводка Ф2 | ADR-001/002, §7.5, `plugins.md`, `security.md` |
+| ⏳ `registerCommand(source:'plugin')` + плагинные i18n-namespace `plugin:<id>:<key>` | реестр команд/i18n готовы принять плагины | Ф2-3 | AC-I18N-7, `commands.md`, `i18n.md` |
 | ⏳ Миграции схемы `chat_*` / `link_suggestions` (FTS5/usearch нельзя `ALTER`) | не нужны до соответствующих фич | при их реализации | `db.md` |
 
 ## Фаза 3 / позже — sync, надёжность, доводка
@@ -57,6 +56,10 @@
 | ✂️ Пагинация / бинарный канал для тяжёлых IPC | объёмы пока малы | при росте | §4.1 |
 
 ## Закрыто (история — для сверки, не для работы)
+- **Фронт-транспорт плагинов (Ф2-2b·4)** — sandbox-iframe + `MessagePort`-релей (`plugin-host.ts`), токен host-side, confused-deputy закрыт и на фронте; `tauriApi.plugins` + мок-брокер + `PluginsPanel` (демо + аудит-лог); `plugin_close_session` (отзыв). Проверено в превью.
+- **Dispatch брокера vault read/list/write (Ф2-2b·3)** — `dispatch_vault` + `plugin_invoke(content?)`, scoped + defense-in-depth граница.
+- **Capability-broker host-side + модель прав + токены + live-команды (Ф2-1/2-2a/2-2b)** — `permission.rs`/`broker.rs`, identity-по-токену, audit, path-glob с deny-override.
+- **Windows-фикс анти-traversal** — `has_root()` в `resolve_vault_path*` (кросс-платформенно; поймано Windows-CI).
 - **Виртуализация ленты чата** (DESIGN) — `@tanstack/react-virtual` в `ChatView` + умный автоскролл; проверено в превью.
 - **Мультиязычный эмбеддер bge-m3 + AC-EVAL-6** — Ф1-12: bge-m3 @ :8083 (dim 1024), eval recall@8 1.0 (оба кросс-язычных кейса найдены). Риск ADR-005 снят.
 - **Crash-reconcile usearch** (§5.1) — `reconcile_vectors` в `scan_vault` (ночь, после Ф1-10).
