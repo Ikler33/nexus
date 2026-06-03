@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { isTauri } from './lib/tauri-api';
-import { openVaultFlow, registerCoreCommands } from './lib/commands-core';
+import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
@@ -10,6 +9,7 @@ import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
+import { Onboarding } from './components/onboarding/Onboarding';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
@@ -41,12 +41,6 @@ export function App() {
     return () => disposable.dispose();
   }, []);
 
-  useEffect(() => {
-    if (!isTauri() && !info) {
-      void openVaultFlow();
-    }
-  }, [info]);
-
   // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
   useEffect(() => {
     if (!reading) return;
@@ -59,6 +53,9 @@ export function App() {
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
   }, [reading]);
+
+  // Первый запуск (vault не открыт) — приветственный экран онбординга.
+  if (!info) return <Onboarding />;
 
   return (
     <div className={styles.app}>
