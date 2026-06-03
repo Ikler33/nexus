@@ -64,6 +64,8 @@ Vite эмитит woff2 как ассеты 'self' / маленькие как d
 - [x] Ф4-7 — рестайл панели плагинов (демо+аудит): glass-бэкдроп, elevated-диалог, чип-пилюля,
   прозрачный close, аудит на chrome (allowed→success/denied→danger). Менеджер+consent-sheet — post-v1.
 - [x] **Рестайл существующих экранов завершён.** Дальше — новые экраны:
-- [ ] conflict resolver (закрывает git-хвост Ф3) · reading mode · вложения/Mermaid/LaTeX · onboarding ·
-  tweaks-панель · Home-дашборд. Затем инфра-релиз-преп (C).
+- [x] Ф4-8a — conflict resolver **бэкенд** (libgit2 in-memory 3-way merge: preview base/ours/theirs +
+  apply→merge-коммит; команды + api + мок + Rust-тест). Закрывает git-хвост Ф3 (бэк).
+- [ ] Ф4-8b — conflict resolver **UI** (3-way панель) · reading mode · вложения/Mermaid/LaTeX ·
+  onboarding · tweaks-панель · Home-дашборд. Затем инфра-релиз-преп (C).
 - [ ] новые экраны: reading mode · вложения/Mermaid/LaTeX · conflict resolver · onboarding · tweaks · Home.

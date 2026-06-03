@@ -54,7 +54,7 @@
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
 | ⏳ **i18n бэкенда** (Rust-ошибки, fluent/rust-i18n) | фронт-i18n закрыт (AC-I18N-1…5) | Ф3 | AC-I18N-6, `i18n.md` |
-| ⏳ git-sync: **разрешение конфликтов** при `merge-required` (3-way / диск vs грязный буфер) + pull плагина → `needs-review` (AC-Б3-2) | ядро git-sync (Ф3-1…3b-3) + secret-scan **сделаны**; конфликты — отдельно, needs-review завязан на marketplace | доводка Ф3 | `git.md`, `editor.md`, AC-Б3-2 |
+| ✂️ git-sync: **диск vs грязный буфер** при merge (если в редакторе несохранённые правки конфликтного файла) + pull плагина → `needs-review` (AC-Б3-2) | **3-way merge готов** (Ф4-8: in-memory preview base/ours/theirs + apply→merge-коммит, бэк+UI); остаётся нюанс грязного буфера и needs-review (завязан на marketplace) | доводка / marketplace | `git.md`, `editor.md`, AC-Б3-2 |
 | ⏳ Анти-SSRF валидация `*.url`; опц. at-rest шифрование (SQLCipher) | локальные доверенные эндпоинты на dev | Ф3 / релиз | §11, `security.md` |
 | ⏳ Рантайм-CSP-проверка на упаковке | каркас CSP/capabilities закрыт | упаковка/релиз | AC-SEC-5, `security.md` |
 | ✂️ Workspace: drag вкладок между группами, вертикальный сплит, персист раскладки | базовая модель групп/вкладок есть | — | DESIGN §3, `workspace.md` |

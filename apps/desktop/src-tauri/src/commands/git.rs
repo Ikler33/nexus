@@ -4,7 +4,7 @@
 
 use tauri::State;
 
-use crate::git::{creds, CommitOutcome, GitSync, PullOutcome, StatusEntry};
+use crate::git::{creds, CommitOutcome, GitSync, MergePreview, PullOutcome, StatusEntry};
 use crate::state::AppState;
 
 /// Корень открытого vault или ошибка «vault не открыт».
@@ -120,6 +120,50 @@ pub async fn git_sync(state: State<'_, AppState>) -> Result<PullOutcome, String>
             git.push(&token).map_err(|e| e.to_string())?;
         }
         Ok(pulled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Превью merge с origin (in-memory `merge_commits`, репозиторий не трогается): up-to-date / clean /
+/// конфликты (3-way: base/ours/theirs). Токен из keychain. Для resolver-панели (Ф4-8).
+#[tauri::command]
+pub async fn git_merge_preview(state: State<'_, AppState>) -> Result<MergePreview, String> {
+    let root = vault_root(&state).await?;
+    let _lock = state.git_lock.lock().await;
+    tokio::task::spawn_blocking(move || -> Result<MergePreview, String> {
+        let account = root.to_string_lossy();
+        let token = creds::get_token(&account)
+            .map_err(|e| e.to_string())?
+            .ok_or("нет токена доступа — сохрани его (keychain)")?;
+        let git = GitSync::open_or_init(&root).map_err(|e| e.to_string())?;
+        git.merge_preview(&token).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Применяет разрешённый merge: `resolutions` (path → итоговое содержимое) + merge-коммит, затем push.
+/// `theirs` — oid их коммита из превью. Возвращает oid merge-коммита. Под sync-локом.
+#[tauri::command]
+pub async fn git_resolve_conflicts(
+    state: State<'_, AppState>,
+    theirs: String,
+    resolutions: Vec<(String, String)>,
+) -> Result<String, String> {
+    let root = vault_root(&state).await?;
+    let _lock = state.git_lock.lock().await;
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let account = root.to_string_lossy();
+        let token = creds::get_token(&account)
+            .map_err(|e| e.to_string())?
+            .ok_or("нет токена доступа — сохрани его (keychain)")?;
+        let git = GitSync::open_or_init(&root).map_err(|e| e.to_string())?;
+        let oid = git
+            .apply_merge(&theirs, &resolutions)
+            .map_err(|e| e.to_string())?;
+        git.push(&token).map_err(|e| e.to_string())?;
+        Ok(oid)
     })
     .await
     .map_err(|e| e.to_string())?
