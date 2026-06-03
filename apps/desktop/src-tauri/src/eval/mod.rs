@@ -375,4 +375,91 @@ mod tests {
             baseline.metrics.mrr
         );
     }
+
+    /// Живой smoke по РЕАЛЬНОМУ vault из env `NEXUS_TEST_VAULT` на bge-m3 :8083. Индексирует vault
+    /// целиком во ВРЕМЕННЫЕ db+usearch (реальный `.nexus/` не трогаем) и проверяет кросс-язычный
+    /// гибридный поиск на живом контенте. Тихо выходит, если env не задан.
+    ///
+    /// `NEXUS_TEST_VAULT=~/Documents/nexus-test-vault \`
+    /// `  cargo test live_real_vault_smoke -- --ignored --nocapture`
+    ///
+    /// Контракт — recall@8 (как в baseline), НЕ @5: на крошечном корпусе у BM25 слабый IDF, поэтому
+    /// стоп-слова запроса («на», «без»…) лексически цепляют неродственные RU-заметки и через RRF
+    /// поднимают их над семантически верной кросс-язычной заметкой (та находится вектором на ранге ~0,
+    /// но живёт в одном списке → ниже по RRF). На реальном vault IDF давит стоп-слова. См. BACKLOG.
+    #[tokio::test]
+    #[ignore = "нужен реальный vault в NEXUS_TEST_VAULT + bge-m3 :8083"]
+    async fn live_real_vault_smoke() {
+        use crate::ai::default_prefixes;
+        let Ok(vault) = std::env::var("NEXUS_TEST_VAULT") else {
+            eprintln!("NEXUS_TEST_VAULT не задан — пропуск");
+            return;
+        };
+        // Разворачиваем ведущий ~/ (cargo не делает shell-expansion для env).
+        let vault = match vault.strip_prefix("~/") {
+            Some(rest) => format!("{}/{}", std::env::var("HOME").unwrap_or_default(), rest),
+            None => vault,
+        };
+        let root = std::path::PathBuf::from(vault);
+
+        let tmp = TempDir::new().unwrap();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            OpenAiEmbedder::new(
+                "http://127.0.0.1:8083",
+                "bge-m3",
+                1024,
+                default_prefixes("bge-m3"),
+            )
+            .unwrap(),
+        );
+        let vectors =
+            Arc::new(VectorIndex::open(tmp.path().join("vectors.usearch"), 1024).unwrap());
+        let db = Database::open(tmp.path().join("nexus.db")).await.unwrap();
+        let indexer = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
+        indexer.scan_vault().await.unwrap();
+
+        // (запрос, ожидаемый файл-подстрока). Первые две — кросс-язычные (RU-запрос → EN-заметка).
+        let probes = [
+            ("рецепт хлеба на закваске", "Sourdough"),
+            (
+                "борьба с утечками памяти без сборщика мусора",
+                "Rust-Ownership",
+            ),
+            (
+                "how does approximate nearest neighbour search work",
+                "Vector-Search",
+            ),
+            (
+                "права плагинов, аудит и предотвращение confused deputy",
+                "Безопасность",
+            ),
+        ];
+        let mut ok = 0;
+        for (q, expect) in probes {
+            let hits = search::hybrid_search(
+                db.reader(),
+                Some(&vectors),
+                Some(embedder.as_ref()),
+                q.to_string(),
+                SearchOptions {
+                    limit: 8,
+                    filter: None,
+                    center: None,
+                },
+            )
+            .await
+            .unwrap();
+            let rank = hits.iter().position(|h| h.path.contains(expect));
+            ok += usize::from(rank.is_some());
+            let top: Vec<String> = hits
+                .iter()
+                .map(|h| format!("{}({:.3})", h.path, h.score))
+                .collect();
+            eprintln!(
+                "[{}] {q:?} → rank={rank:?}\n      {top:?}",
+                if rank.is_some() { "OK" } else { "--" }
+            );
+        }
+        assert!(ok >= 3, "ожидали ≥3/4 проб найденными, получили {ok}/4");
+    }
 }

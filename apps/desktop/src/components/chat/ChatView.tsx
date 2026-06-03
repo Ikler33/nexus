@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 
 import { type ChatMessage, useChatStore } from '../../stores/chat';
@@ -6,8 +7,10 @@ import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import styles from './ChatPanel.module.css';
 
 /**
- * Тело чата (Ф1-8): лента сессии + композер. Оболочку (табы/закрытие) даёт `AiPanel`.
- * Стриминг токенов, источники-цитаты (→ открыть файл), контекст retrieval = открытый файл.
+ * Тело чата (Ф1-8 + виртуализация): лента сессии + композер. Оболочку (табы/закрытие) даёт `AiPanel`.
+ * Лента виртуализирована (DESIGN §«лента виртуализирована»): рендерятся только видимые сообщения,
+ * высота переменная → `measureElement`. Автоскролл к низу — только если пользователь уже у низа
+ * (чтение истории не дёргается во время стрима). Стриминг токенов, источники-цитаты (→ открыть файл).
  */
 export function ChatView() {
   const { t } = useTranslation();
@@ -20,28 +23,62 @@ export function ChatView() {
 
   const [input, setInput] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
+  const atBottom = useRef(true);
 
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => feedRef.current,
+    estimateSize: () => 72,
+    overscan: 6,
+    // Стартовый размер — чтобы элементы рендерились до измерения (важно для jsdom-тестов).
+    initialRect: { width: 360, height: 800 },
+  });
+
+  // Следим за низом при новом сообщении/токене (messages — новый ref на каждый патч стора).
   useEffect(() => {
+    if (atBottom.current && messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+    }
+  }, [messages, virtualizer]);
+
+  const onScroll = () => {
     const el = feedRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    if (el) atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
 
   const submit = () => {
     const q = input.trim();
     if (!q || streaming) return;
+    atBottom.current = true; // свой вопрос → следим за ответом
     send(q, center ?? undefined);
     setInput('');
   };
 
   return (
     <>
-      <div className={styles.feed} ref={feedRef}>
+      <div className={styles.feed} ref={feedRef} onScroll={onScroll}>
         {messages.length === 0 ? (
           <p className={styles.empty}>{t('chat.empty')}</p>
         ) : (
-          messages.map((m) => (
-            <Message key={m.id} message={m} onOpen={(p) => void openFile(p)} />
-          ))
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((vItem) => (
+              <div
+                key={messages[vItem.index].id}
+                data-index={vItem.index}
+                ref={virtualizer.measureElement}
+                className={styles.row}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${vItem.start}px)`,
+                }}
+              >
+                <Message message={messages[vItem.index]} onOpen={(p) => void openFile(p)} />
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

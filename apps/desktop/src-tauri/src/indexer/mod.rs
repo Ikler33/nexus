@@ -360,9 +360,84 @@ impl Indexer {
             }
         }
         self.writer.transaction(resolve_all_dangling).await?;
+        // §5.1: дочинить векторы, потерянные при крахе между commit и save (на force-скане no-op).
+        if let Err(e) = self.reconcile_vectors().await {
+            tracing::warn!(error = %e, "reconcile усearch failed");
+        }
         self.persist_vectors(); // финальный save усearch
         self.force.store(false, Ordering::Relaxed); // дальше — инкрементально, с mtime-шорткатом
         tracing::info!(files = total, "initial vault scan complete");
+        Ok(())
+    }
+
+    /// **Crash-reconcile usearch (§5.1).** Для чанков, что есть в БД, но чьих векторов нет в usearch
+    /// (commit прошёл, `save` усearch — нет), переэмбеддит содержимое и доливает векторы. На force-скане
+    /// обычно no-op (все чанки только что переиндексированы). Best-effort: при недоступном эмбеддере
+    /// логирует и выходит — повторит при следующем открытии. Закрывает рассинхрон из docs/vector.md.
+    async fn reconcile_vectors(&self) -> DbResult<()> {
+        let Some(rag) = &self.rag else {
+            return Ok(());
+        };
+        let all_ids: Vec<i64> = self
+            .reader
+            .query(|c| {
+                c.prepare("SELECT id FROM chunks")?
+                    .query_map([], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .await?;
+        let missing: Vec<i64> = all_ids
+            .into_iter()
+            .filter(|id| !rag.vectors.contains(*id as u64))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(
+            count = missing.len(),
+            "reconcile: дочиняю потерянные векторы чанков (§5.1)"
+        );
+
+        let mut restored = 0usize;
+        for batch in missing.chunks(EMBED_BATCH) {
+            let ids = batch.to_vec();
+            let rows: Vec<(i64, String)> = self
+                .reader
+                .query(move |c| {
+                    let ph = vec!["?"; ids.len()].join(",");
+                    let sql = format!("SELECT id, content FROM chunks WHERE id IN ({ph})");
+                    c.prepare(&sql)?
+                        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .await?;
+            let texts: Vec<&str> = rows.iter().map(|(_, c)| c.as_str()).collect();
+            let _permit = rag
+                .embed_sem
+                .acquire()
+                .await
+                .map_err(|_| DbError::Unavailable)?;
+            match rag.embedder.embed_documents(&texts).await {
+                Ok(vecs) => {
+                    for ((id, _), v) in rows.iter().zip(&vecs) {
+                        match rag.vectors.upsert(*id as u64, v) {
+                            Ok(()) => restored += 1,
+                            Err(e) => tracing::warn!(error = %e, "reconcile: upsert вектора"),
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "reconcile: эмбеддер недоступен — повтор при след. открытии");
+                    break;
+                }
+            }
+        }
+        if restored > 0 {
+            self.persist_vectors();
+            tracing::info!(restored, "reconcile: векторы восстановлены");
+        }
         Ok(())
     }
 
@@ -761,6 +836,42 @@ mod tests {
             "force переиндексировал несмотря на mtime-шорткат (§6.5)"
         );
         assert_eq!(vectors2.len(), n as usize);
+    }
+
+    /// §5.1 crash-reconcile: потерянный вектор (chunks в БД есть, вектора в usearch нет) дочиняется.
+    #[tokio::test]
+    async fn reconcile_restores_lost_vectors() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(
+            root.join("Note.md"),
+            "# H\n\nalpha vector beta gamma delta\n",
+        )
+        .unwrap();
+
+        let db = open(&root).await;
+        let (idx, vectors) = rag_indexer(&db, &root, 16, false);
+        idx.index_file("Note.md").await.unwrap();
+        let n = vectors.len();
+        assert!(n >= 1);
+
+        // Имитируем крах: вектор пропал из usearch, но чанк в БД остался.
+        let lost: i64 = db
+            .reader()
+            .query(|c| c.query_row("SELECT id FROM chunks LIMIT 1", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        vectors.remove(lost as u64).unwrap();
+        assert!(!vectors.contains(lost as u64));
+        assert_eq!(vectors.len(), n - 1);
+
+        // reconcile переэмбеддит и возвращает потерянный вектор.
+        idx.reconcile_vectors().await.unwrap();
+        assert!(
+            vectors.contains(lost as u64),
+            "reconcile вернул потерянный вектор"
+        );
+        assert_eq!(vectors.len(), n);
     }
 
     /// Живой end-to-end против nomic на :8081 (`cargo test -- --ignored`): индексируем два файла,

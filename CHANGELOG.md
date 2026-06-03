@@ -291,3 +291,94 @@
   Закрывает **AC-EVAL-1..5** (golden, метрики, baseline-гейт, условия в отчёте; suggest-порог per-model).
   **AC-EVAL-6** измерен и зафиксирован как недостигнутый на nomic (нужен мультиязычный эмбеддер — BACKLOG).
   **🏁 Фаза 1 (AI Core) завершена** — RAG end-to-end + видимый UI + suggest + измеримое качество.
+
+### Added — после Фазы 1 (надёжность/доводка)
+
+- **Crash-reconcile usearch (§5.1).** `indexer::reconcile_vectors` (в конце `scan_vault`): чанки, что
+  есть в БД, но чьих векторов нет в usearch (крах между commit и `save`), переэмбеддятся батчами и
+  доливаются; на force-скане no-op; best-effort при недоступном эмбеддере. Тест восстановления
+  потерянного вектора. Закрывает рассинхрон, обещанный в `docs/dev/vector.md`.
+- **condition-driven eval** (подготовка к Ф1-12): live-прогон читает модель/сервер/dim из
+  `baseline.json` (`Conditions`) — AC-EVAL-4, прогон в зафиксированных условиях.
+
+- **Ф1-12 — мультиязычный эмбеддер bge-m3 (закрыт AC-EVAL-6).** Подключён **bge-m3 Q4_K_M @ :8083**
+  (dim 1024, мультиязычный) как основной RAG-эмбеддер вместо англоцентричного nomic. Переключение —
+  через переэмбеддизацию (§6.5, dim 768→1024, код был готов с Ф1-5). `default_prefixes("bge-m3")` → без
+  префиксов. Добавлен в `start_servers.sh` (:8083, персистентно).
+  - **Eval на bge-m3: recall@8 = 1.000, nDCG@8 = 0.883, MRR = 0.848** (было 0.800/0.800/0.800 на nomic).
+    Оба кросс-язычных кейса (EN→RU, RU→EN) теперь в recall@8 → **AC-EVAL-6 закрыт**; baseline поднят и
+    перепроверен живым прогоном. Риск ADR-005 (англоцентричность) снят.
+  - Доки: `ai.md`/`eval.md` обновлены; `docs/BACKLOG.md` — мультиязычный эмбеддер + AC-EVAL-6 в «Закрыто».
+
+### Added — Фаза 2 (плагины / broker)
+
+- **Ф2-1 — Модель прав плагина (capability-broker, security-ядро; ADR-002, §7.2/§7.4/§7.9).**
+  - `plugin/permission.rs`: `Permissions` из `manifest.permissions` (vault:read/write — path-glob со
+    scoped-правами; ai:embed; ai:complete `true`/`{local_only}`; net-allowlist; ui-точки). Манифест
+    расширен полем `permissions` (отсутствие = deny-all, **fail-closed**).
+  - `Permissions::check(ApiRequest) -> Result<(), Denied>` = §7.4 `check_scoped_permission`: метод→право,
+    **path-scoped** (`path_in_scope`, `!`-deny перекрывает allow), анти-traversal в глубину
+    (`..`/abs/`\`/пустой сегмент → `PathEscape`), net-allowlist, неизвестный метод → `UnknownMethod`.
+    Сегментный `glob_match` (`**` 0..N сегментов, `*` внутри сегмента). Identity/токены — рантайм по порту (Ф2-2).
+  - 13 security-тестов (glob, deny-override в любом порядке, read≠write, path-escape, ai/local_only,
+    net, fail-closed). Rust 85 тестов зелёные. Дока `docs/dev/plugins.md`.
+
+  Фундамент **AC-SEC-*** (path-scoped права, fail-closed). Рантайм-брокер (порты/токены/audit/iframe,
+  исполнение JS/WASM) — Ф2-2+.
+
+- **Ф2-2a — Capability-broker, host-сторона (§7.4).** `plugin/broker.rs`: `PluginBroker { sessions:
+  HashMap<PortId, PluginSession>, audit }` — **identity по порту** (не из payload → закрывает
+  confused-deputy/capability-laundering), `authorize(port, req)` = порт→сессия → `Permissions::check`
+  → запись в **неотключаемый `AuditLog`** (и успех, и отказ), `revoke` (мгновенная ревокация),
+  `handle(.., &mut dyn HostDispatch)` = authorize→dispatch. Реальный I/O — за трейтом `HostDispatch`
+  (Ф2-2b). 6 тестов (unknown-port deny+audit, scope, confused-deputy по порту, ревокация, handle).
+  Rust 91 тест. Дока `docs/dev/plugins.md`.
+
+  Транспорт MessagePort/iframe + capability-токены + реальный dispatch — Ф2-2b (нужна фронт-сторона).
+
+- **Ф2-2b (часть 1) — Capability-токены (§7.9).** Брокер переведён с порт-идентичности на
+  **token-identity** (IPC-эквивалент порта): `open_session(session) -> CapToken` (32 случайных байта
+  hex, `getrandom`, неугадываем), `authorize(&token, req)`, `revoke(&token)` (мгновенная инвалидация).
+  Токен — источник identity на границе фронт↔Rust (порт-релей — на фронте). Закрывает confused-deputy
+  по токену. Зависимость `getrandom`. 7 тестов брокера (уникальность токенов, ревокация, identity).
+  Rust 92 теста. Транспорт MessagePort/iframe + `plugin_invoke` + реальный `HostDispatch` — далее.
+
+- **Ф2-2b (часть 2) — Брокер live: Tauri-команды.** `AppState.plugins: Mutex<PluginBroker>`.
+  `plugin_open_session(dir)` — манифест→совместимость→сессия с правами→**токен**; `plugin_invoke(token,
+  method, path?)` — `authorize` (scoped + audit) → dispatch (`vault.readFile` через
+  `vault::resolve_vault_path`, read-only). Лок брокера — только на синхронную авторизацию, async-I/O
+  после освобождения. Зарегистрированы в `lib.rs`. Фронт-транспорт (iframe/MessagePort) + остальные
+  методы (write/list/ai/net) — далее.
+
+- **Ф2-2b (часть 3) — Расширение dispatch брокера: vault read/list/write.** `plugin_invoke` получил
+  аргумент `content?` и возвращает JSON; реальный I/O вынесен в тестируемую `dispatch_vault`. Методы:
+  `vault.readFile`/`vault.listFiles` (право `vault:read`), `vault.writeFile` (`vault:write`, через
+  `resolve_vault_path_for_write`). Листинг/запись проходят ту же анти-traversal границу
+  (defense-in-depth) уже ПОСЛЕ авторизации брокером по scope. +4 теста: read/list/write в пределах
+  vault; path-escape (read+write) отклонён; unknown-метод / нет аргумента → ошибка; **E2E**
+  «scope (broker) → dispatch I/O» с проверкой аудита (allow+deny). Rust 96 тестов. `ai.*`/`net.fetch`
+  + фронт-транспорт — далее.
+
+### Added — UI-доводка
+
+- **Виртуализация ленты чата (DESIGN §«лента виртуализирована»).** `ChatView` рендерит сообщения через
+  `@tanstack/react-virtual` (только видимые; переменная высота → `measureElement`, `initialRect` для
+  jsdom). **Умный автоскролл**: следует за стримом только если пользователь у низа (`atBottom` по
+  `onScroll`) — чтение истории не дёргается. Прозрачно (выглядит как было); проверено в превью. Фронт 64 теста.
+
+### Fixed / Hardening
+
+- **Кросс-платформенная анти-traversal граница (Windows; AC-SEC-1).** `resolve_vault_path` /
+  `resolve_vault_path_for_write` блокировали абсолютные пути через `is_absolute()`, но на Windows
+  `/etc/passwd` не абсолютен (нет диск-префикса) → `root.join("/etc/passwd")` даёт `C:\etc\passwd`
+  (побег с диска), что ловилось лишь бэкстопом (canonicalize+`starts_with`) и возвращало `Io` вместо
+  `PathEscape`. Добавлен явный отказ **root-anchored** путей (`rel.has_root()` — ловит `/x` и `\x` на
+  обеих ОС). Поймано Windows-джобом CI (тест `resolve_blocks_traversal_and_absolute`). Поведение на
+  Unix не изменилось; fail-closed усилен и сделан явным до файловых операций.
+
+### Tooling
+
+- **Живой smoke по реальному vault** (`eval::live_real_vault_smoke`, `#[ignore]`, env
+  `NEXUS_TEST_VAULT`): индексирует произвольный vault во временные db+usearch (реальный `.nexus/` не
+  трогается) и проверяет кросс-язычный гибридный поиск на живом контенте (bge-m3 :8083). Находка
+  (стоп-слова запроса + слабый IDF на малом корпусе теснят кросс-язычную семантику) — в `docs/BACKLOG.md`.
