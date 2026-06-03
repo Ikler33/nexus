@@ -5,42 +5,76 @@
 }
 
 .tree:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--color-accent-soft);
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-sm);
-  color: var(--color-text);
+  gap: 6px;
+  height: 100%;
+  padding-right: 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  color: var(--color-text-muted);
   cursor: default;
   user-select: none;
   white-space: nowrap;
   overflow: hidden;
+  position: relative;
+}
+
+/* Иконки (caret + файл/папка) — приглушённые в покое, акцентные на открытом файле. */
+.row svg {
+  flex: none;
+  color: var(--color-text-faint);
 }
 
 .row:hover {
-  background: var(--color-bg-elevated);
-}
-
-.row[data-active] {
-  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-}
-
-.row[data-selected] {
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  background: var(--color-surface-hover);
   color: var(--color-text);
 }
 
+/* Курсор клавиатуры — мягкая подсветка (отличается от открытого файла). */
+.row[data-active] {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* Открытый файл — фирменное выделение: фон + 3px акцентная полоса + акцентная иконка + 500. */
+.row[data-selected] {
+  background: var(--color-selected);
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.row[data-selected]:hover {
+  background: var(--color-selected-hover);
+}
+
+.row[data-selected]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  background: var(--color-accent);
+  border-radius: 0 3px 3px 0;
+}
+
+.row[data-selected] svg {
+  color: var(--color-accent);
+}
+
 .name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .caret {
-  flex: none;
-  color: var(--color-text-muted);
   transition: transform var(--motion-fast) var(--ease-standard);
 }
 
@@ -56,6 +90,6 @@
 
 .empty {
   padding: var(--space-4);
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   font-size: var(--text-sm);
 }
