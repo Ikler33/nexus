@@ -5,7 +5,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   padding: var(--space-4);
 }
 
@@ -15,9 +17,9 @@
   width: min(820px, 92vw);
   height: min(560px, 88vh);
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
   overflow: hidden;
 }
 
@@ -32,32 +34,36 @@
 .title {
   font-size: var(--text-sm);
   font-weight: 600;
+  color: var(--color-text);
 }
 
+/* Чип «песочница» (нейтральный, скруглённый). */
 .badge {
   font-size: var(--text-xs);
-  color: var(--color-ai);
+  color: var(--color-text-muted);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-1);
+  border-radius: 99px;
+  padding: 2px 8px;
 }
 
 .close {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-1);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
   cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
 }
 
 .close:hover {
   color: var(--color-text);
-  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
 }
 
 .close:focus-visible {
@@ -76,7 +82,7 @@
   width: 100%;
   height: 100%;
   border: none;
-  background: #1b1b1f;
+  background: var(--color-surface);
 }
 
 .audit {
@@ -84,7 +90,7 @@
   flex-direction: column;
   min-height: 0;
   border-left: 1px solid var(--color-border);
-  background: var(--color-bg);
+  background: var(--color-chrome);
 }
 
 .auditHead {
@@ -94,7 +100,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -102,7 +108,7 @@
   margin: 0;
   padding: var(--space-3);
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
 }
 
 .auditList {
@@ -119,17 +125,22 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-1);
-  padding: 2px var(--space-2);
+  padding: 3px var(--space-2);
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
+}
+
+.auditList li:hover {
+  background: var(--color-surface-hover);
 }
 
 .verdict {
   flex: none;
 }
 
+/* allowed → success, denied → danger. */
 .ok .verdict {
-  color: var(--color-ai);
+  color: var(--color-success);
 }
 
 .denied .verdict {
@@ -138,7 +149,7 @@
 
 .method {
   color: var(--color-text);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .path {
