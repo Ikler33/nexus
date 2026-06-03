@@ -6,7 +6,7 @@
 mod broker;
 mod permission;
 pub use broker::{
-    AuditEntry, AuditLog, BrokerError, HostDispatch, PluginBroker, PluginSession, PortId,
+    AuditEntry, AuditLog, BrokerError, CapToken, HostDispatch, PluginBroker, PluginSession,
 };
 pub use permission::{ApiRequest, Denied, Permissions};
 

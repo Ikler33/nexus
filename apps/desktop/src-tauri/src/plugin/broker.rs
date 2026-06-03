@@ -1,21 +1,43 @@
-//! Capability-broker, host-сторона (**ADR-002**, §7.4). Брокер — РЕАЛЬНАЯ граница прав: на каждый
-//! вызов плагина он определяет identity **по порту** (не по `pluginId` из payload — иначе confused
-//! deputy: плагин A назвался бы B и забрал его права), проверяет scoped-права ([`Permissions::check`],
-//! Ф2-1) и пишет в **неотключаемый audit-log** (§7.9). Сам dispatch (реальный I/O к vault/ai) —
-//! отдельным слоем через [`HostDispatch`]; транспорт (MessagePort/iframe) и capability-токены — Ф2-2b.
+//! Capability-broker, host-сторона (**ADR-002**, §7.4/§7.9). Брокер — РЕАЛЬНАЯ граница прав: на
+//! каждый вызов плагина он определяет identity по **capability-токену сессии**, проверяет
+//! scoped-права ([`Permissions::check`], Ф2-1) и пишет в **неотключаемый audit-log**. Сам dispatch
+//! (реальный I/O к vault/ai) — за [`HostDispatch`].
 //!
-//! Здесь — чистая, тестируемая модель: сессии, авторизация, audit, ревокация. Никакого ввода-вывода.
+//! **Identity = токен (а не `pluginId` из payload).** На фронте каждому плагину выдан один
+//! `MessagePort` (§7.5), и хост-релей привязывает к нему правильный токен; через IPC (фронт↔Rust)
+//! сессию идентифицирует именно токен — он случаен/неугадываем (`getrandom`), проверяется на каждый
+//! вызов и мгновенно инвалидируется ревокацией (§7.9). Это закрывает confused-deputy/laundering:
+//! плагин A не может предъявить токен B.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::permission::{ApiRequest, Denied, Permissions};
 
-/// Идентификатор выделенного плагину порта/канала — источник истины identity (§7.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PortId(pub u64);
+/// Capability-токен сессии: 32 случайных байта в hex (неугадываем, §7.9). Источник identity на IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CapToken(String);
 
-/// Сессия плагина: привязана к порту, несёт его права и корень vault (для резолва путей при dispatch).
+impl CapToken {
+    /// Генерирует криптослучайный токен. Паника при недоступности системного RNG — невосстановимо
+    /// и крайне маловероятно на десктопе (лучше упасть, чем выдать слабый токен).
+    fn generate() -> Self {
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).expect("системный RNG недоступен");
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut s = String::with_capacity(64);
+        for b in bytes {
+            s.push(HEX[(b >> 4) as usize] as char);
+            s.push(HEX[(b & 0x0f) as usize] as char);
+        }
+        CapToken(s)
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Сессия плагина: его права + корень vault (для резолва путей при dispatch).
 #[derive(Debug, Clone)]
 pub struct PluginSession {
     pub id: String,
@@ -63,7 +85,7 @@ impl AuditLog {
 /// Ошибка авторизации брокера.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokerError {
-    /// Порт не привязан к сессии (неизвестный/отозванный плагин) — fail-closed.
+    /// Токен не привязан к сессии (неизвестный/отозванный плагин) — fail-closed.
     UnknownSession,
     /// Право не выдано / путь вне scope / хост не в allowlist и т.п. (см. [`Denied`]).
     Denied(Denied),
@@ -72,22 +94,22 @@ pub enum BrokerError {
 impl std::fmt::Display for BrokerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BrokerError::UnknownSession => write!(f, "сессия не найдена (порт не зарегистрирован)"),
+            BrokerError::UnknownSession => write!(f, "сессия не найдена (токен невалиден/отозван)"),
             BrokerError::Denied(d) => write!(f, "{d}"),
         }
     }
 }
 
 /// Реальный исполнитель авторизованного вызова (vault/ai I/O). Брокер сам I/O не делает —
-/// он авторизует и аудитит, а dispatch уводит в этот слой (Ф2-2b: vault::resolve_vault_path + db/ai).
+/// он авторизует и аудитит, а dispatch уводит в этот слой (через `vault::resolve_vault_path` + db/ai).
 pub trait HostDispatch {
     fn dispatch(&mut self, session: &PluginSession, req: &ApiRequest) -> Result<String, String>;
 }
 
-/// Host-сторона capability-брокера: порт → сессия (identity) + неотключаемый audit.
+/// Host-сторона capability-брокера: токен → сессия (identity) + неотключаемый audit.
 #[derive(Debug, Default)]
 pub struct PluginBroker {
-    sessions: HashMap<PortId, PluginSession>,
+    sessions: HashMap<CapToken, PluginSession>,
     audit: AuditLog,
 }
 
@@ -96,34 +118,33 @@ impl PluginBroker {
         Self::default()
     }
 
-    /// Привязывает сессию к порту (выдаётся хостом при загрузке плагина).
-    pub fn register(&mut self, port: PortId, session: PluginSession) {
-        self.sessions.insert(port, session);
+    /// Открывает сессию плагину, выдавая новый capability-токен (хост зовёт при загрузке плагина).
+    pub fn open_session(&mut self, session: PluginSession) -> CapToken {
+        let token = CapToken::generate();
+        self.sessions.insert(token.clone(), session);
+        token
     }
 
-    /// Отзывает сессию (disable/uninstall/смена прав) — порт больше не авторизуется (§7.9 ревокация).
-    pub fn revoke(&mut self, port: PortId) {
-        self.sessions.remove(&port);
+    /// Отзывает сессию (disable/uninstall/смена прав) — токен немедленно невалиден (§7.9 ревокация).
+    pub fn revoke(&mut self, token: &CapToken) {
+        self.sessions.remove(token);
     }
 
     pub fn audit(&self) -> &AuditLog {
         &self.audit
     }
 
-    fn session(&self, port: PortId) -> Option<&PluginSession> {
-        self.sessions.get(&port)
+    pub fn session(&self, token: &CapToken) -> Option<&PluginSession> {
+        self.sessions.get(token)
     }
 
-    /// Авторизует вызов: identity по порту → проверка scoped-прав → запись в audit. Возвращает `Ok`
-    /// (можно диспатчить) либо `Err`. **И отказ, и успех аудитятся** (§7.9). Identity берётся из
-    /// сессии порта, а НЕ из запроса — закрывает confused-deputy/capability-laundering.
-    pub fn authorize(&mut self, port: PortId, req: &ApiRequest) -> Result<(), BrokerError> {
-        // Сначала вычисляем id + решение (заимствование сессии завершается до записи в audit).
-        let (id, decision) = match self.sessions.get(&port) {
+    /// Авторизует вызов: identity по токену → проверка scoped-прав → запись в audit (и успех, и
+    /// отказ, §7.9). Identity — из сессии токена, НЕ из запроса → закрывает confused-deputy.
+    pub fn authorize(&mut self, token: &CapToken, req: &ApiRequest) -> Result<(), BrokerError> {
+        let (id, decision) = match self.sessions.get(token) {
             None => {
-                // Неизвестный порт: тоже фиксируем попытку (id неизвестен).
                 self.audit.record(
-                    "<unknown-port>",
+                    "<unknown>",
                     req,
                     &Err(Denied::UnknownMethod(req.method.to_string())),
                 );
@@ -138,12 +159,12 @@ impl PluginBroker {
     /// Полный путь вызова (§7.4): авторизация → (при успехе) dispatch через [`HostDispatch`].
     pub fn handle(
         &mut self,
-        port: PortId,
+        token: &CapToken,
         req: &ApiRequest,
         host: &mut dyn HostDispatch,
     ) -> Result<String, BrokerError> {
-        self.authorize(port, req)?;
-        let session = self.session(port).ok_or(BrokerError::UnknownSession)?;
+        self.authorize(token, req)?;
+        let session = self.session(token).ok_or(BrokerError::UnknownSession)?;
         host.dispatch(session, req)
             .map_err(|e| BrokerError::Denied(Denied::UnknownMethod(e)))
     }
@@ -169,23 +190,30 @@ mod tests {
     }
 
     #[test]
-    fn unknown_port_is_denied_and_audited() {
+    fn tokens_are_unique_and_unguessable_length() {
         let mut b = PluginBroker::new();
-        let r = b.authorize(PortId(99), &read("Notes/a.md"));
+        let t1 = b.open_session(session("a", r#"{}"#));
+        let t2 = b.open_session(session("b", r#"{}"#));
+        assert_ne!(t1, t2, "каждая сессия — свой токен");
+        assert_eq!(t1.as_str().len(), 64, "32 байта в hex");
+        assert!(t1.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn unknown_token_is_denied_and_audited() {
+        let mut b = PluginBroker::new();
+        let bogus = b.open_session(session("x", r#"{}"#));
+        b.revoke(&bogus); // токен больше не валиден
+        let r = b.authorize(&bogus, &read("Notes/a.md"));
         assert_eq!(r, Err(BrokerError::UnknownSession));
-        assert_eq!(
-            b.audit().len(),
-            1,
-            "попытка с неизвестного порта тоже в audit"
-        );
-        assert!(!b.audit().entries()[0].allowed);
+        assert!(!b.audit().entries().last().unwrap().allowed);
     }
 
     #[test]
     fn authorizes_within_scope_and_audits_allow() {
         let mut b = PluginBroker::new();
-        b.register(PortId(1), session("p.a", r#"{"vault:read":["Notes/**"]}"#));
-        assert!(b.authorize(PortId(1), &read("Notes/a.md")).is_ok());
+        let t = b.open_session(session("p.a", r#"{"vault:read":["Notes/**"]}"#));
+        assert!(b.authorize(&t, &read("Notes/a.md")).is_ok());
         let e = &b.audit().entries()[0];
         assert!(e.allowed && e.plugin_id == "p.a" && e.method == "vault.readFile");
         assert_eq!(e.target.as_deref(), Some("Notes/a.md"));
@@ -194,35 +222,30 @@ mod tests {
     #[test]
     fn out_of_scope_denied_and_audited() {
         let mut b = PluginBroker::new();
-        b.register(PortId(1), session("p.a", r#"{"vault:read":["Notes/**"]}"#));
-        let r = b.authorize(PortId(1), &read("Secrets/x.md"));
+        let t = b.open_session(session("p.a", r#"{"vault:read":["Notes/**"]}"#));
+        let r = b.authorize(&t, &read("Secrets/x.md"));
         assert!(matches!(r, Err(BrokerError::Denied(Denied::OutOfScope(_)))));
-        assert!(!b.audit().entries()[0].allowed);
         assert!(b.audit().entries()[0].denied_reason.is_some());
     }
 
     #[test]
-    fn identity_is_per_port_not_payload_confused_deputy() {
-        // Плагин A (узкие права) на порту 1; плагин B (широкие) на порту 2.
+    fn identity_is_per_token_confused_deputy() {
+        // Узкий плагин и широкий — разные токены. Токен узкого не даёт доступ к scope широкого.
         let mut b = PluginBroker::new();
-        b.register(
-            PortId(1),
-            session("narrow", r#"{"vault:read":["Notes/**"]}"#),
-        );
-        b.register(PortId(2), session("wide", r#"{"vault:read":["**"]}"#));
-        // С порта 1 нельзя дотянуться до того, что разрешено только порту 2 — права берутся ПО ПОРТУ.
-        assert!(b.authorize(PortId(1), &read("Secrets/x.md")).is_err());
-        assert!(b.authorize(PortId(2), &read("Secrets/x.md")).is_ok());
+        let narrow = b.open_session(session("narrow", r#"{"vault:read":["Notes/**"]}"#));
+        let wide = b.open_session(session("wide", r#"{"vault:read":["**"]}"#));
+        assert!(b.authorize(&narrow, &read("Secrets/x.md")).is_err());
+        assert!(b.authorize(&wide, &read("Secrets/x.md")).is_ok());
     }
 
     #[test]
-    fn revoked_session_is_denied() {
+    fn revoked_token_is_denied() {
         let mut b = PluginBroker::new();
-        b.register(PortId(1), session("p", r#"{"vault:read":["**"]}"#));
-        assert!(b.authorize(PortId(1), &read("a.md")).is_ok());
-        b.revoke(PortId(1));
+        let t = b.open_session(session("p", r#"{"vault:read":["**"]}"#));
+        assert!(b.authorize(&t, &read("a.md")).is_ok());
+        b.revoke(&t);
         assert_eq!(
-            b.authorize(PortId(1), &read("a.md")),
+            b.authorize(&t, &read("a.md")),
             Err(BrokerError::UnknownSession)
         );
     }
@@ -242,13 +265,12 @@ mod tests {
     #[test]
     fn handle_dispatches_only_after_authorize() {
         let mut b = PluginBroker::new();
-        b.register(PortId(1), session("p", r#"{"vault:read":["Notes/**"]}"#));
+        let t = b.open_session(session("p", r#"{"vault:read":["Notes/**"]}"#));
         let mut host = EchoHost;
         assert_eq!(
-            b.handle(PortId(1), &read("Notes/a.md"), &mut host).unwrap(),
+            b.handle(&t, &read("Notes/a.md"), &mut host).unwrap(),
             "p:vault.readFile:Notes/a.md"
         );
-        // Вне scope — dispatch НЕ вызывается (отказ на авторизации).
-        assert!(b.handle(PortId(1), &read("Other/a.md"), &mut host).is_err());
+        assert!(b.handle(&t, &read("Other/a.md"), &mut host).is_err());
     }
 }

@@ -29,23 +29,27 @@
 - `glob_match`: сегментный glob — `**` (0..N сегментов), `*` (внутри сегмента, не пересекает `/`).
 > Identity плагина и capability-токен проверяются РАНТАЙМОМ по порту (§7.9), не из payload (Ф2-2).
 
-## Брокер, host-сторона (Ф2-2a, `broker.rs`) — §7.4
-`PluginBroker { sessions: HashMap<PortId, PluginSession>, audit: AuditLog }`:
-- **identity по порту** (`register(port, session)`): права берутся из сессии ПОРТА, а не из payload —
-  закрывает confused-deputy/capability-laundering (плагин A не может назваться B).
-- `authorize(port, req)`: порт→сессия (нет → `UnknownSession`, fail-closed) → `Permissions::check` →
-  запись в **audit** (и успех, и отказ). `handle(port, req, &mut dyn HostDispatch)` = authorize → dispatch.
-- **`AuditLog`** — только добавление (неотключаемый, §7.9); `revoke(port)` мгновенно лишает прав (ревокация).
-- Реальный I/O (vault/ai) — за трейтом `HostDispatch` (Ф2-2b: через `vault::resolve_vault_path` + db/ai).
-> Capability-токены, MessagePort/iframe-транспорт, генерация секретов — Ф2-2b (нужна фронт-сторона).
+## Брокер, host-сторона (Ф2-2a/2-2b, `broker.rs`) — §7.4/§7.9
+`PluginBroker { sessions: HashMap<CapToken, PluginSession>, audit: AuditLog }`:
+- **identity по capability-токену** (`open_session(session) -> CapToken`): токен = 32 случайных байта
+  в hex (`getrandom`, неугадываем, §7.9) — IPC-эквивалент порт-идентичности. Права берутся из сессии
+  ТОКЕНА, а не из payload → закрывает confused-deputy/laundering (плагин A не предъявит токен B).
+- `authorize(&token, req)`: токен→сессия (нет → `UnknownSession`, fail-closed) → `Permissions::check`
+  → запись в **audit** (и успех, и отказ). `handle(&token, req, &mut dyn HostDispatch)` = authorize → dispatch.
+- **`AuditLog`** — только добавление (неотключаемый); `revoke(&token)` мгновенно инвалидирует сессию.
+- Реальный I/O (vault/ai) — за трейтом `HostDispatch` (через `vault::resolve_vault_path` + db/ai).
+> На фронте каждому плагину — один `MessagePort` (§7.5); хост-релей привязывает к порту правильный
+> токен и передаёт его в Tauri-вызов. Фронт-транспорт (iframe/MessagePort) + Tauri-команда `plugin_invoke`
+> + реальный `HostDispatch` — следующий срез (нужна фронт-сторона).
 
 ## Тесты
 - Лоадер: совместимый грузится; `TooNew`/`TooOld`/`BadVersion`/`Parse`; `scan` различает состояния.
 - Права (13): glob (`**`/`*`/exact/регистр), scope с deny-override (любой порядок), vault read/write,
   path-escape (`..`,`/abs`,`\`,пустой сегмент), ai+local_only, `ai:complete:false`, net-allowlist,
   unknown-method fail-closed, пустые права = deny-all.
-- Брокер (6): неизвестный порт → deny+audit, scope allow+audit, out-of-scope deny+audit,
-  **identity-по-порту** (confused-deputy: узкий плагин не дотянется до прав широкого), ревокация, handle→dispatch.
+- Брокер (7): токены уникальны/неугадываемы (64 hex), неизвестный/отозванный токен → deny+audit,
+  scope allow+audit, out-of-scope deny+audit, **identity-по-токену** (confused-deputy: узкий плагин не
+  дотянется до прав широкого), ревокация, handle→dispatch.
 
 ## Дальше (Ф2-2b+)
 - **Транспорт + токены (фронт):** доверенный JS в Worker + редакторные расширения в main-контексте;

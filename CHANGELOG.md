@@ -335,3 +335,10 @@
   Rust 91 тест. Дока `docs/dev/plugins.md`.
 
   Транспорт MessagePort/iframe + capability-токены + реальный dispatch — Ф2-2b (нужна фронт-сторона).
+
+- **Ф2-2b (часть 1) — Capability-токены (§7.9).** Брокер переведён с порт-идентичности на
+  **token-identity** (IPC-эквивалент порта): `open_session(session) -> CapToken` (32 случайных байта
+  hex, `getrandom`, неугадываем), `authorize(&token, req)`, `revoke(&token)` (мгновенная инвалидация).
+  Токен — источник identity на границе фронт↔Rust (порт-релей — на фронте). Закрывает confused-deputy
+  по токену. Зависимость `getrandom`. 7 тестов брокера (уникальность токенов, ревокация, identity).
+  Rust 92 теста. Транспорт MessagePort/iframe + `plugin_invoke` + реальный `HostDispatch` — далее.
