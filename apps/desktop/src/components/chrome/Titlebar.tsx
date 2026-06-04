@@ -112,8 +112,8 @@ export function Titlebar() {
           type="button"
           className={`${styles.tbBtn} ${tweaksOpen ? styles.active : ''}`}
           onClick={() => toggleTweaks()}
-          title={t('commands.view.tweaks')}
-          aria-label={t('commands.view.tweaks')}
+          title={t('commands.view.settings')}
+          aria-label={t('commands.view.settings')}
           aria-pressed={tweaksOpen}
         >
           <SlidersHorizontal size={16} aria-hidden />

@@ -10,7 +10,7 @@ import { EditorArea } from './components/workspace/EditorArea';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { Onboarding } from './components/onboarding/Onboarding';
-import { TweaksPanel } from './components/tweaks/TweaksPanel';
+import { SettingsView } from './components/settings/SettingsView';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
@@ -95,7 +95,7 @@ export function App() {
           <SyncPanel />
         </Suspense>
       )}
-      {tweaksOpen && <TweaksPanel />}
+      {tweaksOpen && <SettingsView />}
     </div>
   );
 }

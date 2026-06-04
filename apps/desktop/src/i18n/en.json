@@ -26,6 +26,18 @@
     "comfortable": "Cozy",
     "compact": "Compact"
   },
+  "settings": {
+    "title": "Settings",
+    "appearance": "Appearance",
+    "ai": "AI / Models",
+    "hotkeys": "Hotkeys",
+    "about": "About",
+    "soon": "This section is coming soon.",
+    "app": "App",
+    "version": "Version",
+    "vault": "Vault",
+    "noVault": "Not opened"
+  },
   "sidebar": {
     "searchPlaceholder": "Search…",
     "searchLabel": "Search the vault",
@@ -163,6 +175,6 @@
     "view.sync": "Sync (git)",
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
-    "view.tweaks": "Appearance settings"
+    "view.settings": "Settings"
   }
 }
