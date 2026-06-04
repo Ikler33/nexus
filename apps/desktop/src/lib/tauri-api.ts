@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockGit from './mock/git';
 import * as mockPlugins from './mock/plugins';
@@ -285,6 +286,17 @@ export const tauriApi = {
     /** Все заметки-цели (инлайн-тег `#goal`) с прогрессом (#35). Офлайн, без LLM. Вне Tauri — мок. */
     list: (): Promise<GoalEntry[]> =>
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
+  },
+
+  events: {
+    /**
+     * Подписка на событие «индекс vault обновлён» (backend `emit("vault:changed")` после реиндекса —
+     * ADR-007 S8 event-канал). Возвращает функцию отписки. Вне Tauri — no-op (мок-бэкенд не индексирует).
+     */
+    onVaultChanged: async (cb: () => void): Promise<() => void> => {
+      if (!isTauri()) return () => {};
+      return listen('vault:changed', () => cb());
+    },
   },
 
   chat: {

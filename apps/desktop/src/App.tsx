@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
+import { tauriApi } from './lib/tauri-api';
 import { useChatStore } from './stores/chat';
+import { useGoalsStore } from './stores/goals';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { Titlebar } from './components/chrome/Titlebar';
@@ -51,6 +53,26 @@ export function App() {
   useEffect(() => {
     useChatStore.getState().hydrate(vaultRoot);
   }, [vaultRoot]);
+
+  // Живой пересчёт зависимых от индекса вьюх по событию индексатора (ADR-007 S8, AC-GP-3):
+  // сейчас — «Цели» (#35), и только когда панель открыта. Дебаунс — событий может быть пачка.
+  useEffect(() => {
+    let unlisten = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    void tauriApi.events
+      .onVaultChanged(() => {
+        if (!useUIStore.getState().goalsOpen) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => void useGoalsStore.getState().load(), 800);
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => {
+      clearTimeout(timer);
+      unlisten();
+    };
+  }, []);
 
   // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
   useEffect(() => {
