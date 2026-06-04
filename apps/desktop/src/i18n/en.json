@@ -94,7 +94,9 @@
     "emptyGroup": "Empty group",
     "splitRight": "Split right",
     "close": "Close {{name}}",
-    "unsaved": "unsaved"
+    "unsaved": "unsaved",
+    "source": "Source",
+    "preview": "Preview"
   },
   "backlinks": {
     "title": "Backlinks",
