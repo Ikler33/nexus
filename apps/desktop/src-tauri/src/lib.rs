@@ -27,6 +27,8 @@ pub mod indexer;
 pub mod parser;
 /// Plugin loader (минимум): manifest + совместимость версии API (без broker — Ф2).
 pub mod plugin;
+/// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
+pub mod redact;
 /// Поиск по метаданным (title/path/tags) — Ф0.
 pub mod search;
 /// Глобальное состояние (managed state).
