@@ -42,8 +42,55 @@ pub async fn get_link_suggestions(
         return Ok(Vec::new());
     }
 
-    // 1) file_id + его chunk_id + уже связанные файлы (исключаем из предложений).
-    let Some((file_id, chunk_ids, linked)) = file_context(reader, &path).await? else {
+    let mut out: Vec<LinkSuggestion> = collect_related(reader, vectors, &path, true)
+        .await?
+        .into_iter()
+        .filter(|s| s.score >= MIN_SCORE)
+        .collect();
+    sort_truncate(&mut out, limit);
+    Ok(out)
+}
+
+/// «Похожие заметки» (#35, режим дискавери): семантически близкие заметки, **включая уже связанные**
+/// (отличие от `get_link_suggestions`, который их вычитает). Порог релевантности — на стороне UI
+/// (настройка с v1), поэтому здесь без жёсткой отсечки: отдаём топ-`limit` по max-sim. Пусто, если
+/// файл не проиндексирован / нет векторов.
+pub async fn get_related_notes(
+    reader: &ReadPool,
+    vectors: &VectorIndex,
+    path: String,
+    limit: usize,
+) -> DbResult<Vec<LinkSuggestion>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut out = collect_related(reader, vectors, &path, false).await?;
+    sort_truncate(&mut out, limit);
+    Ok(out)
+}
+
+/// Сортировка по score (убыв.), тай-брейк по пути (детерминизм), усечение до `limit`.
+fn sort_truncate(out: &mut Vec<LinkSuggestion>, limit: usize) {
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.path.cmp(&b.path))
+    });
+    out.truncate(limit);
+}
+
+/// Общее ядро max-sim для «Связей» (Ф1-9) и «Похожих» (#35): файлы-кандидаты с max-sim score и
+/// «причиной» (сниппет лучшего чанка). `exclude_linked=true` — режим предложений связей (только
+/// несвязанные); `false` — дискавери «Похожие» (include_linked). БЕЗ порога/сортировки/усечения —
+/// это делают вызывающие. Сам файл исключается всегда.
+async fn collect_related(
+    reader: &ReadPool,
+    vectors: &VectorIndex,
+    path: &str,
+    exclude_linked: bool,
+) -> DbResult<Vec<LinkSuggestion>> {
+    let Some((file_id, chunk_ids, linked)) = file_context(reader, path).await? else {
         return Ok(Vec::new());
     };
     if chunk_ids.is_empty() {
@@ -51,7 +98,7 @@ pub async fn get_link_suggestions(
     }
     let own: HashSet<u64> = chunk_ids.iter().map(|&id| id as u64).collect();
 
-    // 2) Для каждого чанка — ближайшие соседи (мимо чанков самого файла). usearch sync, быстрый.
+    // Для каждого чанка — ближайшие соседи (мимо чанков самого файла). usearch sync, быстрый.
     let mut candidates: Vec<(i64, f32)> = Vec::new();
     for &cid in &chunk_ids {
         let Some(vec) = vectors
@@ -71,7 +118,7 @@ pub async fn get_link_suggestions(
         return Ok(Vec::new());
     }
 
-    // 3) Агрегация по файлу (max-sim): лучший чанк определяет score и «причину».
+    // Агрегация по файлу (max-sim): лучший чанк определяет score и «причину».
     let cand_ids: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
     let meta = chunk_file_meta(reader, &cand_ids).await?;
 
@@ -81,8 +128,8 @@ pub async fn get_link_suggestions(
         let Some((tgt_file, tgt_path, tgt_title, content)) = meta.get(&chunk_id) else {
             continue;
         };
-        if *tgt_file == file_id || linked.contains(tgt_file) {
-            continue; // сам файл или уже связан
+        if *tgt_file == file_id || (exclude_linked && linked.contains(tgt_file)) {
+            continue; // сам файл (всегда) или уже связан (только режим «Связи»)
         }
         let entry = best.entry(*tgt_file).or_insert((
             f32::MIN,
@@ -100,25 +147,15 @@ pub async fn get_link_suggestions(
         }
     }
 
-    // 4) Порог + сортировка + усечение.
-    let mut out: Vec<LinkSuggestion> = best
+    Ok(best
         .into_values()
-        .filter(|(score, ..)| *score >= MIN_SCORE)
         .map(|(score, path, title, reason)| LinkSuggestion {
             path,
             title,
             score,
             reason,
         })
-        .collect();
-    out.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.path.cmp(&b.path))
-    });
-    out.truncate(limit);
-    Ok(out)
+        .collect())
 }
 
 /// `(file_id, chunk_ids, linked_file_ids)` для пути. `None`, если файла нет (или удалён).
@@ -289,6 +326,32 @@ mod tests {
             sug.iter().all(|s| s.path != "B.md"),
             "уже связанная B не предлагается"
         );
+    }
+
+    /// «Похожие» (#35): в отличие от «Связей», уже связанная похожая заметка ПРИСУТСТВУЕТ
+    /// (дискавери, include_linked — AC-RN-2); сам файл — никогда (AC-RN-3).
+    #[tokio::test]
+    async fn related_includes_linked_similar() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let body = "alpha beta gamma delta epsilon zeta semantic body text here";
+        let (db, vectors) = index(
+            &root,
+            &[
+                ("A.md", &format!("# A\n\n{body}\n\nсм. [[B]]\n")), // A УЖЕ ссылается на B
+                ("B.md", &format!("# B\n\n{body}\n")),
+            ],
+        )
+        .await;
+
+        let rel = get_related_notes(db.reader(), &vectors, "A.md".into(), 10)
+            .await
+            .unwrap();
+        assert!(
+            rel.iter().any(|s| s.path == "B.md"),
+            "связанная похожая B В выдаче (дискавери)"
+        );
+        assert!(rel.iter().all(|s| s.path != "A.md"), "сам файл не в выдаче");
     }
 
     /// Живой max-sim на nomic :8081: для заметки про кошку топовое предложение — ДРУГАЯ про кошек

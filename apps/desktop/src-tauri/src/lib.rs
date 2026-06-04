@@ -82,6 +82,7 @@ pub fn run() {
             commands::chat::chat_rag,
             commands::chat::chat_cancel,
             commands::suggest::get_link_suggestions,
+            commands::suggest::get_related_notes,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
             commands::settings::test_ai_connection,

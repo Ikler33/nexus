@@ -26,3 +26,25 @@ pub async fn get_link_suggestions(
         .await
         .map_err(|e| e.to_string())
 }
+
+/// «Похожие заметки» (#35, дискавери): семантически близкие заметки ВКЛЮЧАЯ уже связанные. Порог —
+/// на стороне UI (настройка), бэкенд отдаёт топ-`limit` по max-sim. `limit` по умолчанию 12, потолок 20.
+#[tauri::command]
+pub async fn get_related_notes(
+    state: State<'_, AppState>,
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<LinkSuggestion>, String> {
+    let (reader, vectors) = {
+        let guard = state.vault.read().await;
+        let ctx = guard.as_ref().ok_or("vault не открыт")?;
+        (ctx.db.reader().clone(), ctx.vectors.clone())
+    };
+    let Some(vectors) = vectors else {
+        return Ok(Vec::new());
+    };
+    let limit = limit.unwrap_or(12).min(20);
+    suggest::get_related_notes(&reader, vectors.as_ref(), path, limit)
+        .await
+        .map_err(|e| e.to_string())
+}

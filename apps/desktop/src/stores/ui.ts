@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-type AiTab = 'chat' | 'suggest';
+type AiTab = 'chat' | 'suggest' | 'related';
 /** Активная секция раздела настроек (Obsidian-style: левый нав → контент). Кросс-план #11. */
 export type SettingsSection = 'general' | 'editor' | 'appearance' | 'ai' | 'hotkeys' | 'about';
 
