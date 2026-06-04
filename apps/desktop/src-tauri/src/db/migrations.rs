@@ -25,6 +25,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "chunks_fts",
         sql: include_str!("migrations/002_chunks_fts.sql"),
     },
+    Migration {
+        version: 3,
+        name: "frontmatter_fields",
+        sql: include_str!("migrations/003_frontmatter_fields.sql"),
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

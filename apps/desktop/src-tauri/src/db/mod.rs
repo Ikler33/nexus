@@ -120,7 +120,7 @@ mod tests {
     fn count_tables(conn: &Connection) -> rusqlite::Result<i64> {
         conn.query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' \
-             AND name IN ('files','links','tags','file_tags','aliases','settings')",
+             AND name IN ('files','links','tags','file_tags','aliases','settings','frontmatter_fields')",
             [],
             |r| r.get(0),
         )
@@ -138,7 +138,7 @@ mod tests {
             db.schema_version().await.unwrap(),
             migrations::latest_version()
         );
-        assert_eq!(db.reader().query(count_tables).await.unwrap(), 6);
+        assert_eq!(db.reader().query(count_tables).await.unwrap(), 7);
 
         // Повторное открытие той же БД: версия не меняется, ошибок нет.
         drop(db);
@@ -147,7 +147,7 @@ mod tests {
             db2.schema_version().await.unwrap(),
             migrations::latest_version()
         );
-        assert_eq!(db2.reader().query(count_tables).await.unwrap(), 6);
+        assert_eq!(db2.reader().query(count_tables).await.unwrap(), 7);
     }
 
     /// AC-Б7-2: транзакция атомарна — ошибка в середине откатывает всё, частичного
