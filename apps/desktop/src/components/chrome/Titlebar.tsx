@@ -8,6 +8,7 @@ import {
   Share2,
   SlidersHorizontal,
   Sun,
+  Target,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
@@ -35,6 +36,8 @@ export function Titlebar() {
   const togglePlugins = useUIStore((s) => s.togglePlugins);
   const syncOpen = useUIStore((s) => s.syncOpen);
   const toggleSync = useUIStore((s) => s.toggleSync);
+  const goalsOpen = useUIStore((s) => s.goalsOpen);
+  const toggleGoals = useUIStore((s) => s.toggleGoals);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const toggleTweaks = useUIStore((s) => s.toggleTweaks);
   const theme = useThemeStore((s) => s.theme);
@@ -95,6 +98,16 @@ export function Titlebar() {
           aria-pressed={syncOpen}
         >
           <GitBranch size={16} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`${styles.tbBtn} ${goalsOpen ? styles.active : ''}`}
+          onClick={() => toggleGoals()}
+          title={t('commands.view.goals')}
+          aria-label={t('commands.view.goals')}
+          aria-pressed={goalsOpen}
+        >
+          <Target size={16} aria-hidden />
         </button>
 
         <span className={styles.divider} />

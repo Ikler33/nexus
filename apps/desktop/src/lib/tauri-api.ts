@@ -114,6 +114,13 @@ export interface LinkSuggestion {
   reason: string;
 }
 
+/** Заметка-цель (зеркалит Rust `goals::Goal`). `progress` 0–100 или `null` (нет валидного значения, D7). */
+export interface GoalEntry {
+  path: string;
+  title: string | null;
+  progress: number | null;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -272,6 +279,12 @@ export const tauriApi = {
       isTauri()
         ? invoke<LinkSuggestion[]>('get_related_notes', { path, limit })
         : mockVault.getRelatedNotes(path, limit),
+  },
+
+  goals: {
+    /** Все заметки-цели (инлайн-тег `#goal`) с прогрессом (#35). Офлайн, без LLM. Вне Tauri — мок. */
+    list: (): Promise<GoalEntry[]> =>
+      isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
   },
 
   chat: {

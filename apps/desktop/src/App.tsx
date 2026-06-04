@@ -12,6 +12,7 @@ import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
+import { GoalsPanel } from './components/goals/GoalsPanel';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
@@ -34,6 +35,7 @@ export function App() {
   const chatOpen = useUIStore((s) => s.chatOpen);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   const syncOpen = useUIStore((s) => s.syncOpen);
+  const goalsOpen = useUIStore((s) => s.goalsOpen);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
@@ -103,6 +105,7 @@ export function App() {
         </Suspense>
       )}
       {tweaksOpen && <SettingsView />}
+      {goalsOpen && <GoalsPanel />}
     </div>
   );
 }
