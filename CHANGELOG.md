@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Архитектура — ADR-решения (codesign egress + планировщик)
+
+- **Приняты owner-решения по egress (#16) и планировщику (#21)** из codesign-сессии (`docs/reviews/ADR_CODESIGN.md`).
+  В `ARCHITECTURE.md §0`: **egress зафиксирован как расширение ADR-005** (единый `net::GuardedClient`-chokepoint:
+  kill-switch «офлайн» рубит облако/web но не LAN, per-feature opt-in, allowlist из `local.json`, in-memory audit,
+  metadata-блок, политика в OS config-dir; E1–E10) и **новый ADR-007 «Планировщик фоновых задач»**
+  (`tokio::interval`-движок, run-if-overdue, жёсткий приоритет чата, backoff+видимый-dead+GC, кэш по `indexed_at`,
+  Tauri event-канал как HARD-dep; S1–S10). `AC-SEC-4` уточнён (явные `ai.*.url` разрешены ядру, metadata reject
+  всегда; плагинный `net.fetch` — под полным `is_private_host`). **Реализация** egress — после #5+#9; планировщика —
+  после #13 (rebuild-примитив) + event-канал. Сетевой vision-класс (News Feed) разблокируется только обоими.
+
 ### Кросс-план — Wave B (точечные)
 
 - **#35 vision: «Прогресс целей» (Goal Progress).** Вторая vision-фича, тоже **офлайн** (чистый SQL-read,
