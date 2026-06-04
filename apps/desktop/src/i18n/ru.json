@@ -62,7 +62,11 @@
     "modeLocal": "Локальный",
     "modeFull": "Весь vault",
     "truncated": "показано {{shown}} из {{total}} узлов",
-    "nodeCount": "узлов: {{count}}"
+    "nodeCount": "узлов: {{count}}",
+    "depth": "Глубина",
+    "loading": "Раскладка…",
+    "stat": "узлов: {{nodes}} · связей: {{edges}}",
+    "close": "Закрыть граф"
   },
   "chat": {
     "title": "AI-панель",

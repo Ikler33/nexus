@@ -64,7 +64,7 @@
     "AC-PERF-3": { "status": "manual", "note": "Семантика <300мс на полном индексе — реальное железо." },
     "AC-PERF-4": { "status": "manual", "note": "RAG до первого токена <1с — зависит от сервера/железа." },
     "AC-PERF-5": { "status": "partial", "tests": ["indexer::tests"], "note": "Reconcile резюмируемости покрыт; throughput — manual-замер." },
-    "AC-PERF-6": { "status": "manual", "note": "Graph worker-layout <1с — замер + есть баг вылета графа (BACKLOG)." },
+    "AC-PERF-6": { "status": "manual", "note": "Граф: симуляция переведена на main-thread rAF ради live-drag (worker-layout заменён — дизайн); узлы капнуты (N-hop / топ-600). Перф <1с + отсутствие джанка — замер на реальном железе. «Вылет графа» закрыт (был Vite dev-reload, не краш)." },
     "AC-PERF-7": { "status": "manual", "note": "50k дерево без джанка — виртуализация есть, perf-замер manual." },
 
     "AC-I18N-1": { "status": "covered", "tests": ["src/i18n/i18n.test.ts"], "note": "Парность ключей ru/en." },

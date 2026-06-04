@@ -61,7 +61,11 @@
     "modeLocal": "Local",
     "modeFull": "Whole vault",
     "truncated": "showing {{shown}} of {{total}} nodes",
-    "nodeCount": "{{count}} nodes"
+    "nodeCount": "{{count}} nodes",
+    "depth": "Depth",
+    "loading": "Laying out…",
+    "stat": "{{nodes}} nodes · {{edges}} links",
+    "close": "Close graph"
   },
   "chat": {
     "title": "AI panel",
