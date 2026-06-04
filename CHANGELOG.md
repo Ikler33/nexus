@@ -52,6 +52,16 @@
   - Отложено (no silent caps): рендер `traceability.md` для PR, проверка существования имён тестов в
     бинарях, конвенция `Closes AC-…` в PR-шаблоне — BACKLOG.
 
+### Исправлено / безопасность (Волна 2 ночной очереди)
+
+- **V2.1 — Анти-SSRF для core-LLM-клиентов** (AC-SEC-4 / ревью C5). chat/embedding HTTP-клиенты ядра
+  строятся через общий `ai::core_client_builder()` с `redirect(Policy::none())` — подменённый или
+  скомпрометированный эндпоинт не уведёт запрос 30x-редиректом на внутренний/metadata-адрес. Закрывает
+  core-половину AC-SEC-4 (плагинная `net.fetch` закрыта ранее). Тест `core_client_does_not_follow_redirects`
+  (локальный 302-сервер на `std::net`, без новых зависимостей). `is_private_host` к ядру намеренно НЕ
+  применяется — LLM-серверы локальные/LAN by design; consent на смену `base_url` из git-pull отнесён к
+  «Единому egress-контролю ядра» (BACKLOG, Фундамент).
+
 ### Added — Фаза 0
 
 - **Ф0-1 — Каркас (monorepo + Tauri 2 + CI).**

@@ -69,7 +69,7 @@ impl OpenAiEmbedder {
         dim: usize,
         prefixes: Option<(String, String)>,
     ) -> AiResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = super::core_client_builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .map_err(|e| AiError::Http(e.to_string()))?;
@@ -87,7 +87,7 @@ impl OpenAiEmbedder {
     /// Узнаёт размерность модели одним пробным эмбеддингом (когда `embedding.dim` не задан
     /// в `local.json`). Не применяет проверку/префиксы — только длину вектора.
     pub async fn probe_dim(base_url: &str, model: &str) -> AiResult<usize> {
-        let client = reqwest::Client::builder()
+        let client = super::core_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| AiError::Http(e.to_string()))?;

@@ -67,7 +67,7 @@ pub struct OpenAiChatProvider {
 impl OpenAiChatProvider {
     pub fn new(base_url: &str, model: &str, temperature: Option<f32>) -> AiResult<Self> {
         // Без общего timeout: стриминг ответа долгий. Connect-timeout страхует от зависшего коннекта.
-        let client = reqwest::Client::builder()
+        let client = super::core_client_builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| AiError::Http(e.to_string()))?;
