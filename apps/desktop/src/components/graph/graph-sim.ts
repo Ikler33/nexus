@@ -25,6 +25,17 @@ export type Positions = Record<string, Pos>;
 export const STAGE_W = 900;
 export const STAGE_H = 620;
 
+// Параметры силовой модели (тюнинг: разлёт по площади + плавность; финал — по визуальной проверке).
+// Сильнее отталкивание + слабее гравитация-к-центру + длиннее пружины → узлы не схлопываются в центр.
+// Кламп скорости гасит резкие рывки, медленнее остывание → плавнее садится.
+const REPULSION = 16000; // отталкивание (выше → дальше разлёт)
+const SPRING_REST = 150; // «длина покоя» ребра (выше → связанные дальше друг от друга)
+const SPRING_K = 0.04; // жёсткость пружины
+const GRAVITY = 0.004; // притяжение к центру (ниже → меньше схлопывания в кучу)
+const DAMPING = 0.85; // трение
+const MAX_V = 26; // кламп скорости за шаг (плавность — без рывков)
+const ALPHA_DECAY = 0.95; // остывание (выше → дольше/плавнее раскладывается)
+
 /** Неориентированный список смежности по рёбрам. */
 export function buildAdjacency(edges: SimEdge[]): Record<string, string[]> {
   const adj: Record<string, string[]> = {};
@@ -79,9 +90,10 @@ export function kinSet(edges: SimEdge[], activeId: string | null): Set<string> {
   return s;
 }
 
-/** Радиус узла по степени связности (дизайн: 6 + deg·1.7, клампы 6..15). */
+/** Радиус узла по степени связности: sqrt-шкала (чёткая градация хабов без линейного разноса),
+ *  клампы 5..30 — заметно шире прежнего 6..15. */
 export function nodeRadius(deg: number): number {
-  return Math.max(6, Math.min(15, 6 + deg * 1.7));
+  return Math.max(5, Math.min(30, 5 + Math.sqrt(deg) * 4.5));
 }
 
 /**
@@ -111,7 +123,7 @@ export function forceStep(
       const dx = A.x - B.x;
       const dy = A.y - B.y;
       const d2 = dx * dx + dy * dy || 0.01;
-      const f = (6800 / d2) * a;
+      const f = (REPULSION / d2) * a;
       const d = Math.sqrt(d2);
       A.vx += (dx / d) * f;
       A.vy += (dy / d) * f;
@@ -127,7 +139,7 @@ export function forceStep(
     const dx = B.x - A.x;
     const dy = B.y - A.y;
     const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-    const f = (d - 96) * 0.05 * a;
+    const f = (d - SPRING_REST) * SPRING_K * a;
     A.vx += (dx / d) * f;
     A.vy += (dy / d) * f;
     B.vx -= (dx / d) * f;
@@ -142,17 +154,20 @@ export function forceStep(
       N.vy = 0;
       continue;
     }
-    N.vx += (cx - N.x) * 0.012 * a;
-    N.vy += (cy - N.y) * 0.012 * a;
-    N.vx *= 0.85;
-    N.vy *= 0.85;
+    N.vx += (cx - N.x) * GRAVITY * a;
+    N.vy += (cy - N.y) * GRAVITY * a;
+    N.vx *= DAMPING;
+    N.vy *= DAMPING;
+    // кламп скорости — гасит резкие рывки (плавность)
+    N.vx = Math.max(-MAX_V, Math.min(MAX_V, N.vx));
+    N.vy = Math.max(-MAX_V, Math.min(MAX_V, N.vy));
     N.x += N.vx;
     N.y += N.vy;
     N.x = Math.max(40, Math.min(w - 40, N.x));
     N.y = Math.max(36, Math.min(h - 36, N.y));
   }
 
-  return a * 0.94;
+  return a * ALPHA_DECAY;
 }
 
 /**

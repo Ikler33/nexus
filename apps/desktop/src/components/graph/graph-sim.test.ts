@@ -38,10 +38,10 @@ describe('graph-sim (V-граф интерактив)', () => {
     expect(kinSet(chain, null)).toEqual(new Set());
   });
 
-  it('nodeRadius: растёт со степенью, клампится 6..15', () => {
-    expect(nodeRadius(0)).toBe(6);
-    expect(nodeRadius(3)).toBeCloseTo(11.1, 5);
-    expect(nodeRadius(100)).toBe(15);
+  it('nodeRadius: sqrt-шкала, клампится 5..30', () => {
+    expect(nodeRadius(0)).toBe(5);
+    expect(nodeRadius(1)).toBeCloseTo(9.5, 5);
+    expect(nodeRadius(100)).toBe(30); // 5 + 10·4.5 = 50 → клампится в 30
   });
 
   it('forceStep: пружина стягивает связанные далёкие узлы', () => {
@@ -75,7 +75,7 @@ describe('graph-sim (V-граф интерактив)', () => {
     const next = forceStep(pos, ['a', 'b'], [{ a: 'a', b: 'b' }], 1, 'a');
     expect(pos.a).toEqual({ x: 200, y: 200, vx: 0, vy: 0 }); // a не сдвинулся
     expect(pos.b.x).not.toBe(600); // b — свободен, поехал
-    expect(next).toBeCloseTo(0.94, 5); // 1 * 0.94
+    expect(next).toBeCloseTo(0.95, 5); // 1 * ALPHA_DECAY
   });
 
   it('seedPositions: сеет недостающие детерминированно, существующие не трогает', () => {
