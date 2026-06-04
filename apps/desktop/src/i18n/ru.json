@@ -26,6 +26,18 @@
     "comfortable": "Просторно",
     "compact": "Компактно"
   },
+  "settings": {
+    "title": "Настройки",
+    "appearance": "Оформление",
+    "ai": "AI / Модели",
+    "hotkeys": "Горячие клавиши",
+    "about": "О программе",
+    "soon": "Раздел скоро появится.",
+    "app": "Приложение",
+    "version": "Версия",
+    "vault": "Vault",
+    "noVault": "Не открыт"
+  },
   "sidebar": {
     "searchPlaceholder": "Поиск…",
     "searchLabel": "Поиск по vault",
@@ -164,6 +176,6 @@
     "view.sync": "Синхронизация (git)",
     "theme.toggle": "Тема: светлая / тёмная",
     "view.reading": "Режим чтения",
-    "view.tweaks": "Оформление"
+    "view.settings": "Настройки"
   }
 }
