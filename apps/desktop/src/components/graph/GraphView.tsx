@@ -126,19 +126,19 @@ export default function GraphView() {
     }
     setLoading(true);
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
-      .force('charge', forceManyBody<GraphNodeDatum>().strength(-340).distanceMax(560))
+      .force('charge', forceManyBody<GraphNodeDatum>().strength(-520).distanceMax(820))
       .force(
         'link',
         forceLink<GraphNodeDatum, GraphLink>(graph.links)
           .id((d) => d.id)
-          .distance(72)
-          .strength(0.55),
+          .distance(115)
+          .strength(0.45),
       )
-      .force('center', forceCenter<GraphNodeDatum>(STAGE_W / 2, STAGE_H / 2).strength(0.06))
+      .force('center', forceCenter<GraphNodeDatum>(STAGE_W / 2, STAGE_H / 2).strength(0.04))
       .force(
         'collide',
         forceCollide<GraphNodeDatum>()
-          .radius((d) => nodeRadius(d.deg) + 9)
+          .radius((d) => nodeRadius(d.deg) + 12)
           .iterations(2),
       )
       .on('tick', () => tick((v) => v + 1));
@@ -186,13 +186,16 @@ export default function GraphView() {
       };
       const up = () => {
         sim.alphaTarget(0);
-        node.fx = null;
-        node.fy = null;
         setDragId(null);
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
-        if (!moved) {
-          // клик без перетаскивания → открыть файл
+        if (moved) {
+          // перетащили → нода ОСТАЁТСЯ там, где бросили (sticky, как в Obsidian): fx/fy НЕ сбрасываем,
+          // соседи переселяются вокруг неё. Освобождение — только при следующем drag или новых данных.
+        } else {
+          // клик без движения → не закрепляем; открываем файл
+          node.fx = null;
+          node.fy = null;
           close();
           void openFile(node.path);
         }
