@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { SettingsView } from './SettingsView';
+import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 
 describe('SettingsView (кросс-план #11, оболочка раздела)', () => {
@@ -9,7 +10,9 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     useUIStore.setState({ settingsSection: 'appearance' });
     render(<SettingsView />);
 
-    // Левый нав — 4 секции.
+    // Левый нав — секции (вкл. новые «Основное»/«Редактор», слайс 3).
+    expect(screen.getByRole('button', { name: /основное|general/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /редактор|editor/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /оформление|appearance/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /модели|models/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /горячие|hotkeys/i })).toBeInTheDocument();
@@ -59,5 +62,29 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     fireEvent.change(urls[1], { target: { value: 'http://127.0.0.1:8083' } });
     fireEvent.click(screen.getByRole('button', { name: /^сохранить$|^save$/i }));
     expect(await screen.findByText(/перезапустите|restart/i)).toBeInTheDocument();
+  });
+
+  it('General (слайс 3): секция с переключателем языка RU/EN', () => {
+    useUIStore.setState({ settingsSection: 'general' });
+    render(<SettingsView />);
+    expect(screen.getByText(/язык|language/i)).toBeInTheDocument();
+    // Эндонимы языков рендерятся как есть, независимо от текущей локали.
+    expect(screen.getByRole('button', { name: 'Русский' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'English' })).toBeInTheDocument();
+  });
+
+  it('Editor (слайс 3): тогл читаемой ширины меняет prefs-стор и CSS-переменную', () => {
+    usePrefsStore.getState().setReadableLineWidth(true); // нормализуем старт
+    useUIStore.setState({ settingsSection: 'editor' });
+    render(<SettingsView />);
+    expect(usePrefsStore.getState().readableLineWidth).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /^выкл$|^off$/i }));
+    expect(usePrefsStore.getState().readableLineWidth).toBe(false);
+    expect(document.documentElement.style.getPropertyValue('--editor-max-width')).toBe('none');
+
+    fireEvent.click(screen.getByRole('button', { name: /^вкл$|^on$/i }));
+    expect(usePrefsStore.getState().readableLineWidth).toBe(true);
+    expect(document.documentElement.style.getPropertyValue('--editor-max-width')).toBe('44rem');
   });
 });

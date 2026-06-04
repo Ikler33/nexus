@@ -130,7 +130,13 @@ function wikilinkAutocomplete(getNotes: () => NoteRef[]): Extension {
 const editorTheme = EditorView.theme({
   '&': { height: '100%', fontSize: 'var(--text-base)' },
   '.cm-scroller': { fontFamily: 'var(--font-editor)', lineHeight: 'var(--leading-normal)' },
-  '.cm-content': { padding: 'var(--space-4) 0' },
+  // Читаемая ширина строки (настройка «Редактор»): колонка ограничивается и центрируется через
+  // CSS-переменную `--editor-max-width` (stores/prefs.ts). `none` → полная ширина (как было).
+  '.cm-content': {
+    padding: 'var(--space-4) 0',
+    maxWidth: 'var(--editor-max-width, none)',
+    marginInline: 'auto',
+  },
   '.cm-wikilink': { color: 'var(--color-link)', cursor: 'pointer' },
   '.cm-tag': { color: 'var(--color-tag)' },
   '&.cm-focused': { outline: 'none' },

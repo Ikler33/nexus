@@ -1,8 +1,21 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, Cpu, Info, Keyboard, Loader2, Palette, X } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  Cpu,
+  Globe,
+  Info,
+  Keyboard,
+  Loader2,
+  Palette,
+  Pencil,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { changeLocale } from '../../i18n/setup';
 import { tauriApi } from '../../lib/tauri-api';
+import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, useThemeStore } from '../../stores/theme';
 import type { Accent } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
@@ -19,6 +32,8 @@ const ACCENT_PREVIEW: Record<Accent, string> = {
 };
 
 const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
+  { id: 'general', icon: Globe, key: 'settings.general' },
+  { id: 'editor', icon: Pencil, key: 'settings.editor' },
   { id: 'appearance', icon: Palette, key: 'settings.appearance' },
   { id: 'ai', icon: Cpu, key: 'settings.ai' },
   { id: 'hotkeys', icon: Keyboard, key: 'settings.hotkeys' },
@@ -27,8 +42,9 @@ const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
 
 /**
  * Раздел настроек (кросс-план #11, по образцу Obsidian): модалка с левым навом секций + контент-панель.
- * Секции собираются инкрементально (слайсами): «Оформление» и «О программе» — здесь; «AI / Модели» и
- * «Горячие клавиши» — следующими срезами (сейчас заглушки). Состояние открытия/секции — в ui-сторе.
+ * Секции: «Основное» (язык), «Редактор» (читаемая ширина), «Оформление» (тема/акцент/плотность),
+ * «AI / Модели», «О программе»; «Горячие клавиши» — следующим срезом (пока заглушка). Состояние
+ * открытия/активной секции — в ui-сторе.
  */
 export function SettingsView() {
   const { t } = useTranslation();
@@ -65,6 +81,8 @@ export function SettingsView() {
           <button type="button" className={styles.close} onClick={close} aria-label={t('git.close')}>
             <X size={16} aria-hidden />
           </button>
+          {section === 'general' && <GeneralSection />}
+          {section === 'editor' && <EditorSection />}
           {section === 'appearance' && <AppearanceSection />}
           {section === 'ai' && <AiSection />}
           {section === 'hotkeys' && <Stub text={t('settings.soon')} />}
@@ -72,6 +90,72 @@ export function SettingsView() {
         </div>
       </div>
     </div>
+  );
+}
+
+function GeneralSection() {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.language === 'ru' ? 'ru' : 'en';
+  return (
+    <>
+      <h2 className={styles.h2}>{t('settings.general')}</h2>
+      <section className={styles.group}>
+        <span className={styles.label}>{t('settings.gen.language')}</span>
+        <div className={styles.seg}>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${lang === 'ru' ? styles.on : ''}`}
+            onClick={() => changeLocale('ru')}
+            aria-pressed={lang === 'ru'}
+          >
+            Русский
+          </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${lang === 'en' ? styles.on : ''}`}
+            onClick={() => changeLocale('en')}
+            aria-pressed={lang === 'en'}
+          >
+            English
+          </button>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function EditorSection() {
+  const { t } = useTranslation();
+  const readable = usePrefsStore((s) => s.readableLineWidth);
+  const setReadable = usePrefsStore((s) => s.setReadableLineWidth);
+  return (
+    <>
+      <h2 className={styles.h2}>{t('settings.editor')}</h2>
+      <section className={styles.group}>
+        <div className={styles.rowText}>
+          <span className={styles.label}>{t('settings.ed.readableWidth')}</span>
+          <span className={styles.rowDesc}>{t('settings.ed.readableWidthDesc')}</span>
+        </div>
+        <div className={styles.seg}>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${!readable ? styles.on : ''}`}
+            onClick={() => setReadable(false)}
+            aria-pressed={!readable}
+          >
+            {t('settings.off')}
+          </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${readable ? styles.on : ''}`}
+            onClick={() => setReadable(true)}
+            aria-pressed={readable}
+          >
+            {t('settings.on')}
+          </button>
+        </div>
+      </section>
+    </>
   );
 }
 

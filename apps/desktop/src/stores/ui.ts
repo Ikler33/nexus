@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 type AiTab = 'chat' | 'suggest';
 /** Активная секция раздела настроек (Obsidian-style: левый нав → контент). Кросс-план #11. */
-export type SettingsSection = 'appearance' | 'ai' | 'hotkeys' | 'about';
+export type SettingsSection = 'general' | 'editor' | 'appearance' | 'ai' | 'hotkeys' | 'about';
 
 interface UIState {
   paletteOpen: boolean;
@@ -52,7 +52,7 @@ export const useUIStore = create<UIState>((set) => ({
   pluginsOpen: false,
   syncOpen: false,
   tweaksOpen: false,
-  settingsSection: 'appearance',
+  settingsSection: 'general',
   reading: false,
   aiTab: 'chat',
   openPalette: () => set({ paletteOpen: true }),
@@ -74,6 +74,6 @@ export const useUIStore = create<UIState>((set) => ({
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),
   closeTweaks: () => set({ tweaksOpen: false }),
   setSettingsSection: (settingsSection) => set({ settingsSection }),
-  openSettings: (section = 'appearance') => set({ tweaksOpen: true, settingsSection: section }),
+  openSettings: (section = 'general') => set({ tweaksOpen: true, settingsSection: section }),
   setAiTab: (tab) => set({ aiTab: tab }),
 }));

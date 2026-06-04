@@ -28,6 +28,8 @@
   },
   "settings": {
     "title": "Settings",
+    "general": "General",
+    "editor": "Editor",
     "appearance": "Appearance",
     "ai": "AI / Models",
     "hotkeys": "Hotkeys",
@@ -37,6 +39,15 @@
     "version": "Version",
     "vault": "Vault",
     "noVault": "Not opened",
+    "on": "On",
+    "off": "Off",
+    "gen": {
+      "language": "Language"
+    },
+    "ed": {
+      "readableWidth": "Readable line length",
+      "readableWidthDesc": "Caps text width for comfortable reading (like Obsidian)."
+    },
     "aiSec": {
       "intro": "Endpoints of local OpenAI-compatible servers. Stored in .nexus/local.json (outside git) — keys won't be synced.",
       "chatTitle": "Chat model",

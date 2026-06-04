@@ -1,0 +1,55 @@
+import { create } from 'zustand';
+
+/**
+ * Пользовательские настройки, не относящиеся к оформлению (theme-стор) или языку (i18n): сейчас —
+ * «читаемая ширина строки» редактора (как Obsidian «Readable line length»). Применяется CSS-переменной
+ * `--editor-max-width` на `<html>` (её читает тема редактора `.cm-content`), персист в localStorage,
+ * стартовое применение на импорте модуля (без вспышки) — тот же приём, что в theme-сторе (`main.tsx`).
+ */
+const READABLE_KEY = 'nexus.editor.readableWidth';
+/** Ширина читаемой колонки (~700px, как дефолт Obsidian). */
+const READABLE_WIDTH = '44rem';
+
+function readBool(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+  } catch {
+    /* localStorage недоступен */
+  }
+  return fallback;
+}
+
+function persistBool(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyReadable(on: boolean): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.setProperty('--editor-max-width', on ? READABLE_WIDTH : 'none');
+  }
+}
+
+// По умолчанию ВКЛ (как Obsidian) — комфортнее читать; пользователь может выключить.
+const START_READABLE = readBool(READABLE_KEY, true);
+applyReadable(START_READABLE);
+
+interface PrefsState {
+  readableLineWidth: boolean;
+  setReadableLineWidth: (on: boolean) => void;
+}
+
+export const usePrefsStore = create<PrefsState>((set) => ({
+  readableLineWidth: START_READABLE,
+  setReadableLineWidth: (on) =>
+    set(() => {
+      persistBool(READABLE_KEY, on);
+      applyReadable(on);
+      return { readableLineWidth: on };
+    }),
+}));
