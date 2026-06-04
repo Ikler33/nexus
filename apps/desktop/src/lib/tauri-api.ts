@@ -266,6 +266,12 @@ export const tauriApi = {
       isTauri()
         ? invoke<LinkSuggestion[]>('get_link_suggestions', { path, limit })
         : mockVault.getLinkSuggestions(path, limit),
+
+    /** «Похожие заметки» (#35, дискавери — включая уже связанные). Порог — на стороне UI. Вне Tauri — мок. */
+    related: (path: string, limit?: number) =>
+      isTauri()
+        ? invoke<LinkSuggestion[]>('get_related_notes', { path, limit })
+        : mockVault.getRelatedNotes(path, limit),
   },
 
   chat: {

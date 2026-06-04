@@ -177,6 +177,32 @@ export async function getLinkSuggestions(path: string, limit = 5): Promise<LinkS
   return out.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
+/** Мок «Похожих заметок» (#35): как getLinkSuggestions, но ВКЛЮЧАЯ уже связанные (дискавери). */
+export async function getRelatedNotes(path: string, limit = 12): Promise<LinkSuggestion[]> {
+  const raw = CONTENT[path];
+  if (!raw) return [];
+  const terms = new Set(
+    raw
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((t) => t.length > 3),
+  );
+  const out: LinkSuggestion[] = [];
+  for (const [p, c] of Object.entries(CONTENT)) {
+    if (p === path) continue; // исключаем только сам файл; уже связанные — ВКЛЮЧАЕМ
+    const words = c.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+    const overlap = words.filter((w) => terms.has(w)).length;
+    if (overlap === 0) continue;
+    out.push({
+      path: p,
+      title: null,
+      score: overlap / Math.max(words.length, 1),
+      reason: c.slice(0, 120).replace(/\s+/g, ' ').trim(),
+    });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
 /** Симуляция RAG-чат-стрима для превью/тестов: sources → токены (по словам) → done. */
 export function streamChat(
   question: string,

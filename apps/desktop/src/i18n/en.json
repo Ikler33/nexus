@@ -132,6 +132,7 @@
     "title": "AI panel",
     "tabChat": "Chat",
     "tabSuggest": "Links",
+    "tabRelated": "Related",
     "mode": "Chat mode",
     "modeVault": "From notes",
     "modeGeneral": "General",
@@ -156,6 +157,15 @@
     "empty": "No similar unlinked notes found.",
     "accept": "Add",
     "dismiss": "Dismiss",
+    "recompute": "Recompute"
+  },
+  "related": {
+    "title": "Related notes",
+    "noFile": "Open a note to see related ones.",
+    "loading": "Finding related…",
+    "empty": "Nothing related above the threshold.",
+    "insert": "Insert link",
+    "threshold": "Threshold",
     "recompute": "Recompute"
   },
   "plugins": {

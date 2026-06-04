@@ -2,10 +2,12 @@ import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useChatStore } from '../../stores/chat';
+import { useRelatedStore } from '../../stores/related';
 import { useSuggestStore } from '../../stores/suggest';
 import { useUIStore } from '../../stores/ui';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { ChatView } from './ChatView';
+import { RelatedView } from './RelatedView';
 import { SuggestView } from './SuggestView';
 import styles from './AiPanel.module.css';
 
@@ -24,6 +26,7 @@ export function AiPanel() {
   const clearChat = useChatStore((s) => s.clear);
 
   const reloadSuggest = useSuggestStore((s) => s.load);
+  const reloadRelated = useRelatedStore((s) => s.load);
   const path = useWorkspaceStore(activePath);
 
   return (
@@ -46,6 +49,14 @@ export function AiPanel() {
           >
             {t('chat.tabSuggest')}
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'related'}
+            className={`${styles.tab} ${tab === 'related' ? styles.active : ''}`}
+            onClick={() => setTab('related')}
+          >
+            {t('chat.tabRelated')}
+          </button>
         </div>
 
         <span className={styles.badge} title={t('chat.localHint')}>
@@ -65,9 +76,9 @@ export function AiPanel() {
         ) : (
           <button
             className={styles.iconBtn}
-            onClick={() => void reloadSuggest(path)}
-            title={t('suggest.recompute')}
-            aria-label={t('suggest.recompute')}
+            onClick={() => void (tab === 'related' ? reloadRelated(path) : reloadSuggest(path))}
+            title={t(tab === 'related' ? 'related.recompute' : 'suggest.recompute')}
+            aria-label={t(tab === 'related' ? 'related.recompute' : 'suggest.recompute')}
           >
             <RefreshCw size={15} aria-hidden />
           </button>
@@ -83,7 +94,9 @@ export function AiPanel() {
         </button>
       </header>
 
-      <div className={styles.body}>{tab === 'chat' ? <ChatView /> : <SuggestView />}</div>
+      <div className={styles.body}>
+        {tab === 'chat' ? <ChatView /> : tab === 'related' ? <RelatedView /> : <SuggestView />}
+      </div>
     </aside>
   );
 }
