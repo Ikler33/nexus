@@ -183,3 +183,136 @@
   color: var(--color-text-faint);
   font-size: var(--text-sm);
 }
+
+/* секция «AI / Модели» */
+.hint {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.endpoint {
+  padding: var(--space-3) 0 var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+.subhead {
+  margin: var(--space-2) 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text);
+}
+.desc {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  line-height: 1.5;
+}
+.field {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.field span {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.field input {
+  width: 100%;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--motion-fast);
+}
+.field input::placeholder {
+  color: var(--color-text-faint);
+}
+.field input:focus {
+  border-color: var(--color-accent);
+}
+.testRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.ghostBtn {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 5px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.ghostBtn:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.ghostBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.badgeOk {
+  color: oklch(0.62 0.13 150);
+}
+.badgeFail {
+  color: oklch(0.6 0.18 25);
+}
+.spin {
+  animation: settings-spin 0.8s linear infinite;
+}
+@keyframes settings-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.saveBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+.primaryBtn {
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, white);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 7px 18px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: filter var(--motion-fast);
+}
+.primaryBtn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.primaryBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.okText {
+  font-size: var(--text-sm);
+  color: oklch(0.62 0.13 150);
+}
+.warnText {
+  font-size: var(--text-sm);
+  color: oklch(0.6 0.1 75);
+}

@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockGit from './mock/git';
 import * as mockPlugins from './mock/plugins';
+import * as mockSettings from './mock/settings';
 import * as mockVault from './mock/vault';
 
 /**
@@ -154,6 +155,24 @@ export type ChatStreamEvent =
   | { type: 'token'; text: string }
   | { type: 'done'; full: string }
   | { type: 'error'; message: string };
+
+/** AI-эндпоинт настроек (зеркалит Rust `settings::EndpointDto`). `model` опционален. */
+export interface AiEndpoint {
+  url: string;
+  model: string | null;
+}
+/** Текущая AI-конфигурация для формы настроек (зеркалит Rust `settings::AiConfigDto`). */
+export interface AiConfigDto {
+  chat: AiEndpoint | null;
+  embedding: AiEndpoint | null;
+}
+/** Результат записи AI-конфига (зеркалит Rust `settings::SetAiResult`). */
+export interface SetAiResult {
+  /** Chat применён немедленно (без перезапуска). */
+  chatApplied: boolean;
+  /** Embedding изменился → нужен перезапуск приложения для переиндексации. */
+  embeddingChanged: boolean;
+}
 
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
@@ -344,6 +363,25 @@ export const tauriApi = {
       isTauri()
         ? invoke<string>('git_resolve_conflicts', { theirs, resolutions })
         : mockGit.resolveConflicts(theirs, resolutions),
+  },
+
+  settings: {
+    /** Текущая AI-конфигурация из `.nexus/local.json` — для префилла формы (раздел «AI / Модели»). */
+    getAiConfig: (): Promise<AiConfigDto> =>
+      isTauri() ? invoke<AiConfigDto>('get_ai_config') : mockSettings.getAiConfig(),
+
+    /**
+     * Записывает AI-конфиг в `.nexus/local.json` (сохраняя прочие ключи) и ГОРЯЧО применяет chat.
+     * `embeddingChanged` в ответе → UI просит перезапуск (индексатор перечитает конфиг при старте).
+     */
+    setAiConfig: (chat: AiEndpoint | null, embedding: AiEndpoint | null): Promise<SetAiResult> =>
+      isTauri()
+        ? invoke<SetAiResult>('set_ai_config', { chat, embedding })
+        : mockSettings.setAiConfig(chat, embedding),
+
+    /** Проверка связи с LLM-эндпоинтом (пробный GET `/v1/models`). Резолвится = достижим; throw = нет. */
+    testConnection: (url: string): Promise<void> =>
+      isTauri() ? invoke<void>('test_ai_connection', { url }) : mockSettings.testConnection(url),
   },
 };
 
