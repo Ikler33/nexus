@@ -21,13 +21,8 @@ export default defineConfig({
       ignored: ['**/src-tauri/**'],
     },
   },
-  // Пребандлим тяжёлые ЛЕНИВО-подгружаемые зависимости графа на старте dev-сервера. Иначе Vite
-  // оптимизирует их при ПЕРВОМ открытии графа на лету и делает full-reload вебвью
-  // («✨ new dependencies optimized … reloading») — выглядит как «перезапуск приложения» (ложный
-  // «вылет графа», диагностика июнь 2026). Прод-сборки (`vite build`) не касается — там всё пребандлено.
-  optimizeDeps: {
-    include: ['graphology', 'graphology-layout-forceatlas2', 'sigma'],
-  },
+  // (Граф переписан на чистый SVG — тяжёлых лениво-подгружаемых граф-зависимостей больше нет, поэтому
+  // прежний `optimizeDeps.include` для sigma/graphology удалён вместе с самими зависимостями.)
   // Переменные окружения Tauri доступны во фронте.
   envPrefix: ['VITE_', 'TAURI_ENV_'],
   build: {

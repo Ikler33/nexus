@@ -205,7 +205,15 @@
   `[vite] ✨ new dependencies optimized: graphology-layout-forceatlas2 … reloading`. Корень: dev-only
   ленивая до-оптимизация Vite граф-зависимостей → full-reload. Фикс: `optimizeDeps.include`
   (graphology/sigma/forceatlas2) в `vite.config.ts`. Прод-сборки не касалось. Баг в BACKLOG → закрыт.
-  PR открыт, мерж на зелёном. **Последний 🔴-баг снят.** Следующий: выбор владельца (V4.4 / V2.2).
+  **PR #41 смержен.** Последний 🔴-баг снят.
+- ✅ **Граф: интерактив по дизайну** (выбор владельца; новый дизайн `graph.jsx` из Hermes.zip). sigma.js →
+  кастомный **SVG force-directed**: drag (соседи подтягиваются), hover-подсветка, активная нота
+  пульс/ripple/кольцо, kin-кольца, «поток» по рёбрам, local(глубина)/full, счётчик, загрузка. Логика —
+  `graph-sim.ts` (8 юнит-тестов); view `GraphView.tsx` — human-verify (исключён из coverage). Удалены
+  sigma/graphology/forceatlas2 + worker + optimizeDeps. Frontend 90 тестов + coverage 67.95% зелёные,
+  tsc/eslint/build ok. ⚠️ Симуляция main-thread (worker-layout заменён, AC-PERF-6) — узлы капнуты.
+  Отложено: теги-цвета/фильтр (нужны теги на узлах из БД) + render-smoke. PR открыт, мерж на зелёном.
+  Дальше по списку: V4.4 (общий чат) / V2.2 (rename) / граф-теги.
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;

@@ -23,6 +23,9 @@ export default defineConfig({
         'src/main.tsx', // точка входа (бутстрап рендера) — не юнит-тестируется
         'src/**/*.d.ts',
         'src/vite-env.d.ts',
+        // SVG/rAF/drag view-слой графа: логика вынесена в graph-sim.ts (юнит-тесты), визуал —
+        // проверка человеком (visual-regression — отдельный слой, TESTING_STRATEGY §3/§7).
+        'src/components/graph/GraphView.tsx',
       ],
       reporter: ['text-summary', 'json-summary', 'lcov'],
       // Храповик «не ниже»: пороги чуть ниже фактического baseline (запас на шум v8).
