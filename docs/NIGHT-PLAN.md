@@ -194,6 +194,14 @@
   начать с **V4.1 вариант «aliases-only line-парсер»** (без YAML-либы, контейнерно) ИЛИ согласовать
   YAML-подход. Перед стартом: `git fetch && checkout main && pull`.
 
+### Утро — продолжение с владельцем
+- ✅ **V4.1 — Frontmatter `aliases` + резолв `[[Алиас]]`** (выбор владельца: вариант aliases-only
+  line-парсер, без YAML-либы). Парсер: 3 формы (инлайн/блок/скаляр). Индексатор: таблица `aliases`
+  (OR REPLACE на UNIQUE), `resolve_target`/`resolve_all_dangling` + обратный резолв расширены на алиасы
+  (forward+backward, путь приоритетнее). Rust 113+9 зелёные. Отложено: **полный typed-frontmatter** —
+  NEEDS-DECISION по YAML-подходу (записано). PR открыт, мерж на зелёном.
+  Следующий: на выбор владельца (V4.4 общий чат / V2.2 rename / прочее).
+
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;
 crash-reconcile usearch (§5.1, `27f5e0c`); **Ф1-12** bge-m3 (AC-EVAL-6 закрыт; eval recall@8=1.0,

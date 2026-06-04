@@ -49,6 +49,8 @@ pub struct ParsedDocument {
     pub links: Vec<ParsedLink>,
     /// Нормализованные (lowercase) уникальные теги, отсортированы.
     pub tags: Vec<String>,
+    /// Алиасы из frontmatter (`aliases:`/`alias:`) — для резолва `[[Алиас]]` (V4.1).
+    pub aliases: Vec<String>,
     pub word_count: usize,
 }
 
@@ -69,6 +71,7 @@ pub fn parse(content: &str) -> ParsedDocument {
         frontmatter: frontmatter.map(str::to_owned),
         links,
         tags: tags.into_iter().collect(),
+        aliases: frontmatter.map(frontmatter_aliases).unwrap_or_default(),
         word_count: body.split_whitespace().count(),
     }
 }
@@ -217,6 +220,58 @@ fn frontmatter_title(fm: &str) -> Option<String> {
     })
 }
 
+/// Извлекает алиасы из frontmatter (V4.1) минимальным line-парсером — без YAML-либы (serde_yaml
+/// архивирован → security-гейт). Формы: `aliases: [A, B]` (инлайн), `alias: A` (скаляр) и блок:
+/// ```text
+/// aliases:
+///   - A
+///   - B
+/// ```
+/// Берёт ПЕРВЫЙ ключ `aliases:`/`alias:`. Сложный YAML (вложенность/многострочные) не покрывается —
+/// полный typed-frontmatter — отдельным решением по YAML-подходу (NEEDS-DECISION).
+fn frontmatter_aliases(fm: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut lines = fm.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix("aliases:")
+            .or_else(|| trimmed.strip_prefix("alias:"))
+        else {
+            continue;
+        };
+        let rest = rest.trim();
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            for item in inner.split(',') {
+                push_alias(&mut out, item);
+            }
+        } else if rest.is_empty() {
+            // Блочный список: подряд идущие `- value`.
+            while let Some(next) = lines.peek() {
+                match next.trim_start().strip_prefix('-') {
+                    Some(item) => {
+                        push_alias(&mut out, item);
+                        lines.next();
+                    }
+                    None => break,
+                }
+            }
+        } else {
+            push_alias(&mut out, rest);
+        }
+        break; // только первый ключ aliases
+    }
+    out
+}
+
+/// Чистит значение алиаса (тримит кавычки/пробелы) и добавляет, если непусто и ещё нет.
+fn push_alias(out: &mut Vec<String>, raw: &str) {
+    let v = raw.trim().trim_matches(['"', '\'']).trim();
+    if !v.is_empty() && !out.iter().any(|a| a == v) {
+        out.push(v.to_string());
+    }
+}
+
 /// Нормализует цель ссылки: убирает `|alias` и `#heading`, тримит. `None`, если пусто.
 fn normalize_target(raw: &str) -> Option<String> {
     let no_alias = raw.split('|').next().unwrap_or(raw);
@@ -303,6 +358,33 @@ mod tests {
             doc.tags,
             vec!["area/sub".to_string(), "project".to_string()]
         );
+        assert_eq!(doc.aliases, vec!["Alt".to_string()]);
+    }
+
+    #[test]
+    fn frontmatter_aliases_inline_block_scalar() {
+        // инлайн-список (с кавычками и пробелами)
+        assert_eq!(
+            parse("---\naliases: [Alt, \"Second Name\", 'Third']\n---\nbody\n").aliases,
+            vec![
+                "Alt".to_string(),
+                "Second Name".to_string(),
+                "Third".to_string()
+            ]
+        );
+        // блочный список (прерывается на следующем ключе)
+        assert_eq!(
+            parse("---\ntitle: X\naliases:\n  - One\n  - Two\ntags: [t]\n---\nbody\n").aliases,
+            vec!["One".to_string(), "Two".to_string()]
+        );
+        // скаляр (alias: единственное число тоже)
+        assert_eq!(
+            parse("---\nalias: Solo\n---\nb\n").aliases,
+            vec!["Solo".to_string()]
+        );
+        // нет алиасов / нет frontmatter
+        assert!(parse("---\ntitle: X\n---\nb\n").aliases.is_empty());
+        assert!(parse("no frontmatter [[X]]\n").aliases.is_empty());
     }
 
     #[test]
