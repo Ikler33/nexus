@@ -16,6 +16,8 @@ export function ChatView() {
   const { t } = useTranslation();
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
+  const grounded = useChatStore((s) => s.grounded);
+  const setGrounded = useChatStore((s) => s.setGrounded);
   const send = useChatStore((s) => s.send);
   const stop = useChatStore((s) => s.stop);
   const center = useWorkspaceStore(activePath);
@@ -80,6 +82,31 @@ export function ChatView() {
             ))}
           </div>
         )}
+      </div>
+
+      <div className={styles.modeRow} role="radiogroup" aria-label={t('chat.mode')}>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={grounded}
+          className={`${styles.modeBtn} ${grounded ? styles.modeOn : ''}`}
+          onClick={() => setGrounded(true)}
+          disabled={streaming}
+          title={t('chat.modeVaultHint')}
+        >
+          {t('chat.modeVault')}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!grounded}
+          className={`${styles.modeBtn} ${!grounded ? styles.modeOn : ''}`}
+          onClick={() => setGrounded(false)}
+          disabled={streaming}
+          title={t('chat.modeGeneralHint')}
+        >
+          {t('chat.modeGeneral')}
+        </button>
       </div>
 
       <form

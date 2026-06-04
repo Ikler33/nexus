@@ -201,6 +201,16 @@ pub fn build_rag_messages(question: &str, contexts: &[(String, String)]) -> Vec<
     vec![ChatMessage::system(SYSTEM), ChatMessage::user(user)]
 }
 
+/// Сообщения для **общего** чата (V4.4): без грунтинга в vault — обычный ассистент, отвечает напрямую
+/// из знаний модели. RAG-ретрив НЕ выполняется (см. `chat_rag` при `grounded=false`). Никакого
+/// контекста заметок и требования цитировать источники — это режим «спросить модель», не «по базе».
+pub fn build_chat_messages(question: &str) -> Vec<ChatMessage> {
+    const SYSTEM: &str = "Ты — полезный ассистент. Отвечай ясно и по делу на языке вопроса. \
+        Это общий чат без доступа к заметкам пользователя — отвечай из собственных знаний и, если \
+        чего-то не знаешь, честно скажи об этом.";
+    vec![ChatMessage::system(SYSTEM), ChatMessage::user(question)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +248,19 @@ mod tests {
         let msgs = build_rag_messages("Вопрос?", &[]);
         assert!(msgs[1].content.contains("не найден"));
         assert!(msgs[1].content.contains("Вопрос?"));
+    }
+
+    /// V4.4: общий чат — system без vault-грунтинга, user = чистый вопрос (без контекста/источников).
+    #[test]
+    fn build_chat_messages_is_ungrounded() {
+        let msgs = build_chat_messages("Столица Франции?");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "system");
+        assert_eq!(msgs[1].role, "user");
+        assert_eq!(msgs[1].content, "Столица Франции?");
+        // Никакого vault-грунтинга: ни «контекст из заметок», ни требования цитировать [1].
+        assert!(!msgs[0].content.contains("заметок ["));
+        assert!(!msgs[1].content.contains("Контекст"));
     }
 
     /// Живой стриминг против Qwen на 192.168.0.172:8080 (`cargo test -- --ignored`).

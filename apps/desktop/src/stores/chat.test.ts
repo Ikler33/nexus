@@ -5,7 +5,7 @@ import { useChatStore } from './chat';
 
 // В vitest (не Tauri) `streamRag` проксируется в мок `mock/vault.streamChat` (sources→токены→done).
 beforeEach(() => {
-  useChatStore.setState({ messages: [], streaming: false });
+  useChatStore.setState({ messages: [], streaming: false, grounded: true });
 });
 
 afterEach(() => {
@@ -37,6 +37,45 @@ describe('chat store (Ф1-8)', () => {
     useChatStore.getState().send('   ');
     expect(useChatStore.getState().messages).toHaveLength(0);
     expect(useChatStore.getState().streaming).toBe(false);
+  });
+
+  it('vault-режим (дефолт) шлёт grounded:true; общий — grounded:false (V4.4)', () => {
+    const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+
+    useChatStore.getState().send('вопрос');
+    expect(spy).toHaveBeenLastCalledWith(
+      'вопрос',
+      expect.any(Function),
+      expect.objectContaining({ grounded: true }),
+    );
+
+    useChatStore.setState({ messages: [], streaming: false });
+    useChatStore.getState().setGrounded(false);
+    expect(useChatStore.getState().grounded).toBe(false);
+    useChatStore.getState().send('привет');
+    expect(spy).toHaveBeenLastCalledWith(
+      'привет',
+      expect.any(Function),
+      expect.objectContaining({ grounded: false }),
+    );
+  });
+
+  it('общий чат: ретрив не вызывается → ответ без источников (V4.4)', async () => {
+    useChatStore.getState().setGrounded(false);
+    useChatStore.getState().send('Roadmap');
+    await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
+      timeout: 2000,
+    });
+    const reply = useChatStore.getState().messages[1];
+    expect(reply.content.length).toBeGreaterThan(0);
+    expect(reply.sources?.length ?? 0).toBe(0); // общий режим источников не возвращает
+  });
+
+  it('setGrounded игнорируется во время стрима', () => {
+    vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    useChatStore.getState().send('Roadmap'); // streaming=true
+    useChatStore.getState().setGrounded(false);
+    expect(useChatStore.getState().grounded).toBe(true); // на лету не переключается
   });
 
   it('stop прекращает стрим', () => {
