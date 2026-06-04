@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Единый прогон всех проверок локально (кросс-план #4г, TESTING_STRATEGY §7 шаг 1).
+# Те же гейты, что в CI — «зелено локально ⇒ зелено в CI». Fail-fast.
+#   bash scripts/test-all.sh
+set -euo pipefail
+cd "$(dirname "$0")/.."
+# shellcheck disable=SC1091
+source "$HOME/.cargo/env" 2>/dev/null || true
+
+echo "── preflight (гигиена дерева) ──"
+node scripts/preflight.mjs
+
+echo "── traceability (AC↔тест + имена) + #[ignore]-гейт ──"
+node scripts/check-traceability.mjs
+node scripts/check-ignored.mjs
+
+echo "── Rust: fmt · clippy · test ──"
+(
+  cd apps/desktop/src-tauri
+  cargo fmt --all -- --check
+  cargo clippy --all-targets -- -D warnings
+  cargo test
+)
+
+echo "── Frontend: tsc · eslint · vitest · build ──"
+(
+  cd apps/desktop
+  pnpm exec tsc --noEmit
+  pnpm exec eslint .
+  pnpm exec vitest run
+  pnpm exec vite build
+)
+
+echo "✅ Все проверки пройдены."

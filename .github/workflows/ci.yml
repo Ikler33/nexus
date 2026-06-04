@@ -121,4 +121,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # Traceability + существование имён tests[] (кросс-план #4а) + гейт #[ignore] (#4б).
       - run: node scripts/check-traceability.mjs
+      - run: node scripts/check-ignored.mjs
