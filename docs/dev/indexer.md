@@ -58,6 +58,13 @@
 (кратчайший путь при неоднозначности — упрощённо). Обратный: при появлении файла висячие
 ссылки на него (`target_id IS NULL`, совпадение по нормализованным формам) до-резолвятся.
 
+**Алиасы (V4.1).** Frontmatter `aliases:` (инлайн `[A,B]` / блочный `- A` / скаляр `alias: A`) парсятся
+мини line-парсером (без YAML-либы — `serde_yaml` архивирован) и пишутся в таблицу `aliases`
+(полная замена на файл; `OR REPLACE` на глобальном `UNIQUE(alias)`). `resolve_target` и
+`resolve_all_dangling` после path-матча падают на алиас (`COALESCE(path, alias)`), а обратный резолв
+обновляет висячие ссылки и по алиасам файла — так `[[Алиас]]` находит цель forward и backward. **Путь
+приоритетнее алиаса.** Полный typed-frontmatter (`progress/due/…`) — NEEDS-DECISION по YAML-подходу.
+
 ## Тесты
 - parser: frontmatter/title/links/tags, исключение кода, номера строк.
 - watcher: `is_ignored` (AC-Б9-2), `normalize` (AC-Б9-3).

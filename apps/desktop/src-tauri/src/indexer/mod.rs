@@ -182,6 +182,16 @@ impl Indexer {
                     |r| r.get(0),
                 )?;
 
+                // Алиасы из frontmatter (V4.1): полная замена. UNIQUE(alias) глобальный →
+                // OR REPLACE (последний проиндексированный файл выигрывает спорный алиас).
+                tx.execute("DELETE FROM aliases WHERE file_id=?1", [file_id])?;
+                for alias in &parsed.aliases {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO aliases (file_id, alias) VALUES (?1, ?2)",
+                        params![file_id, alias],
+                    )?;
+                }
+
                 // Исходящие ссылки: полная замена (DELETE + INSERT с прямым резолвом цели).
                 tx.execute("DELETE FROM links WHERE source_id=?1", [file_id])?;
                 for link in &parsed.links {
@@ -212,11 +222,17 @@ impl Indexer {
                     )?;
                 }
 
-                // Обратный резолв: висячие ссылки на этот файл получают target_id.
+                // Обратный резолв: висячие ссылки на этот файл получают target_id (путь + алиасы).
                 for form in &forms {
                     tx.execute(
                         "UPDATE links SET target_id=?1 WHERE target_id IS NULL AND target_raw=?2",
                         params![file_id, form],
+                    )?;
+                }
+                for alias in &parsed.aliases {
+                    tx.execute(
+                        "UPDATE links SET target_id=?1 WHERE target_id IS NULL AND target_raw=?2",
+                        params![file_id, alias],
                     )?;
                 }
 
@@ -506,13 +522,26 @@ pub fn spawn(indexer: Indexer) {
     });
 }
 
-/// Резолвит цель ссылки в `file_id` (точный путь, путь+`.md`, basename ± `.md`).
+/// Резолвит цель ссылки в `file_id` (точный путь, путь+`.md`, basename ± `.md`; затем алиас).
+/// Путь имеет приоритет над алиасом (реальный файл `X` важнее алиаса `X`).
 fn resolve_target(tx: &Transaction, target_raw: &str) -> rusqlite::Result<Option<i64>> {
+    let by_path = tx
+        .query_row(
+            "SELECT id FROM files WHERE is_deleted=0 AND ( \
+               path = ?1 OR path = ?1 || '.md' \
+               OR path LIKE '%/' || ?1 OR path LIKE '%/' || ?1 || '.md' \
+             ) ORDER BY length(path) LIMIT 1",
+            [target_raw],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if by_path.is_some() {
+        return Ok(by_path);
+    }
+    // Фолбэк: точное совпадение с алиасом (V4.1), файл не удалён.
     tx.query_row(
-        "SELECT id FROM files WHERE is_deleted=0 AND ( \
-           path = ?1 OR path = ?1 || '.md' \
-           OR path LIKE '%/' || ?1 OR path LIKE '%/' || ?1 || '.md' \
-         ) ORDER BY length(path) LIMIT 1",
+        "SELECT a.file_id FROM aliases a JOIN files f ON f.id = a.file_id \
+         WHERE f.is_deleted=0 AND a.alias = ?1 LIMIT 1",
         [target_raw],
         |r| r.get(0),
     )
@@ -522,11 +551,13 @@ fn resolve_target(tx: &Transaction, target_raw: &str) -> rusqlite::Result<Option
 /// До-резолвит ВСЕ висячие ссылки (после начального скана — закрывает порядок индексации).
 fn resolve_all_dangling(tx: &Transaction) -> rusqlite::Result<()> {
     tx.execute(
-        "UPDATE links SET target_id = ( \
-           SELECT f.id FROM files f WHERE f.is_deleted=0 AND ( \
-             f.path = links.target_raw OR f.path = links.target_raw || '.md' \
-             OR f.path LIKE '%/' || links.target_raw OR f.path LIKE '%/' || links.target_raw || '.md' \
-           ) ORDER BY length(f.path) LIMIT 1 \
+        "UPDATE links SET target_id = COALESCE( \
+           ( SELECT f.id FROM files f WHERE f.is_deleted=0 AND ( \
+               f.path = links.target_raw OR f.path = links.target_raw || '.md' \
+               OR f.path LIKE '%/' || links.target_raw OR f.path LIKE '%/' || links.target_raw || '.md' \
+             ) ORDER BY length(f.path) LIMIT 1 ), \
+           ( SELECT a.file_id FROM aliases a JOIN files f ON f.id = a.file_id \
+             WHERE f.is_deleted=0 AND a.alias = links.target_raw LIMIT 1 ) \
          ) WHERE target_id IS NULL",
         [],
     )?;
@@ -636,6 +667,58 @@ mod tests {
             })
             .await
             .unwrap()
+    }
+
+    /// Алиасы файла (отсортированы).
+    async fn read_aliases(db: &Database, file_id: i64) -> Vec<String> {
+        db.reader()
+            .query(move |c| {
+                let mut s =
+                    c.prepare("SELECT alias FROM aliases WHERE file_id=?1 ORDER BY alias")?;
+                let v = s
+                    .query_map([file_id], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(v)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// V4.1: `[[Алиас]]` резолвится в файл, объявивший алиас в frontmatter (forward и backward),
+    /// таблица `aliases` заполняется.
+    #[tokio::test]
+    async fn aliases_resolve_links_and_populate_table() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(
+            root.join("Target.md"),
+            "---\naliases: [MyAlias, Second]\n---\n# Target\n",
+        )
+        .unwrap();
+        fs::write(root.join("Fwd.md"), "see [[MyAlias]]\n").unwrap();
+        fs::write(root.join("Bwd.md"), "see [[Second]]\n").unwrap();
+
+        let db = open(&root).await;
+        let idx = Indexer::new(&db, root.clone());
+
+        // Backward: Bwd индексируется ДО Target (ссылка висячая) → резолв при индексации Target по алиасу.
+        idx.index_file("Bwd.md").await.unwrap();
+        idx.index_file("Target.md").await.unwrap();
+        // Forward: Fwd индексируется ПОСЛЕ Target → резолв алиаса при вставке ссылки.
+        idx.index_file("Fwd.md").await.unwrap();
+
+        let target_id = file_id(&db, "Target.md").await;
+        let mut bl = backlink_sources(&db, target_id).await;
+        bl.sort();
+        assert_eq!(
+            bl,
+            vec!["Bwd.md".to_string(), "Fwd.md".to_string()],
+            "[[Алиас]] резолвится и forward, и backward"
+        );
+        assert_eq!(
+            read_aliases(&db, target_id).await,
+            vec!["MyAlias".to_string(), "Second".to_string()]
+        );
     }
 
     /// AC-Б9-1: atomic-save (перезапись того же пути) сохраняет file_id, беклинки целы.
