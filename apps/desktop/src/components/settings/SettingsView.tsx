@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Cpu, Info, Keyboard, Palette, X } from 'lucide-react';
+import { AlertCircle, Check, Cpu, Info, Keyboard, Loader2, Palette, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
@@ -66,7 +66,7 @@ export function SettingsView() {
             <X size={16} aria-hidden />
           </button>
           {section === 'appearance' && <AppearanceSection />}
-          {section === 'ai' && <Stub text={t('settings.soon')} />}
+          {section === 'ai' && <AiSection />}
           {section === 'hotkeys' && <Stub text={t('settings.soon')} />}
           {section === 'about' && <AboutSection />}
         </div>
@@ -171,6 +171,188 @@ function AboutSection() {
         <dd className={styles.mono}>{vaultRoot ?? t('settings.noVault')}</dd>
       </dl>
     </>
+  );
+}
+
+type TestState = { status: 'idle' | 'testing' | 'ok' | 'fail'; msg?: string };
+
+/**
+ * Секция «AI / Модели» (кросс-план #11, слайс 2): форма эндпоинтов chat/embedding с проверкой связи
+ * и сохранением в `.nexus/local.json` через нативные команды. Chat применяется немедленно; смена
+ * embedding требует перезапуска (на нём висит индексатор) — об этом сообщаем после сохранения.
+ */
+function AiSection() {
+  const { t } = useTranslation();
+  const [chatUrl, setChatUrl] = useState('');
+  const [chatModel, setChatModel] = useState('');
+  const [embUrl, setEmbUrl] = useState('');
+  const [embModel, setEmbModel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [restart, setRestart] = useState(false);
+  const [chatTest, setChatTest] = useState<TestState>({ status: 'idle' });
+  const [embTest, setEmbTest] = useState<TestState>({ status: 'idle' });
+
+  useEffect(() => {
+    let alive = true;
+    void tauriApi.settings.getAiConfig().then((cfg) => {
+      if (!alive) return;
+      setChatUrl(cfg.chat?.url ?? '');
+      setChatModel(cfg.chat?.model ?? '');
+      setEmbUrl(cfg.embedding?.url ?? '');
+      setEmbModel(cfg.embedding?.model ?? '');
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const runTest = async (url: string, set: (s: TestState) => void) => {
+    const u = url.trim();
+    if (!u) {
+      set({ status: 'fail', msg: t('settings.aiSec.urlRequired') });
+      return;
+    }
+    set({ status: 'testing' });
+    try {
+      await tauriApi.settings.testConnection(u);
+      set({ status: 'ok' });
+    } catch (e) {
+      set({ status: 'fail', msg: String(e) });
+    }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    const chat = chatUrl.trim() ? { url: chatUrl.trim(), model: chatModel.trim() || null } : null;
+    const embedding = embUrl.trim()
+      ? { url: embUrl.trim(), model: embModel.trim() || null }
+      : null;
+    try {
+      const res = await tauriApi.settings.setAiConfig(chat, embedding);
+      setRestart(res.embeddingChanged);
+      setSaved(true);
+    } catch (e) {
+      setChatTest({ status: 'fail', msg: String(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <h2 className={styles.h2}>{t('settings.ai')}</h2>
+      <p className={styles.hint}>{t('settings.aiSec.intro')}</p>
+
+      <Endpoint
+        title={t('settings.aiSec.chatTitle')}
+        desc={t('settings.aiSec.chatDesc')}
+        url={chatUrl}
+        model={chatModel}
+        onUrl={setChatUrl}
+        onModel={setChatModel}
+        test={chatTest}
+        onTest={() => void runTest(chatUrl, setChatTest)}
+      />
+      <Endpoint
+        title={t('settings.aiSec.embTitle')}
+        desc={t('settings.aiSec.embDesc')}
+        url={embUrl}
+        model={embModel}
+        onUrl={setEmbUrl}
+        onModel={setEmbModel}
+        test={embTest}
+        onTest={() => void runTest(embUrl, setEmbTest)}
+      />
+
+      <div className={styles.saveBar}>
+        <button type="button" className={styles.primaryBtn} onClick={() => void save()} disabled={saving}>
+          {saving ? t('settings.aiSec.saving') : t('settings.aiSec.save')}
+        </button>
+        {saved && !restart && <span className={styles.okText}>{t('settings.aiSec.saved')}</span>}
+        {saved && restart && <span className={styles.warnText}>{t('settings.aiSec.restart')}</span>}
+      </div>
+    </>
+  );
+}
+
+function Endpoint(props: {
+  title: string;
+  desc: string;
+  url: string;
+  model: string;
+  onUrl: (v: string) => void;
+  onModel: (v: string) => void;
+  test: TestState;
+  onTest: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className={styles.endpoint}>
+      <h3 className={styles.subhead}>{props.title}</h3>
+      <p className={styles.desc}>{props.desc}</p>
+      <label className={styles.field}>
+        <span>{t('settings.aiSec.url')}</span>
+        <input
+          type="text"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          placeholder="http://127.0.0.1:8080"
+          value={props.url}
+          onChange={(e) => props.onUrl(e.target.value)}
+        />
+      </label>
+      <label className={styles.field}>
+        <span>{t('settings.aiSec.model')}</span>
+        <input
+          type="text"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          placeholder={t('settings.aiSec.modelPlaceholder')}
+          value={props.model}
+          onChange={(e) => props.onModel(e.target.value)}
+        />
+      </label>
+      <div className={styles.testRow}>
+        <button
+          type="button"
+          className={styles.ghostBtn}
+          onClick={props.onTest}
+          disabled={props.test.status === 'testing'}
+        >
+          {t('settings.aiSec.test')}
+        </button>
+        <TestBadge state={props.test} />
+      </div>
+    </section>
+  );
+}
+
+function TestBadge({ state }: { state: TestState }) {
+  const { t } = useTranslation();
+  if (state.status === 'idle') return null;
+  if (state.status === 'testing')
+    return (
+      <span className={styles.badge}>
+        <Loader2 size={14} className={styles.spin} aria-hidden />
+        {t('settings.aiSec.testing')}
+      </span>
+    );
+  if (state.status === 'ok')
+    return (
+      <span className={`${styles.badge} ${styles.badgeOk}`}>
+        <Check size={14} aria-hidden />
+        {t('settings.aiSec.reachable')}
+      </span>
+    );
+  return (
+    <span className={`${styles.badge} ${styles.badgeFail}`} title={state.msg}>
+      <AlertCircle size={14} aria-hidden />
+      {t('settings.aiSec.unreachable')}
+    </span>
   );
 }
 
