@@ -165,7 +165,14 @@
 - ✅ **V2.1 — Анти-SSRF core-redirect** (AC-SEC-4 / ревью C5). 3 core-клиента (embedder×2, chat) → общий
   `ai::core_client_builder()` с `redirect(Policy::none())`; тест `core_client_does_not_follow_redirects`
   (локальный 302-сервер, zero-dep). `is_private_host` к ядру НЕ применяется (LLM локальны by design).
-  Rust 110+9 зелёные, fmt/clippy ok. PR открыт, мерж на зелёном. Следующий: **V2.2 (rename-as-move)**.
+  Rust 110+9 зелёные, fmt/clippy ok. **PR #37 смержен.**
+- ✅ **V2.3 — Граф: guard лимита SQLite-переменных** (ревью A9; взят вне очереди до V2.2 — contained +
+  адресует баг вылета графа). `get_local_graph`/`get_full_graph`: все `IN`-запросы чанкуются
+  (`collect_in_chunks` ≤900; рёбра — одиночный `source IN (chunk)` + фильтр target∈ids вместо двойного
+  IN; BFS-фронтир по 450). Результат полный, без обрезки. Тест `super_hub_does_not_exceed_sql_var_limit`
+  (хаб 1000 связей, фикстура через `WriteActor::transaction`). Снимает 1 из 3 гипотез вылета графа (корень
+  ждёт артефакт владельца). Rust 111+9 зелёные. PR открыт, мерж на зелёном.
+  Следующий: **V2.4 (chat-throttle, frontend)** — V2.2 (rename) finicky-watcher, ниже приоритетом.
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;

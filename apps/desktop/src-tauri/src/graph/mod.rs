@@ -8,6 +8,34 @@ use serde::Serialize;
 
 use crate::db::{DbResult, ReadPool};
 
+/// Безопасный батч bind-параметров на один SQLite-запрос. Современный bundled-SQLite держит 32766,
+/// но чанкуем по 900 — переносимо (старые сборки = 999) и с двойным запасом (часть запросов повторяет
+/// набор в `IN` дважды). Граф на супер-хабе (узел с десятками тысяч связей) иначе ловил
+/// `too many SQL variables` и валил команду (ревью A9). Чанкинг сохраняет ПОЛНЫЙ результат (без обрезки).
+const SQL_VAR_CHUNK: usize = 900;
+
+/// Гоняет запрос с одним `IN ({ph})` по `ids` чанками ≤ [`SQL_VAR_CHUNK`] и собирает строки.
+/// `make_sql(ph)` строит SQL по строке плейсхолдеров; `map_row` маппит строку результата.
+fn collect_in_chunks<T>(
+    c: &rusqlite::Connection,
+    ids: &[i64],
+    make_sql: impl Fn(&str) -> String,
+    map_row: impl Fn(&rusqlite::Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<Vec<T>> {
+    let mut out = Vec::new();
+    for chunk in ids.chunks(SQL_VAR_CHUNK) {
+        let ph = vec!["?"; chunk.len()].join(",");
+        let mut stmt = c.prepare(&make_sql(&ph))?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            chunk.iter().map(|x| x as &dyn rusqlite::ToSql).collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |r| map_row(r))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        out.extend(rows);
+    }
+    Ok(out)
+}
+
 /// Обратная ссылка: кто и в каком контексте ссылается на файл.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -93,68 +121,70 @@ pub async fn get_local_graph(reader: &ReadPool, center: String, hops: u32) -> Db
                 if frontier.is_empty() {
                     break;
                 }
-                let ph = vec!["?"; frontier.len()].join(",");
-                let sql = format!(
-                    "SELECT source_id, target_id FROM links \
-                     WHERE target_id IS NOT NULL AND (source_id IN ({ph}) OR target_id IN ({ph}))"
-                );
-                let mut stmt = c.prepare(&sql)?;
-                let params: Vec<&dyn rusqlite::ToSql> = frontier
-                    .iter()
-                    .chain(frontier.iter())
-                    .map(|x| x as &dyn rusqlite::ToSql)
-                    .collect();
-                let neighbors = stmt
-                    .query_map(params.as_slice(), |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-
+                // Чанкуем frontier по SQL_VAR_CHUNK/2 (набор повторяется в `source_id OR target_id`),
+                // иначе супер-хаб даёт тысячи bind-переменных → `too many SQL variables` (ревью A9).
                 let mut next = Vec::new();
-                for (s, t) in neighbors {
-                    for n in [s, t] {
-                        if ids.insert(n) {
-                            next.push(n);
+                for batch in frontier.chunks(SQL_VAR_CHUNK / 2) {
+                    let ph = vec!["?"; batch.len()].join(",");
+                    let sql = format!(
+                        "SELECT source_id, target_id FROM links \
+                         WHERE target_id IS NOT NULL AND (source_id IN ({ph}) OR target_id IN ({ph}))"
+                    );
+                    let mut stmt = c.prepare(&sql)?;
+                    let params: Vec<&dyn rusqlite::ToSql> = batch
+                        .iter()
+                        .chain(batch.iter())
+                        .map(|x| x as &dyn rusqlite::ToSql)
+                        .collect();
+                    let neighbors = stmt
+                        .query_map(params.as_slice(), |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    for (s, t) in neighbors {
+                        for n in [s, t] {
+                            if ids.insert(n) {
+                                next.push(n);
+                            }
                         }
                     }
                 }
                 frontier = next;
             }
 
-            let id_ph = vec!["?"; ids.len()].join(",");
-            let id_params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|x| x as &dyn rusqlite::ToSql).collect();
-
-            let mut nstmt = c.prepare(&format!(
-                "SELECT id, path, title FROM files WHERE id IN ({id_ph})"
-            ))?;
-            let nodes = nstmt
-                .query_map(id_params.as_slice(), |r| {
+            let id_vec: Vec<i64> = ids.iter().copied().collect();
+            let nodes = collect_in_chunks(
+                c,
+                &id_vec,
+                |ph| format!("SELECT id, path, title FROM files WHERE id IN ({ph})"),
+                |r| {
                     Ok(GraphNode {
                         id: r.get(0)?,
                         path: r.get(1)?,
                         title: r.get(2)?,
                     })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+                },
+            )?;
 
-            let edge_params: Vec<&dyn rusqlite::ToSql> = ids
-                .iter()
-                .chain(ids.iter())
-                .map(|x| x as &dyn rusqlite::ToSql)
+            // Рёбра: одиночный `source_id IN (chunk)` + фильтр `target ∈ ids` в Rust — избегаем
+            // двойного IN (source AND target), вдвое сокращая bind-переменные на запрос. Результат
+            // тот же (рёбра внутри набора узлов); source_id разбивает чанки → дублей (s,t) нет.
+            let raw_edges = collect_in_chunks(
+                c,
+                &id_vec,
+                |ph| {
+                    format!(
+                        "SELECT DISTINCT source_id, target_id FROM links \
+                         WHERE target_id IS NOT NULL AND source_id IN ({ph})"
+                    )
+                },
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )?;
+            let edges: Vec<GraphEdge> = raw_edges
+                .into_iter()
+                .filter(|(_, t)| ids.contains(t))
+                .map(|(source, target)| GraphEdge { source, target })
                 .collect();
-            let mut estmt = c.prepare(&format!(
-                "SELECT DISTINCT source_id, target_id FROM links \
-                 WHERE target_id IS NOT NULL AND source_id IN ({id_ph}) AND target_id IN ({id_ph})"
-            ))?;
-            let edges = estmt
-                .query_map(edge_params.as_slice(), |r| {
-                    Ok(GraphEdge {
-                        source: r.get(0)?,
-                        target: r.get(1)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(GraphData { nodes, edges })
         })
@@ -210,27 +240,25 @@ pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGra
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             let ids: BTreeSet<i64> = nodes.iter().map(|n| n.id).collect();
-            let mut edges: Vec<GraphEdge> = Vec::new();
-            if !ids.is_empty() {
-                let id_ph = vec!["?"; ids.len()].join(",");
-                let edge_params: Vec<&dyn rusqlite::ToSql> = ids
-                    .iter()
-                    .chain(ids.iter())
-                    .map(|x| x as &dyn rusqlite::ToSql)
-                    .collect();
-                let mut estmt = c.prepare(&format!(
-                    "SELECT DISTINCT source_id, target_id FROM links \
-                     WHERE target_id IS NOT NULL AND source_id IN ({id_ph}) AND target_id IN ({id_ph})"
-                ))?;
-                edges = estmt
-                    .query_map(edge_params.as_slice(), |r| {
-                        Ok(GraphEdge {
-                            source: r.get(0)?,
-                            target: r.get(1)?,
-                        })
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-            }
+            let id_vec: Vec<i64> = ids.iter().copied().collect();
+            // Рёбра внутри выбранных узлов — чанкуем по `source_id` + фильтр `target ∈ ids` в Rust
+            // (как в get_local_graph): без двойного IN, безопасно при любом `limit` (ревью A9).
+            let raw_edges = collect_in_chunks(
+                c,
+                &id_vec,
+                |ph| {
+                    format!(
+                        "SELECT DISTINCT source_id, target_id FROM links \
+                         WHERE target_id IS NOT NULL AND source_id IN ({ph})"
+                    )
+                },
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )?;
+            let edges: Vec<GraphEdge> = raw_edges
+                .into_iter()
+                .filter(|(_, t)| ids.contains(t))
+                .map(|(source, target)| GraphEdge { source, target })
+                .collect();
 
             let truncated = total_files > nodes.len() as i64;
             Ok(FullGraph {
@@ -351,5 +379,58 @@ mod tests {
         assert!(top.truncated);
         let tp: BTreeSet<_> = top.nodes.iter().map(|n| n.path.as_str()).collect();
         assert_eq!(tp, BTreeSet::from(["A.md", "B.md"]), "топ-2 по степени");
+    }
+
+    /// Ревью A9: граф на супер-хабе (узел с тысячами связей) не падает на `too many SQL variables`
+    /// и отдаёт ПОЛНЫЙ результат через чанкинг IN-запросов. N=1000 > SQL_VAR_CHUNK(900) → много чанков
+    /// (узлы: 2 чанка; frontier hop-1: набор повторяется в OR). Фикстуру вставляем напрямую в БД
+    /// (быстро), минуя индексатор.
+    #[tokio::test]
+    async fn super_hub_does_not_exceed_sql_var_limit() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+
+        const N: i64 = 1000;
+        db.writer()
+            .transaction(|tx| {
+                // hub.md = id 1; n0..n(N-1) = id 2..N+1; hub ссылается на каждый.
+                tx.execute(
+                    "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                     VALUES (1,'hub.md','h',0,0,0,0)",
+                    [],
+                )?;
+                for i in 0..N {
+                    let fid = i + 2;
+                    tx.execute(
+                        "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                         VALUES (?1,?2,'h',0,0,0,0)",
+                        rusqlite::params![fid, format!("n{i}.md")],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO links (source_id,target_id,target_raw,link_type) \
+                         VALUES (1,?1,?2,'wikilink')",
+                        rusqlite::params![fid, format!("n{i}")],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // 1-hop из хаба: ВСЕ N+1 узлов и N рёбер, без ошибки SQLite-лимита переменных.
+        let g = get_local_graph(db.reader(), "hub.md".into(), 1)
+            .await
+            .expect("супер-хаб не должен валить запрос лимитом переменных");
+        assert_eq!(g.nodes.len() as i64, N + 1, "все узлы (hub + N соседей)");
+        assert_eq!(g.edges.len() as i64, N, "все рёбра hub→nK");
+
+        // Полный граф с запасом по лимиту — тоже все узлы/рёбра.
+        let full = get_full_graph(db.reader(), (N as usize) + 10)
+            .await
+            .unwrap();
+        assert_eq!(full.nodes.len() as i64, N + 1);
+        assert_eq!(full.edges.len() as i64, N);
     }
 }
