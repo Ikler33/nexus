@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
+import { useChatStore } from './stores/chat';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { Titlebar } from './components/chrome/Titlebar';
@@ -42,6 +43,12 @@ export function App() {
     const disposable = registerCoreCommands();
     return () => disposable.dispose();
   }, []);
+
+  // История чата — на vault (#17): подгружаем сохранённую сессию при смене корня vault.
+  const vaultRoot = info?.root ?? null;
+  useEffect(() => {
+    useChatStore.getState().hydrate(vaultRoot);
+  }, [vaultRoot]);
 
   // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
   useEffect(() => {

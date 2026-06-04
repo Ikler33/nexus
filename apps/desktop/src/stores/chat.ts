@@ -37,13 +37,40 @@ interface ChatState {
   stop: () => void;
   /** Очищает сессию (нельзя во время стрима — сначала `stop`). */
   clear: () => void;
+  /**
+   * Загружает сохранённую историю чата для vault (`root`) из localStorage; `null` (vault закрыт) —
+   * очистка. Вызывается из `App.tsx` при смене корня vault. Персист идёт автоматически на терминальных
+   * событиях (done/error/stop/clear).
+   */
+  hydrate: (root: string | null) => void;
 }
 
 let seq = 0;
 const nextId = () => `m${++seq}`;
 
+/** Префикс ключа localStorage для истории чата (на каждый vault — свой). */
+const CHAT_KEY_PREFIX = 'nexus.chat.v1:';
+/** Максимум сохраняемых сообщений (хвост) — защита localStorage от разрастания (см. docs/BACKLOG). */
+const MAX_PERSISTED = 100;
+
 export const useChatStore = create<ChatState>((set, get) => {
   let cancelFn: (() => void) | null = null;
+  // Ключ localStorage текущего vault (ставит `hydrate`); `null` — vault не открыт, не персистим.
+  let vaultKey: string | null = null;
+
+  // Сохраняет историю текущего vault (хвост ≤MAX_PERSISTED, без стрим-флагов). Вызывается на
+  // терминальных событиях. Best-effort: localStorage может быть недоступен/переполнен.
+  const save = () => {
+    if (!vaultKey) return;
+    try {
+      const msgs = get()
+        .messages.slice(-MAX_PERSISTED)
+        .map((m) => ({ ...m, streaming: false }));
+      localStorage.setItem(vaultKey, JSON.stringify(msgs));
+    } catch {
+      /* недоступно/переполнено — не критично */
+    }
+  };
 
   // Троттлинг рендера токенов (AC-Б10-4 / ревью C9): копим текст в буфер и применяем одним set()
   // на кадр (requestAnimationFrame) — ≤~60 ре-рендеров/сек вместо O(токенов). Один стрим за раз.
@@ -114,6 +141,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             }));
             cancelFn = null;
             set({ streaming: false });
+            save();
             break;
           }
           case 'error': {
@@ -128,6 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             }));
             cancelFn = null;
             set({ streaming: false });
+            save();
             break;
           }
         }
@@ -148,11 +177,34 @@ export const useChatStore = create<ChatState>((set, get) => {
           m.streaming ? { ...m, content: m.content + tail, streaming: false } : m,
         ),
       }));
+      save();
     },
 
     clear() {
       if (get().streaming) return;
       set({ messages: [] });
+      save();
+    },
+
+    hydrate(root) {
+      vaultKey = root ? CHAT_KEY_PREFIX + root : null;
+      if (!vaultKey) {
+        set({ messages: [] });
+        return;
+      }
+      let restored: ChatMessage[] = [];
+      try {
+        const raw = localStorage.getItem(vaultKey);
+        if (raw) {
+          const parsed: unknown = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            restored = (parsed as ChatMessage[]).map((m) => ({ ...m, streaming: false }));
+          }
+        }
+      } catch {
+        /* битый JSON / нет localStorage — пустая история */
+      }
+      set({ messages: restored });
     },
   };
 });
