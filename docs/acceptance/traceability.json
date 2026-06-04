@@ -30,7 +30,7 @@
     "AC-Б7-2": { "status": "covered", "tests": ["db::tests", "indexer::tests"], "note": "Атомарная транзакция индексации." },
     "AC-Б8-1": { "status": "covered", "tests": ["search::tests", "indexer::tests"], "note": "FTS-триггеры синхронизации." },
     "AC-Б8-2": { "status": "covered", "tests": ["indexer::tests", "vector::tests", "search::tests"], "note": "Удаление файла чистит fts+векторы." },
-    "AC-Б9-1": { "status": "pending", "tests": ["indexer::tests"], "note": "Сейчас delete+create рвёт file_id; rename-as-move = V2.2 (ревью L6)." },
+    "AC-Б9-1": { "status": "covered", "tests": ["indexer::tests"], "note": "atomic-save (tmp→rename того же пути) и rename/move в другой путь (V2.2: rename_file переносит files.path, file_id сохраняется → links/chunks/tags не каскадятся, беклинки целы). Переписывание текста ссылок [[Old]]→[[New]] у источников — отдельная фича (BACKLOG)." },
     "AC-Б9-2": { "status": "covered", "tests": ["watcher::tests"], "note": "is_ignored для .nexus/*." },
     "AC-Б9-3": { "status": "covered", "tests": ["watcher::tests"], "note": "Дебаунс схлопывает шторм; remove+create=upsert." },
     "AC-Б10-1": { "status": "partial", "tests": ["ai::chat::tests", "src/stores/chat.test.ts"], "note": "Channel-буферы per-session." },

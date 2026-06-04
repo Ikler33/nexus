@@ -24,6 +24,9 @@ pub enum VaultEvent {
     Upsert(PathBuf),
     /// Файл удалён.
     Deleted(PathBuf),
+    /// Файл переименован/перемещён `from`→`to`. Индексатор переносит `files.path` с СОХРАНЕНИЕМ
+    /// `file_id` (беклинки/чанки целы) — в отличие от delete+create. `from` исчез, `to` существует.
+    Renamed { from: PathBuf, to: PathBuf },
 }
 
 /// Сырое изменение до нормализации (промежуточное, тестируемое представление).
@@ -32,6 +35,8 @@ pub enum RawChange {
     Created(PathBuf),
     Modified(PathBuf),
     Removed(PathBuf),
+    /// Пара переименования (`from`→`to`), реконструированная watcher'ом по file-id.
+    Renamed(PathBuf, PathBuf),
 }
 
 /// Должен ли путь игнорироваться watcher'ом: служебные каталоги `.nexus`/`.git`,
@@ -61,6 +66,7 @@ pub fn is_ignored(path: &Path) -> bool {
 /// побеждает (remove→create = `Upsert`; create→remove = `Deleted`); дубли схлопываются.
 pub fn normalize(changes: &[RawChange]) -> Vec<VaultEvent> {
     let mut exists: BTreeMap<PathBuf, bool> = BTreeMap::new();
+    let mut renames: Vec<(PathBuf, PathBuf)> = Vec::new();
     for change in changes {
         match change {
             RawChange::Created(p) | RawChange::Modified(p) => {
@@ -69,18 +75,43 @@ pub fn normalize(changes: &[RawChange]) -> Vec<VaultEvent> {
             RawChange::Removed(p) => {
                 exists.insert(p.clone(), false);
             }
+            RawChange::Renamed(from, to) => {
+                exists.insert(from.clone(), false);
+                exists.insert(to.clone(), true);
+                renames.push((from.clone(), to.clone()));
+            }
         }
     }
-    exists
-        .into_iter()
-        .map(|(path, exists)| {
-            if exists {
-                VaultEvent::Upsert(path)
-            } else {
-                VaultEvent::Deleted(path)
-            }
-        })
-        .collect()
+    let mut out: Vec<VaultEvent> = Vec::new();
+    let mut handled: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    // Переименования — только если итоговое состояние не перекрыто другими событиями (источник
+    // по-прежнему исчез, цель существует, ни один путь не «занят» иным событием в пачке).
+    for (from, to) in &renames {
+        if exists.get(from) == Some(&false)
+            && exists.get(to) == Some(&true)
+            && !handled.contains(from)
+            && !handled.contains(to)
+        {
+            out.push(VaultEvent::Renamed {
+                from: from.clone(),
+                to: to.clone(),
+            });
+            handled.insert(from.clone());
+            handled.insert(to.clone());
+        }
+    }
+    // Остальные пути — по итоговому состоянию (последнее побеждает; remove→create = Upsert).
+    for (path, present) in exists {
+        if handled.contains(&path) {
+            continue;
+        }
+        out.push(if present {
+            VaultEvent::Upsert(path)
+        } else {
+            VaultEvent::Deleted(path)
+        });
+    }
+    out
 }
 
 /// Преобразует одно debounced-событие в сырые изменения, отбрасывая игнорируемые пути.
@@ -99,19 +130,35 @@ fn to_raw_changes(event: &DebouncedEvent) -> Vec<RawChange> {
             .filter(|p| keep(p))
             .map(|p| RawChange::Removed(p.clone()))
             .collect(),
-        // Переименование: новый путь существует → Created, старый исчез → Removed.
-        EventKind::Modify(ModifyKind::Name(_)) => event
-            .paths
-            .iter()
-            .filter(|p| keep(p))
-            .map(|p| {
-                if p.exists() {
-                    RawChange::Created(p.clone())
+        // Переименование. notify-debouncer-full склеивает пару From/To по file-id в одно событие
+        // с двумя путями — это и есть move, при котором `file_id` можно сохранить. Если путей не
+        // ровно два (несклеенный одиночный From/To, либо один из путей игнорируется) — деградируем
+        // к Created/Removed по факту существования (как раньше, через delete+create).
+        EventKind::Modify(ModifyKind::Name(_)) => {
+            let kept: Vec<PathBuf> = event.paths.iter().filter(|p| keep(p)).cloned().collect();
+            if kept.len() == 2 {
+                // Источник — исчезнувший путь, цель — существующий (надёжнее порядка notify).
+                let (a, b) = (kept[0].clone(), kept[1].clone());
+                let (from, to) = if b.exists() && !a.exists() {
+                    (a, b)
+                } else if a.exists() && !b.exists() {
+                    (b, a)
                 } else {
-                    RawChange::Removed(p.clone())
-                }
-            })
-            .collect(),
+                    (a, b) // оба есть/нет — берём порядок notify [from, to]
+                };
+                vec![RawChange::Renamed(from, to)]
+            } else {
+                kept.into_iter()
+                    .map(|p| {
+                        if p.exists() {
+                            RawChange::Created(p)
+                        } else {
+                            RawChange::Removed(p)
+                        }
+                    })
+                    .collect()
+            }
+        }
         EventKind::Modify(_) => event
             .paths
             .iter()
@@ -206,5 +253,37 @@ mod tests {
         got.sort_by(|x, y| format!("{x:?}").cmp(&format!("{y:?}")));
         assert!(got.contains(&VaultEvent::Deleted(a)));
         assert!(got.contains(&VaultEvent::Deleted(b)));
+    }
+
+    /// AC-Б9 (V2.2): склеенная пара переименования → одно событие `Renamed` (а не Deleted+Upsert),
+    /// чтобы индексатор сохранил `file_id`.
+    #[test]
+    fn normalizes_rename_to_single_renamed_event() {
+        let from = PathBuf::from("/vault/Old.md");
+        let to = PathBuf::from("/vault/New.md");
+        let changes = vec![RawChange::Renamed(from.clone(), to.clone())];
+        assert_eq!(
+            normalize(&changes),
+            vec![VaultEvent::Renamed {
+                from: from.clone(),
+                to: to.clone()
+            }]
+        );
+    }
+
+    /// Переименование + последующее удаление цели в одной пачке → не `Renamed`, а `Deleted` обоих
+    /// (итоговое состояние перекрыло move; деградация безопасна).
+    #[test]
+    fn rename_then_delete_target_degrades_to_deletes() {
+        let from = PathBuf::from("/vault/Old.md");
+        let to = PathBuf::from("/vault/New.md");
+        let changes = vec![
+            RawChange::Renamed(from.clone(), to.clone()),
+            RawChange::Removed(to.clone()),
+        ];
+        let got = normalize(&changes);
+        assert_eq!(got.len(), 2, "перекрытый move не должен выдавать Renamed");
+        assert!(got.contains(&VaultEvent::Deleted(from)));
+        assert!(got.contains(&VaultEvent::Deleted(to)));
     }
 }
