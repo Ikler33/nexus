@@ -8,6 +8,14 @@
 
 ### Кросс-план — Wave A (quick-wins)
 
+- **#4 Гейты против ложной зелени.** (а) `check-traceability.mjs` теперь **проверяет существование имён**
+  в `tests[]`: rust-тест-модуль реально есть (`mod tests`), фронт-тест-файл существует — мёртвая ссылка
+  на тест ловится (раньше гейт верил на слово). (б) Новый `scripts/check-ignored.mjs` — **гейт числа
+  `#[ignore]`** (=11): тихо отключённый тест → красный CI, нужно осознанно поднять `EXPECTED`. Оба
+  добавлены в CI-job `traceability`. (г) `scripts/test-all.sh` — одна команда на все локальные проверки
+  (preflight·traceability·#[ignore]·Rust fmt/clippy/test·фронт tsc/eslint/vitest/build). (в) `vitest
+  --allowOnly` — **уже** false в CI по умолчанию (`!isCI`), отдельная правка не нужна (фактчек). Zero-dep.
+
 - **#1 Команда «Новая заметка» + пустое состояние.** Раньше создать заметку было НЕЧЕМ
   (`write_file` есть, но команды/кнопки нет → пустой vault = тупик первого впечатления). Добавлены:
   `vault.createNote(dir, {baseName, content})` (уникальное имя `Untitled`/`Untitled N`, запись, обновление

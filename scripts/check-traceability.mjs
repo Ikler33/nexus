@@ -5,7 +5,7 @@
 // неизвестный статус, или covered/partial без тестов. Принцип «no silent caps»: pending/manual/deferred
 // допустимы, но видимы в сводке. Zero-dep (только node:fs) — гоняется без pnpm install.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -53,6 +53,46 @@ for (const [id, e] of Object.entries(acs)) {
   counts[e.status]++;
   if ((e.status === 'covered' || e.status === 'partial') && !(Array.isArray(e.tests) && e.tests.length > 0)) {
     errors.push(`AC ${id}: статус ${e.status}, но не указаны tests[]`);
+  }
+}
+
+// 6b. Существование имён tests[] (анти-false-green, кросс-план #4(а)): rust-тест-модуль реально есть
+//     (есть `mod tests`), фронт-тест-файл существует. CI-описания/нераспознанное — пропускаем.
+function rustTestModules(srcDir) {
+  const set = new Set();
+  const walk = (dir, prefix) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = resolve(dir, e.name);
+      if (e.isDirectory()) {
+        walk(full, [...prefix, e.name]);
+      } else if (e.name.endsWith('.rs') && /\bmod tests\b/.test(readFileSync(full, 'utf8'))) {
+        const stem = e.name.replace(/\.rs$/, '');
+        const modPath =
+          stem === 'lib' || stem === 'main' ? [] : stem === 'mod' ? prefix : [...prefix, stem];
+        set.add([...modPath, 'tests'].join('::'));
+      }
+    }
+  };
+  walk(srcDir, []);
+  return set;
+}
+const RUST_SRC = resolve(root, 'apps/desktop/src-tauri/src');
+const FE_ROOT = resolve(root, 'apps/desktop');
+const rustMods = existsSync(RUST_SRC) ? rustTestModules(RUST_SRC) : new Set();
+for (const [id, e] of Object.entries(acs)) {
+  for (const raw of Array.isArray(e.tests) ? e.tests : []) {
+    const ref = String(raw).trim();
+    if (ref.startsWith('CI:') || ref.startsWith('CI ')) continue; // CI-описания, не имена тестов
+    const head = ref.split(/[\s(]/)[0]; // отрезаем примечания/парентетику
+    if (/\.test\.tsx?$/.test(head)) {
+      if (!existsSync(resolve(FE_ROOT, head))) errors.push(`AC ${id}: фронт-тест "${head}" не найден`);
+      continue;
+    }
+    const m = head.match(/^(.+?::tests)(::.+)?$/);
+    const modTests = m ? m[1] : /^tests(::.+)?$/.test(head) ? 'tests' : null;
+    if (modTests && !rustMods.has(modTests)) {
+      errors.push(`AC ${id}: тест-модуль "${modTests}" (из "${ref}") не найден в src (нет mod tests)`);
+    }
   }
 }
 
