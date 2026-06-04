@@ -298,6 +298,134 @@ mod tests {
         assert!(report.cases[0].hits.contains(&"alpha.md".to_string()));
     }
 
+    /// Эмбеддер с ФИКСИРОВАННЫМИ векторами (V4.5): текст → вектор по вхождению ключа. В отличие от
+    /// хеш-`MockEmbedder`, делает векторное ранжирование детерминированным И осмысленным → можно
+    /// проверять саму логику (vector → RRF → метрики), а не только проводку.
+    struct FixedEmbedder {
+        dim: usize,
+        table: Vec<(&'static str, Vec<f32>)>,
+    }
+    impl FixedEmbedder {
+        fn vec_for(&self, text: &str) -> Vec<f32> {
+            for (key, v) in &self.table {
+                if text.contains(key) {
+                    return v.clone();
+                }
+            }
+            // неизвестный текст → орт к ключевым осям (не ближайший ни к одному ключевому запросу)
+            let mut v = vec![0.0; self.dim];
+            v[self.dim - 1] = 1.0;
+            v
+        }
+    }
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FixedEmbedder {
+        async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|t| self.vec_for(t)).collect())
+        }
+        async fn embed_query(&self, text: &str) -> crate::ai::AiResult<Vec<f32>> {
+            Ok(self.vec_for(text))
+        }
+        fn dim(&self) -> usize {
+            self.dim
+        }
+        fn model_id(&self) -> &str {
+            "fixed-test"
+        }
+    }
+
+    /// V4.5 — офлайн eval-ГЕЙТ на ФИКСИРОВАННЫХ синтетических векторах. Релевантные находятся по
+    /// ВЕКТОРНОЙ близости (cosine): токенов запроса (QRY*) в телах НЕТ → FTS по ним пуст, поэтому
+    /// ранжирование чисто векторное → пиннит проводку vector → RRF → метрики БЕЗ живого сервера.
+    /// Метрики посчитаны вручную и точны; регрессия логики ранжирования сломает тест в обычном
+    /// `cargo test`. (Гейт на РЕАЛЬНОМ качестве — `live_eval_meets_baseline`, `#[ignore]`.)
+    #[tokio::test]
+    async fn offline_eval_gate_on_fixed_vectors() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let docs = vec![
+            GoldenDoc {
+                path: "apple.md".into(),
+                body: "# Apple\n\nAPLZED fruit notes here".into(),
+            },
+            GoldenDoc {
+                path: "banana.md".into(),
+                body: "# Banana\n\nBNNZED fruit notes here".into(),
+            },
+            GoldenDoc {
+                path: "cherry.md".into(),
+                body: "# Cherry\n\nCHRZED fruit notes here".into(),
+            },
+        ];
+        // Оси: apple=e0, banana=e1, cherry=e2. Запрос QRYMIX ближе к cherry (0.8) чем к apple (0.6).
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(FixedEmbedder {
+            dim: 4,
+            table: vec![
+                ("APLZED", vec![1.0, 0.0, 0.0, 0.0]),
+                ("BNNZED", vec![0.0, 1.0, 0.0, 0.0]),
+                ("CHRZED", vec![0.0, 0.0, 1.0, 0.0]),
+                ("QRYAPL", vec![1.0, 0.0, 0.0, 0.0]),
+                ("QRYCHR", vec![0.0, 0.0, 1.0, 0.0]),
+                ("QRYMIX", vec![0.6, 0.0, 0.8, 0.0]),
+            ],
+        });
+        let vectors = Arc::new(VectorIndex::open(root.join(".nexus/vectors.usearch"), 4).unwrap());
+        let db = index_corpus(&root, &docs, embedder.clone(), vectors.clone())
+            .await
+            .unwrap();
+
+        let cases = vec![
+            GoldenCase {
+                query: "QRYAPL".into(),
+                relevant: vec!["apple.md".into()],
+                note: "vec→apple@1".into(),
+            },
+            GoldenCase {
+                query: "QRYCHR".into(),
+                relevant: vec!["cherry.md".into()],
+                note: "vec→cherry@1".into(),
+            },
+            // QRYMIX: cherry@1 (cos 0.8) > apple@2 (cos 0.6) → apple релевантен, но НЕ первый.
+            GoldenCase {
+                query: "QRYMIX".into(),
+                relevant: vec!["apple.md".into()],
+                note: "vec→apple@2".into(),
+            },
+        ];
+        let report = run_eval(db.reader(), &vectors, embedder.as_ref(), &cases, 8)
+            .await
+            .unwrap();
+
+        assert_eq!(report.n_cases, 3);
+        // Корпус из 3 → вектор (CANDIDATES=50) возвращает все, релевантные в top-8 → recall=1.
+        assert!(
+            (report.recall_at_k - 1.0).abs() < 1e-6,
+            "recall {}",
+            report.recall_at_k
+        );
+        // MRR = (1 + 1 + 1/2)/3: apple в QRYMIX на 2-й позиции.
+        assert!((report.mrr - 2.5 / 3.0).abs() < 1e-3, "mrr {}", report.mrr);
+        // nDCG = (1 + 1 + 1/log2(3))/3 ≈ 0.877: apple@2 в QRYMIX даёт 1/log2(3)=0.6309.
+        let expected_ndcg = (2.0 + 1.0 / 3.0_f32.log2()) / 3.0;
+        assert!(
+            (report.ndcg_at_k - expected_ndcg).abs() < 1e-3,
+            "ndcg {} != {}",
+            report.ndcg_at_k,
+            expected_ndcg
+        );
+        // Кейс QRYMIX: apple найден (recall 1), но первым идёт cherry (вектор 0.8 > 0.6) → RR=0.5.
+        assert_eq!(report.cases[2].recall_at_k, 1.0);
+        assert!(
+            (report.cases[2].reciprocal_rank - 0.5).abs() < 1e-6,
+            "rr {}",
+            report.cases[2].reciprocal_rank
+        );
+        assert_eq!(
+            report.cases[2].hits.first().map(String::as_str),
+            Some("cherry.md")
+        );
+    }
+
     /// Живой прогон на nomic :8081 (`cargo test -- --ignored`): печатает отчёт и проверяет, что
     /// метрики НЕ ниже baseline (AC-EVAL-2/3). Условия — в выводе (AC-EVAL-4).
     #[tokio::test]
