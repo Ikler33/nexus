@@ -126,7 +126,14 @@ export default function GraphView() {
     }
     setLoading(true);
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
-      .force('charge', forceManyBody<GraphNodeDatum>().strength(-520).distanceMax(820))
+      // Отталкивание масштабируется по степени: хабы (много связей) расталкивают сильнее, иначе их
+      // стягивают в центр собственные рёбра. Лист ≈ -500, хаб (deg 20) ≈ -1300.
+      .force(
+        'charge',
+        forceManyBody<GraphNodeDatum>()
+          .strength((d) => -(500 + d.deg * 40))
+          .distanceMax(900),
+      )
       .force(
         'link',
         forceLink<GraphNodeDatum, GraphLink>(graph.links)
@@ -173,6 +180,14 @@ export default function GraphView() {
       e.preventDefault();
       const sim = simRef.current;
       if (!sim) return;
+      // Освобождаем ранее «закреплённые» ноды: при перетягивании другой (связанной) ноды прежние
+      // снова включаются в физику — pin не навсегда (как в Obsidian).
+      for (const other of sim.nodes()) {
+        if (other.id !== node.id) {
+          other.fx = null;
+          other.fy = null;
+        }
+      }
       setDragId(node.id);
       sim.alphaTarget(0.3).restart();
       node.fx = node.x;
