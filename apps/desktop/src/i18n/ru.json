@@ -94,7 +94,9 @@
     "emptyGroup": "Пустая группа",
     "splitRight": "Разделить вправо",
     "close": "Закрыть {{name}}",
-    "unsaved": "несохранено"
+    "unsaved": "несохранено",
+    "source": "Исходник",
+    "preview": "Просмотр"
   },
   "backlinks": {
     "title": "Беклинки",

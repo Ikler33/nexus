@@ -1,6 +1,7 @@
 # Редактор CodeMirror 6 (`src/components/editor`)
 
-> Срез Ф0-5 (§4.1; DESIGN §6). Source-mode. Live Preview — отдельный эпик (С-22), НЕ в Ф0.
+> Срез Ф0-5 (§4.1; DESIGN §6). Source-mode + read-only preview (#20). **Live Preview** (inline-правки
+> с рендером на месте) — отдельный пост-v1 эпик (С-22).
 
 ## Контракт CM6↔React (`Editor.tsx`)
 - `EditorView` создаётся ОДИН раз (`useEffect([])`), уничтожается в cleanup → двойной mount
@@ -18,6 +19,21 @@
 - Клик по `[[wikilink]]` → `onOpenLink(target)` (`posAtCoords` + матч по строке; `normalizeTarget`
   срезает `#heading` / `|alias`).
 - Автокомплит имён заметок внутри `[[…` (источник — `getNotes()` → команда `list_notes`).
+
+## Read-only preview (`MarkdownPreview.tsx`, #20)
+- Переключатель **Исходник/Просмотр** — в панели вкладок (`GroupPane`, кнопка-книга), только для `.md`;
+  режим локален на группу-сплит. В preview-режиме вместо `Editor` рендерится `MarkdownPreview` от
+  `active.doc` (read-only; правки — в source-режиме).
+- `react-markdown` + `remark-gfm` (таблицы, таск-листы, strikethrough). **CSP-safe**: сырой HTML НЕ
+  рендерится (`rehype-raw` не подключён → нет `dangerouslySetInnerHTML`); `urlTransform` пропускает
+  `http(s)`/`mailto`/`tel`/относительные + кастомные nexus-схемы, режет `javascript:`/`data:`.
+- `[[wikilink]]` и `#tag` — remark-плагин `remarkNexus` (`lib/markdown/remarkNexus.ts`): на mdast-уровне
+  заменяет в `text`-узлах на `link` с URL `nexus-wikilink:<encoded>` / `nexus-tag:<encoded>` (внутрь
+  `code`/`inlineCode` НЕ лезет). `MarkdownPreview` ловит их в `components.a` по префиксу href: wikilink →
+  кликабельная навигация (`onOpenLink`, цель `decodeURIComponent`), tag → чип-`span`.
+- **Отложено** (строгий CSP запрещает inline-стили, на которых держатся): KaTeX-математика, Mermaid-
+  диаграммы (BACKLOG). Vault-локальные картинки — нужен asset-протокол. Глобальная команда/хоткей
+  переключения (Ctrl+E) — потребует подъёма режима в стор (сейчас кнопка на пане).
 
 ## Данные (vault store + команды)
 - Команды Rust: `read_file` / `write_file` (write-safe `resolve_vault_path_for_write`), `list_notes`.
