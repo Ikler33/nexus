@@ -1,10 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { tauriApi } from '../lib/tauri-api';
 import { useChatStore } from './chat';
 
 // В vitest (не Tauri) `streamRag` проксируется в мок `mock/vault.streamChat` (sources→токены→done).
 beforeEach(() => {
   useChatStore.setState({ messages: [], streaming: false });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('chat store (Ф1-8)', () => {
@@ -48,5 +54,35 @@ describe('chat store (Ф1-8)', () => {
     });
     useChatStore.getState().clear();
     expect(useChatStore.getState().messages).toHaveLength(0);
+  });
+
+  it('троттлит рендер токенов: N токенов коалесятся в один кадр (AC-Б10-4)', () => {
+    const rafCbs: FrameRequestCallback[] = [];
+    const rafSpy = vi.fn((cb: FrameRequestCallback) => {
+      rafCbs.push(cb);
+      return rafCbs.length;
+    });
+    vi.stubGlobal('requestAnimationFrame', rafSpy);
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    const N = 200;
+    vi.spyOn(tauriApi.chat, 'streamRag').mockImplementation((_q, onEvent) => {
+      onEvent({ type: 'sources', sources: [] });
+      for (let i = 0; i < N; i++) onEvent({ type: 'token', text: 'x' });
+      return () => {};
+    });
+
+    useChatStore.getState().send('вопрос');
+
+    // N токенов → rAF запланирован ОДИН раз (коалесинг), не N → ≤N ре-рендеров (AC-Б10-4).
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+    // Буфер ещё не применён к стейту (кадр не сработал) — токены не текут по одному.
+    const mid = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(mid?.content).toBe('');
+
+    // Прогоняем кадр → весь буфер применяется ОДНИМ апдейтом.
+    rafCbs.forEach((cb) => cb(0));
+    const after = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(after?.content).toBe('x'.repeat(N));
   });
 });

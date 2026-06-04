@@ -41,6 +41,17 @@ const nextId = () => `m${++seq}`;
 export const useChatStore = create<ChatState>((set, get) => {
   let cancelFn: (() => void) | null = null;
 
+  // Троттлинг рендера токенов (AC-Б10-4 / ревью C9): копим текст в буфер и применяем одним set()
+  // на кадр (requestAnimationFrame) — ≤~60 ре-рендеров/сек вместо O(токенов). Один стрим за раз.
+  let pending = '';
+  let rafId: number | null = null;
+  const cancelFlush = () => {
+    if (rafId != null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+  };
+
   /** Обновляет сообщение по id (иммутабельно). */
   const patch = (id: string, fn: (m: ChatMessage) => ChatMessage) =>
     set((s) => ({ messages: s.messages.map((m) => (m.id === id ? fn(m) : m)) }));
@@ -56,7 +67,21 @@ export const useChatStore = create<ChatState>((set, get) => {
       const userMsg: ChatMessage = { id: nextId(), role: 'user', content: q };
       const replyId = nextId();
       const reply: ChatMessage = { id: replyId, role: 'assistant', content: '', streaming: true };
+      pending = '';
+      cancelFlush();
       set((s) => ({ messages: [...s.messages, userMsg, reply], streaming: true }));
+
+      // Применяет накопленный буфер одним апдейтом (вызывается из rAF).
+      const flush = () => {
+        rafId = null;
+        if (!pending) return;
+        const chunk = pending;
+        pending = '';
+        patch(replyId, (m) => ({ ...m, content: m.content + chunk }));
+      };
+      const scheduleFlush = () => {
+        if (rafId == null) rafId = requestAnimationFrame(flush);
+      };
 
       const onEvent = (event: ChatStreamEvent) => {
         switch (event.type) {
@@ -64,18 +89,37 @@ export const useChatStore = create<ChatState>((set, get) => {
             patch(replyId, (m) => ({ ...m, sources: event.sources }));
             break;
           case 'token':
-            patch(replyId, (m) => ({ ...m, content: m.content + event.text }));
+            // Не set() на каждый токен — копим в буфер, рендерим раз в кадр (AC-Б10-4).
+            pending += event.text;
+            scheduleFlush();
             break;
-          case 'done':
-            patch(replyId, (m) => ({ ...m, content: event.full || m.content, streaming: false }));
+          case 'done': {
+            cancelFlush();
+            const tail = pending;
+            pending = '';
+            patch(replyId, (m) => ({
+              ...m,
+              content: event.full || m.content + tail,
+              streaming: false,
+            }));
             cancelFn = null;
             set({ streaming: false });
             break;
-          case 'error':
-            patch(replyId, (m) => ({ ...m, error: event.message, streaming: false }));
+          }
+          case 'error': {
+            cancelFlush();
+            const tail = pending;
+            pending = '';
+            patch(replyId, (m) => ({
+              ...m,
+              content: m.content + tail,
+              error: event.message,
+              streaming: false,
+            }));
             cancelFn = null;
             set({ streaming: false });
             break;
+          }
         }
       };
 
@@ -85,9 +129,14 @@ export const useChatStore = create<ChatState>((set, get) => {
     stop() {
       cancelFn?.();
       cancelFn = null;
+      cancelFlush();
+      const tail = pending;
+      pending = '';
       set((s) => ({
         streaming: false,
-        messages: s.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+        messages: s.messages.map((m) =>
+          m.streaming ? { ...m, content: m.content + tail, streaming: false } : m,
+        ),
       }));
     },
 
