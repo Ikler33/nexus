@@ -38,6 +38,18 @@ export function registerCoreCommands(): Disposable {
       run: () => openVaultFlow(),
     }),
     commands.register({
+      id: 'file.new',
+      title: 'New note',
+      titleKey: 'commands.file.new',
+      source: 'core',
+      defaultKey: 'mod+n',
+      run: async () => {
+        if (!useVaultStore.getState().info) return; // нет открытого vault — некуда писать
+        const path = await useVaultStore.getState().createNote();
+        await useWorkspaceStore.getState().openFile(path);
+      },
+    }),
+    commands.register({
       id: 'file.save',
       title: 'Save file',
       titleKey: 'commands.file.save',

@@ -20,6 +20,7 @@ export function FileTree() {
   const loading = useVaultStore((s) => s.loading);
   const selectedPath = useWorkspaceStore(activePath);
   const toggleDir = useVaultStore((s) => s.toggleDir);
+  const createNote = useVaultStore((s) => s.createNote);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const { t } = useTranslation();
 
@@ -43,7 +44,18 @@ export function FileTree() {
   if (nodes.length === 0) {
     return (
       <div className={styles.empty} role="note">
-        {t('tree.empty')}
+        <p className={styles.emptyText}>{t('tree.empty')}</p>
+        <button
+          type="button"
+          className={styles.newNoteBtn}
+          onClick={() =>
+            void createNote('', { baseName: 'Welcome', content: t('tree.welcomeBody') }).then(
+              (path) => openFile(path),
+            )
+          }
+        >
+          {t('tree.newNote')}
+        </button>
       </div>
     );
   }

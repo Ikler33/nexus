@@ -30,11 +30,14 @@
     "searchPlaceholder": "Search…",
     "searchLabel": "Search the vault",
     "clearSearch": "Clear search",
-    "noResults": "Nothing found"
+    "noResults": "Nothing found",
+    "newNote": "New note"
   },
   "tree": {
     "label": "Vault files",
-    "empty": "Empty"
+    "empty": "This vault is empty.",
+    "newNote": "New note",
+    "welcomeBody": "# Welcome to Nexus\n\nThis is your first note. A few basics:\n\n- Link notes with [[wiki links]].\n- Tag with #ideas.\n- Open the local graph (Cmd/Ctrl+G) and the AI chat (Cmd/Ctrl+J).\n\nDelete this note anytime — everything stays local on your machine.\n"
   },
   "editor": {
     "selectFile": "Pick a file in the tree, or press {{shortcut}}",
@@ -149,6 +152,7 @@
   "commands": {
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
+    "file.new": "New note",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
     "view.splitRight": "Split right",
