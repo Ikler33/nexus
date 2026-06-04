@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::ai::build_rag_messages;
+use crate::ai::{build_chat_messages, build_rag_messages};
 use crate::search::{self, SearchHit, SearchOptions};
 use crate::state::AppState;
 
@@ -28,7 +28,9 @@ pub enum ChatStreamEvent {
 /// Кол-во RAG-чанков в контексте по умолчанию (калибруется eval-харнессом, Ф1-10).
 const DEFAULT_K: usize = 8;
 
-/// RAG-чат со стримингом: ищет контекст, собирает промпт и стримит ответ модели в `channel`.
+/// Чат со стримингом. `grounded` (по умолчанию `true`) — режим «по vault»: RAG-ретрив → источники →
+/// промпт с контекстом. `grounded=false` — **общий чат** (V4.4): БЕЗ ретрива, ответ напрямую от
+/// модели (источники пустые). Ответ стримится в `channel`.
 #[tauri::command]
 pub async fn chat_rag(
     state: State<'_, AppState>,
@@ -36,7 +38,9 @@ pub async fn chat_rag(
     question: String,
     k: Option<usize>,
     center: Option<String>,
+    grounded: Option<bool>,
 ) -> Result<(), String> {
+    let grounded = grounded.unwrap_or(true);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
     let (reader, vectors, embedder, chat) = {
         let guard = state.vault.read().await;
@@ -51,45 +55,54 @@ pub async fn chat_rag(
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
     };
-    let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
 
-    // 1) Retrieve: гибридный поиск (с граф-рангом от открытого файла, если задан) → источники.
-    let opts = SearchOptions {
-        limit: k,
-        filter: None,
-        center,
-    };
-    let hits = match search::hybrid_search(
-        &reader,
-        vectors.as_deref(),
-        embedder.as_deref(),
-        question.clone(),
-        opts,
-    )
-    .await
-    {
-        Ok(h) => h,
-        Err(e) => {
-            let _ = channel.send(ChatStreamEvent::Error {
-                message: e.to_string(),
-            });
-            return Ok(());
-        }
-    };
-    let _ = channel.send(ChatStreamEvent::Sources {
-        sources: hits.clone(),
-    });
-
-    // 2) Контекст из полного содержимого чанков (в порядке релевантности).
-    let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
-    let texts = search::fetch_chunk_contexts(&reader, &ids)
+    // Сборка сообщений: vault-режим (RAG-ретрив + источники) ИЛИ общий чат (без грунтинга, V4.4).
+    let messages = if grounded {
+        let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
+        // 1) Retrieve: гибридный поиск (с граф-рангом от открытого файла, если задан) → источники.
+        let opts = SearchOptions {
+            limit: k,
+            filter: None,
+            center,
+        };
+        let hits = match search::hybrid_search(
+            &reader,
+            vectors.as_deref(),
+            embedder.as_deref(),
+            question.clone(),
+            opts,
+        )
         .await
-        .map_err(|e| e.to_string())?;
-    let contexts: Vec<(String, String)> = hits
-        .iter()
-        .filter_map(|h| texts.get(&h.chunk_id).cloned())
-        .collect();
-    let messages = build_rag_messages(&question, &contexts);
+        {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = channel.send(ChatStreamEvent::Error {
+                    message: e.to_string(),
+                });
+                return Ok(());
+            }
+        };
+        let _ = channel.send(ChatStreamEvent::Sources {
+            sources: hits.clone(),
+        });
+
+        // 2) Контекст из полного содержимого чанков (в порядке релевантности).
+        let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
+        let texts = search::fetch_chunk_contexts(&reader, &ids)
+            .await
+            .map_err(|e| e.to_string())?;
+        let contexts: Vec<(String, String)> = hits
+            .iter()
+            .filter_map(|h| texts.get(&h.chunk_id).cloned())
+            .collect();
+        build_rag_messages(&question, &contexts)
+    } else {
+        // V4.4: общий чат — ретрив НЕ выполняется. Пустые источники, чтобы UI очистил прежние.
+        let _ = channel.send(ChatStreamEvent::Sources {
+            sources: Vec::new(),
+        });
+        build_chat_messages(&question)
+    };
 
     // 3) Стриминг ответа в канал (с поддержкой отмены).
     let cancel = state.begin_chat();

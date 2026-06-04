@@ -181,16 +181,24 @@ export async function getLinkSuggestions(path: string, limit = 5): Promise<LinkS
 export function streamChat(
   question: string,
   onEvent: (event: ChatStreamEvent) => void,
-  k = 8,
+  opts: { k?: number; grounded?: boolean } = {},
 ): () => void {
+  const { k = 8, grounded = true } = opts;
   let cancelled = false;
   void (async () => {
-    const sources = await searchContent(question, { limit: k });
-    if (cancelled) return;
-    onEvent({ type: 'sources', sources });
-    const answer = sources.length
-      ? `На основе заметок: ${sources[0].snippet.slice(0, 80)}… [1]`
-      : 'Не нашёл ответа в ваших заметках.';
+    let answer: string;
+    if (grounded) {
+      const sources = await searchContent(question, { limit: k });
+      if (cancelled) return;
+      onEvent({ type: 'sources', sources });
+      answer = sources.length
+        ? `На основе заметок: ${sources[0].snippet.slice(0, 80)}… [1]`
+        : 'Не нашёл ответа в ваших заметках.';
+    } else {
+      // V4.4 общий чат: без ретрива, источники пустые.
+      onEvent({ type: 'sources', sources: [] });
+      answer = `(общий чат) Отвечаю напрямую: ${question}`;
+    }
     for (const tok of answer.split(/(\s+)/)) {
       if (cancelled) return;
       await new Promise((r) => setTimeout(r, 15));

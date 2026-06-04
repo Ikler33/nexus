@@ -15,11 +15,16 @@
   вопроса, не выдумывать) + user с пронумерованным контекстом. `contexts` = `(метка-источник, текст)`.
 
 ## Команда `chat_rag` (Channel-стрим)
-`chat_rag(channel, question, k?)` (§4.1, поток событий в `Channel<ChatStreamEvent>`):
+`chat_rag(channel, question, k?, center?, grounded?)` (§4.1, поток событий в `Channel<ChatStreamEvent>`):
 1. `Sources { sources }` — `search::hybrid_search` (Ф1-6) → найденные чанки (приходит первым).
 2. `Token { text }` — дельты ответа модели (контекст = полное содержимое топ-`k` чанков через
    `search::fetch_chunk_contexts`, в порядке релевантности; `k` дефолт 8, clamp 1..20).
 3. `Done { full }` (полный текст в историю) **или** `Error { message }`.
+
+**Режим `grounded` (V4.4).** По умолчанию `true` — «по vault»: ретрив → источники → `build_rag_messages`.
+При `grounded=false` — **общий чат**: ретрив НЕ выполняется (`hybrid_search` не вызывается), `Sources`
+шлётся пустым (UI очищает прежние), промпт = `build_chat_messages` (system без vault-грунтинга + чистый
+вопрос). Web-search/tool-use — НЕ здесь (требует ADR egress-контроля, BACKLOG).
 
 Лок vault снимается ДО сетевых вызовов (эмбеддинг запроса + LLM-стрим не держат `RwLock`).
 **Отмена:** `AppState::begin_chat` регистрирует токен (отменяя предыдущий стрим — UI ведёт один чат);
@@ -29,22 +34,28 @@
 - `.nexus/local.json → ai.chat { url, model }` (ADR-005, не в git). `build_chat` в `open_vault`;
   `None`, если секции нет → команда вернёт ошибку «chat не сконфигурирован». Доступность сервера
   проверяется при первом стриме (не на открытии).
-- Контракт: `tauriApi.chat.streamRag(question, onEvent, {k?}) -> cancelFn` (создаёт `Channel`, вешает
-  `onmessage`, вызывает `chat_rag`; возвращает функцию отмены → `chat_cancel`). Вне Tauri — мок
-  `mock/vault.streamChat` (sources → токены по словам → done; поддерживает отмену).
+- Контракт: `tauriApi.chat.streamRag(question, onEvent, {k?, center?, grounded?}) -> cancelFn` (создаёт
+  `Channel`, вешает `onmessage`, вызывает `chat_rag`; возвращает функцию отмены → `chat_cancel`). Вне
+  Tauri — мок `mock/vault.streamChat` (в `grounded`-режиме sources → токены → done; в общем — пустые
+  sources + прямой ответ; поддерживает отмену).
 
 ## Тесты
 - Rust: `parse_sse_delta` (content/`[DONE]`/role-only/keep-alive/мусор), `build_rag_messages`
-  (нумерация источников, вопрос, пустой контекст). **Живой** (`#[ignore]`, Qwen :8080): стрим токенов,
-  непустой ответ «Париж». ✓ проверено вживую.
-- Фронт: мок `streamChat` (порядок sources→token→done; отмена прекращает до done).
+  (нумерация источников, вопрос, пустой контекст), **`build_chat_messages` (V4.4: общий — без грунтинга,
+  чистый вопрос)**. **Живой** (`#[ignore]`, Qwen :8080): стрим токенов, непустой ответ «Париж». ✓ вживую.
+- Фронт: мок `streamChat` (порядок sources→token→done; отмена прекращает до done); **V4.4 стор —
+  `grounded:true/false` прокидывается в `streamRag`; общий режим → ответ без источников; `setGrounded`
+  игнорируется во время стрима.**
 
 ## UI чата (Ф1-8, фронт)
 Правая панель (DESIGN §«AI Chat»; layout `FileTree | Editor | Chat`, колонка по `.withChat`).
 - **`stores/chat.ts`** (`useChatStore`): лента `ChatMessage[]` (сессия в памяти), `streaming`, `send`/
   `stop`/`clear`. `send` пушит user + пустой assistant(streaming), затем `tauriApi.chat.streamRag`:
   `sources` → `sources` сообщения, `token` → дописывает `content`, `done`/`error` → финализация.
-  Один стрим за раз; `stop` зовёт cancel-fn (→ backend `chat_cancel`).
+  Один стрим за раз; `stop` зовёт cancel-fn (→ backend `chat_cancel`). **V4.4:** `grounded` (дефолт
+  `true`) + `setGrounded` (нельзя на лету во время стрима) → `send` прокидывает режим в `streamRag`.
+- **Переключатель «По заметкам / Общий» (V4.4)** — сегмент над композером (`ChatView`, `role=radiogroup`),
+  отключён во время стрима. «Общий» → ответ напрямую от модели без RAG (источников нет).
 - **`components/chat/ChatPanel.tsx`**: пустое состояние-подсказка; лента (user/assistant); каретка при
   стриминге; кнопка **Стоп** во время стрима, иначе **Отправить** (Enter — отправка, Shift+Enter — перенос);
   источники — кликабельные (`→ openFile`); бейдж «локально»; очистка/закрытие. Контекст retrieval —

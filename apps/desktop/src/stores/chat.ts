@@ -27,7 +27,11 @@ export interface ChatMessage {
 interface ChatState {
   messages: ChatMessage[];
   streaming: boolean;
-  /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval). */
+  /** Режим: `true` — ответ по vault (RAG-ретрив + источники); `false` — общий чат без грунтинга (V4.4). */
+  grounded: boolean;
+  /** Переключает режим vault/общий (нельзя во время стрима). */
+  setGrounded: (grounded: boolean) => void;
+  /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
   /** Останавливает текущий стрим (если идёт). */
   stop: () => void;
@@ -59,6 +63,12 @@ export const useChatStore = create<ChatState>((set, get) => {
   return {
     messages: [],
     streaming: false,
+    grounded: true,
+
+    setGrounded(grounded) {
+      if (get().streaming) return; // не переключаем режим на лету
+      set({ grounded });
+    },
 
     send(question, center) {
       const q = question.trim();
@@ -123,7 +133,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         }
       };
 
-      cancelFn = tauriApi.chat.streamRag(q, onEvent, { center });
+      cancelFn = tauriApi.chat.streamRag(q, onEvent, { center, grounded: get().grounded });
     },
 
     stop() {

@@ -233,7 +233,15 @@
   с СОХРАНЕНИЕМ `file_id` (беклинки/чанки целы, в отличие от delete+create); `[[New]]` до-резолвится.
   Тесты offline (watcher normalize + indexer file_id/беклинки/чанки). Rust 117 зелёных, traceability
   AC-Б9-1 → covered. Текст ссылок `[[Old]]`→`[[New]]` у источников — BACKLOG. **Волна 2 закрыта.**
-  Ветка `track/12-rename-as-move`, PR на зелёном CI. Дальше по списку: V4.4 (общий чат) / V4.3 / V4.2.
+  Ветка `track/12-rename-as-move`, **PR #45 смержен**. Дальше: V4.4 (общий чат) / V4.3 / V4.2.
+- ✅ **V4.4 — Общий чат без vault-грунтинга** (ревью правка 17, vision-critical; «продолжим дальше»).
+  Два режима: «По заметкам» (RAG + источники) и «Общий» (ответ напрямую, без ретрива). Бэкенд: параметр
+  `grounded` у `chat_rag` (false → `hybrid_search` не вызывается, пустые источники, `build_chat_messages`
+  без грунтинга). Фронт: переключатель-сегмент над композером + `grounded`/`setGrounded` в сторе
+  (на лету при стриме не меняется) → `streamRag` + мок. Тесты offline: Rust `build_chat_messages`; фронт —
+  прокидка режима, общий → без источников, блок переключения при стриме. Rust 127 + фронт 89 зелёные,
+  coverage держит, i18n RU/EN. Web-search/tool-use — BLOCKED (ADR egress + SearXNG, владелец).
+  Ветка `track/13-general-chat`, PR на зелёном CI. **Волна 4 фич-часть: остаются V4.3 / V4.2 / V4.5.**
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;
