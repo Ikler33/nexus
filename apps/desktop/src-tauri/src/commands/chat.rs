@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::ai::{build_chat_messages, build_rag_messages};
+use crate::ai::{build_chat_messages, build_rag_messages, injection_marker};
 use crate::search::{self, SearchHit, SearchOptions};
 use crate::state::AppState;
 
@@ -95,7 +95,8 @@ pub async fn chat_rag(
             .iter()
             .filter_map(|h| texts.get(&h.chunk_id).cloned())
             .collect();
-        build_rag_messages(&question, &contexts)
+        // Анти-инъекция (AC-SEC-7): обрамляем недоверенный контекст заметок случайным маркером запроса.
+        build_rag_messages(&question, &contexts, &injection_marker())
     } else {
         // V4.4: общий чат — ретрив НЕ выполняется. Пустые источники, чтобы UI очистил прежние.
         let _ = channel.send(ChatStreamEvent::Sources {

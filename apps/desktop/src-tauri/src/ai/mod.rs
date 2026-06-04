@@ -6,7 +6,8 @@ mod config;
 mod embedder;
 
 pub use chat::{
-    build_chat_messages, build_rag_messages, ChatMessage, ChatProvider, OpenAiChatProvider,
+    build_chat_messages, build_rag_messages, injection_marker, ChatMessage, ChatProvider,
+    OpenAiChatProvider,
 };
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
 #[cfg(test)]
