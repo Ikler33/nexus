@@ -81,6 +81,75 @@
   background: var(--color-surface);
   color: var(--color-text);
 }
+.graph-close.on {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* ── Панель настроек физики (плавает поверх сцены, как ⚙️ в Obsidian) ── */
+.graph-settings {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 6;
+  width: 256px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: color-mix(in oklch, var(--color-bg-elevated) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-2, var(--elevation-1));
+}
+.graph-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+.graph-reset {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--motion-fast);
+}
+.graph-reset:hover {
+  background: var(--color-surface);
+  color: var(--color-accent);
+}
+.graph-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.graph-row-label {
+  grid-column: 1;
+}
+.graph-row-val {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--color-text-faint);
+  text-align: right;
+  min-width: 36px;
+}
+.graph-row input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--color-accent);
+}
 
 .graph-warn {
   display: flex;

@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  forceCenter,
   forceCollide,
   forceLink,
   forceManyBody,
   forceSimulation,
+  forceX,
+  forceY,
+  type ForceCollide,
+  type ForceLink,
+  type ForceManyBody,
+  type ForceX,
+  type ForceY,
   type Simulation,
 } from 'd3-force';
-import { X } from 'lucide-react';
+import { Settings, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
@@ -32,6 +38,53 @@ const FULL_LIMIT = 600;
 /** Логический размер сцены (SVG viewBox). */
 const STAGE_W = 1000;
 const STAGE_H = 680;
+
+/** Параметры физики — пользователь крутит вживую (как ⚙️ в Obsidian); сохраняются в localStorage. */
+interface GraphSettings {
+  repel: number; // база отталкивания: заряд = -(repel + deg*30); выше = сильнее разлёт
+  linkDist: number; // длина пружин-связей
+  gravity: number; // притяжение к центру (forceX/Y): выше = плотнее, ниже = разлёт
+  sizeScale: number; // множитель радиуса узла
+}
+const DEFAULT_SETTINGS: GraphSettings = { repel: 420, linkDist: 110, gravity: 0.05, sizeScale: 1 };
+const SETTINGS_KEY = 'nexus.graph.settings.v1';
+function loadSettings(): GraphSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<GraphSettings>) };
+  } catch {
+    /* нет localStorage / битый JSON → дефолты */
+  }
+  return DEFAULT_SETTINGS;
+}
+
+/** Строка-слайдер панели настроек графа. */
+function SettingRow(props: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (v: number) => void;
+  fmt?: (v: number) => string;
+}) {
+  return (
+    <label className="graph-row">
+      <span className="graph-row-label">{props.label}</span>
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={props.value}
+        onChange={(e) => props.onChange(+e.target.value)}
+      />
+      <span className="graph-row-val graph-mono">
+        {props.fmt ? props.fmt(props.value) : props.value}
+      </span>
+    </label>
+  );
+}
 
 function basename(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
@@ -66,10 +119,19 @@ export default function GraphView() {
   const [loading, setLoading] = useState(true);
   const [hover, setHover] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<GraphSettings>(loadSettings);
+  const [showSettings, setShowSettings] = useState(false);
   const [, tick] = useState(0); // ре-рендер на каждый tick d3 (позиции живут в узлах, d3 их мутирует)
 
   const simRef = useRef<Simulation<GraphNodeDatum, GraphLink> | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  // ссылки на силы — чтобы менять их вживую из слайдеров без пересоздания сим (позиции сохраняются)
+  const settingsRef = useRef(settings);
+  const chargeRef = useRef<ForceManyBody<GraphNodeDatum> | null>(null);
+  const linkRef = useRef<ForceLink<GraphNodeDatum, GraphLink> | null>(null);
+  const gravXRef = useRef<ForceX<GraphNodeDatum> | null>(null);
+  const gravYRef = useRef<ForceY<GraphNodeDatum> | null>(null);
+  const collideRef = useRef<ForceCollide<GraphNodeDatum> | null>(null);
 
   // ── загрузка данных: локальный N-hop считает Rust (глубина = hops); единый — топ-N ──
   useEffect(() => {
@@ -125,30 +187,34 @@ export default function GraphView() {
       return;
     }
     setLoading(true);
+    const s = settingsRef.current;
+    // Отталкивание масштабируется по степени: хабы расталкивают сильнее.
+    const charge = forceManyBody<GraphNodeDatum>()
+      .strength((d) => -(s.repel + d.deg * 30))
+      .distanceMax(950);
+    // ВАЖНО: НЕ задаём link.strength → d3 авто-масштабирует обратно степени (рёбра к хабам слабее).
+    // Это каноничный механизм d3, который раздвигает хабы; жёсткий uniform-strength их стягивал.
+    const link = forceLink<GraphNodeDatum, GraphLink>(graph.links)
+      .id((d) => d.id)
+      .distance(s.linkDist);
+    // Притяжение к центру через forceX/Y (а не forceCenter): это «гравитация» — выше плотнее, ниже разлёт.
+    const gravX = forceX<GraphNodeDatum>(STAGE_W / 2).strength(s.gravity);
+    const gravY = forceY<GraphNodeDatum>(STAGE_H / 2).strength(s.gravity);
+    const collide = forceCollide<GraphNodeDatum>()
+      .radius((d) => nodeRadius(d.deg) * s.sizeScale + 12)
+      .iterations(2);
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
-      // Отталкивание масштабируется по степени: хабы (много связей) расталкивают сильнее, иначе их
-      // стягивают в центр собственные рёбра. Лист ≈ -500, хаб (deg 20) ≈ -1300.
-      .force(
-        'charge',
-        forceManyBody<GraphNodeDatum>()
-          .strength((d) => -(500 + d.deg * 40))
-          .distanceMax(900),
-      )
-      .force(
-        'link',
-        forceLink<GraphNodeDatum, GraphLink>(graph.links)
-          .id((d) => d.id)
-          .distance(115)
-          .strength(0.45),
-      )
-      .force('center', forceCenter<GraphNodeDatum>(STAGE_W / 2, STAGE_H / 2).strength(0.04))
-      .force(
-        'collide',
-        forceCollide<GraphNodeDatum>()
-          .radius((d) => nodeRadius(d.deg) + 12)
-          .iterations(2),
-      )
+      .force('charge', charge)
+      .force('link', link)
+      .force('x', gravX)
+      .force('y', gravY)
+      .force('collide', collide)
       .on('tick', () => tick((v) => v + 1));
+    chargeRef.current = charge;
+    linkRef.current = link;
+    gravXRef.current = gravX;
+    gravYRef.current = gravY;
+    collideRef.current = collide;
     sim.alpha(1).restart();
     simRef.current = sim;
     const timer = setTimeout(() => setLoading(false), 600);
@@ -157,6 +223,23 @@ export default function GraphView() {
       sim.stop();
     };
   }, [graph]);
+
+  // ── живое применение настроек физики: мутируем силы существующей сим (позиции сохраняются) ──
+  useEffect(() => {
+    settingsRef.current = settings;
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      /* нет localStorage → просто не сохраняем */
+    }
+    if (!simRef.current) return;
+    chargeRef.current?.strength((d) => -(settings.repel + d.deg * 30));
+    linkRef.current?.distance(settings.linkDist);
+    gravXRef.current?.strength(settings.gravity);
+    gravYRef.current?.strength(settings.gravity);
+    collideRef.current?.radius((d) => nodeRadius(d.deg) * settings.sizeScale + 12);
+    simRef.current.alpha(0.5).restart();
+  }, [settings]);
 
   useEffect(
     () => () => {
@@ -267,6 +350,14 @@ export default function GraphView() {
           </span>
         )}
         <button
+          className={'graph-close' + (showSettings ? ' on' : '')}
+          onClick={() => setShowSettings((v) => !v)}
+          title={t('graph.settings')}
+          aria-label={t('graph.settings')}
+        >
+          <Settings size={16} />
+        </button>
+        <button
           className="graph-close"
           onClick={close}
           title={t('graph.close')}
@@ -320,7 +411,7 @@ export default function GraphView() {
             {graph.nodes.map((n) => {
               if (n.x == null || n.y == null) return null;
               const isActive = n.id === graph.activeId;
-              const r = nodeRadius(n.deg);
+              const r = nodeRadius(n.deg) * settings.sizeScale;
               const faded = nbrs != null && !nbrs.has(n.id);
               const isKin = !isActive && kin.has(n.id);
               return (
@@ -350,6 +441,51 @@ export default function GraphView() {
               );
             })}
           </svg>
+        )}
+
+        {showSettings && (
+          <div className="graph-settings">
+            <div className="graph-settings-head">
+              <span>{t('graph.settings')}</span>
+              <button className="graph-reset" onClick={() => setSettings(DEFAULT_SETTINGS)}>
+                {t('graph.reset')}
+              </button>
+            </div>
+            <SettingRow
+              label={t('graph.repel')}
+              min={100}
+              max={900}
+              step={20}
+              value={settings.repel}
+              onChange={(v) => setSettings((s) => ({ ...s, repel: v }))}
+            />
+            <SettingRow
+              label={t('graph.linkDist')}
+              min={40}
+              max={240}
+              step={5}
+              value={settings.linkDist}
+              onChange={(v) => setSettings((s) => ({ ...s, linkDist: v }))}
+            />
+            <SettingRow
+              label={t('graph.gravity')}
+              min={0}
+              max={0.25}
+              step={0.01}
+              value={settings.gravity}
+              fmt={(v) => v.toFixed(2)}
+              onChange={(v) => setSettings((s) => ({ ...s, gravity: v }))}
+            />
+            <SettingRow
+              label={t('graph.nodeSize')}
+              min={0.6}
+              max={2}
+              step={0.1}
+              value={settings.sizeScale}
+              fmt={(v) => v.toFixed(1) + '×'}
+              onChange={(v) => setSettings((s) => ({ ...s, sizeScale: v }))}
+            />
+          </div>
         )}
       </div>
     </div>
