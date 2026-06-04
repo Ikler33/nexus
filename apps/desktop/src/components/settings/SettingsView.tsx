@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -9,11 +9,13 @@ import {
   Loader2,
   Palette,
   Pencil,
+  RotateCcw,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { changeLocale } from '../../i18n/setup';
+import { commands, eventToCombo, formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, useThemeStore } from '../../stores/theme';
@@ -43,7 +45,7 @@ const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
 /**
  * Раздел настроек (кросс-план #11, по образцу Obsidian): модалка с левым навом секций + контент-панель.
  * Секции: «Основное» (язык), «Редактор» (читаемая ширина), «Оформление» (тема/акцент/плотность),
- * «AI / Модели», «О программе»; «Горячие клавиши» — следующим срезом (пока заглушка). Состояние
+ * «AI / Модели», «Горячие клавиши» (переназначение хоткеев), «О программе». Состояние
  * открытия/активной секции — в ui-сторе.
  */
 export function SettingsView() {
@@ -85,7 +87,7 @@ export function SettingsView() {
           {section === 'editor' && <EditorSection />}
           {section === 'appearance' && <AppearanceSection />}
           {section === 'ai' && <AiSection />}
-          {section === 'hotkeys' && <Stub text={t('settings.soon')} />}
+          {section === 'hotkeys' && <HotkeysSection />}
           {section === 'about' && <AboutSection />}
         </div>
       </div>
@@ -440,6 +442,96 @@ function TestBadge({ state }: { state: TestState }) {
   );
 }
 
-function Stub({ text }: { text: string }) {
-  return <p className={styles.stub}>{text}</p>;
+/**
+ * Секция «Горячие клавиши» (кросс-план #11, слайс 4): список команд с их текущим хоткеем + захват новой
+ * комбинации (capture-фаза window — раньше глобального `useKeymap`), сброс к дефолту, подсветка
+ * конфликтов. Ремап/сброс идут через реестр команд (`commands.remap/resetKey`, персист в localStorage).
+ */
+function HotkeysSection() {
+  const { t } = useTranslation();
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  const [capturingId, setCapturingId] = useState<string | null>(null);
+
+  // Перерисовка при изменении реестра (ремап/сброс/регистрация).
+  useEffect(() => commands.subscribe(force), []);
+
+  // Захват комбинации: слушаем на capture-фазе window — раньше глобального хоткей-хендлера, чтобы
+  // нажатие не сработало как команда. Esc — отмена; ждём не-модификатор; требуем модификатор.
+  useEffect(() => {
+    if (!capturingId) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setCapturingId(null);
+        return;
+      }
+      if (e.key === 'Control' || e.key === 'Meta' || e.key === 'Alt' || e.key === 'Shift') return;
+      if (!(e.ctrlKey || e.metaKey || e.altKey)) return;
+      commands.remap(capturingId, eventToCombo(e));
+      setCapturingId(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [capturingId]);
+
+  const label = (c: { titleKey?: string; title: string }) => (c.titleKey ? t(c.titleKey) : c.title);
+  const list = [...commands.list()].sort((a, b) => label(a).localeCompare(label(b)));
+
+  // Подсчёт эффективных комбо → конфликт, если одна комбинация у ≥2 команд.
+  const counts = new Map<string, number>();
+  for (const c of list) {
+    const k = commands.effectiveKey(c.id);
+    if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+
+  return (
+    <>
+      <h2 className={styles.h2}>{t('settings.hotkeys')}</h2>
+      <p className={styles.hint}>{t('settings.hk.intro')}</p>
+      <ul className={styles.hkList}>
+        {list.map((c) => {
+          const key = commands.effectiveKey(c.id);
+          const overridden = commands.userKeyFor(c.id) !== undefined;
+          const conflict = key !== undefined && (counts.get(key) ?? 0) > 1;
+          const capturing = capturingId === c.id;
+          return (
+            <li key={c.id} className={styles.hkRow}>
+              <span className={styles.hkName}>{label(c)}</span>
+              <div className={styles.hkRight}>
+                {capturing ? (
+                  <span className={styles.hkCapturing}>{t('settings.hk.press')}</span>
+                ) : (
+                  <kbd
+                    className={`${styles.hkKey} ${conflict ? styles.hkConflict : ''}`}
+                    title={conflict ? t('settings.hk.conflict') : undefined}
+                  >
+                    {key ? formatCombo(key) : '—'}
+                  </kbd>
+                )}
+                <button
+                  type="button"
+                  className={styles.ghostBtn}
+                  onClick={() => setCapturingId(capturing ? null : c.id)}
+                >
+                  {capturing ? t('settings.hk.cancel') : t('settings.hk.edit')}
+                </button>
+                {overridden && (
+                  <button
+                    type="button"
+                    className={styles.hkReset}
+                    onClick={() => commands.resetKey(c.id)}
+                    title={t('settings.hk.reset')}
+                    aria-label={t('settings.hk.reset')}
+                  >
+                    <RotateCcw size={14} aria-hidden />
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
 }

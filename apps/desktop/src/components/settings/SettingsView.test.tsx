@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { SettingsView } from './SettingsView';
+import { commands } from '../../lib/commands';
+import { registerCoreCommands } from '../../lib/commands-core';
 import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 
@@ -86,5 +88,34 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     fireEvent.click(screen.getByRole('button', { name: /^вкл$|^on$/i }));
     expect(usePrefsStore.getState().readableLineWidth).toBe(true);
     expect(document.documentElement.style.getPropertyValue('--editor-max-width')).toBe('44rem');
+  });
+
+  it('Hotkeys (слайс 4): список команд, захват комбинации и сброс', () => {
+    const reg = registerCoreCommands();
+    try {
+      useUIStore.setState({ settingsSection: 'hotkeys' });
+      render(<SettingsView />);
+
+      // Строка «Новая заметка» (file.new) с её дефолтным хоткеем (Ctrl+N в jsdom = не-mac).
+      const row = screen.getByText(/новая заметка|new note/i).closest('li') as HTMLElement;
+      expect(within(row).getByText(/ctrl\+n|⌘n/i)).toBeInTheDocument();
+
+      // «Изменить» → захват → жмём Ctrl+Shift+N (capture-фаза window).
+      fireEvent.click(within(row).getByRole('button', { name: /изменить|change/i }));
+      act(() => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'N', ctrlKey: true, shiftKey: true }),
+        );
+      });
+      expect(commands.userKeyFor('file.new')).toBe('ctrl+shift+n');
+
+      // Появилась кнопка сброса → возвращает дефолт.
+      const row2 = screen.getByText(/новая заметка|new note/i).closest('li') as HTMLElement;
+      fireEvent.click(within(row2).getByRole('button', { name: /сбросить|reset/i }));
+      expect(commands.userKeyFor('file.new')).toBeUndefined();
+    } finally {
+      reg.dispose();
+      commands._reset();
+    }
   });
 });
