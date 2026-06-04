@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { Plus, Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
+import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
 import styles from './Sidebar.module.css';
@@ -15,6 +16,8 @@ export function Sidebar() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NoteRef[]>([]);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  const createNote = useVaultStore((s) => s.createNote);
+  const vaultOpen = useVaultStore((s) => s.info != null);
   const q = query.trim();
 
   useEffect(() => {
@@ -41,6 +44,17 @@ export function Sidebar() {
 
   return (
     <div className={styles.sidebar}>
+      {vaultOpen && (
+        <button
+          type="button"
+          className={styles.newNote}
+          onClick={() => void createNote().then((path) => openFile(path))}
+          title={t('sidebar.newNote')}
+        >
+          <Plus size={15} aria-hidden />
+          <span>{t('sidebar.newNote')}</span>
+        </button>
+      )}
       <div className={styles.searchBox}>
         <Search size={14} className={styles.searchIcon} aria-hidden />
         <input

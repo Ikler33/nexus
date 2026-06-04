@@ -1,6 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import type { NoteRef } from '../lib/tauri-api';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { tauriApi, type FileEntry, type NoteRef } from '../lib/tauri-api';
 import { flattenVisible, resolveLink, useVaultStore } from './vault';
+
+const entry = (name: string): FileEntry => ({
+  name,
+  path: name,
+  isDir: false,
+  hasChildren: false,
+  sizeBytes: 0,
+});
 
 function reset() {
   useVaultStore.setState({
@@ -50,6 +58,23 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
     const s = useVaultStore.getState();
     const visible = flattenVisible(s.childrenByPath, s.expanded, s.loading);
     expect(visible.find((n) => n.entry.path === 'Projects/Alpha/Spec.md')?.depth).toBe(2);
+  });
+
+  it('createNote: уникальное имя, пишет файл, обновляет дерево (кросс-план #1)', async () => {
+    useVaultStore.setState({ childrenByPath: { '': [entry('Untitled.md')] } });
+    const write = vi.spyOn(tauriApi.vault, 'writeFile').mockResolvedValue(undefined);
+    vi.spyOn(tauriApi.vault, 'listDir').mockResolvedValue([
+      entry('Untitled.md'),
+      entry('Untitled 1.md'),
+    ]);
+    vi.spyOn(tauriApi.vault, 'listNotes').mockResolvedValue([]);
+
+    const path = await useVaultStore.getState().createNote('', { content: 'hi' });
+
+    expect(path).toBe('Untitled 1.md'); // Untitled.md занят → Untitled 1.md
+    expect(write).toHaveBeenCalledWith('Untitled 1.md', 'hi');
+    expect(useVaultStore.getState().childrenByPath['']).toHaveLength(2);
+    vi.restoreAllMocks();
   });
 });
 

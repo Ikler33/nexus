@@ -21,6 +21,12 @@ interface VaultState {
 
   openVault: (path: string) => Promise<void>;
   toggleDir: (path: string) => Promise<void>;
+  /**
+   * Создаёт новую заметку в каталоге `dir` ('' = корень) с уникальным именем (`baseName`, по
+   * умолчанию `Untitled`) и опциональным содержимым; пишет файл, обновляет дерево/notes и возвращает
+   * путь. Используется командой `file.new`, кнопкой сайдбара и пустым состоянием дерева (кросс-план #1).
+   */
+  createNote: (dir?: string, opts?: { baseName?: string; content?: string }) => Promise<string>;
 }
 
 export const useVaultStore = create<VaultState>((set, get) => ({
@@ -77,6 +83,25 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       });
       throw err;
     }
+  },
+
+  async createNote(dir = '', opts = {}) {
+    const base = opts.baseName ?? 'Untitled';
+    const existing = new Set((get().childrenByPath[dir] ?? []).map((e) => e.name));
+    let name = `${base}.md`;
+    let i = 1;
+    while (existing.has(name)) name = `${base} ${i++}.md`;
+    const path = dir ? `${dir}/${name}` : name;
+    await tauriApi.vault.writeFile(path, opts.content ?? '');
+    // Обновляем детей каталога + список заметок (автокомплит ссылок); раскрываем каталог.
+    const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
+    const notes = await tauriApi.vault.listNotes().catch(() => get().notes);
+    set((s) => ({
+      childrenByPath: { ...s.childrenByPath, [dir]: children },
+      expanded: dir ? { ...s.expanded, [dir]: true } : s.expanded,
+      notes,
+    }));
+    return path;
   },
 }));
 
