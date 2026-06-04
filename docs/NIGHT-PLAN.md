@@ -249,8 +249,17 @@
   маркером (≥2), инъекция как данные, система предупреждена, маркер случаен. Rust 120 зелёных, AC-SEC-7 →
   covered. **Вторая половина AC-SEC-7 (JSON-валидация suggest) — N/A:** suggest вектор-similarity, LLM/JSON
   не использует → инъекцией не управляем by-construction (BACKLOG: применится с LLM-suggest). Untrusted-канал
-  для web/tool-use — остаётся в BLOCKED (предусловие web-агента). Ветка `track/14-anti-injection`, PR на CI.
-  **Остаются: V4.2 (redaction) / V4.5 (offline eval-гейт).**
+  для web/tool-use — остаётся в BLOCKED (предусловие web-агента). Ветка `track/14-anti-injection`,
+  **PR #47 смержен**. Остаются: V4.2 (redaction) / V4.5 (offline eval-гейт).
+- ✅ **V4.5 — Offline eval-гейт логики ранжирования (AC-EVAL-3/AC-Q-4)** (ревью A1 «делать раньше всех»;
+  выбор владельца на развилке). Регресс-гейт качества был только живым (`#[ignore]`, :8083) → CI зелёный
+  без проверки ранжирования. Добавлен детерминированный `offline_eval_gate_on_fixed_vectors` (обычный
+  `cargo test`, без сервера): `FixedEmbedder` с фикс. синтетическими векторами (cosine-оси) → запросы
+  находят релевантные по векторной близости (FTS пуст) → реальный `hybrid_search`→RRF→`run_eval` с точно
+  посчитанными метриками (recall@8=1.0, MRR=5/6, nDCG≈0.877; кейс QRYMIX cherry@1>apple@2 → RR=0.5).
+  Ловит регрессии RRF/метрик в CI. Rust 121 зелёных. AC-EVAL-3/AC-Q-4 → partial. **Реальное качество**
+  (golden настоящих эмбеддингов) — BLOCKED (разовый :8083). Ветка `track/15-offline-eval-gate`, PR на CI.
+  **Остаётся из Волны 4: V4.2 (redaction-layer, AC-SEC-6).**
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;

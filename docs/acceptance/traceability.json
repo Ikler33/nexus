@@ -6,7 +6,7 @@
     "AC-Q-1": { "status": "covered", "tests": ["CI: rust job (cargo build --locked, матрица ОС)", "CI: frontend job (pnpm build)"] },
     "AC-Q-2": { "status": "covered", "tests": ["CI: coverage-rust (cargo-llvm-cov --fail-under-lines 65)", "CI: frontend (pnpm test:coverage, пороги vitest)"], "note": "V1.2 — храповик покрытия. Per-path пороги критичных модулей — доводка (BACKLOG)." },
     "AC-Q-3": { "status": "covered", "tests": ["CI: clippy -D warnings", "CI: eslint", "CI: tsc --noEmit"] },
-    "AC-Q-4": { "status": "partial", "tests": ["eval::tests"], "note": "Eval-математика покрыта; живой гейт baseline — manual (сервер), офлайн-фикстура = V4.5." },
+    "AC-Q-4": { "status": "partial", "tests": ["eval::tests"], "note": "Eval-математика + офлайн-гейт логики ранжирования на синтетических векторах (V4.5) покрыты в cargo test; живой baseline-гейт на реальном качестве — manual (нужен сервер)." },
     "AC-Q-5": { "status": "partial", "tests": ["CI: security job (cargo-deny + gitleaks, V1.1)", "plugin::permission::tests", "plugin::broker::tests", "tests::csp_and_capabilities_are_hardened"], "note": "Supply-chain + ядро security-тестов есть; AC-SEC-6/7 не закрыты (V4.2/V4.3)." },
     "AC-Q-6": { "status": "pending", "note": "Линт на висячие упоминания снятых решений (sqlite-vec/petgraph/WASM/currentFile) не автоматизирован — пока ручная сверка." },
 
@@ -44,8 +44,8 @@
     "AC-Б12-2": { "status": "partial", "tests": ["src/stores/workspace.test.ts"], "note": "dirty-буфер при переключении." },
 
     "AC-EVAL-1": { "status": "covered", "tests": ["eval::tests"], "note": "Golden-набор загружается." },
-    "AC-EVAL-2": { "status": "partial", "tests": ["eval::tests"], "note": "Метрики считаются; живые пороги — manual (сервер)." },
-    "AC-EVAL-3": { "status": "manual", "note": "Живой eval-гейт ручной до офлайн-фикстуры (ревью A1, V4.5)." },
+    "AC-EVAL-2": { "status": "partial", "tests": ["eval::tests"], "note": "Метрики считаются + сквозной офлайн-прогон на фикс. векторах (V4.5); живые пороги — manual (сервер)." },
+    "AC-EVAL-3": { "status": "partial", "tests": ["eval::tests"], "note": "V4.5: офлайн-гейт ПРОВОДКИ/логики ранжирования автоматизирован (offline_eval_gate_on_fixed_vectors — детерминированные синтетические векторы → recall/nDCG/MRR в обычном cargo test, ловит регрессии RRF/метрик). Гейт на РЕАЛЬНОМ качестве (live baseline) — manual, нужен :8083 (BLOCKED, разовый шаг владельца)." },
     "AC-EVAL-4": { "status": "covered", "tests": ["eval::tests"], "note": "Сравнение валидно при совпадении условий." },
     "AC-EVAL-5": { "status": "pending", "note": "Калибровка similarity per-model под eval (ревью H8)." },
     "AC-EVAL-6": { "status": "manual", "tests": ["eval::tests (#[ignore] live)"], "note": "Кросс-язычность подтверждена на bge-m3 (recall@8=1.0, прогон #1); живой тест." },
