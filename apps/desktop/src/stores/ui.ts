@@ -12,6 +12,8 @@ interface UIState {
   pluginsOpen: boolean;
   /** Открыта ли панель синхронизации (git-sync, Ф3). */
   syncOpen: boolean;
+  /** Открыта ли панель «Цели» (#35, vision). */
+  goalsOpen: boolean;
   /** Открыт ли раздел настроек (модалка Obsidian-style; `tweaksOpen` исторически — теперь весь раздел). */
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
@@ -34,6 +36,8 @@ interface UIState {
   togglePlugins: () => void;
   closeSync: () => void;
   toggleSync: () => void;
+  closeGoals: () => void;
+  toggleGoals: () => void;
   toggleReading: () => void;
   closeReading: () => void;
   toggleTweaks: () => void;
@@ -51,6 +55,7 @@ export const useUIStore = create<UIState>((set) => ({
   chatOpen: false,
   pluginsOpen: false,
   syncOpen: false,
+  goalsOpen: false,
   tweaksOpen: false,
   settingsSection: 'general',
   reading: false,
@@ -69,6 +74,8 @@ export const useUIStore = create<UIState>((set) => ({
   togglePlugins: () => set((s) => ({ pluginsOpen: !s.pluginsOpen })),
   closeSync: () => set({ syncOpen: false }),
   toggleSync: () => set((s) => ({ syncOpen: !s.syncOpen })),
+  closeGoals: () => set({ goalsOpen: false }),
+  toggleGoals: () => set((s) => ({ goalsOpen: !s.goalsOpen })),
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),

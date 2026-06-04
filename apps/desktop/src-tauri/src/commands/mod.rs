@@ -3,6 +3,7 @@
 
 pub mod chat;
 pub mod git;
+pub mod goals;
 pub mod graph;
 pub mod plugin;
 pub mod search;

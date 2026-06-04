@@ -19,6 +19,8 @@ pub mod db;
 pub mod eval;
 /// git-sync (Фаза 3, §8): vault как git-репозиторий — фундамент (open/init, .gitignore, status).
 pub mod git;
+/// «Прогресс целей» (#35): кросс-файловый список заметок-целей (#goal) — vision-волна 2.
+pub mod goals;
 /// Граф ссылок: беклинки из SQLite (ADR-004).
 pub mod graph;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
@@ -83,6 +85,7 @@ pub fn run() {
             commands::chat::chat_cancel,
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
+            commands::goals::list_goals,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
             commands::settings::test_ai_connection,

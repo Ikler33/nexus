@@ -3,6 +3,7 @@ import type {
   ChatStreamEvent,
   FileEntry,
   FullGraph,
+  GoalEntry,
   GraphData,
   GraphEdge,
   LinkSuggestion,
@@ -201,6 +202,15 @@ export async function getRelatedNotes(path: string, limit = 12): Promise<LinkSug
     });
   }
   return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/** Мок «Целей» (#35) для превью/тестов: пара целей с прогрессом + одна без (D7). */
+export async function getGoals(): Promise<GoalEntry[]> {
+  return [
+    { path: 'Цели/Книга.md', title: 'Дописать книгу', progress: 65 },
+    { path: 'Цели/Марафон.md', title: 'Пробежать марафон', progress: 30 },
+    { path: 'Цели/Идея.md', title: 'Идея без прогресса', progress: null },
+  ];
 }
 
 /** Симуляция RAG-чат-стрима для превью/тестов: sources → токены (по словам) → done. */
