@@ -51,6 +51,10 @@ pub struct ParsedDocument {
     pub tags: Vec<String>,
     /// Алиасы из frontmatter (`aliases:`/`alias:`) — для резолва `[[Алиас]]` (V4.1).
     pub aliases: Vec<String>,
+    /// Плоские скалярные поля frontmatter верхнего уровня (`progress/due/goal/evergreen/draft`…) как
+    /// `(ключ, значение)` — для кросс-файловых запросов (цели/stale-radar/Dataview). Списки/вложенный
+    /// YAML сюда не попадают (см. [`frontmatter_fields`]); порядок — как в файле, ключи уникальны.
+    pub fields: Vec<(String, String)>,
     pub word_count: usize,
 }
 
@@ -72,6 +76,7 @@ pub fn parse(content: &str) -> ParsedDocument {
         links,
         tags: tags.into_iter().collect(),
         aliases: frontmatter.map(frontmatter_aliases).unwrap_or_default(),
+        fields: frontmatter.map(frontmatter_fields).unwrap_or_default(),
         word_count: body.split_whitespace().count(),
     }
 }
@@ -272,6 +277,45 @@ fn push_alias(out: &mut Vec<String>, raw: &str) {
     }
 }
 
+/// Извлекает ПЛОСКИЕ скалярные поля frontmatter верхнего уровня (typed-frontmatter) минимальным
+/// line-парсером — без YAML-либы (serde_yaml архивирован → security-гейт; выбор владельца). Берёт
+/// строки вида `ключ: значение` БЕЗ ведущих отступов (вложенное/блок-список — пропускаются), значение —
+/// непустой скаляр (НЕ инлайн-список `[…]`/объект `{…}`; кавычки снимаются). Списки (`tags`/`aliases`)
+/// и вложенный YAML сюда НЕ попадают — для них свои таблицы / сырой `frontmatter`. Ключи уникальны
+/// (последний выигрывает), порядок — как в файле. Намеренно простой: PKM-frontmatter — плоские поля.
+fn frontmatter_fields(fm: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in fm.lines() {
+        // Только верхний уровень: без ведущих пробелов/таба (вложенность) и не элемент списка `-`.
+        if line.starts_with([' ', '\t', '-']) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        // Ключ — простой идентификатор (буквы/цифры/`_`/`-`); иначе это не «ключ: значение».
+        if key.is_empty()
+            || !key
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+        {
+            continue;
+        }
+        let value = value.trim().trim_matches(['"', '\'']).trim();
+        // Только непустые скаляры: инлайн-список/объект и пустое (блок ниже) — не сюда.
+        if value.is_empty() || value.starts_with('[') || value.starts_with('{') {
+            continue;
+        }
+        if let Some(slot) = out.iter_mut().find(|(k, _)| k == key) {
+            slot.1 = value.to_string(); // последний ключ выигрывает
+        } else {
+            out.push((key.to_string(), value.to_string()));
+        }
+    }
+    out
+}
+
 /// Нормализует цель ссылки: убирает `|alias` и `#heading`, тримит. `None`, если пусто.
 fn normalize_target(raw: &str) -> Option<String> {
     let no_alias = raw.split('|').next().unwrap_or(raw);
@@ -385,6 +429,47 @@ mod tests {
         // нет алиасов / нет frontmatter
         assert!(parse("---\ntitle: X\n---\nb\n").aliases.is_empty());
         assert!(parse("no frontmatter [[X]]\n").aliases.is_empty());
+    }
+
+    #[test]
+    fn frontmatter_fields_extracts_flat_scalars_only() {
+        let doc = parse(
+            "---\n\
+             title: My Note\n\
+             progress: 0.5\n\
+             due: 2026-01-01\n\
+             goal: \"Ship v1\"\n\
+             evergreen: true\n\
+             aliases: [A, B]\n\
+             tags: [x, y]\n\
+             nested:\n  sub: 1\n\
+             list:\n  - a\n  - b\n\
+             ---\nbody\n",
+        );
+        // Плоские скаляры попадают (кавычки сняты), порядок как в файле.
+        assert_eq!(
+            doc.fields,
+            vec![
+                ("title".to_string(), "My Note".to_string()),
+                ("progress".to_string(), "0.5".to_string()),
+                ("due".to_string(), "2026-01-01".to_string()),
+                ("goal".to_string(), "Ship v1".to_string()),
+                ("evergreen".to_string(), "true".to_string()),
+            ],
+            "инлайн-списки (aliases/tags), вложенное (nested) и блок-списки (list) исключены"
+        );
+    }
+
+    #[test]
+    fn frontmatter_fields_last_key_wins_and_empty_cases() {
+        // дубль ключа → последний выигрывает
+        assert_eq!(
+            parse("---\nstatus: draft\nstatus: final\n---\nb\n").fields,
+            vec![("status".to_string(), "final".to_string())]
+        );
+        // нет frontmatter / только списки → пусто
+        assert!(parse("body only\n").fields.is_empty());
+        assert!(parse("---\naliases: [A]\n---\nb\n").fields.is_empty());
     }
 
     #[test]

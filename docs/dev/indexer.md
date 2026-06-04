@@ -4,7 +4,9 @@
 > **AC-Б4-1/2 · AC-Б5-2 · AC-Б8-1/2 · AC-PERF-5**.
 
 ## parser
-`parse(content) -> ParsedDocument { title, frontmatter(raw), links[], tags[], word_count }`.
+`parse(content) -> ParsedDocument { title, frontmatter(raw), links[], tags[], aliases[], fields[], word_count }`.
+- **fields**: плоские скаляры верхнего уровня frontmatter (`progress/due/goal/evergreen/draft`…) как
+  `(key, value)` — мини-парсер (без YAML-либы); инлайн-списки/вложенный YAML/блок-списки исключены.
 - **frontmatter**: YAML-блок между ведущими `---` (вырезан из тела, хвостовые `\n` срезаны).
 - **title**: frontmatter `title:`, иначе первый H1.
 - **links**: `[[wiki]]`, `![[embed]]` (ручной скан сырого тела) + внутренние markdown-ссылки
@@ -72,15 +74,22 @@
 (полная замена на файл; `OR REPLACE` на глобальном `UNIQUE(alias)`). `resolve_target` и
 `resolve_all_dangling` после path-матча падают на алиас (`COALESCE(path, alias)`), а обратный резолв
 обновляет висячие ссылки и по алиасам файла — так `[[Алиас]]` находит цель forward и backward. **Путь
-приоритетнее алиаса.** Полный typed-frontmatter (`progress/due/…`) — NEEDS-DECISION по YAML-подходу.
+приоритетнее алиаса.**
+
+**Typed-frontmatter (плоские поля).** Плоские скаляры frontmatter (`parsed.fields`) пишутся в таблицу
+`frontmatter_fields` (миграция 003; `UNIQUE(file_id,key)` + индекс по `key`) — полная замена на файл,
+как теги/алиасы. Разблокирует кросс-файловые запросы (цели/stale-radar/Dataview). Значения — строки
+(типизацию делает консьюмер); сложный/вложенный YAML — fallback на сырой `frontmatter`. Выбор владельца:
+расширенный мини-парсер (без YAML-либы). Query-API/команда — с первым консьюмером (BACKLOG).
 
 ## Тесты
-- parser: frontmatter/title/links/tags, исключение кода, номера строк.
+- parser: frontmatter/title/links/tags, исключение кода, номера строк; **плоские поля frontmatter
+  (только скаляры; дубль→последний; списки/вложенность исключены)**.
 - watcher: `is_ignored` (AC-Б9-2), `normalize` (AC-Б9-3) + склейка переименования в `Renamed` и
   безопасная деградация перекрытого move (V2.2).
 - indexer (граф): atomic-save сохраняет file_id + беклинки (AC-Б9-1), обратный резолв, замена тегов;
   **rename сохраняет file_id+беклинки** (`[[Old]]` по id, `[[New]]` до-резолвилась) и **чанки+векторы**
-  (V2.2).
+  (V2.2); **плоские поля frontmatter пишутся в `frontmatter_fields` и заменяются при реиндексе**.
 - indexer (RAG, `MockEmbedder`): запись chunks+FTS+векторов (Б4-1); реиндексация без осиротевших
   векторов (Б4-2); `remove` чистит chunks+FTS+векторы (Б8-2); `force` переиндексирует неизменённый
   файл (§6.5). `reconcile_embedding_model`: первое включение → force+settings; смена модели → wipe+force.

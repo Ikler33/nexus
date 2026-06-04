@@ -192,6 +192,17 @@ impl Indexer {
                     )?;
                 }
 
+                // Плоские поля frontmatter (typed-frontmatter): полная замена на файл; UNIQUE(file_id,key)
+                // → OR REPLACE. Для кросс-файловых запросов (цели/stale-radar/Dataview).
+                tx.execute("DELETE FROM frontmatter_fields WHERE file_id=?1", [file_id])?;
+                for (key, value) in &parsed.fields {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO frontmatter_fields (file_id, key, value) \
+                         VALUES (?1, ?2, ?3)",
+                        params![file_id, key, value],
+                    )?;
+                }
+
                 // Исходящие ссылки: полная замена (DELETE + INSERT с прямым резолвом цели).
                 tx.execute("DELETE FROM links WHERE source_id=?1", [file_id])?;
                 for link in &parsed.links {
@@ -783,6 +794,24 @@ mod tests {
             .unwrap()
     }
 
+    /// Поля frontmatter файла как `(key, value)`, отсортированы по ключу.
+    async fn read_fields(db: &Database, file_id: i64) -> Vec<(String, String)> {
+        db.reader()
+            .query(move |c| {
+                let mut s = c.prepare(
+                    "SELECT key, value FROM frontmatter_fields WHERE file_id=?1 ORDER BY key",
+                )?;
+                let v = s
+                    .query_map([file_id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(v)
+            })
+            .await
+            .unwrap()
+    }
+
     /// V4.1: `[[Алиас]]` резолвится в файл, объявивший алиас в frontmatter (forward и backward),
     /// таблица `aliases` заполняется.
     #[tokio::test]
@@ -944,6 +973,45 @@ mod tests {
         fs::write(root.join("N.md"), "body #area only\n").unwrap();
         idx.index_file("N.md").await.unwrap();
         assert_eq!(read_tags(&db).await, vec!["area".to_string()]);
+    }
+
+    /// typed-frontmatter: плоские поля индексируются в `frontmatter_fields` и заменяются при реиндексе.
+    #[tokio::test]
+    async fn indexes_and_replaces_frontmatter_fields() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(
+            root.join("Goal.md"),
+            "---\nprogress: 0.3\ndue: 2026-02-01\naliases: [G]\n---\nbody\n",
+        )
+        .unwrap();
+
+        let db = open(&root).await;
+        let idx = Indexer::new(&db, root.clone());
+        idx.index_file("Goal.md").await.unwrap();
+        let id = file_id(&db, "Goal.md").await;
+
+        // Плоские скаляры записаны; список aliases в frontmatter_fields НЕ попал (у него своя таблица).
+        assert_eq!(
+            read_fields(&db, id).await,
+            vec![
+                ("due".to_string(), "2026-02-01".to_string()),
+                ("progress".to_string(), "0.3".to_string()),
+            ]
+        );
+
+        // Реиндекс с другими полями → полная замена (старое `due` ушло).
+        fs::write(root.join("Goal.md"), "---\nprogress: 1.0\n---\nbody\n").unwrap();
+        idx.index_file("Goal.md").await.unwrap();
+        assert_eq!(
+            read_fields(&db, id).await,
+            vec![("progress".to_string(), "1.0".to_string())]
+        );
+        assert_eq!(
+            file_id(&db, "Goal.md").await,
+            id,
+            "file_id стабилен (UPSERT по пути)"
+        );
     }
 
     // ── RAG (Ф1-5): чанки + эмбеддинги + usearch ──────────────────────────────────────────────
