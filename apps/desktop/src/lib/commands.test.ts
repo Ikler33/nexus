@@ -1,5 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { commands, eventToCombo, normalizeCombo } from './commands';
+
+// jsdom под node 25 не отдаёт рабочий localStorage (нативный экспериментальный global мешает),
+// а реестр хоткеев в него персистит. In-memory localStorage для теста персиста (стартует пустым).
+beforeAll(() => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    },
+  });
+});
 
 afterEach(() => commands._reset());
 
@@ -30,5 +45,34 @@ describe('command registry (Ф0-8)', () => {
     expect(commands.resolve('mod+k')).toBe('plugin.x'); // плагин > ядро
     commands.setUserKey('mod+k', 'core.x');
     expect(commands.resolve('mod+k')).toBe('core.x'); // пользователь перекрывает
+  });
+
+  it('remap / effectiveKey / userKeyFor / resetKey (слайс 4)', () => {
+    commands.register({ id: 'c.g', title: 'g', source: 'core', defaultKey: 'mod+g', run: () => {} });
+    // Дефолт (jsdom = не-mac → mod→ctrl).
+    expect(commands.effectiveKey('c.g')).toBe('ctrl+g');
+    expect(commands.userKeyFor('c.g')).toBeUndefined();
+
+    commands.remap('c.g', 'mod+shift+g');
+    expect(commands.userKeyFor('c.g')).toBe('ctrl+shift+g');
+    expect(commands.effectiveKey('c.g')).toBe('ctrl+shift+g');
+    expect(commands.resolve('mod+shift+g')).toBe('c.g');
+
+    // Повторный ремап снимает прежний пользовательский бинд (не остаётся двух комбо у одной команды).
+    commands.remap('c.g', 'mod+alt+g');
+    expect(commands.resolve('ctrl+shift+g')).toBeUndefined();
+    expect(commands.effectiveKey('c.g')).toBe('ctrl+alt+g');
+
+    commands.resetKey('c.g');
+    expect(commands.userKeyFor('c.g')).toBeUndefined();
+    expect(commands.effectiveKey('c.g')).toBe('ctrl+g'); // снова дефолт
+  });
+
+  it('ремап персистится в localStorage (слайс 4)', () => {
+    commands.register({ id: 'c.k', title: 'k', source: 'core', defaultKey: 'mod+k', run: () => {} });
+    commands.remap('c.k', 'mod+shift+k');
+    const raw = localStorage.getItem('nexus.hotkeys.v1');
+    expect(raw).toBeTruthy();
+    expect(JSON.parse(raw as string)).toEqual({ 'ctrl+shift+k': 'c.k' });
   });
 });

@@ -77,10 +77,17 @@ export function formatCombo(combo: string): string {
     .join(mac ? '' : '+');
 }
 
+/** Ключ localStorage для пользовательского ремапа хоткеев (combo → id). */
+const HOTKEYS_KEY = 'nexus.hotkeys.v1';
+
 class CommandRegistry {
   private commands = new Map<string, Command>();
   private userKeymap = new Map<string, string>(); // combo → id (пользовательский ремап)
   private listeners = new Set<() => void>();
+
+  constructor() {
+    this.loadUserKeymap();
+  }
 
   register(cmd: Command): Disposable {
     this.commands.set(cmd.id, cmd);
@@ -105,10 +112,74 @@ class CommandRegistry {
     await this.commands.get(id)?.run(ctx);
   }
 
-  /** Пользовательский ремап combo → команда (наивысший приоритет). */
+  /** Пользовательский ремап combo → команда (наивысший приоритет). Персист. */
   setUserKey(combo: string, id: string): void {
     this.userKeymap.set(normalizeCombo(combo), id);
+    this.persistUserKeymap();
     this.emit();
+  }
+
+  /** Текущий пользовательский combo команды (если переопределён), нормализованный. */
+  userKeyFor(id: string): string | undefined {
+    for (const [combo, cmdId] of this.userKeymap) if (cmdId === id) return combo;
+    return undefined;
+  }
+
+  /** Эффективный combo команды для UI: пользовательский оверрайд → дефолт (оба нормализованы). */
+  effectiveKey(id: string): string | undefined {
+    const user = this.userKeyFor(id);
+    if (user) return user;
+    const def = this.commands.get(id)?.defaultKey;
+    return def ? normalizeCombo(def) : undefined;
+  }
+
+  /**
+   * Назначить команде хоткей: снимает прежний пользовательский бинд ЭТОЙ команды, затем ставит новый
+   * (combo → id). Конфликт с другой командой не блокируется — резолв даст приоритет пользователю, а UI
+   * подсветит совпадение. Персист.
+   */
+  remap(id: string, combo: string): void {
+    const norm = normalizeCombo(combo);
+    for (const [c, cmdId] of [...this.userKeymap]) if (cmdId === id) this.userKeymap.delete(c);
+    this.userKeymap.set(norm, id);
+    this.persistUserKeymap();
+    this.emit();
+  }
+
+  /** Сбросить команду к дефолтному хоткею (убрать пользовательский оверрайд). Персист. */
+  resetKey(id: string): void {
+    let changed = false;
+    for (const [c, cmdId] of [...this.userKeymap]) {
+      if (cmdId === id) {
+        this.userKeymap.delete(c);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.persistUserKeymap();
+      this.emit();
+    }
+  }
+
+  private persistUserKeymap(): void {
+    try {
+      localStorage.setItem(HOTKEYS_KEY, JSON.stringify(Object.fromEntries(this.userKeymap)));
+    } catch {
+      /* localStorage недоступен */
+    }
+  }
+
+  private loadUserKeymap(): void {
+    try {
+      const raw = localStorage.getItem(HOTKEYS_KEY);
+      if (!raw) return;
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      for (const [combo, id] of Object.entries(obj)) {
+        if (typeof id === 'string') this.userKeymap.set(normalizeCombo(combo), id);
+      }
+    } catch {
+      /* битый JSON / нет localStorage — игнорируем */
+    }
   }
 
   /** Резолвит combo в id команды: пользователь > плагин > ядро. */
@@ -134,6 +205,11 @@ class CommandRegistry {
   _reset(): void {
     this.commands.clear();
     this.userKeymap.clear();
+    try {
+      localStorage.removeItem(HOTKEYS_KEY);
+    } catch {
+      /* ignore */
+    }
     this.emit();
   }
 

@@ -113,6 +113,19 @@
   font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
+/* строка-настройка с описанием: подпись + поясняющий текст слева */
+.rowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-right: var(--space-3);
+}
+.rowDesc {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  line-height: 1.4;
+}
 
 .seg {
   display: inline-flex;
@@ -315,4 +328,69 @@
 .warnText {
   font-size: var(--text-sm);
   color: oklch(0.6 0.1 75);
+}
+
+/* секция «Горячие клавиши» */
+.hkList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hkRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.hkName {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hkRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+.hkKey {
+  display: inline-block;
+  min-width: 48px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+}
+.hkConflict {
+  color: oklch(0.6 0.18 25);
+  border-color: oklch(0.6 0.18 25 / 0.6);
+}
+.hkCapturing {
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  padding: 3px 8px;
+}
+.hkReset {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.hkReset:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
