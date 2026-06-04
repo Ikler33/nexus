@@ -30,6 +30,14 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
+# iCloud Drive sync-conflict каталоги/файлы («<имя> 2») — артефакты синка, не код.
+# Загрязняют grep/find автономного агента; чистятся scripts/preflight.mjs.
+* 2/
+* 2.*
+
+# Vault-БД, если тест-vault открыт внутри репозитория (обычно vault внешний).
+.nexus/
+
 # Editors
 .idea/
 *.iml
