@@ -65,7 +65,13 @@
     "depth": "Depth",
     "loading": "Laying out…",
     "stat": "{{nodes}} nodes · {{edges}} links",
-    "close": "Close graph"
+    "close": "Close graph",
+    "settings": "Settings",
+    "repel": "Repel force",
+    "linkDist": "Link distance",
+    "gravity": "Center gravity",
+    "nodeSize": "Node size",
+    "reset": "Reset"
   },
   "chat": {
     "title": "AI panel",
