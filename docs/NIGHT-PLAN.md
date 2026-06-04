@@ -199,8 +199,13 @@
   line-парсер, без YAML-либы). Парсер: 3 формы (инлайн/блок/скаляр). Индексатор: таблица `aliases`
   (OR REPLACE на UNIQUE), `resolve_target`/`resolve_all_dangling` + обратный резолв расширены на алиасы
   (forward+backward, путь приоритетнее). Rust 113+9 зелёные. Отложено: **полный typed-frontmatter** —
-  NEEDS-DECISION по YAML-подходу (записано). PR открыт, мерж на зелёном.
-  Следующий: на выбор владельца (V4.4 общий чат / V2.2 rename / прочее).
+  NEEDS-DECISION по YAML-подходу (записано). **PR #40 смержен.**
+- ✅ **«Вылет графа» РАЗГАДАН — НЕ краш** (диагностика с владельцем на реальном vault SA-Vault, 122
+  файла). Лог Rust: паники нет, процесс один раз стартовал; перезагрузился только webview после
+  `[vite] ✨ new dependencies optimized: graphology-layout-forceatlas2 … reloading`. Корень: dev-only
+  ленивая до-оптимизация Vite граф-зависимостей → full-reload. Фикс: `optimizeDeps.include`
+  (graphology/sigma/forceatlas2) в `vite.config.ts`. Прод-сборки не касалось. Баг в BACKLOG → закрыт.
+  PR открыт, мерж на зелёном. **Последний 🔴-баг снят.** Следующий: выбор владельца (V4.4 / V2.2).
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;
