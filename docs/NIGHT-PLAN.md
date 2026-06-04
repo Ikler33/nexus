@@ -151,7 +151,12 @@
   `vitest.config.ts` (пороги 63/63/60/75, baseline 64.3/62.1/77.3%), CI `pnpm test:coverage`. Rust: job
   `coverage-rust` (`cargo-llvm-cov --fail-under-lines 65`, baseline строк 71.8%), параллельно матрице.
   Локально зелёные оба замера. Отложено в BACKLOG: per-path пороги, baseline.json-bump, test-all.sh.
-  PR открыт, мерж на зелёном CI. Следующий: **V1.3 (traceability AC↔тест)**.
+  **PR #35 смержен** (понадобился fix: корневой `test:coverage`-скрипт — CI запускает из корня репо).
+- ✅ **V1.3 — Traceability AC ↔ тест** (TESTING_STRATEGY §4). `docs/acceptance/traceability.json` (77 AC:
+  статус + tests) + zero-dep гейт `scripts/check-traceability.mjs` (job `traceability`): новый AC без
+  записи → красный CI. Гейт сразу поймал 2 свои несогласованности (partial без tests) → поправлено.
+  Картина: 26 covered · 17 partial · 12 pending · 17 manual · 5 deferred (43/77 автотестами); pending
+  совпадают с очередью V2/V4. PR открыт, мерж на зелёном CI. Следующий: **V1.4 (integration-тесты)**.
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;

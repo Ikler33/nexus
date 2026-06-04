@@ -41,6 +41,16 @@
   - Механика «тест на каждую новую функцию»: непокрытый код роняет % → CI краснеет.
   - Отложено (no silent caps): per-path пороги ≥70% критичных модулей, `coverage-baseline.json` +
     дельта-комментарий в PR, единый `scripts/test-all.sh` — BACKLOG «Coverage-доводка».
+- **V1.3 — Traceability AC ↔ тест** (TESTING_STRATEGY §4). Матрица `docs/acceptance/traceability.json`:
+  у КАЖДОГО из 77 AC (`ACCEPTANCE.md`) — статус (covered/partial/pending/manual/deferred) + ссылки на
+  тесты. Гейт `scripts/check-traceability.mjs` (zero-dep, job `traceability`) падает, если: AC спеки нет
+  в матрице (новый AC без записи о тесте), запись-сирота, неизвестный статус, или covered/partial без
+  `tests[]`. Делает «тест на каждую фичу» проверяемым свойством сборки.
+  - Стартовая картина (честная, по коду + ревью): **26 covered · 17 partial · 12 pending · 17 manual ·
+    5 deferred** (43/77 с автотестами). pending-AC совпадают с очередью (Б9-1→V2.1, Б10-4→V2.4,
+    SEC-6→V4.2, SEC-7→V4.3, EVAL-5, …) — матрица операционализирует автономность-находки ревью.
+  - Отложено (no silent caps): рендер `traceability.md` для PR, проверка существования имён тестов в
+    бинарях, конвенция `Closes AC-…` в PR-шаблоне — BACKLOG.
 
 ### Added — Фаза 0
 
