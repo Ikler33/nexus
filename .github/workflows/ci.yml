@@ -109,3 +109,16 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
       - run: cargo llvm-cov --locked --workspace --summary-only --fail-under-lines 65
+
+  # Traceability-гейт (V1.3, TESTING_STRATEGY §4): у КАЖДОГО AC из ACCEPTANCE.md есть запись в
+  # docs/acceptance/traceability.json (статус covered/partial/pending/manual/deferred + tests).
+  # Новый AC без записи о тесте → красный CI. Zero-dep (node:fs) — без pnpm install, ~10с.
+  traceability:
+    name: Traceability (AC ↔ тест)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-traceability.mjs
