@@ -7,28 +7,36 @@ struct Migration {
     version: u32,
     name: &'static str,
     sql: &'static str,
+    /// Миграция инвалидирует производный FTS5-индекс (смена схемы/конфига `fts_chunks`) → раннер после
+    /// её SQL **пересобирает `fts_chunks` из `chunks`** (external-content rebuild), пользователю НЕ нужно
+    /// удалять `.nexus`. Чистый SQL (content-таблица `chunks` цела). usearch (смена размерности эмбеддинга)
+    /// пересобирается индексатором (reconcile на открытии — нужен embedder), см. `docs/dev/db.md`.
+    /// ADR-007/§5.1: примитив-резюмируемости для будущих схемо-миграций (#14 re-chunk, jobs и т.п.).
+    rebuild_fts: bool,
 }
 
 /// Упорядоченный список миграций. Версия = индекс в эволюции схемы.
 ///
-/// FTS5 (`fts_chunks`) и usearch нельзя `ALTER` — они появятся отдельными миграциями
-/// в Ф1 (с пересозданием/переиндексацией из `chunks`); chat/link_suggestions — там же
-/// по мере надобности. Здесь — ядро для Ф0 (см. `001_initial.sql`).
+/// FTS5 (`fts_chunks`) и usearch нельзя `ALTER`; при инвалидации производных — `rebuild_fts`-хук (FTS из
+/// `chunks`) + reconcile usearch на открытии. Здесь — ядро Ф0/Ф1 (см. `00x_*.sql`).
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         name: "initial",
         sql: include_str!("migrations/001_initial.sql"),
+        rebuild_fts: false,
     },
     Migration {
         version: 2,
         name: "chunks_fts",
         sql: include_str!("migrations/002_chunks_fts.sql"),
+        rebuild_fts: false, // создаёт FTS — пересобирать нечего
     },
     Migration {
         version: 3,
         name: "frontmatter_fields",
         sql: include_str!("migrations/003_frontmatter_fields.sql"),
+        rebuild_fts: false,
     },
 ];
 
@@ -61,6 +69,10 @@ pub(crate) fn apply(conn: &mut Connection) -> DbResult<()> {
         };
         let tx = conn.transaction().map_err(wrap)?;
         tx.execute_batch(m.sql).map_err(wrap)?;
+        // Пост-хук пересборки производного FTS-индекса из chunks (резюмируемость: без ручного сноса .nexus).
+        if m.rebuild_fts {
+            rebuild_fts(&tx).map_err(wrap)?;
+        }
         // user_version нельзя биндить плейсхолдером; значение — из нашего кода, не из ввода.
         tx.pragma_update(None, "user_version", m.version)
             .map_err(wrap)?;
@@ -68,4 +80,61 @@ pub(crate) fn apply(conn: &mut Connection) -> DbResult<()> {
         tracing::info!(version = m.version, name = m.name, "applied db migration");
     }
     Ok(())
+}
+
+/// Пересобирает external-content FTS5-индекс `fts_chunks` из content-таблицы `chunks` (встроенная
+/// команда FTS5 `'rebuild'`). Применяется после миграции, инвалидирующей FTS (`rebuild_fts: true`), и
+/// как точечный ремонт рассинхрона. `chunks` не трогается — переразбор файлов НЕ нужен.
+pub(crate) fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild');")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `rebuild_fts` восстанавливает external-content FTS5 из `chunks` после рассинхрона (delete-all) —
+    /// без переразбора файлов. Это и есть примитив резюмируемости для будущих FTS-схемо-миграций (#13).
+    #[test]
+    fn rebuild_fts_restores_index_from_chunks() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap(); // 001..003
+
+        // Тест про FTS, не про FK — отключаем FK, чтобы не заводить files-строку; триггер наполнит FTS.
+        conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+        conn.execute(
+            "INSERT INTO chunks(file_id,chunk_index,content,char_start,char_end,token_count) \
+             VALUES(1,0,'alpha beta gamma',0,16,3)",
+            [],
+        )
+        .unwrap();
+        let hits = |c: &Connection| -> i64 {
+            c.query_row(
+                "SELECT count(*) FROM fts_chunks WHERE fts_chunks MATCH 'alpha'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(hits(&conn), 1, "триггер наполнил FTS");
+
+        // Рассинхрон: чистим FTS-индекс (chunks целы).
+        conn.execute_batch("INSERT INTO fts_chunks(fts_chunks) VALUES('delete-all');")
+            .unwrap();
+        assert_eq!(hits(&conn), 0, "после delete-all индекс пуст");
+
+        rebuild_fts(&conn).unwrap();
+        assert_eq!(hits(&conn), 1, "rebuild восстановил индекс из chunks");
+    }
+
+    /// Идемпотентность раннера: повторный `apply` не двигает `user_version` и доводит до `latest`.
+    #[test]
+    fn apply_is_idempotent_to_latest() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+        let v = user_version(&conn).unwrap();
+        assert_eq!(v, i64::from(latest_version()));
+        apply(&mut conn).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), v, "повторный apply — no-op");
+    }
 }
