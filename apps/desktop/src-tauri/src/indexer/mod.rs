@@ -352,6 +352,94 @@ impl Indexer {
         Ok(())
     }
 
+    /// Переименование/перемещение `from_rel`→`to_rel` с СОХРАНЕНИЕМ `file_id` (AC-Б9, V2.2): переносит
+    /// `files.path`, поэтому входящие ссылки (беклинки) и чанки остаются привязаны к тому же id —
+    /// в отличие от delete+create, который рвёт их. Случаи: исходного файла нет в БД → индексируем цель
+    /// как новую; на цели уже был файл → он замещается (строка+чанки убираются, UNIQUE(path) свободен);
+    /// rename совпал с правкой содержимого → финальный `index_file` обновит контент под тем же id
+    /// (UPSERT по новому пути), чистый rename → ранний выход. Текст ссылок-источников `[[Old]]`→`[[New]]`
+    /// у ссылающихся файлов НЕ переписывается (отдельная фича Obsidian «update links on rename» — BACKLOG).
+    pub async fn rename_file(&self, from_rel: &str, to_rel: &str) -> DbResult<()> {
+        // Переименование в не-.md (смена расширения и т.п.) — цель не индексируется; убрать исходный.
+        if !to_rel.ends_with(".md") {
+            return self.remove_file(from_rel).await;
+        }
+        let from = from_rel.to_string();
+        let to = to_rel.to_string();
+        let to_forms = path_forms(to_rel);
+        let now = now_secs();
+        // `None` → исходного файла нет в БД (вызывающий проиндексирует цель как новую);
+        // `Some(purged)` → перенесли, `purged` — чанки замещённого на цели файла (чистка usearch).
+        let outcome: Option<Vec<u64>> = self
+            .writer
+            .transaction(move |tx| {
+                let from_id: Option<i64> = tx
+                    .query_row(
+                        "SELECT id FROM files WHERE path=?1 AND is_deleted=0",
+                        [&from],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(from_id) = from_id else {
+                    return Ok(None);
+                };
+                // Замещение любой строки на целевом пути (живой файл или tombstone), кроме самого
+                // исходного, — иначе UPDATE на занятый UNIQUE(path) упадёт. Чанки вернём для usearch.
+                let mut purged: Vec<u64> = Vec::new();
+                let existing_to: Option<i64> = tx
+                    .query_row("SELECT id FROM files WHERE path=?1", [&to], |r| r.get(0))
+                    .optional()?;
+                if let Some(to_id) = existing_to {
+                    if to_id != from_id {
+                        {
+                            let mut stmt = tx.prepare("SELECT id FROM chunks WHERE file_id=?1")?;
+                            purged = stmt
+                                .query_map([to_id], |r| r.get::<_, i64>(0))?
+                                .collect::<rusqlite::Result<Vec<_>>>()?
+                                .into_iter()
+                                .map(|c| c as u64)
+                                .collect();
+                        }
+                        tx.execute(
+                            "UPDATE links SET target_id=NULL WHERE target_id=?1",
+                            [to_id],
+                        )?;
+                        tx.execute("DELETE FROM links WHERE source_id=?1", [to_id])?;
+                        tx.execute("DELETE FROM file_tags WHERE file_id=?1", [to_id])?;
+                        tx.execute("DELETE FROM chunks WHERE file_id=?1", [to_id])?;
+                        tx.execute("DELETE FROM aliases WHERE file_id=?1", [to_id])?;
+                        tx.execute("DELETE FROM files WHERE id=?1", [to_id])?;
+                    }
+                }
+                // Перенос пути — file_id жив (входящие ссылки на from_id не трогаем → беклинки целы).
+                tx.execute(
+                    "UPDATE files SET path=?1, indexed_at=?2 WHERE id=?3",
+                    params![to, now, from_id],
+                )?;
+                // Висячие ссылки на НОВОЕ имя ([[New]] до переименования) теперь резолвятся сюда.
+                for form in &to_forms {
+                    tx.execute(
+                        "UPDATE links SET target_id=?1 WHERE target_id IS NULL AND target_raw=?2",
+                        params![from_id, form],
+                    )?;
+                }
+                Ok(Some(purged))
+            })
+            .await?;
+
+        match outcome {
+            None => self.index_file(to_rel).await,
+            Some(purged) => {
+                if let Some(rag) = &self.rag {
+                    for id in &purged {
+                        let _ = rag.vectors.remove(*id);
+                    }
+                }
+                self.index_file(to_rel).await
+            }
+        }
+    }
+
     /// Начальный обход vault: индексирует все .md, затем до-резолвит висячие ссылки.
     pub async fn scan_vault(&self) -> DbResult<()> {
         let root = self.root.clone();
@@ -511,6 +599,17 @@ pub fn spawn(indexer: Indexer) {
                     Some(rel) => indexer.remove_file(&rel).await,
                     None => Ok(()),
                 },
+                VaultEvent::Renamed { from, to } => {
+                    match (rel_of(&indexer.root, &from), rel_of(&indexer.root, &to)) {
+                        (Some(from_rel), Some(to_rel)) => {
+                            indexer.rename_file(&from_rel, &to_rel).await
+                        }
+                        // Перемещение из/в пределы vault → как удаление/создание соответственно.
+                        (None, Some(to_rel)) => indexer.index_file(&to_rel).await,
+                        (Some(from_rel), None) => indexer.remove_file(&from_rel).await,
+                        (None, None) => Ok(()),
+                    }
+                }
             };
             match result {
                 // Персистим usearch после каждого инкрементального события (события дебаунсятся
@@ -753,6 +852,62 @@ mod tests {
         );
     }
 
+    /// AC-Б9 (V2.2): rename/move сохраняет `file_id` → беклинки целы. `[[Old]]` остаётся
+    /// зарезолвленной по сохранённому id, а ранее висячая `[[New]]` до-резолвится в этот файл.
+    #[tokio::test]
+    async fn rename_preserves_file_id_and_backlinks() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(root.join("Old.md"), "# Old\n").unwrap();
+        fs::write(root.join("Ref.md"), "see [[Old]]\n").unwrap();
+        fs::write(root.join("Fwd.md"), "see [[New]]\n").unwrap();
+
+        let db = open(&root).await;
+        let idx = Indexer::new(&db, root.clone());
+        idx.index_file("Old.md").await.unwrap();
+        idx.index_file("Ref.md").await.unwrap(); // [[Old]] → Old.md
+        idx.index_file("Fwd.md").await.unwrap(); // [[New]] висячая (New.md ещё нет)
+
+        let old_id = file_id(&db, "Old.md").await;
+        assert_eq!(
+            backlink_sources(&db, old_id).await,
+            vec!["Ref.md"],
+            "до rename зарезолвлена только [[Old]]"
+        );
+
+        // Переименование Old.md → New.md (как watcher после move на ФС).
+        fs::rename(root.join("Old.md"), root.join("New.md")).unwrap();
+        idx.rename_file("Old.md", "New.md").await.unwrap();
+
+        assert_eq!(
+            file_id(&db, "New.md").await,
+            old_id,
+            "file_id сохраняется под новым путём"
+        );
+        let mut bl = backlink_sources(&db, old_id).await;
+        bl.sort();
+        assert_eq!(
+            bl,
+            vec!["Fwd.md".to_string(), "Ref.md".to_string()],
+            "[[Old]] цела (по id), [[New]] до-резолвилась"
+        );
+
+        // Старого пути в живых не осталось.
+        let old_live: Option<i64> = db
+            .reader()
+            .query(|c| {
+                c.query_row(
+                    "SELECT id FROM files WHERE path='Old.md' AND is_deleted=0",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+            })
+            .await
+            .unwrap();
+        assert!(old_live.is_none(), "старый путь не должен оставаться живым");
+    }
+
     /// Обратный резолв: ссылка, чья цель проиндексирована позже, до-резолвится.
     #[tokio::test]
     async fn back_resolves_links_indexed_out_of_order() {
@@ -849,6 +1004,42 @@ mod tests {
         assert!(n >= 1, "должен появиться хотя бы один чанк");
         assert_eq!(vectors.len(), n as usize, "по вектору на чанк (AC-Б4-1)");
         assert_eq!(fts_hits(&db, "vector").await, 1, "FTS находит тело чанка");
+    }
+
+    /// AC-Б9 (V2.2): rename сохраняет чанки и векторы под тем же `file_id` (не пересоздаёт) —
+    /// чистый rename проходит через ранний выход `index_file` (mtime/size не изменились).
+    #[tokio::test]
+    async fn rename_preserves_chunks_and_vectors() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(
+            root.join("Old.md"),
+            "# Heading\n\nalpha beta gamma vector search body text here\n",
+        )
+        .unwrap();
+
+        let db = open(&root).await;
+        let (idx, vectors) = rag_indexer(&db, &root, 16, false);
+        idx.index_file("Old.md").await.unwrap();
+        let before = chunk_count(&db).await;
+        assert!(before >= 1, "должен появиться хотя бы один чанк");
+        let old_id = file_id(&db, "Old.md").await;
+
+        fs::rename(root.join("Old.md"), root.join("New.md")).unwrap();
+        idx.rename_file("Old.md", "New.md").await.unwrap();
+
+        assert_eq!(file_id(&db, "New.md").await, old_id, "file_id сохранён");
+        assert_eq!(chunk_count(&db).await, before, "число чанков не изменилось");
+        assert_eq!(
+            vectors.len(),
+            before as usize,
+            "векторы целы (по одному на чанк)"
+        );
+        assert_eq!(
+            fts_hits(&db, "vector").await,
+            1,
+            "FTS по-прежнему находит чанк переименованного файла"
+        );
     }
 
     /// AC-Б4-2 (интеграция): реиндексация заменяет чанки и векторы без осиротевших — число
