@@ -15,6 +15,7 @@
     "preview": "pnpm --filter @nexus/desktop preview",
     "test": "pnpm -r --if-present test",
     "lint": "pnpm -r --if-present lint",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test:coverage": "pnpm -r --if-present test:coverage"
   }
 }
