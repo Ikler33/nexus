@@ -83,22 +83,30 @@ impl Database {
     }
 }
 
-/// Pragmas write-коннекта: WAL + внешние ключи + busy-timeout + `synchronous=NORMAL`.
+/// Pragmas write-коннекта: WAL + внешние ключи + busy-timeout + `synchronous=NORMAL` + перф
+/// (`mmap_size` 256MB, `cache_size` 64MB, `temp_store=MEMORY` — кросс-план #6; ускоряет индексацию).
 fn configure_write(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;\n\
          PRAGMA foreign_keys=ON;\n\
          PRAGMA busy_timeout=5000;\n\
-         PRAGMA synchronous=NORMAL;",
+         PRAGMA synchronous=NORMAL;\n\
+         PRAGMA mmap_size=268435456;\n\
+         PRAGMA cache_size=-65536;\n\
+         PRAGMA temp_store=MEMORY;",
     )
 }
 
-/// Pragmas read-коннекта: внешние ключи + busy-timeout + `query_only` (defense-in-depth).
+/// Pragmas read-коннекта: внешние ключи + busy-timeout + `query_only` (defense-in-depth) + перф
+/// (`mmap_size` 256MB, `cache_size` 16MB/конн, `temp_store=MEMORY` — кросс-план #6; ускоряет граф/поиск).
 fn configure_read(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA foreign_keys=ON;\n\
          PRAGMA busy_timeout=5000;\n\
-         PRAGMA query_only=ON;",
+         PRAGMA query_only=ON;\n\
+         PRAGMA mmap_size=268435456;\n\
+         PRAGMA cache_size=-16384;\n\
+         PRAGMA temp_store=MEMORY;",
     )
 }
 
