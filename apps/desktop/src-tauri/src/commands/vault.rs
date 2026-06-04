@@ -16,7 +16,11 @@ use crate::vector::VectorIndex;
 
 /// Открывает vault: канонизирует папку, открывает БД в `.nexus/nexus.db`, сохраняет в state.
 #[tauri::command]
-pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<VaultInfo, String> {
+pub async fn open_vault(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<VaultInfo, String> {
     let root = PathBuf::from(&path)
         .canonicalize()
         .map_err(|e| format!("vault path: {e}"))?;
@@ -63,7 +67,7 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
     };
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
-    crate::indexer::spawn(indexer);
+    crate::indexer::spawn(indexer, app);
 
     *state.vault.write().await = Some(VaultContext {
         root,
