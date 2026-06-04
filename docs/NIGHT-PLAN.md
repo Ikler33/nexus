@@ -156,7 +156,16 @@
   статус + tests) + zero-dep гейт `scripts/check-traceability.mjs` (job `traceability`): новый AC без
   записи → красный CI. Гейт сразу поймал 2 свои несогласованности (partial без tests) → поправлено.
   Картина: 26 covered · 17 partial · 12 pending · 17 manual · 5 deferred (43/77 автотестами); pending
-  совпадают с очередью V2/V4. PR открыт, мерж на зелёном CI. Следующий: **V1.4 (integration-тесты)**.
+  совпадают с очередью V2/V4. **PR #36 смержен.** Все 3 гейта стратегии (security/coverage/traceability)
+  на main.
+- ⏭️ **V1.4 (integration-тесты команд) ОТЛОЖЕН** после Волны 2. Рекон: command-обёртки (chat/git/graph/
+  search/suggest `.rs`) — тонкие `#[tauri::command]`, делегируют в уже покрытые модули (graph 92.8%,
+  search 81.8%, git 77.5%); тесты требуют State<AppState>-фикстур при умеренной пользе. coverage-храповик
+  (V1.2) и так держит регрессии. Приоритет владельца — «фикс багов» → перешёл к Волне 2.
+- ✅ **V2.1 — Анти-SSRF core-redirect** (AC-SEC-4 / ревью C5). 3 core-клиента (embedder×2, chat) → общий
+  `ai::core_client_builder()` с `redirect(Policy::none())`; тест `core_client_does_not_follow_redirects`
+  (локальный 302-сервер, zero-dep). `is_private_host` к ядру НЕ применяется (LLM локальны by design).
+  Rust 110+9 зелёные, fmt/clippy ok. PR открыт, мерж на зелёном. Следующий: **V2.2 (rename-as-move)**.
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;

@@ -35,6 +35,11 @@ vault идёт через СОБСТВЕННЫЕ команды (`read_file`/`wr
   плагина — только через broker по `MessagePort` (AC-SEC-5). CSP без `unsafe-inline`/`unsafe-eval`.
 - **Анти-SSRF для `net.fetch`** (AC-SEC-4): net-allowlist + `is_private_host` (приватные/loopback/
   link-local/metadata, напр. `169.254.169.254`, запрещены даже из allowlist), без следования редиректам.
+- **Анти-SSRF для core-LLM-клиентов** (AC-SEC-4 / ревью C5, V2.1): chat/embedding-клиенты строятся через
+  `ai::core_client_builder()` с `redirect(Policy::none())` — подменённый/скомпрометированный эндпоинт не
+  уведёт запрос ядра 30x-редиректом на внутренний адрес. `is_private_host` к ядру НЕ применяется
+  намеренно: LLM-серверы локальные/LAN by design (блок приватных хостов сломал бы local-first). Consent
+  на смену `base_url` из git-pull — в пункте «Единый egress-контроль ядра» (BACKLOG, Фундамент).
 
 ## CI security-gate (V1.1, ревью B6 / AC-Q-5)
 Отдельный job `security` в `.github/workflows/ci.yml` — проверки безопасности не тонут в общем

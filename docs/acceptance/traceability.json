@@ -53,7 +53,7 @@
     "AC-SEC-1": { "status": "covered", "tests": ["vault::tests::resolve_blocks_traversal_and_absolute", "commands::plugin::tests::dispatch_blocks_path_escape"] },
     "AC-SEC-2": { "status": "covered", "tests": ["plugin::broker::tests", "plugin::permission::tests"], "note": "Composite Б2-1/Б2-2." },
     "AC-SEC-3": { "status": "covered", "tests": ["git::tests"], "note": "Код плагина не через git." },
-    "AC-SEC-4": { "status": "partial", "tests": ["plugin::permission::tests::ssrf_blocks_private_loopback_metadata"], "note": "Плагин net.fetch закрыт; core base_url + redirect(none) = V2.1 (ревью C5)." },
+    "AC-SEC-4": { "status": "partial", "tests": ["plugin::permission::tests::ssrf_blocks_private_loopback_metadata", "ai::tests::core_client_does_not_follow_redirects"], "note": "Плагин net.fetch + core redirect-none (V2.1) закрыты; consent на смену base_url из git-pull — в «Едином egress-контроле ядра» (Фундамент)." },
     "AC-SEC-5": { "status": "covered", "tests": ["tests::csp_and_capabilities_are_hardened", "plugin::broker::tests"] },
     "AC-SEC-6": { "status": "partial", "tests": ["crash::tests"], "note": "crash-scrub чистит HOME; Redacted<T> + аудит tracing = V4.2 (ревью H18)." },
     "AC-SEC-7": { "status": "pending", "note": "Anti-prompt-injection не реализован (ревью B2/A3); V4.3." },
