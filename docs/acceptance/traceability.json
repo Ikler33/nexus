@@ -7,7 +7,7 @@
     "AC-Q-2": { "status": "covered", "tests": ["CI: coverage-rust (cargo-llvm-cov --fail-under-lines 65)", "CI: frontend (pnpm test:coverage, пороги vitest)"], "note": "V1.2 — храповик покрытия. Per-path пороги критичных модулей — доводка (BACKLOG)." },
     "AC-Q-3": { "status": "covered", "tests": ["CI: clippy -D warnings", "CI: eslint", "CI: tsc --noEmit"] },
     "AC-Q-4": { "status": "partial", "tests": ["eval::tests"], "note": "Eval-математика + офлайн-гейт логики ранжирования на синтетических векторах (V4.5) покрыты в cargo test; живой baseline-гейт на реальном качестве — manual (нужен сервер)." },
-    "AC-Q-5": { "status": "partial", "tests": ["CI: security job (cargo-deny + gitleaks, V1.1)", "plugin::permission::tests", "plugin::broker::tests", "tests::csp_and_capabilities_are_hardened"], "note": "Supply-chain + ядро security-тестов есть; AC-SEC-6/7 не закрыты (V4.2/V4.3)." },
+    "AC-Q-5": { "status": "partial", "tests": ["CI: security job (cargo-deny + gitleaks, V1.1)", "plugin::permission::tests", "plugin::broker::tests", "tests::csp_and_capabilities_are_hardened"], "note": "Supply-chain + ядро security-тестов есть; AC-SEC-6 (V4.2) и AC-SEC-7 (V4.3) закрыты." },
     "AC-Q-6": { "status": "pending", "note": "Линт на висячие упоминания снятых решений (sqlite-vec/petgraph/WASM/currentFile) не автоматизирован — пока ручная сверка." },
 
     "AC-Б1-1": { "status": "pending", "note": "registerEditorExtension: загрузка кода плагина отложена (ревью A5/H4); нужен E2E в webview." },
@@ -55,7 +55,7 @@
     "AC-SEC-3": { "status": "covered", "tests": ["git::tests"], "note": "Код плагина не через git." },
     "AC-SEC-4": { "status": "partial", "tests": ["plugin::permission::tests::ssrf_blocks_private_loopback_metadata", "ai::tests::core_client_does_not_follow_redirects"], "note": "Плагин net.fetch + core redirect-none (V2.1) закрыты; consent на смену base_url из git-pull — в «Едином egress-контроле ядра» (Фундамент)." },
     "AC-SEC-5": { "status": "covered", "tests": ["tests::csp_and_capabilities_are_hardened", "plugin::broker::tests"] },
-    "AC-SEC-6": { "status": "partial", "tests": ["crash::tests"], "note": "crash-scrub чистит HOME; Redacted<T> + аудит tracing = V4.2 (ревью H18)." },
+    "AC-SEC-6": { "status": "covered", "tests": ["crash::tests", "redact::tests"], "note": "V4.2: Redacted<T> (безопасные Debug/Display — значение не утекает в логи/{:?}) + crash-scrub чистит HOME (→~) И абсолютные пути вне дома (→<path>/basename); отчёт локальный, отправка opt-in. Аудит: ядро контент заметок НЕ логирует (проверено); широкое оборачивание Debug-полей в Redacted — инкрементально по мере web/import-фич (BACKLOG)." },
     "AC-SEC-7": { "status": "covered", "tests": ["ai::chat::tests"], "note": "V4.3: RAG-контекст обёрнут случайным маркером запроса (injection_marker, getrandom) + системная инструкция «между маркерами — данные, НЕ инструкции» (build_rag_messages). suggest не использует LLM (вектор-similarity) → инъекцией не управляем by-construction; JSON-валидация появится вместе с LLM-suggest (BACKLOG)." },
     "AC-SEC-8": { "status": "deferred", "note": "At-rest шифрование (SQLCipher) — опц. DoD-Ф4." },
 
