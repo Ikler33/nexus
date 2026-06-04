@@ -36,7 +36,7 @@
     "AC-Б10-1": { "status": "partial", "tests": ["ai::chat::tests", "src/stores/chat.test.ts"], "note": "Channel-буферы per-session." },
     "AC-Б10-2": { "status": "pending", "tests": ["src/stores/chat.test.ts"], "note": "Персист истории сессий не реализован (ревью C9, BACKLOG)." },
     "AC-Б10-3": { "status": "partial", "tests": ["ai::chat::tests"], "note": "cancel — backend есть; UI→idle проверяется частично." },
-    "AC-Б10-4": { "status": "pending", "note": "Throttle рендера на 2000 токенов = V2.4 (ревью C9/M9)." },
+    "AC-Б10-4": { "status": "covered", "tests": ["src/stores/chat.test.ts"], "note": "rAF-коалесинг рендера токенов (V2.4): N токенов → 1 кадр-апдейт; тест считает rAF-вызовы (200 токенов → 1)." },
     "AC-Б11-1": { "status": "covered", "tests": ["vault::tests::resolve_blocks_traversal_and_absolute", "vault::tests::write_resolve_allows_new_file_blocks_escape", "commands::plugin::tests::dispatch_blocks_path_escape"] },
     "AC-Б11-2": { "status": "deferred", "note": "WASM epoch-прерывание — WASM-рантайм вне текущего скоупа (рантайм плагинов отложен)." },
     "AC-Б11-3": { "status": "deferred", "note": "WASM resource-limiter — то же." },

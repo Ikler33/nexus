@@ -171,8 +171,15 @@
   (`collect_in_chunks` ≤900; рёбра — одиночный `source IN (chunk)` + фильтр target∈ids вместо двойного
   IN; BFS-фронтир по 450). Результат полный, без обрезки. Тест `super_hub_does_not_exceed_sql_var_limit`
   (хаб 1000 связей, фикстура через `WriteActor::transaction`). Снимает 1 из 3 гипотез вылета графа (корень
-  ждёт артефакт владельца). Rust 111+9 зелёные. PR открыт, мерж на зелёном.
-  Следующий: **V2.4 (chat-throttle, frontend)** — V2.2 (rename) finicky-watcher, ниже приоритетом.
+  ждёт артефакт владельца). Rust 111+9 зелёные. **PR #38 смержен.**
+- ✅ **V2.4 — Throttle рендера токенов чата** (AC-Б10-4 / ревью C9). `stores/chat.ts`: токены копятся в
+  буфер, применяются одним `set()` на кадр (`requestAnimationFrame`) вместо O(токенов) ре-рендеров;
+  `done`/`error`/`stop` сбрасывают хвост синхронно. Тест: 200 токенов → 1 rAF-кадр (мок rAF). Frontend
+  86 тестов + coverage 64.5% зелёные, tsc/eslint/build ok. traceability AC-Б10-4 → covered. PR открыт,
+  мерж на зелёном.
+  **Волна 2 почти закрыта.** Осталась V2.2 (rename-as-move) — finicky-watcher (notify rename From/To,
+  платформозависимо). Следующий: **V2.2** ИЛИ переход к Волне 4 (frontmatter-parse — contained, чистый
+  Rust). Рекомендация: V4.1 (frontmatter) безопаснее V2.2 для крон-режима.
 
 ### Архив — прогон #1 (предыдущая ночь, до ревью)
 Сделано за ночь и закоммичено (`phase1/12` → `phase2/01-capability-model`): condition-eval;
