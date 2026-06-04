@@ -1,5 +1,3 @@
-Confirmed: no `coverage` block in vitest config, and the frontend tests rely on a `src/test/setup.ts` plus a `src/lib/mock/` deterministic backend rather than mocking Tauri IPC directly. I have a complete, honest picture of the codebase. Now I'll write the strategy document.
-
 # Стратегия комплексного автоматизированного тестирования Nexus
 
 > Источник истины по требованиям: `docs/acceptance/ACCEPTANCE.md` (AC-…) и `docs/architecture/ARCHITECTURE.md` (v1.1). Этот документ описывает **как** мы проверяем каждую фичу и функцию автоматически, чтобы агент мог самостоятельно гонять полный набор тестов до PR, а CI подтверждал результат и ловил регрессии без участия человека.

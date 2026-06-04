@@ -100,6 +100,14 @@ LLM не добавлен поверх — он встроен в индексн
 
 ## 2. Структура репозитория
 
+> ⚠️ **Статус (2026-06, фактчек кросс-плана #5):** дерево ниже — ИЛЛЮСТРАТИВНО-ЦЕЛЕВОЕ, не дословно
+> по факту. Реальная Rust-раскладка **плоская**: модули — `src/<name>/mod.rs` или `src/<name>.rs` в
+> корне `src-tauri/src` (`db`, `indexer`, `parser`, `watcher`, `search`, `graph`, `ai`, `plugin`, `eval`,
+> `vector`, `crash`, `redact`, `commands`). Расхождения с деревом: AI-слой плоский — `ai/{chat,embedder,
+> config,mod}.rs` (нет `client.rs`/`schema.rs`/`wasm.rs`/`registry.rs`); граф — `graph/mod.rs` (нет
+> `store.rs`/`queries.rs`, граф в SQLite по ADR-004, не in-memory); схема — `db/migrations/*.sql` (нет
+> `schema.rs`). WASM-плагины (`wasm.rs`/`compute.wasm`) — опционально/не реализованы (плагины = JS).
+
 ```
 nexus/
 ├── apps/

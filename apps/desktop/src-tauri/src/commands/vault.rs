@@ -33,9 +33,16 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
         name: vault::vault_name(&root),
     };
 
-    // RAG (Ф1-5): строим эмбеддер + векторный индекс из .nexus/local.json. Если конфига нет
-    // или embedding-сервер недоступен — vault открывается без AI (local-first).
-    let (vectors, embedder, indexer) = match build_rag(&root, &db).await {
+    // Конфиг `.nexus/local.json` парсим ОДИН раз (раньше — дважды: build_rag + build_chat), кросс-план #8.
+    let local_cfg = load_local_config(&root).await;
+
+    // RAG (Ф1-5): строим эмбеддер + векторный индекс. Если конфига нет / нет embedding-секции /
+    // сервер недоступен — vault открывается без AI (local-first).
+    let rag = match &local_cfg {
+        Some(cfg) => build_rag(&root, &db, cfg).await,
+        None => None,
+    };
+    let (vectors, embedder, indexer) = match rag {
         Some((embedder, vec_index, force)) => {
             let idx = crate::indexer::Indexer::with_rag(
                 &db,
@@ -50,7 +57,10 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
     };
 
     // Chat-провайдер (ADR-005: отдельный хост) — независимо от embedding RAG.
-    let chat = build_chat(&root).await;
+    let chat = match &local_cfg {
+        Some(cfg) => build_chat(cfg).await,
+        None => None,
+    };
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     crate::indexer::spawn(indexer);
@@ -66,19 +76,25 @@ pub async fn open_vault(state: State<'_, AppState>, path: String) -> Result<Vaul
     Ok(info)
 }
 
-/// Строит RAG-подсистему из `.nexus/local.json`. `None` — конфига нет / нет embedding-секции /
-/// сервер недоступен (RAG отключается, vault работает без AI). Делает реконсиляцию модели (§6.5).
-async fn build_rag(
-    root: &Path,
-    db: &Database,
-) -> Option<(Arc<dyn EmbeddingProvider>, Arc<VectorIndex>, bool)> {
+/// Читает и парсит `.nexus/local.json` ОДИН раз (кросс-план #8 — раньше парсили дважды). `None` —
+/// конфига нет / битый JSON (AI отключается, vault работает без AI — local-first).
+async fn load_local_config(root: &Path) -> Option<LocalConfig> {
     let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
         .await
         .ok()?;
-    let cfg = LocalConfig::parse(&raw)
-        .map_err(|e| tracing::warn!(error = %e, "local.json: разбор не удался — RAG отключён"))
-        .ok()?;
-    let emb = cfg.ai.embedding?;
+    LocalConfig::parse(&raw)
+        .map_err(|e| tracing::warn!(error = %e, "local.json: разбор не удался — AI отключён"))
+        .ok()
+}
+
+/// Строит RAG-подсистему из распарсенного конфига. `None` — нет embedding-секции / сервер недоступен
+/// (RAG отключается, vault работает без AI). Делает реконсиляцию модели (§6.5).
+async fn build_rag(
+    root: &Path,
+    db: &Database,
+    cfg: &LocalConfig,
+) -> Option<(Arc<dyn EmbeddingProvider>, Arc<VectorIndex>, bool)> {
+    let emb = cfg.ai.embedding.as_ref()?;
     let model = emb.model.clone().unwrap_or_else(|| "embedding".to_string());
 
     // Размерность: из конфига или пробным эмбеддингом у сервера (§6.5 — не хардкод).
@@ -107,13 +123,10 @@ async fn build_rag(
     Some((Arc::new(embedder), Arc::new(vectors), force))
 }
 
-/// Строит chat-провайдер из `.nexus/local.json` (`ai.chat`). `None`, если секции нет или клиент
+/// Строит chat-провайдер из распарсенного конфига (`ai.chat`). `None`, если секции нет или клиент
 /// не инициализировался. Доступность сервера здесь НЕ проверяем — это выяснится при первом стриме.
-async fn build_chat(root: &Path) -> Option<Arc<dyn ChatProvider>> {
-    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
-        .await
-        .ok()?;
-    let chat = LocalConfig::parse(&raw).ok()?.ai.chat?;
+async fn build_chat(cfg: &LocalConfig) -> Option<Arc<dyn ChatProvider>> {
+    let chat = cfg.ai.chat.as_ref()?;
     let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
     let provider = OpenAiChatProvider::new(&chat.url, &model, None)
         .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
