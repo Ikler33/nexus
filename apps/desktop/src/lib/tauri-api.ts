@@ -172,6 +172,16 @@ export type ChatStreamEvent =
   | { type: 'done'; full: string }
   | { type: 'error'; message: string };
 
+/** Событие inline-стрима редактора (зеркалит Rust `commands::inline::InlineStreamEvent`). Без `sources`
+ * — inline не делает RAG-ретрив (D2). Порядок: много `token` → `done` (или `error`). */
+export type InlineStreamEvent =
+  | { type: 'token'; text: string }
+  | { type: 'done'; full: string }
+  | { type: 'error'; message: string };
+
+/** Режим inline-генерации (зеркалит Rust `ai::InlineMode`). */
+export type InlineMode = 'continue' | 'rewrite' | 'summarize';
+
 /** AI-эндпоинт настроек (зеркалит Rust `settings::EndpointDto`). `model` опционален. */
 export interface AiEndpoint {
   url: string;
@@ -352,6 +362,30 @@ export const tauriApi = {
       }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
       return () => {
         void invoke<void>('chat_cancel');
+      };
+    },
+  },
+
+  inline: {
+    /**
+     * Inline-генерация в редакторе (IL-1/2): стрим результата в `onEvent` (`token`… → `done`|`error`).
+     * `mode` — `continue`/`rewrite`/`summarize`; `context` — текст до курсора; `selection` — выделение
+     * (для rewrite/summarize). Возвращает функцию отмены (взводит `inline_cancel`). Вне Tauri — мок.
+     */
+    complete: (
+      mode: InlineMode,
+      context: string,
+      selection: string | undefined,
+      onEvent: (event: InlineStreamEvent) => void,
+    ): (() => void) => {
+      if (!isTauri()) return mockVault.streamInline(mode, onEvent);
+      const channel = new Channel<InlineStreamEvent>();
+      channel.onmessage = onEvent;
+      invoke<void>('inline_complete', { mode, context, selection, channel }).catch((e: unknown) =>
+        onEvent({ type: 'error', message: String(e) }),
+      );
+      return () => {
+        void invoke<void>('inline_cancel');
       };
     },
   },
