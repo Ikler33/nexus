@@ -31,6 +31,8 @@ pub mod parser;
 pub mod plugin;
 /// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
 pub mod redact;
+/// Планировщик фоновых задач (ADR-007): очередь `jobs` (слой данных — slice 1).
+pub mod scheduler;
 /// Поиск по метаданным (title/path/tags) — Ф0.
 pub mod search;
 /// Глобальное состояние (managed state).
