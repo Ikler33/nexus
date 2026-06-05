@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Планировщик задач (ADR-007) — slice 3: live-спавн + первый kind
+
+- **Очередь ожила end-to-end.** `open_vault` строит `default_registry` (встроенный kind **`gc`** —
+  самоочистка завершённых джоб, S7), спавнит воркер (как индексатор: clone write-actor + crash-recovery
+  на старте) и сидит gc-джобу на ближайший тик. Конвейер работает целиком: spawn → enqueue → claim →
+  выполнение обработчика → `done` → событие `jobs:changed`. +1 тест (`gc_kind_registered_and_runs`).
+  **Дальше (срез 4):** первый LLM-kind (Карта/Противоречия — на живых моделях), backpressure чата (S5),
+  run-if-overdue-расписание + дедуп (S2), on-change-триггер (S4). Грабли (общие с индексатором): воркер
+  спавнится на каждый open → дубли при переоткрытии vault (нужен shutdown-сигнал — BACKLOG). clippy/тесты
+  зелёные. Контракт: `docs/dev/scheduler.md`.
+
 ### Планировщик задач (ADR-007) — slice 2: движок диспатча
 
 - **Реестр обработчиков + воркер-луп.** `JobHandler`-трейт (`#[async_trait]`) + `Registry` (kind→handler);

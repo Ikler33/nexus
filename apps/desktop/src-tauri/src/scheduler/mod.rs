@@ -239,6 +239,43 @@ fn emit_jobs_changed(app: &tauri::AppHandle) {
     let _ = app.emit("jobs:changed", ());
 }
 
+// ── slice 3: первый встроенный kind + реестр по умолчанию ───────────────────────────────────────
+
+/// Встроенный kind «gc»: периодическая чистка завершённых джоб (S7). Первый live-потребитель воркера.
+pub const KIND_GC: &str = "gc";
+/// Сколько хранить `done`-джобы до сборки мусора.
+const GC_RETENTION_SECS: i64 = 7 * 24 * 3600;
+
+/// Обработчик «gc»: удаляет `done`-джобы старше retention. Держит свой клон write-actor.
+struct GcHandler {
+    writer: WriteActor,
+    retention_secs: i64,
+}
+
+#[async_trait]
+impl JobHandler for GcHandler {
+    async fn handle(&self, _job: &Job) -> Result<(), String> {
+        gc_done(&self.writer, now_secs() - self.retention_secs)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Реестр встроенных обработчиков (сейчас — только `gc`). Расширяется реальными kind (Карта/Противоречия)
+/// в следующих срезах. `writer` — клон для обработчиков, которым нужна запись.
+pub fn default_registry(writer: WriteActor) -> Registry {
+    let mut reg = Registry::new();
+    reg.insert(
+        KIND_GC.to_string(),
+        Arc::new(GcHandler {
+            writer,
+            retention_secs: GC_RETENTION_SECS,
+        }),
+    );
+    reg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +395,27 @@ mod tests {
         assert!(
             run_due(w, &reg, 100).await.unwrap() == 0,
             "повторно готовых нет"
+        );
+    }
+
+    /// Встроенный kind `gc` зарегистрирован в `default_registry`, прогоняется воркером и завершается
+    /// успешно (done, без retry/dead) — проверяет диспатч встроенного обработчика.
+    #[tokio::test]
+    async fn gc_kind_registered_and_runs() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let reg = default_registry(w.clone());
+        assert!(reg.contains_key(KIND_GC), "gc зарегистрирован");
+
+        enqueue(w, KIND_GC, "", 0, 3).await.unwrap();
+        assert_eq!(
+            run_due(w, &reg, now_secs()).await.unwrap(),
+            1,
+            "gc-джоба обработана"
+        );
+        assert!(
+            claim_next(w, now_secs() + 1).await.unwrap().is_none(),
+            "gc завершилась (done), не ушла в retry/dead"
         );
     }
 }

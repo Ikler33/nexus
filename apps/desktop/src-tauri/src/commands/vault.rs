@@ -67,7 +67,14 @@ pub async fn open_vault(
     };
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
-    crate::indexer::spawn(indexer, app);
+    crate::indexer::spawn(indexer, app.clone());
+
+    // Планировщик фоновых задач (ADR-007): воркер очереди + встроенный kind `gc` (самоочистка очереди).
+    // Реальные kind (Карта/Противоречия) и периодическое расписание — следующими срезами.
+    let registry = Arc::new(crate::scheduler::default_registry(db.writer().clone()));
+    crate::scheduler::spawn_worker(db.writer().clone(), app, registry);
+    // Seed: поставить gc-джобу на ближайший тик (демонстрирует live-конвейер; дедуп/расписание — далее).
+    let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
 
     *state.vault.write().await = Some(VaultContext {
         root,
