@@ -125,6 +125,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleGoals(),
     }),
     commands.register({
+      id: 'view.digest',
+      title: 'Changes digest',
+      titleKey: 'commands.view.digest',
+      source: 'core',
+      run: () => useUIStore.getState().toggleDigest(),
+    }),
+    commands.register({
       id: 'theme.toggle',
       title: 'Toggle theme (light/dark)',
       titleKey: 'commands.theme.toggle',

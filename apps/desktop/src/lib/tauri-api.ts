@@ -122,6 +122,14 @@ export interface GoalEntry {
   progress: number | null;
 }
 
+/** Дайджест недавних изменений (зеркалит Rust `digest::Digest`, ADR-007 slice 4). Время — Unix-секунды. */
+export interface Digest {
+  createdAt: number;
+  since: number;
+  content: string;
+  noteCount: number;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -288,6 +296,19 @@ export const tauriApi = {
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
   },
 
+  digest: {
+    /** Последний сгенерированный «Дайджест изменений» (или `null`). ADR-007 slice 4. Вне Tauri — мок. */
+    latest: (): Promise<Digest | null> =>
+      isTauri() ? invoke<Digest | null>('get_latest_digest') : mockVault.getDigest(),
+
+    /**
+     * Ставит генерацию дайджеста в очередь (воркер выполнит на ближайшем тике). Требует
+     * сконфигурированного chat (иначе backend вернёт ошибку). Завершение — по событию `jobs:changed`.
+     */
+    generate: (): Promise<void> =>
+      isTauri() ? invoke<void>('generate_digest') : Promise.resolve(),
+  },
+
   events: {
     /**
      * Подписка на событие «индекс vault обновлён» (backend `emit("vault:changed")` после реиндекса —
@@ -296,6 +317,15 @@ export const tauriApi = {
     onVaultChanged: async (cb: () => void): Promise<() => void> => {
       if (!isTauri()) return () => {};
       return listen('vault:changed', () => cb());
+    },
+
+    /**
+     * Подписка на «очередь задач изменилась» (backend `emit("jobs:changed")` после продуктивного тика
+     * воркера — ADR-007). Используется для refetch дайджеста по завершении джобы. Вне Tauri — no-op.
+     */
+    onJobsChanged: async (cb: () => void): Promise<() => void> => {
+      if (!isTauri()) return () => {};
+      return listen('jobs:changed', () => cb());
     },
   },
 

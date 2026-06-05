@@ -3,6 +3,7 @@ import {
   GitBranch,
   MessageSquare,
   Moon,
+  Newspaper,
   Puzzle,
   Search,
   Share2,
@@ -38,6 +39,8 @@ export function Titlebar() {
   const toggleSync = useUIStore((s) => s.toggleSync);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
   const toggleGoals = useUIStore((s) => s.toggleGoals);
+  const digestOpen = useUIStore((s) => s.digestOpen);
+  const toggleDigest = useUIStore((s) => s.toggleDigest);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const toggleTweaks = useUIStore((s) => s.toggleTweaks);
   const theme = useThemeStore((s) => s.theme);
@@ -108,6 +111,16 @@ export function Titlebar() {
           aria-pressed={goalsOpen}
         >
           <Target size={16} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`${styles.tbBtn} ${digestOpen ? styles.active : ''}`}
+          onClick={() => toggleDigest()}
+          title={t('commands.view.digest')}
+          aria-label={t('commands.view.digest')}
+          aria-pressed={digestOpen}
+        >
+          <Newspaper size={16} aria-hidden />
         </button>
 
         <span className={styles.divider} />

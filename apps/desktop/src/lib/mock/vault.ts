@@ -1,6 +1,7 @@
 import type {
   BacklinkEntry,
   ChatStreamEvent,
+  Digest,
   FileEntry,
   FullGraph,
   GoalEntry,
@@ -211,6 +212,17 @@ export async function getGoals(): Promise<GoalEntry[]> {
     { path: 'Цели/Марафон.md', title: 'Пробежать марафон', progress: 30 },
     { path: 'Цели/Идея.md', title: 'Идея без прогресса', progress: null },
   ];
+}
+
+/** Мок «Дайджеста изменений» (ADR-007 slice 4) для превью/тестов: один пример дайджеста. */
+export async function getDigest(): Promise<Digest> {
+  return {
+    createdAt: 1_733_000_000,
+    since: 1_732_913_600,
+    noteCount: 3,
+    content:
+      '- Доработана глава про введение в книге.\n- Обновлён план тренировок к марафону.\n- Зафиксирована новая идея для проекта.',
+  };
 }
 
 /** Симуляция RAG-чат-стрима для превью/тестов: sources → токены (по словам) → done. */
