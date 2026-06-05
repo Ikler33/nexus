@@ -146,6 +146,53 @@ const editorTheme = EditorView.theme({
     opacity: '0.75',
     whiteSpace: 'pre-wrap',
   },
+  // Индикатор «генерируется» (до первого токена, AC-IL-1): акцентный пульсирующий чип.
+  '.cm-inline-ghost-pending': {
+    color: 'var(--color-accent)',
+    opacity: '0.85',
+    animation: 'nexus-ghost-pulse 1.1s ease-in-out infinite',
+  },
+  '@keyframes nexus-ghost-pulse': {
+    '0%, 100%': { opacity: '0.4' },
+    '50%': { opacity: '0.9' },
+  },
+  // Подсказка accept/reject у завершённого предложения (AC-IL-10).
+  '.cm-inline-ghost-hint': {
+    fontSize: 'var(--text-xs)',
+    fontStyle: 'normal',
+    opacity: '0.6',
+    whiteSpace: 'nowrap',
+  },
+  // Inline-ошибка у курсора (AC-IL-7): без модала, ненавязчиво.
+  '.cm-inline-ghost-error': {
+    color: 'var(--color-danger, oklch(0.6 0.2 25))',
+    fontStyle: 'normal',
+    opacity: '0.95',
+  },
+  // Тулбар по выделению (IL-3, D4): чип с кнопками над выделением.
+  '.cm-inline-toolbar': {
+    display: 'flex',
+    gap: '2px',
+    padding: '3px',
+    background: 'var(--color-bg-elevated)',
+    border: '1px solid var(--color-border-strong)',
+    borderRadius: 'var(--radius-md)',
+    boxShadow: 'var(--elevation-2)',
+  },
+  '.cm-inline-toolbar-btn': {
+    font: 'inherit',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text)',
+    background: 'transparent',
+    border: 'none',
+    borderRadius: 'var(--radius-sm)',
+    padding: '3px 8px',
+    cursor: 'pointer',
+  },
+  '.cm-inline-toolbar-btn:hover': {
+    background: 'var(--color-surface-hover)',
+    color: 'var(--color-accent)',
+  },
   '&.cm-focused': { outline: 'none' },
 });
 

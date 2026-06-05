@@ -1,10 +1,20 @@
 import { commands, type Disposable } from './commands';
+import { getActiveEditorView } from './editor/activeView';
 import { printActiveNote } from './print';
-import { isTauri, tauriApi } from './tauri-api';
+import { isTauri, tauriApi, type InlineMode } from './tauri-api';
+import { useInlineStore } from '../stores/inline';
 import { useThemeStore } from '../stores/theme';
 import { useUIStore } from '../stores/ui';
 import { useVaultStore } from '../stores/vault';
 import { activeBuffer, useWorkspaceStore } from '../stores/workspace';
+
+/** Запускает inline-генерацию в активном редакторе (IL-3, команда палитры). Нет редактора — no-op. */
+function runInlineInActiveEditor(mode: InlineMode): void {
+  const view = getActiveEditorView();
+  if (!view) return;
+  view.focus();
+  useInlineStore.getState().runInline(view, mode);
+}
 
 /** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
 export async function openVaultFlow(): Promise<void> {
@@ -65,6 +75,27 @@ export function registerCoreCommands(): Disposable {
       titleKey: 'commands.file.print',
       source: 'core',
       run: () => printActiveNote(),
+    }),
+    commands.register({
+      id: 'editor.inline.continue',
+      title: 'Inline: continue',
+      titleKey: 'commands.inline.continue',
+      source: 'core',
+      run: () => runInlineInActiveEditor('continue'),
+    }),
+    commands.register({
+      id: 'editor.inline.rewrite',
+      title: 'Inline: rewrite selection',
+      titleKey: 'commands.inline.rewrite',
+      source: 'core',
+      run: () => runInlineInActiveEditor('rewrite'),
+    }),
+    commands.register({
+      id: 'editor.inline.summarize',
+      title: 'Inline: summarize selection',
+      titleKey: 'commands.inline.summarize',
+      source: 'core',
+      run: () => runInlineInActiveEditor('summarize'),
     }),
     commands.register({
       id: 'view.splitRight',

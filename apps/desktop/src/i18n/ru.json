@@ -188,6 +188,18 @@
     "refresh": "Обновить",
     "close": "Закрыть"
   },
+  "inline": {
+    "continue": "Продолжить",
+    "rewrite": "Переписать",
+    "summarize": "Сократить",
+    "toolbarLabel": "Действия ИИ с выделением",
+    "generating": "генерирую…",
+    "ready": "Предложение готово — Tab принять, Esc отклонить",
+    "hintAccept": "Tab — принять",
+    "hintReject": "Esc — отклонить",
+    "errNoText": "Поставьте курсор после текста — нечего продолжать",
+    "errNoSelection": "Выделите текст для этого действия"
+  },
   "plugins": {
     "title": "Плагины",
     "sandbox": "песочница",
@@ -237,6 +249,9 @@
     "file.new": "Новая заметка",
     "file.save": "Сохранить файл",
     "file.print": "Печать / Экспорт PDF",
+    "inline.continue": "ИИ: продолжить текст",
+    "inline.rewrite": "ИИ: переписать выделение",
+    "inline.summarize": "ИИ: сократить выделение",
     "view.splitRight": "Разделить вправо",
     "view.graph": "Граф",
     "view.chat": "AI-чат",

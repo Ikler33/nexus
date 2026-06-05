@@ -2,10 +2,12 @@ import { useEffect, useRef } from 'react';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { Annotation, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
+import { clearActiveEditorView, setActiveEditorView } from '../../lib/editor/activeView';
 import type { NoteRef } from '../../lib/tauri-api';
 import { useInlineStore } from '../../stores/inline';
 import { nexusExtensions } from './extensions';
 import { ghostField, inlineKeymap } from './inlineGhost';
+import { inlineToolbar } from './inlineToolbar';
 import styles from './Editor.module.css';
 
 /** Помечает программную замену документа (смена файла) — НЕ пользовательскую правку. */
@@ -58,8 +60,9 @@ export function Editor({
       },
     ]);
 
-    // Inline-LLM (IL-2): триггер «продолжить» у курсора (Mod-i). Slash-меню / тулбар по выделению (D4/D5)
-    // — IL-3. Tab/Esc (accept/reject) ставит `inlineKeymap` (Prec.highest, перехват только при ghost).
+    // Inline-LLM: триггер «продолжить» у курсора (Mod-i, IL-2). Тулбар по выделению (D4) — `inlineToolbar`
+    // (IL-3); команды палитры — через реестр активного view. Tab/Esc (accept/reject) — `inlineKeymap`
+    // (Prec.highest, перехват только при активном ghost, AC-IL-5).
     const inlineTrigger = keymap.of([
       {
         key: 'Mod-i',
@@ -71,6 +74,14 @@ export function Editor({
       },
     ]);
 
+    // Регистрируем активный редактор для команд палитры (IL-3): фокус → этот view становится целью.
+    const focusTracker = EditorView.domEventHandlers({
+      focus: (_e, view) => {
+        setActiveEditorView(view);
+        return false;
+      },
+    });
+
     const view = new EditorView({
       state: EditorState.create({
         doc: loadedDoc.current,
@@ -81,6 +92,8 @@ export function Editor({
           inlineTrigger,
           ghostField,
           inlineKeymap({ onResolve: () => useInlineStore.getState().cancelInline() }),
+          inlineToolbar,
+          focusTracker,
           ...nexusExtensions({
             getNotes: () => cb.current.getNotes?.() ?? [],
             getOpenLink: () => cb.current.onOpenLink,
@@ -95,9 +108,11 @@ export function Editor({
       parent,
     });
     viewRef.current = view;
+    setActiveEditorView(view);
     loadedPath.current = path;
 
     return () => {
+      clearActiveEditorView(view);
       view.destroy();
       viewRef.current = null;
     };

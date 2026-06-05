@@ -37,19 +37,21 @@ describe('inline store (IL-2)', () => {
     view.destroy();
   });
 
-  it('rewrite без выделения → ошибка no-selection, ghost не создаётся', () => {
+  it('rewrite без выделения → ошибка показана у курсора (AC-IL-7)', () => {
     const view = makeView('текст', 5); // курсор, выделения нет
     useInlineStore.getState().runInline(view, 'rewrite');
-    expect(useInlineStore.getState().error).toBe('no-selection');
-    expect(ghostActive(view.state)).toBe(false);
+    const err = useInlineStore.getState().error;
+    expect(err).toBeTruthy(); // локализованное сообщение, не голый код
+    expect(ghostActive(view.state)).toBe(true); // ошибка-виджет у курсора
+    expect(ghostTextOf(view.state)).toBe(err);
     view.destroy();
   });
 
-  it('continue в пустом документе → ошибка no-text', () => {
+  it('continue в пустом документе → ошибка показана (AC-IL-7)', () => {
     const view = makeView('', 0);
     useInlineStore.getState().runInline(view, 'continue');
-    expect(useInlineStore.getState().error).toBe('no-text');
-    expect(ghostActive(view.state)).toBe(false);
+    expect(useInlineStore.getState().error).toBeTruthy();
+    expect(ghostActive(view.state)).toBe(true);
     view.destroy();
   });
 

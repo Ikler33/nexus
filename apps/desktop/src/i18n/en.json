@@ -187,6 +187,18 @@
     "refresh": "Refresh",
     "close": "Close"
   },
+  "inline": {
+    "continue": "Continue",
+    "rewrite": "Rewrite",
+    "summarize": "Summarize",
+    "toolbarLabel": "AI actions on selection",
+    "generating": "generating…",
+    "ready": "Suggestion ready — Tab to accept, Esc to dismiss",
+    "hintAccept": "Tab — accept",
+    "hintReject": "Esc — dismiss",
+    "errNoText": "Place the cursor after some text — nothing to continue",
+    "errNoSelection": "Select text for this action"
+  },
   "plugins": {
     "title": "Plugins",
     "sandbox": "sandbox",
@@ -236,6 +248,9 @@
     "file.new": "New note",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
+    "inline.continue": "AI: continue text",
+    "inline.rewrite": "AI: rewrite selection",
+    "inline.summarize": "AI: summarize selection",
     "view.splitRight": "Split right",
     "view.graph": "Graph",
     "view.chat": "AI chat",

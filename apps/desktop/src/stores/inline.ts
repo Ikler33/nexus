@@ -6,25 +6,38 @@ import {
   clearGhost,
   endGhostStream,
   setGhost,
+  setGhostError,
 } from '../components/editor/inlineGhost';
+import i18n from '../i18n/setup';
 import type { InlineMode } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
 
 /**
- * Контроллер inline-LLM (IL-2, спека `docs/specs/inline-llm.md`): связывает CM6 ghost (`inlineGhost.ts`)
+ * Контроллер inline-LLM (IL-2/3, спека `docs/specs/inline-llm.md`): связывает CM6 ghost (`inlineGhost.ts`)
  * со стрим-командой бэкенда (`tauriApi.inline`). Один активный стрим за раз (AC-IL-8): новый `runInline`
- * гасит прежний. Токены копятся и применяются раз в кадр (rAF-троттл, как чат V2.4 / AC-IL-2). Само
- * ghost-состояние живёт в CM6; здесь — стрим/rAF + UI-флаги (active/streaming/error) для chrome (IL-3).
+ * гасит прежний. Токены копятся и применяются раз в кадр (rAF-троттл, как чат V2.4 / AC-IL-2). Ошибка —
+ * тихая нотификация у курсора (AC-IL-7) + флаг в сторе (для aria-live). Ghost живёт в CM; здесь —
+ * стрим/rAF + UI-флаги (active/streaming/error).
  */
 
 let cancelStream: (() => void) | null = null;
 let pending = '';
 let rafId: number | null = null;
+let errorTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Сколько держать inline-ошибку у курсора до авто-снятия. */
+const ERROR_TTL_MS = 6000;
 
 function cancelFlush() {
   if (rafId != null) {
     cancelAnimationFrame(rafId);
     rafId = null;
+  }
+}
+function clearErrorTimer() {
+  if (errorTimer != null) {
+    clearTimeout(errorTimer);
+    errorTimer = null;
   }
 }
 
@@ -35,7 +48,7 @@ interface InlineState {
   streaming: boolean;
   /** Текущий режим (для индикации). */
   mode: InlineMode | null;
-  /** Код/сообщение ошибки (`no-selection`/`no-text` — фронт; иначе — текст бэкенда). `null` — нет. */
+  /** Сообщение ошибки (локализованное) для aria-live; `null` — нет. */
   error: string | null;
   /** Запустить inline-генерацию у курсора/выделения текущего редактора. */
   runInline: (view: EditorView, mode: InlineMode) => void;
@@ -45,101 +58,116 @@ interface InlineState {
   clearError: () => void;
 }
 
-export const useInlineStore = create<InlineState>((set) => ({
-  active: false,
-  streaming: false,
-  mode: null,
-  error: null,
+export const useInlineStore = create<InlineState>((set) => {
+  /** Показать inline-ошибку у курсора + флаг для SR; авто-снятие через TTL (AC-IL-7). */
+  const showError = (view: EditorView, message: string) => {
+    clearErrorTimer();
+    view.dispatch({ effects: setGhostError.of(message) });
+    set({ active: false, streaming: false, mode: null, error: message });
+    errorTimer = setTimeout(() => {
+      view.dispatch({ effects: clearGhost.of() });
+      errorTimer = null;
+    }, ERROR_TTL_MS);
+  };
 
-  runInline(view, mode) {
-    // Один активный inline за раз (AC-IL-8): гасим прежний стрим и его ghost.
-    cancelStream?.();
-    cancelStream = null;
-    cancelFlush();
-    pending = '';
-    view.dispatch({ effects: clearGhost.of() });
+  return {
+    active: false,
+    streaming: false,
+    mode: null,
+    error: null,
 
-    const sel = view.state.selection.main;
-    let from: number;
-    let to: number;
-    let pos: number;
-    let context: string;
-    let selection: string | undefined;
-
-    if (mode === 'continue') {
-      // Контекст = текст до курсора (D2); вставка в позиции курсора.
-      pos = sel.head;
-      from = sel.head;
-      to = sel.head;
-      context = view.state.sliceDoc(0, sel.head);
-      selection = undefined;
-      if (context.trim() === '') {
-        set({ error: 'no-text', active: false, streaming: false, mode: null });
-        return;
-      }
-    } else {
-      // rewrite/summarize работают по выделению (D4); результат заменит его.
-      if (sel.empty) {
-        set({ error: 'no-selection', active: false, streaming: false, mode: null });
-        return;
-      }
-      from = sel.from;
-      to = sel.to;
-      pos = sel.to; // ghost-превью показываем после выделения
-      context = '';
-      selection = view.state.sliceDoc(sel.from, sel.to);
-    }
-
-    view.dispatch({ effects: setGhost.of({ pos, from, to }) });
-    set({ active: true, streaming: true, mode, error: null });
-
-    const flush = () => {
-      rafId = null;
-      if (!pending) return;
-      const chunk = pending;
+    runInline(view, mode) {
+      // Один активный inline за раз (AC-IL-8): гасим прежний стрим/таймер и его ghost.
+      cancelStream?.();
+      cancelStream = null;
+      cancelFlush();
+      clearErrorTimer();
       pending = '';
-      view.dispatch({ effects: appendGhost.of(chunk) });
-    };
-    const scheduleFlush = () => {
-      if (rafId == null) rafId = requestAnimationFrame(flush);
-    };
+      view.dispatch({ effects: clearGhost.of() });
+      set({ error: null });
 
-    cancelStream = tauriApi.inline.complete(mode, context, selection, (event) => {
-      switch (event.type) {
-        case 'token':
-          pending += event.text;
-          scheduleFlush();
-          break;
-        case 'done':
-          cancelFlush();
-          if (pending) {
-            view.dispatch({ effects: appendGhost.of(pending) });
-            pending = '';
-          }
-          view.dispatch({ effects: endGhostStream.of() });
-          cancelStream = null;
-          set({ streaming: false });
-          break;
-        case 'error':
-          cancelFlush();
-          pending = '';
-          view.dispatch({ effects: clearGhost.of() });
-          cancelStream = null;
-          set({ active: false, streaming: false, mode: null, error: event.message });
-          break;
+      const sel = view.state.selection.main;
+      let from: number;
+      let to: number;
+      let pos: number;
+      let context: string;
+      let selection: string | undefined;
+
+      if (mode === 'continue') {
+        // Контекст = текст до курсора (D2); вставка в позиции курсора.
+        pos = sel.head;
+        from = sel.head;
+        to = sel.head;
+        context = view.state.sliceDoc(0, sel.head);
+        selection = undefined;
+        if (context.trim() === '') {
+          showError(view, i18n.t('inline.errNoText'));
+          return;
+        }
+      } else {
+        // rewrite/summarize работают по выделению (D4); результат заменит его.
+        if (sel.empty) {
+          showError(view, i18n.t('inline.errNoSelection'));
+          return;
+        }
+        from = sel.from;
+        to = sel.to;
+        pos = sel.to; // ghost-превью показываем после выделения
+        context = '';
+        selection = view.state.sliceDoc(sel.from, sel.to);
       }
-    });
-  },
 
-  cancelInline() {
-    cancelStream?.();
-    cancelStream = null;
-    cancelFlush();
-    pending = '';
-    set({ active: false, streaming: false, mode: null });
-  },
+      view.dispatch({ effects: setGhost.of({ pos, from, to }) });
+      set({ active: true, streaming: true, mode, error: null });
 
-  clearError() {
-    set({ error: null });
-  },
-}));
+      const flush = () => {
+        rafId = null;
+        if (!pending) return;
+        const chunk = pending;
+        pending = '';
+        view.dispatch({ effects: appendGhost.of(chunk) });
+      };
+      const scheduleFlush = () => {
+        if (rafId == null) rafId = requestAnimationFrame(flush);
+      };
+
+      cancelStream = tauriApi.inline.complete(mode, context, selection, (event) => {
+        switch (event.type) {
+          case 'token':
+            pending += event.text;
+            scheduleFlush();
+            break;
+          case 'done':
+            cancelFlush();
+            if (pending) {
+              view.dispatch({ effects: appendGhost.of(pending) });
+              pending = '';
+            }
+            view.dispatch({ effects: endGhostStream.of() });
+            cancelStream = null;
+            set({ streaming: false });
+            break;
+          case 'error':
+            cancelFlush();
+            pending = '';
+            cancelStream = null;
+            showError(view, event.message);
+            break;
+        }
+      });
+    },
+
+    cancelInline() {
+      cancelStream?.();
+      cancelStream = null;
+      cancelFlush();
+      clearErrorTimer();
+      pending = '';
+      set({ active: false, streaming: false, mode: null });
+    },
+
+    clearError() {
+      set({ error: null });
+    },
+  };
+});
