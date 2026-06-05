@@ -139,6 +139,13 @@ const editorTheme = EditorView.theme({
   },
   '.cm-wikilink': { color: 'var(--color-link)', cursor: 'pointer' },
   '.cm-tag': { color: 'var(--color-tag)' },
+  // Inline-LLM ghost-text (IL-2): приглушённый курсивный текст предложения у курсора.
+  '.cm-inline-ghost': {
+    color: 'var(--color-text-faint)',
+    fontStyle: 'italic',
+    opacity: '0.75',
+    whiteSpace: 'pre-wrap',
+  },
   '&.cm-focused': { outline: 'none' },
 });
 

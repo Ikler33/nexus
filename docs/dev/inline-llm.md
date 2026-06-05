@@ -8,8 +8,8 @@
 | Срез | Что | Статус |
 |---|---|---|
 | **IL-1. Бэкенд** | команда `inline_complete` (стрим + отмена) + сборка контекста (D2) + режимы continue/rewrite/summarize | ✅ |
-| IL-2. CM6 ghost-core | ghost-text decoration + keymap Tab/Esc (роутинг) + стор + rAF-стрим + accept/reject/cancel | ⏳ |
-| IL-3. Триггеры UX | slash-меню (D5) + inline-тулбар по выделению (D4) + ошибка/a11y (AC-IL-9/10) | ⏳ |
+| **IL-2. CM6 ghost-core** | ghost-text decoration + keymap Tab/Esc (роутинг) + стор + rAF-стрим + accept/reject/cancel + триггер `Mod-i` (continue) | ✅ |
+| IL-3. Триггеры UX | slash-меню (D5) + inline-тулбар по выделению (D4) + ошибка/a11y (AC-IL-9/10) + команды палитры | ⏳ |
 | IL-4. (опц.) авто-ghost | авто-предложение по паузе письма + настройка вкл/выкл (D1, ВЫКЛ по умолчанию) | ⏳ |
 
 ## Бэкенд (IL-1)
@@ -45,8 +45,36 @@ inline_complete(channel: Channel<InlineStreamEvent>, mode: String,
 режиму + payload внутри маркеров); `build_inline_messages_modes_differ` (rewrite≠summarize).
 Качество вывода LLM — **human-eval, НЕ автотест** (спека §4: не «зелёные тесты на бессмысленный вывод»).
 
+## Фронтенд (IL-2)
+
+### CM6 ghost (`components/editor/inlineGhost.ts`)
+- **`ghostField`** (StateField): хранит `{pos, from, to, text, streaming}`; даёт декорацию-виджет
+  (`.cm-inline-ghost`, серый курсив) у `pos`. Эффекты `setGhost`/`appendGhost`/`endGhostStream`/
+  `clearGhost`. Позиции маппятся через правки; **dismiss-on-type** — любая правка пользователя снимает
+  ghost (как автокомплит).
+- **`acceptGhost(view)`** (AC-IL-3): заменяет `from..to` на текст, курсор после вставки, снимает ghost.
+- **`rejectGhost(view)`** (AC-IL-4): снимает ghost, документ/курсор не трогает.
+- **`inlineKeymap({onResolve})`** (`Prec.highest`): `Tab` принять / `Esc` отклонить **только при активном
+  ghost** (иначе `false` → штатные Tab/Esc, AC-IL-5); после accept/reject зовёт `onResolve` (контроллер
+  гасит стрим).
+
+### Контроллер/стор (`stores/inline.ts`)
+- **`runInline(view, mode)`** (AC-IL-1): один активный стрим (AC-IL-8 — гасит прежний). Сборка по D2:
+  `continue` → текст до курсора, вставка в курсор; `rewrite`/`summarize` → выделение (иначе ошибка
+  `no-selection`), замена выделения. `setGhost` → виден сразу. Токены копятся и применяются раз в кадр
+  (**rAF-троттл**, AC-IL-2). `done` → `endGhostStream`; `error` → `clearGhost` + `error` в сторе (AC-IL-7).
+- **`cancelInline()`** (AC-IL-6): гасит стрим/rAF, сбрасывает `active` (ghost снимают accept/reject).
+- UI-флаги `active/streaming/mode/error` — для chrome (тулбар/нотификация — IL-3).
+
+### Триггер (IL-2 — минимальный)
+`Mod-i` в редакторе → `runInline(view, 'continue')`. Полные триггеры (slash-меню D5, тулбар по
+выделению D4, команды палитры) — **IL-3**.
+
+### Тесты (офлайн, jsdom)
+`inlineGhost.test.ts` (6): накопление текста, dismiss-on-type, accept/reject, Tab/Esc-роутинг при
+отсутствии ghost (AC-IL-5), replace-режим (AC-IL-9). `inline.test.ts` (4): триггер→ghost+стрим
+(AC-IL-1/2), no-selection/no-text, отмена (AC-IL-6/8). Стрим — мок `mock/vault.streamInline`.
+
 ## Зависимости
 - **Chat-провайдер (ADR-005)** — переиспользован (`stream_chat`), как чат.
 - **Egress НЕ нужен** (локальная модель). RAG-грунтинг inline / web — отдельный egress-ADR (BACKLOG).
-- **Frontend (IL-2):** `tauriApi.inline.complete()/cancel()` + CM6 ghost-decoration + стор по образцу
-  `stores/chat.ts` (rAF-троттл, как чат V2.4).

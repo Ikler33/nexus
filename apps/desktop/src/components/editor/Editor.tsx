@@ -3,7 +3,9 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { Annotation, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import type { NoteRef } from '../../lib/tauri-api';
+import { useInlineStore } from '../../stores/inline';
 import { nexusExtensions } from './extensions';
+import { ghostField, inlineKeymap } from './inlineGhost';
 import styles from './Editor.module.css';
 
 /** Помечает программную замену документа (смена файла) — НЕ пользовательскую правку. */
@@ -56,6 +58,19 @@ export function Editor({
       },
     ]);
 
+    // Inline-LLM (IL-2): триггер «продолжить» у курсора (Mod-i). Slash-меню / тулбар по выделению (D4/D5)
+    // — IL-3. Tab/Esc (accept/reject) ставит `inlineKeymap` (Prec.highest, перехват только при ghost).
+    const inlineTrigger = keymap.of([
+      {
+        key: 'Mod-i',
+        preventDefault: true,
+        run: (view) => {
+          useInlineStore.getState().runInline(view, 'continue');
+          return true;
+        },
+      },
+    ]);
+
     const view = new EditorView({
       state: EditorState.create({
         doc: loadedDoc.current,
@@ -63,6 +78,9 @@ export function Editor({
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           saveKey,
+          inlineTrigger,
+          ghostField,
+          inlineKeymap({ onResolve: () => useInlineStore.getState().cancelInline() }),
           ...nexusExtensions({
             getNotes: () => cb.current.getNotes?.() ?? [],
             getOpenLink: () => cb.current.onOpenLink,

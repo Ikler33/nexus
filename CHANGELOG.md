@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+### Inline-LLM в редакторе — slice IL-2: ghost-text в CM6 (#vision)
+
+- **Предложение модели прямо в тексте.** Ghost-text (серый курсив) у курсора: `Tab` — принять, `Esc` —
+  отклонить. CM6-расширение `inlineGhost` (StateField + виджет-декорация + эффекты
+  `setGhost`/`appendGhost`/`endGhostStream`/`clearGhost`): позиции маппятся через правки, **снятие при
+  наборе** (как автокомплит). `acceptGhost` заменяет диапазон `from..to` (AC-IL-3); `rejectGhost`
+  оставляет документ нетронутым (AC-IL-4); клавиатура `inlineKeymap` (`Prec.highest`) перехватывает
+  `Tab`/`Esc` **только при активном ghost** (иначе штатное поведение, AC-IL-5).
+- **Контроллер/стор `inline`**: `runInline(view, mode)` собирает контекст по D2 (`continue` — до курсора;
+  `rewrite`/`summarize` — выделение), стримит результат с **rAF-троттлом** (≤~60 рендеров/с, AC-IL-2),
+  один активный стрим за раз (AC-IL-8); `error` → тихий флаг (AC-IL-7). `cancelInline` гасит стрим
+  (AC-IL-6). Контракт фронта `tauriApi.inline.complete()/cancel()` + мок `streamInline` для превью.
+- **Триггер (минимальный):** `Mod-i` → продолжить у курсора. Полные триггеры (slash-меню D5, тулбар по
+  выделению D4, команды палитры, a11y) — **IL-3**. +10 фронт-тестов (`inlineGhost`/`inline`, офлайн).
+  Контракт: `docs/dev/inline-llm.md`.
+
 ### Inline-LLM в редакторе — slice IL-1: бэкенд (#vision, спека `docs/specs/inline-llm.md`)
 
 - **Команда `inline_complete`** (поверх `ChatProvider`, ADR-005): стрим результата в редактор через

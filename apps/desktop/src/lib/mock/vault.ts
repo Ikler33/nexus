@@ -7,6 +7,8 @@ import type {
   GoalEntry,
   GraphData,
   GraphEdge,
+  InlineMode,
+  InlineStreamEvent,
   LinkSuggestion,
   NoteRef,
   SearchHit,
@@ -253,6 +255,31 @@ export function streamChat(
       onEvent({ type: 'token', text: tok });
     }
     if (!cancelled) onEvent({ type: 'done', full: answer });
+  })();
+  return () => {
+    cancelled = true;
+  };
+}
+
+/** Симуляция inline-стрима (IL-2) для превью/тестов: несколько токенов по режиму → done. */
+export function streamInline(
+  mode: InlineMode,
+  onEvent: (event: InlineStreamEvent) => void,
+): () => void {
+  let cancelled = false;
+  const text =
+    mode === 'summarize'
+      ? 'Кратко: основная мысль фрагмента.'
+      : mode === 'rewrite'
+        ? 'Переписанный, более ясный вариант фрагмента.'
+        : ' и продолжается естественно дальше.';
+  void (async () => {
+    for (const tok of text.split(/(\s+)/)) {
+      if (cancelled) return;
+      await new Promise((r) => setTimeout(r, 15));
+      onEvent({ type: 'token', text: tok });
+    }
+    if (!cancelled) onEvent({ type: 'done', full: text });
   })();
   return () => {
     cancelled = true;

@@ -1,0 +1,145 @@
+import type { EditorView } from '@codemirror/view';
+import { create } from 'zustand';
+
+import {
+  appendGhost,
+  clearGhost,
+  endGhostStream,
+  setGhost,
+} from '../components/editor/inlineGhost';
+import type { InlineMode } from '../lib/tauri-api';
+import { tauriApi } from '../lib/tauri-api';
+
+/**
+ * Контроллер inline-LLM (IL-2, спека `docs/specs/inline-llm.md`): связывает CM6 ghost (`inlineGhost.ts`)
+ * со стрим-командой бэкенда (`tauriApi.inline`). Один активный стрим за раз (AC-IL-8): новый `runInline`
+ * гасит прежний. Токены копятся и применяются раз в кадр (rAF-троттл, как чат V2.4 / AC-IL-2). Само
+ * ghost-состояние живёт в CM6; здесь — стрим/rAF + UI-флаги (active/streaming/error) для chrome (IL-3).
+ */
+
+let cancelStream: (() => void) | null = null;
+let pending = '';
+let rafId: number | null = null;
+
+function cancelFlush() {
+  if (rafId != null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+}
+
+interface InlineState {
+  /** Есть активная inline-сессия (стрим идёт ИЛИ ghost ждёт accept/reject). */
+  active: boolean;
+  /** Идёт ли приём токенов. */
+  streaming: boolean;
+  /** Текущий режим (для индикации). */
+  mode: InlineMode | null;
+  /** Код/сообщение ошибки (`no-selection`/`no-text` — фронт; иначе — текст бэкенда). `null` — нет. */
+  error: string | null;
+  /** Запустить inline-генерацию у курсора/выделения текущего редактора. */
+  runInline: (view: EditorView, mode: InlineMode) => void;
+  /** Остановить активный стрим (не трогает ghost — его гасят accept/reject). Идемпотентно. */
+  cancelInline: () => void;
+  /** Сбросить показанную ошибку. */
+  clearError: () => void;
+}
+
+export const useInlineStore = create<InlineState>((set) => ({
+  active: false,
+  streaming: false,
+  mode: null,
+  error: null,
+
+  runInline(view, mode) {
+    // Один активный inline за раз (AC-IL-8): гасим прежний стрим и его ghost.
+    cancelStream?.();
+    cancelStream = null;
+    cancelFlush();
+    pending = '';
+    view.dispatch({ effects: clearGhost.of() });
+
+    const sel = view.state.selection.main;
+    let from: number;
+    let to: number;
+    let pos: number;
+    let context: string;
+    let selection: string | undefined;
+
+    if (mode === 'continue') {
+      // Контекст = текст до курсора (D2); вставка в позиции курсора.
+      pos = sel.head;
+      from = sel.head;
+      to = sel.head;
+      context = view.state.sliceDoc(0, sel.head);
+      selection = undefined;
+      if (context.trim() === '') {
+        set({ error: 'no-text', active: false, streaming: false, mode: null });
+        return;
+      }
+    } else {
+      // rewrite/summarize работают по выделению (D4); результат заменит его.
+      if (sel.empty) {
+        set({ error: 'no-selection', active: false, streaming: false, mode: null });
+        return;
+      }
+      from = sel.from;
+      to = sel.to;
+      pos = sel.to; // ghost-превью показываем после выделения
+      context = '';
+      selection = view.state.sliceDoc(sel.from, sel.to);
+    }
+
+    view.dispatch({ effects: setGhost.of({ pos, from, to }) });
+    set({ active: true, streaming: true, mode, error: null });
+
+    const flush = () => {
+      rafId = null;
+      if (!pending) return;
+      const chunk = pending;
+      pending = '';
+      view.dispatch({ effects: appendGhost.of(chunk) });
+    };
+    const scheduleFlush = () => {
+      if (rafId == null) rafId = requestAnimationFrame(flush);
+    };
+
+    cancelStream = tauriApi.inline.complete(mode, context, selection, (event) => {
+      switch (event.type) {
+        case 'token':
+          pending += event.text;
+          scheduleFlush();
+          break;
+        case 'done':
+          cancelFlush();
+          if (pending) {
+            view.dispatch({ effects: appendGhost.of(pending) });
+            pending = '';
+          }
+          view.dispatch({ effects: endGhostStream.of() });
+          cancelStream = null;
+          set({ streaming: false });
+          break;
+        case 'error':
+          cancelFlush();
+          pending = '';
+          view.dispatch({ effects: clearGhost.of() });
+          cancelStream = null;
+          set({ active: false, streaming: false, mode: null, error: event.message });
+          break;
+      }
+    });
+  },
+
+  cancelInline() {
+    cancelStream?.();
+    cancelStream = null;
+    cancelFlush();
+    pending = '';
+    set({ active: false, streaming: false, mode: null });
+  },
+
+  clearError() {
+    set({ error: null });
+  },
+}));
