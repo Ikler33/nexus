@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Планировщик задач (ADR-007) — slice 2: движок диспатча
+
+- **Реестр обработчиков + воркер-луп.** `JobHandler`-трейт (`#[async_trait]`) + `Registry` (kind→handler);
+  **`run_due`** — детерминированное ядро тика: `claim_next` → диспатч по `kind` → `complete`/`fail`
+  (неизвестный kind → fail → видимый dead), не более 64 джоб/тик (анти-голодание); **`spawn_worker`** —
+  воркер-луп (tokio-interval 5с, S1) с crash-recovery на старте, шлёт `jobs:changed` после продуктивного
+  тика. Слой-1-функции переведены на `&WriteActor` (воркер держит клон, как индексатор). Пока **не
+  спавнится из `open_vault`** (нет kind/энкьюеров — live-спавн в срезе 3, чтобы пустой воркер не
+  dead-летил джобы); backpressure чата (S5) — с LLM-kind. +1 тест (`run_due_dispatches_by_kind`).
+  clippy/тесты зелёные. Контракт: `docs/dev/scheduler.md`.
+
 ### Планировщик задач (ADR-007) — slice 1: очередь `jobs`
 
 - **Слой данных очереди фоновых задач.** Первый срез планировщика (обе hard-dep — #13 rebuild-примитив
