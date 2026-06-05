@@ -42,7 +42,7 @@ pub struct Job {
 }
 
 /// Текущее unix-время (сек) — для меток created_at/updated_at; планирование принимает время явно.
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

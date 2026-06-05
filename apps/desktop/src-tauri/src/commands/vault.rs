@@ -69,12 +69,28 @@ pub async fn open_vault(
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     crate::indexer::spawn(indexer, app.clone());
 
-    // Планировщик фоновых задач (ADR-007): воркер очереди + встроенный kind `gc` (самоочистка очереди).
-    // Реальные kind (Карта/Противоречия) и периодическое расписание — следующими срезами.
-    let registry = Arc::new(crate::scheduler::default_registry(db.writer().clone()));
-    crate::scheduler::spawn_worker(db.writer().clone(), app, registry);
-    // Seed: поставить gc-джобу на ближайший тик (демонстрирует live-конвейер; дедуп/расписание — далее).
+    // Планировщик фоновых задач (ADR-007): встроенный kind `gc` (самоочистка) + (если есть chat) `digest`
+    // (LLM-дайджест недавних изменений, #35). Воркер живёт, пока открыт vault.
+    let mut registry = crate::scheduler::default_registry(db.writer().clone());
+    if let Some(chat) = &chat {
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::digest::DigestHandler::new(
+                db.reader().clone(),
+                chat.clone(),
+                db.writer().clone(),
+            ));
+        registry.insert(crate::digest::KIND_DIGEST.to_string(), handler);
+    }
+    crate::scheduler::spawn_worker(db.writer().clone(), app, Arc::new(registry));
+    // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
+    if chat.is_some()
+        && crate::digest::should_generate(db.reader())
+            .await
+            .unwrap_or(false)
+    {
+        let _ = crate::scheduler::enqueue(db.writer(), crate::digest::KIND_DIGEST, "", 0, 2).await;
+    }
 
     *state.vault.write().await = Some(VaultContext {
         root,
