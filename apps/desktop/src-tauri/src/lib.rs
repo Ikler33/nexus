@@ -87,6 +87,8 @@ pub fn run() {
             commands::search::search_content,
             commands::chat::chat_rag,
             commands::chat::chat_cancel,
+            commands::inline::inline_complete,
+            commands::inline::inline_cancel,
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
             commands::goals::list_goals,
