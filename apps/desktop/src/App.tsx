@@ -17,6 +17,7 @@ import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
 import { DigestPanel } from './components/digest/DigestPanel';
+import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
@@ -126,6 +127,7 @@ export function App() {
         </main>
         {chatOpen && !reading && <AiPanel />}
       </div>
+      <InlineAria />
       <StatusBar />
 
       <CommandPalette />

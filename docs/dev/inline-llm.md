@@ -9,7 +9,8 @@
 |---|---|---|
 | **IL-1. Бэкенд** | команда `inline_complete` (стрим + отмена) + сборка контекста (D2) + режимы continue/rewrite/summarize | ✅ |
 | **IL-2. CM6 ghost-core** | ghost-text decoration + keymap Tab/Esc (роутинг) + стор + rAF-стрим + accept/reject/cancel + триггер `Mod-i` (continue) | ✅ |
-| IL-3. Триггеры UX | slash-меню (D5) + inline-тулбар по выделению (D4) + ошибка/a11y (AC-IL-9/10) + команды палитры | ⏳ |
+| **IL-3. Триггеры UX** | inline-тулбар по выделению (D4) + команды палитры + видимая ошибка у курсора (AC-IL-7) + accept/reject-подсказка и aria-live (AC-IL-10) | ✅ |
+| IL-3b. Slash-меню | `/`-меню (D5: `/continue`·`/rewrite`·`/summarize`·`/ask`·`/template`); `/ask` — новый режим бэкенда | ⏳ |
 | IL-4. (опц.) авто-ghost | авто-предложение по паузе письма + настройка вкл/выкл (D1, ВЫКЛ по умолчанию) | ⏳ |
 
 ## Бэкенд (IL-1)
@@ -73,7 +74,27 @@ inline_complete(channel: Channel<InlineStreamEvent>, mode: String,
 ### Тесты (офлайн, jsdom)
 `inlineGhost.test.ts` (6): накопление текста, dismiss-on-type, accept/reject, Tab/Esc-роутинг при
 отсутствии ghost (AC-IL-5), replace-режим (AC-IL-9). `inline.test.ts` (4): триггер→ghost+стрим
-(AC-IL-1/2), no-selection/no-text, отмена (AC-IL-6/8). Стрим — мок `mock/vault.streamInline`.
+(AC-IL-1/2), ошибка у курсора, отмена (AC-IL-6/8). Стрим — мок `mock/vault.streamInline`.
+
+## Триггеры и UX (IL-3)
+- **Тулбар по выделению (D4, `components/editor/inlineToolbar.ts`):** CM6-tooltip над непустым
+  выделением с кнопками **Переписать / Сократить / Продолжить** → `runInline(view, mode)`. Скрыт при
+  активном ghost. Клик по кнопке — на `mousedown` + `preventDefault` (не теряем выделение до чтения).
+- **Команды палитры (`commands-core`):** `editor.inline.continue/rewrite/summarize` через **реестр
+  активного редактора** (`lib/editor/activeView.ts`: `Editor` регистрирует свой `EditorView` на фокусе
+  /монтировании; команда берёт активный и зовёт `runInline`).
+- **Видимая ошибка у курсора (AC-IL-7):** `setGhostError`-эффект → красный `⚠ <msg>` виджет; авто-снятие
+  через `ERROR_TTL_MS=6с` или по Esc/правке. Сообщения локализованы (`inline.errNo*` / текст бэкенда).
+- **a11y (AC-IL-10):** подсказка «Tab — принять · Esc — отклонить» у готового предложения; `InlineAria`
+  (визуально скрытый `aria-live="polite"`) анонсирует статус (генерируется/готово/ошибка) скринридеру.
+- **Тесты (+4):** `inlineToolbar.test.ts` (тултип при выделении/скрыт при ghost/якорь),
+  `lib/editor/activeView.test.ts` (set/get/clear).
+
+### Отложено (no silent caps)
+- **Slash-меню (D5, IL-3b):** `/`-меню `/continue`·`/rewrite`·`/summarize`·`/ask`·`/template`. `/ask`
+  требует нового режима бэкенда (freeform-вопрос), `/template` → фича «умные шаблоны». — BACKLOG.
+- **Ошибка ровно «у курсора» для координат:** сейчас виджет в позиции курсора (точно); если понадобится
+  плавающий тост — отдельно.
 
 ## Зависимости
 - **Chat-провайдер (ADR-005)** — переиспользован (`stream_chat`), как чат.
