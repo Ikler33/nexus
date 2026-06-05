@@ -3,6 +3,7 @@ import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi } from './lib/tauri-api';
 import { useChatStore } from './stores/chat';
+import { useDigestStore } from './stores/digest';
 import { useGoalsStore } from './stores/goals';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
@@ -15,6 +16,7 @@ import { CommandPalette } from './components/command/CommandPalette';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
+import { DigestPanel } from './components/digest/DigestPanel';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
@@ -38,6 +40,7 @@ export function App() {
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   const syncOpen = useUIStore((s) => s.syncOpen);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
+  const digestOpen = useUIStore((s) => s.digestOpen);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
@@ -72,6 +75,21 @@ export function App() {
       clearTimeout(timer);
       unlisten();
     };
+  }, []);
+
+  // Готовый дайджест прилетает джобой планировщика → refetch по `jobs:changed`, только когда панель
+  // открыта (ADR-007 slice 4). Так пользователь видит результат генерации на живой модели без поллинга.
+  useEffect(() => {
+    let unlisten = () => {};
+    void tauriApi.events
+      .onJobsChanged(() => {
+        if (!useUIStore.getState().digestOpen) return;
+        void useDigestStore.getState().load();
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten();
   }, []);
 
   // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
@@ -128,6 +146,7 @@ export function App() {
       )}
       {tweaksOpen && <SettingsView />}
       {goalsOpen && <GoalsPanel />}
+      {digestOpen && <DigestPanel />}
     </div>
   );
 }

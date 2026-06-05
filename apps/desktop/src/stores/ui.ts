@@ -14,6 +14,8 @@ interface UIState {
   syncOpen: boolean;
   /** Открыта ли панель «Цели» (#35, vision). */
   goalsOpen: boolean;
+  /** Открыта ли панель «Дайджест изменений» (#35, ADR-007 slice 4). */
+  digestOpen: boolean;
   /** Открыт ли раздел настроек (модалка Obsidian-style; `tweaksOpen` исторически — теперь весь раздел). */
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
@@ -38,6 +40,8 @@ interface UIState {
   toggleSync: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
+  closeDigest: () => void;
+  toggleDigest: () => void;
   toggleReading: () => void;
   closeReading: () => void;
   toggleTweaks: () => void;
@@ -56,6 +60,7 @@ export const useUIStore = create<UIState>((set) => ({
   pluginsOpen: false,
   syncOpen: false,
   goalsOpen: false,
+  digestOpen: false,
   tweaksOpen: false,
   settingsSection: 'general',
   reading: false,
@@ -76,6 +81,8 @@ export const useUIStore = create<UIState>((set) => ({
   toggleSync: () => set((s) => ({ syncOpen: !s.syncOpen })),
   closeGoals: () => set({ goalsOpen: false }),
   toggleGoals: () => set((s) => ({ goalsOpen: !s.goalsOpen })),
+  closeDigest: () => set({ digestOpen: false }),
+  toggleDigest: () => set((s) => ({ digestOpen: !s.digestOpen })),
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),

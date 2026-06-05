@@ -176,6 +176,17 @@
     "refresh": "Refresh",
     "close": "Close"
   },
+  "digest": {
+    "title": "Changes digest",
+    "loading": "Loading…",
+    "empty": "No digest yet. Click “Generate” — the model will briefly summarize recent changes.",
+    "queued": "Generation started — the digest will appear here once the model responds.",
+    "meta": "{{when}} · notes: {{count}}",
+    "generate": "Generate",
+    "generating": "Generating…",
+    "refresh": "Refresh",
+    "close": "Close"
+  },
   "plugins": {
     "title": "Plugins",
     "sandbox": "sandbox",
@@ -232,6 +243,7 @@
     "view.plugins": "Plugins",
     "view.sync": "Sync (git)",
     "view.goals": "Goals",
+    "view.digest": "Changes digest",
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
     "view.settings": "Settings"
