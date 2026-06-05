@@ -9,12 +9,19 @@
 | Срез | Что | Статус |
 |---|---|---|
 | **1. Слой данных** | таблица `jobs` (миграция 004) + `scheduler::{enqueue, claim_next, complete, fail, requeue_running, gc_done}` | ✅ |
-| **2. Движок диспатча** | `JobHandler`-трейт + `Registry` (kind→handler), `run_due`, воркер-луп `spawn_worker` (tokio-interval S1, `jobs:changed` event) | ✅ (не спавнится live до среза 3) |
-| 3. Триггеры + live-спавн | on-open / on-change (от завершения реиндекса, S4) / scheduled (run-if-overdue, S2); `spawn_worker` в `open_vault` | ⏳ |
-| 4. Первые kind + backpressure | Карта компетенций, Поиск противоречий (локальные, несетевые — S3); приоритет чата над LLM-джобами (S5) | ⏳ |
+| **2. Движок диспатча** | `JobHandler`-трейт + `Registry` (kind→handler), `run_due`, воркер-луп `spawn_worker` (tokio-interval S1, `jobs:changed` event) | ✅ |
+| **3. Live-спавн + первый kind** | `spawn_worker` в `open_vault` (crash-recovery на старте); встроенный kind **`gc`** (`default_registry`) + seed на открытии — конвейер живой end-to-end | ✅ |
+| 4. Реальные kind + backpressure + расписание | Карта компетенций, Поиск противоречий (локальные, S3); приоритет чата над LLM-джобами (S5); run-if-overdue/дедуп (S2), on-change (S4) | ⏳ |
 | 5. UI | StatusBar N/M поверх `jobs:changed`, видимый `dead`/pending (S7/S8) | ⏳ |
 
 Сетевые kind (News Feed и весь web/cloud-класс) заблокированы на egress (#16) — отдельная волна.
+
+**Live (slice 3):** `open_vault` строит `default_registry` (kind `gc`), спавнит воркер (как индексатор) и
+сидит gc-джобу на ближайший тик → доказывает живой конвейер (spawn → enqueue → claim → выполнение →
+`done` → `jobs:changed`). Сейчас seed-на-открытие + 5с-тик; **дедуп/run-if-overdue-расписание + on-change**
+и **первый LLM-kind** (Карта/Противоречия, на живых моделях) — срез 4. **Грабли (как у индексатора):**
+воркер спавнится на каждый `open_vault` → при переоткрытии vault возможны дубли-воркеры на старый
+write-actor (лог-шум, не корраптит) — нужен shutdown-сигнал (BACKLOG, общий с индексатором).
 
 ## Схема (`migrations/004_jobs.sql`)
 `jobs(id, kind, payload, state, run_at, attempts, max_attempts, last_error, created_at, updated_at)` +
