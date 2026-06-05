@@ -15,6 +15,8 @@ mod commands;
 pub mod crash;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// «Дайджест изменений» (#35): первый LLM-kind планировщика (суммаризация недавних заметок).
+pub mod digest;
 /// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
 pub mod eval;
 /// git-sync (Фаза 3, §8): vault как git-репозиторий — фундамент (open/init, .gitignore, status).
@@ -88,6 +90,8 @@ pub fn run() {
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
             commands::goals::list_goals,
+            commands::digest::get_latest_digest,
+            commands::digest::generate_digest,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
             commands::settings::test_ai_connection,
