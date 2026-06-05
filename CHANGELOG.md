@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Inline-LLM в редакторе — slice IL-1: бэкенд (#vision, спека `docs/specs/inline-llm.md`)
+
+- **Команда `inline_complete`** (поверх `ChatProvider`, ADR-005): стрим результата в редактор через
+  `Channel<InlineStreamEvent>` (`token`/`done`/`error`), **без RAG** — контекст = текущая заметка (D2).
+  Режимы `continue` / `rewrite` / `summarize` (`InlineMode`): `continue` работает с текстом до курсора,
+  `rewrite`/`summarize` — с выделением (валидация пустого ввода/режима → понятная ошибка, AC-IL-7).
+  Промпт по режиму требует вернуть **только результат**; контент заметки обёрнут случайным маркером
+  (анти-инъекция AC-SEC-7, переиспользован из RAG). **Отмена** `inline_cancel` + независимый от чата
+  токен `AppState::begin_inline` (один активный inline-стрим за раз, AC-IL-6/8). +4 Rust-теста (парс
+  режима, обёртка payload маркером, различие режимов). **Дальше:** IL-2 (CM6 ghost-text + accept/reject +
+  rAF-стрим), IL-3 (slash-меню + тулбар по выделению + a11y). Контракт: `docs/dev/inline-llm.md`.
+
 ### Планировщик задач (ADR-007) — slice 4: первый LLM-kind «Дайджест изменений» + UI (#35)
 
 - **Первая настоящая фоновая LLM-фича (бэкенд, 4a).** Kind **`digest`**: собирает заметки, изменённые за окно (сутки,

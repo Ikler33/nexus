@@ -17,6 +17,9 @@ pub struct AppState {
     /// Флаг отмены активного чат-стрима (UI ведёт один чат за раз). `chat_rag` ставит новый
     /// токен (отменяя предыдущий), `chat_cancel` его взводит. `std::Mutex` — держим коротко, без await.
     pub chat_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Флаг отмены активного inline-стрима редактора (один inline-запрос за раз, AC-IL-8). Независим
+    /// от `chat_cancel`: новый inline-триггер отменяет прежний inline, но НЕ трогает чат (и наоборот).
+    pub inline_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// Capability-брокер плагинов (ADR-002, §7.4): токен→сессия + audit. `std::Mutex` — захват только
     /// на синхронную авторизацию (без await; реальный I/O dispatch — после освобождения лока).
     pub plugins: Mutex<crate::plugin::PluginBroker>,
@@ -30,6 +33,7 @@ impl AppState {
         Self {
             vault: RwLock::new(None),
             chat_cancel: Mutex::new(None),
+            inline_cancel: Mutex::new(None),
             plugins: Mutex::new(crate::plugin::PluginBroker::new()),
             git_lock: tokio::sync::Mutex::new(()),
         }
@@ -48,6 +52,26 @@ impl AppState {
     pub fn begin_chat(&self) -> Arc<AtomicBool> {
         let token = Arc::new(AtomicBool::new(false));
         if let Ok(mut guard) = self.chat_cancel.lock() {
+            if let Some(prev) = guard.replace(token.clone()) {
+                prev.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        token
+    }
+
+    /// Взводит флаг отмены текущего inline-стрима редактора (если есть).
+    pub fn cancel_active_inline(&self) {
+        if let Ok(guard) = self.inline_cancel.lock() {
+            if let Some(flag) = guard.as_ref() {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Регистрирует новый токен отмены для начинающегося inline-стрима, отменив предыдущий (AC-IL-8).
+    pub fn begin_inline(&self) -> Arc<AtomicBool> {
+        let token = Arc::new(AtomicBool::new(false));
+        if let Ok(mut guard) = self.inline_cancel.lock() {
             if let Some(prev) = guard.replace(token.clone()) {
                 prev.store(true, std::sync::atomic::Ordering::Relaxed);
             }

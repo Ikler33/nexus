@@ -6,6 +6,7 @@ pub mod digest;
 pub mod git;
 pub mod goals;
 pub mod graph;
+pub mod inline;
 pub mod plugin;
 pub mod search;
 pub mod settings;
