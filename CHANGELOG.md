@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Планировщик задач (ADR-007) — slice 1: очередь `jobs`
+
+- **Слой данных очереди фоновых задач.** Первый срез планировщика (обе hard-dep — #13 rebuild-примитив
+  и event-канал — закрыты). Миграция 004 `jobs(kind,payload,state,run_at,attempts,max_attempts,…)` +
+  `idx_jobs_claim`; модуль `scheduler` с `enqueue` / `claim_next` / `complete` / `fail` / `requeue_running`
+  / `gc_done`. Состояния **pending→running→done|dead** по решениям owner-codesign: claim **без гонок**
+  (сериализован write-actor'ом, ADR-003), экспоненциальный backoff + `max_attempts` → **видимый `dead`**
+  (S7, не тихий дроп), crash-recovery `running→pending` на старте (S8), offline-джобы ждут в `pending`
+  (S10). Логически значимое время — явными параметрами → детерминированные офлайн-тесты (+3). Воркер-луп
+  (tokio-interval S1, приоритет чата S5), триггеры (S2/S4) и первые kind (Карта/Противоречия S3) —
+  следующие срезы; сетевые kind (News Feed) ждут egress (#16). Контракт: `docs/dev/scheduler.md`.
+  clippy `-D warnings` + Rust-тесты зелёные.
+
 ### Фундамент — примитив пересборки FTS в раннере миграций (#13)
 
 - **`rebuild_fts`-хук в раннере миграций** (`db/migrations.rs`). `Migration` получил флаг `rebuild_fts:
