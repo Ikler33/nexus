@@ -11,6 +11,8 @@ pub mod ai;
 pub mod chunker;
 /// Tauri IPC-команды.
 mod commands;
+/// «Поиск противоречий» (#vision): фоновый LLM-kind — пары-кандидаты → судья → таблица `contradictions`.
+pub mod contradictions;
 /// Локальный crash-reporter: panic-hook → scrubbed-лог в `~/.nexus/crashes/` (Ф4-14).
 pub mod crash;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
@@ -94,6 +96,8 @@ pub fn run() {
             commands::goals::list_goals,
             commands::digest::get_latest_digest,
             commands::digest::generate_digest,
+            commands::contradictions::get_contradictions,
+            commands::contradictions::generate_contradictions,
             commands::scheduler::get_job_counts,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
