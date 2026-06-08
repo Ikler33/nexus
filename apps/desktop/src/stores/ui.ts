@@ -16,6 +16,8 @@ interface UIState {
   goalsOpen: boolean;
   /** Открыта ли панель «Дайджест изменений» (#35, ADR-007 slice 4). */
   digestOpen: boolean;
+  /** Открыта ли панель «Поиск противоречий» (#vision). */
+  contradictionsOpen: boolean;
   /** Открыт ли раздел настроек (модалка Obsidian-style; `tweaksOpen` исторически — теперь весь раздел). */
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
@@ -42,6 +44,8 @@ interface UIState {
   toggleGoals: () => void;
   closeDigest: () => void;
   toggleDigest: () => void;
+  closeContradictions: () => void;
+  toggleContradictions: () => void;
   toggleReading: () => void;
   closeReading: () => void;
   toggleTweaks: () => void;
@@ -61,6 +65,7 @@ export const useUIStore = create<UIState>((set) => ({
   syncOpen: false,
   goalsOpen: false,
   digestOpen: false,
+  contradictionsOpen: false,
   tweaksOpen: false,
   settingsSection: 'general',
   reading: false,
@@ -83,6 +88,8 @@ export const useUIStore = create<UIState>((set) => ({
   toggleGoals: () => set((s) => ({ goalsOpen: !s.goalsOpen })),
   closeDigest: () => set({ digestOpen: false }),
   toggleDigest: () => set((s) => ({ digestOpen: !s.digestOpen })),
+  closeContradictions: () => set({ contradictionsOpen: false }),
+  toggleContradictions: () => set((s) => ({ contradictionsOpen: !s.contradictionsOpen })),
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),

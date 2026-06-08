@@ -163,6 +163,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleDigest(),
     }),
     commands.register({
+      id: 'view.contradictions',
+      title: 'Contradiction finder',
+      titleKey: 'commands.view.contradictions',
+      source: 'core',
+      run: () => useUIStore.getState().toggleContradictions(),
+    }),
+    commands.register({
       id: 'theme.toggle',
       title: 'Toggle theme (light/dark)',
       titleKey: 'commands.theme.toggle',

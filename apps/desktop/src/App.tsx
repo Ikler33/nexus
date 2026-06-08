@@ -3,6 +3,7 @@ import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi } from './lib/tauri-api';
 import { useChatStore } from './stores/chat';
+import { useContradictionsStore } from './stores/contradictions';
 import { useDigestStore } from './stores/digest';
 import { useGoalsStore } from './stores/goals';
 import { useUIStore } from './stores/ui';
@@ -17,6 +18,7 @@ import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
 import { DigestPanel } from './components/digest/DigestPanel';
+import { ContradictionsPanel } from './components/contradictions/ContradictionsPanel';
 import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
@@ -42,6 +44,7 @@ export function App() {
   const syncOpen = useUIStore((s) => s.syncOpen);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
+  const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
@@ -78,14 +81,15 @@ export function App() {
     };
   }, []);
 
-  // Готовый дайджест прилетает джобой планировщика → refetch по `jobs:changed`, только когда панель
-  // открыта (ADR-007 slice 4). Так пользователь видит результат генерации на живой модели без поллинга.
+  // Готовые результаты фоновых джоб прилетают по `jobs:changed` → refetch открытой панели (без поллинга,
+  // ADR-007 slice 4/5). Дайджест и «Поиск противоречий» — обе LLM-фичи планировщика.
   useEffect(() => {
     let unlisten = () => {};
     void tauriApi.events
       .onJobsChanged(() => {
-        if (!useUIStore.getState().digestOpen) return;
-        void useDigestStore.getState().load();
+        const ui = useUIStore.getState();
+        if (ui.digestOpen) void useDigestStore.getState().load();
+        if (ui.contradictionsOpen) void useContradictionsStore.getState().load();
       })
       .then((fn) => {
         unlisten = fn;
@@ -149,6 +153,7 @@ export function App() {
       {tweaksOpen && <SettingsView />}
       {goalsOpen && <GoalsPanel />}
       {digestOpen && <DigestPanel />}
+      {contradictionsOpen && <ContradictionsPanel />}
     </div>
   );
 }
