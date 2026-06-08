@@ -339,8 +339,25 @@
 - **Осталось автономно в Wave B:** `#12` integration-крейт git-sync (git-identity в CI НЕ нужна —
   `GitSync::signature()` даёт дефолт), `#22` пагинация `list_notes`, `#25` discriminated Buffer,
   `#10` выборочный git-стейдж; perf-эпик `#14→#15→#6`; `#3` de-risk `tauri build`, `#18` per-path coverage.
-- **Когда автономка кончится** (идея владельца): функциональный прогон LLM (gemma) по всему приложению —
-  оценить качество, решить что доработать + нужна ли быстрая модель для примитивных задач.
+- **Функциональный прогон LLM (gemma) СДЕЛАН** → `docs/reviews/LLM_FUNCTIONAL_REVIEW.md`. Кратко:
+  модель ОК, но это **reasoning-модель**, а приложение под неё не настроено. Два бага:
+  (1) `ai/chat.rs` парсит только `delta.content`, игнорит `delta.reasoning_content` → UI «мёртвая
+  тишина» пока модель думает (= ощущение «зависло»); (2) на примитивах reasoning ест бюджет токенов →
+  медленно и иногда ПУСТОЙ ответ. Reasoning гасится `chat_template_kwargs:{enable_thinking:false}`
+  (другие способы не работают). Отдельная быстрая модель НЕ обязательна.
+
+> ### 🔴 СЛЕДУЮЩАЯ ЗАДАЧА ДЛЯ КРОНА (приоритет, есть AC+offline-тест):
+> Реализовать R1+R2 из `docs/reviews/LLM_FUNCTIONAL_REVIEW.md`:
+> - **R1** (`ai/chat.rs`): `reasoning_content: Option<String>` в `struct Delta`; в `parse_sse_delta`
+>   новый `SseEvent::Reasoning(String)`; в `chat_rag`/`inline_complete` — эвент канала
+>   `Reasoning { text }` (+фронт: статус «💭 размышляет…»). _Тест:_ `parse_sse_delta` на чанке с
+>   `reasoning_content` → `SseEvent::Reasoning` (offline, как существующий `parse_sse_delta_*`).
+> - **R2**: режим «без reasoning» у `OpenAiChatProvider` (тело `chat_template_kwargs:{enable_thinking:false}`)
+>   для inline/digest/contradictions. _Тест offline:_ тело запроса содержит флаг (проверить сборку body).
+> - **R3** (важно): поднять `max_tokens` RAG-чата с запасом (reasoning ест бюджет).
+> Делать срезами R1 → R2 → R3, каждый со своим тестом + CHANGELOG, линейными PR от main.
+> **Мерж: только на ЗЕЛЁНОМ CI вручную** (`gh pr merge <N> --squash --delete-branch -R Ikler33/nexus`) —
+> у main НЕТ required-checks, `--auto` мержит мгновенно (см. ниже).
 
 ### 🏁 Сделано до кросс-плана (дневная сессия)
 граф v2d (#44), V2.2 rename (#45), V4.4 общий чат (#46), V4.3 анти-инъекция (#47), V4.5 eval-гейт (#48),
