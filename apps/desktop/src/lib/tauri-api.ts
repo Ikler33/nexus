@@ -341,6 +341,11 @@ export const tauriApi = {
       isTauri()
         ? invoke<JobCounts>('get_job_counts')
         : Promise.resolve({ pending: 0, running: 0, dead: 0 }),
+
+    /** Идёт ли ещё работа над `kind` (pending|running) — для сброса «Генерирую…», когда джоба
+     *  завершилась/упала без нового результата. Вне Tauri — `false`. */
+    jobActive: (kind: string): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('job_active', { kind }) : Promise.resolve(false),
   },
 
   contradictions: {

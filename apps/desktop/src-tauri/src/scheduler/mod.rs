@@ -237,6 +237,23 @@ pub async fn has_ready_job(reader: &ReadPool, kind: &str, now: i64) -> DbResult<
         .await
 }
 
+/// Идёт ли ещё работа над этим `kind` (`pending` ЛЮБОЙ `run_at` ИЛИ `running`) — для UI «Генерирую…»:
+/// пока джоба запланирована/выполняется (в т.ч. отложена backpressure'ом), индикатор держим; когда её
+/// не стало (готово/упало в `dead`/no-op `done`) — UI гасит индикатор, даже если нового результата нет.
+pub async fn is_kind_busy(reader: &ReadPool, kind: &str) -> DbResult<bool> {
+    let kind = kind.to_string();
+    reader
+        .query(move |c| {
+            let n: i64 = c.query_row(
+                "SELECT count(*) FROM jobs WHERE kind=?1 AND state IN ('pending','running')",
+                [kind],
+                |r| r.get(0),
+            )?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// Recurring (slice 6): ставит следующий запуск `kind` на `run_at`, **только если** нет уже ожидающей
 /// (`pending`) джобы этого kind — анти-стакинг (одна будущая периодическая за раз). Атомарно (один
 /// write-actor). Так дайджест/поиск противоречий сами переназначаются после каждого прогона.
@@ -768,6 +785,22 @@ mod tests {
         assert!(
             has_ready_job(db.reader(), "digest", 100).await.unwrap(),
             "готовая → дедуп срабатывает"
+        );
+    }
+
+    /// `is_kind_busy` считает ЛЮБУЮ pending (в т.ч. будущую/отложенную) + running — для UI «Генерирую…».
+    #[tokio::test]
+    async fn is_kind_busy_counts_future_pending() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        assert!(
+            !is_kind_busy(db.reader(), "digest").await.unwrap(),
+            "пусто → не busy"
+        );
+        enqueue(w, "digest", "", 9_999_999, 5).await.unwrap(); // будущая (отложенная)
+        assert!(
+            is_kind_busy(db.reader(), "digest").await.unwrap(),
+            "будущая pending → busy (в отличие от has_ready_job)"
         );
     }
 

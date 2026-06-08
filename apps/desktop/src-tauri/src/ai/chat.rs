@@ -56,17 +56,25 @@ pub trait ChatProvider: Send + Sync {
     fn model_id(&self) -> &str;
 }
 
+/// Idle-таймаут стрима модели: если сервер не прислал НИ БАЙТА за это время (залип / отдал битый ответ)
+/// — рвём запрос с ошибкой, чтобы чат/джоба не висели вечно (а фоновая джоба не блокировала весь воркер).
+/// Каждый пришедший чанк сбрасывает таймер — легитимный долгий стрим не обрывается.
+const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// Chat через OpenAI-совместимый `POST {base}/v1/chat/completions` (llama.cpp-server, напр. Gemma).
 pub struct OpenAiChatProvider {
     client: reqwest::Client,
     endpoint: String,
     model: String,
     temperature: f32,
+    /// Idle-таймаут стрима (по умолчанию [`STREAM_IDLE_TIMEOUT`]); короче — в тестах.
+    idle_timeout: std::time::Duration,
 }
 
 impl OpenAiChatProvider {
     pub fn new(base_url: &str, model: &str, temperature: Option<f32>) -> AiResult<Self> {
-        // Без общего timeout: стриминг ответа долгий. Connect-timeout страхует от зависшего коннекта.
+        // Общего timeout нет (стрим долгий), но есть idle-таймаут на каждый чанк (см. stream_chat).
+        // Connect-timeout страхует от зависшего коннекта.
         let client = super::core_client_builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
@@ -76,7 +84,15 @@ impl OpenAiChatProvider {
             endpoint: format!("{}/v1/chat/completions", base_url.trim_end_matches('/')),
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
+            idle_timeout: STREAM_IDLE_TIMEOUT,
         })
+    }
+
+    /// Тест-хелпер: короткий idle-таймаут, чтобы проверять обрыв залипшего сервера быстро.
+    #[cfg(test)]
+    fn with_idle_timeout(mut self, d: std::time::Duration) -> Self {
+        self.idle_timeout = d;
+        self
     }
 }
 
@@ -94,12 +110,10 @@ impl ChatProvider for OpenAiChatProvider {
             "stream": true,
             "temperature": self.temperature,
         });
-        let mut resp = self
-            .client
-            .post(&self.endpoint)
-            .json(&body)
-            .send()
+        let send_fut = self.client.post(&self.endpoint).json(&body).send();
+        let mut resp = tokio::time::timeout(self.idle_timeout, send_fut)
             .await
+            .map_err(|_| AiError::Http("таймаут ответа модели (сервер не отвечает)".into()))?
             .map_err(|e| AiError::Http(e.to_string()))?;
         if !resp.status().is_success() {
             return Err(AiError::Http(format!("статус {}", resp.status())));
@@ -107,9 +121,10 @@ impl ChatProvider for OpenAiChatProvider {
 
         let mut full = String::new();
         let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = resp
-            .chunk()
+        // Idle-таймаут на КАЖДЫЙ чанк: залип сервер (нет данных) → рвём, а не висим вечно.
+        while let Some(chunk) = tokio::time::timeout(self.idle_timeout, resp.chunk())
             .await
+            .map_err(|_| AiError::Http("таймаут стрима модели (нет данных)".into()))?
             .map_err(|e| AiError::Http(e.to_string()))?
         {
             if cancel.load(Ordering::Relaxed) {
@@ -376,6 +391,36 @@ mod tests {
         // Никакого vault-грунтинга: ни «контекст из заметок», ни требования цитировать [1].
         assert!(!msgs[0].content.contains("заметок ["));
         assert!(!msgs[1].content.contains("Контекст"));
+    }
+
+    /// Залипший сервер (принял коннект, прочитал запрос, не отвечает) → `stream_chat` рвётся по
+    /// idle-таймауту с ошибкой, а НЕ висит вечно (регресс: дайджест-джоба зависала и блокировала воркер).
+    #[tokio::test]
+    async fn stream_chat_times_out_on_hung_server() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf); // запрос прочитали и «зависли» — не отвечаем
+                std::thread::sleep(std::time::Duration::from_secs(1)); // дольше idle-таймаута теста
+            }
+        });
+        let provider = OpenAiChatProvider::new(&format!("http://{addr}"), "gemma", Some(0.0))
+            .unwrap()
+            .with_idle_timeout(std::time::Duration::from_millis(250));
+        let msgs = vec![ChatMessage::user("привет")];
+        let mut sink = |_t: String| {};
+        let cancel = Arc::new(AtomicBool::new(false));
+        let start = std::time::Instant::now();
+        let res = provider.stream_chat(&msgs, &mut sink, &cancel).await;
+        assert!(res.is_err(), "залипший сервер → ошибка таймаута");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "оборвалось быстро по idle-таймауту, не повисло"
+        );
+        let _ = server.join();
     }
 
     /// Inline-режимы парсятся из строк фронта; неизвестное → None; needs_selection корректен.
