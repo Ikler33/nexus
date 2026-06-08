@@ -363,11 +363,12 @@ mod tests {
         queries: BTreeMap<String, Vec<f32>>,
     }
 
-    /// blake3-хэш зашитого golden-набора (для guard'а фикстуры).
+    /// blake3-хэш зашитого golden-набора (для guard'а фикстуры). EOL нормализуем `\r\n`→`\n`: на
+    /// Windows git может выдать golden.json с CRLF (autocrlf) → иначе хэш разъезжается с LF-машиной,
+    /// где фикстуру сгенерировали (сами body парсятся из `\n`-эскейпов и от EOL файла не зависят).
     fn golden_hash() -> String {
-        blake3::hash(include_str!("../../eval/golden.json").as_bytes())
-            .to_hex()
-            .to_string()
+        let normalized = include_str!("../../eval/golden.json").replace("\r\n", "\n");
+        blake3::hash(normalized.as_bytes()).to_hex().to_string()
     }
 
     /// Обёртка вокруг живого эмбеддера, записывающая каждую пару (текст → вектор) для регенерации фикстуры.
