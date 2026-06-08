@@ -8,9 +8,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-// Осознанно #[ignore]: живые-серверные (embedder/chat) и keychain-роундтрип тесты. Менять — только
+// Осознанно #[ignore]: живые-серверные (embedder/chat/eval) и keychain-роундтрип тесты. Менять — только
 // вместе с объяснением, ПОЧЕМУ тест отключён (а не «чтобы CI позеленел»).
-const EXPECTED = 11;
+// 11→12: + `regen_eval_fixture` (разовая регенерация реальной eval-фикстуры на живом bge-m3; сам гейт
+// качества `eval_fixture_meets_baseline` НЕ ignored — гоняется в CI на замороженных векторах).
+const EXPECTED = 12;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');

@@ -3,7 +3,7 @@
   "_measured": "Фактический прогон bge-m3 @ :8083 (мультиязычный, Ф1-12): recall@8=1.000, nDCG@8=0.883, MRR=0.848 (10/10 кейсов в recall@8, включая ОБА кросс-язычных — budget EN→RU ранг 7, photosynthesis RU→EN ранг 3). AC-EVAL-6 ЗАКРЫТ. Для справки: nomic @ :8081 давал recall@8=0.800 с провалом тех же 2 кросс-язычных (риск ADR-005 подтверждён и снят сменой на bge-m3).",
   "conditions": {
     "embedding_model": "bge-m3",
-    "embedding_server": "http://127.0.0.1:8083",
+    "embedding_server": "http://192.168.0.29:8083",
     "embedding_dim": 1024,
     "k": 8,
     "golden": "eval/golden.json"

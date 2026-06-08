@@ -334,6 +334,253 @@ mod tests {
         }
     }
 
+    // ─── Реальная eval-фикстура (BACKLOG: РЕАЛЬНОЕ качество без живого сервера в CI) ────────────────
+    //
+    // Идея: один раз прогоняем golden через ЖИВОЙ bge-m3, записываем настоящие векторы (чанки + запросы)
+    // в `eval/fixture_bge_m3.json`, и дальше CI-гейт `eval_fixture_meets_baseline` ВОСПРОИЗВОДИТ их
+    // (без сервера) → метрики на РЕАЛЬНЫХ эмбеддингах гейтятся в обычном `cargo test`. Регенерация —
+    // `regen_eval_fixture` (ignored-тест, нужен сервер). Guard: хэш golden + модель + dim в фикстуре; при
+    // расхождении гейт падает с подсказкой пере-генерировать (чанки сменятся → промах ключа → паника).
+
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    /// URL живого embedding-сервера: env `NEXUS_EMBED_URL` или `embedding_server` из baseline (сервер
+    /// мог переехать — напр. с `127.0.0.1` на LAN-хост, при этом модель/dim те же).
+    fn live_embed_url(cond: &Conditions) -> String {
+        std::env::var("NEXUS_EMBED_URL").unwrap_or_else(|_| cond.embedding_server.clone())
+    }
+
+    /// Замороженные реальные векторы golden-набора: ключ — ТОЧНЫЙ текст (чанка/запроса) → эмбеддинг.
+    #[derive(Serialize, Deserialize)]
+    struct EvalFixture {
+        model: String,
+        dim: usize,
+        /// blake3 от `golden.json` — guard: golden изменился → фикстура устарела.
+        golden_hash: String,
+        docs: BTreeMap<String, Vec<f32>>,
+        queries: BTreeMap<String, Vec<f32>>,
+    }
+
+    /// blake3-хэш зашитого golden-набора (для guard'а фикстуры).
+    fn golden_hash() -> String {
+        blake3::hash(include_str!("../../eval/golden.json").as_bytes())
+            .to_hex()
+            .to_string()
+    }
+
+    /// Обёртка вокруг живого эмбеддера, записывающая каждую пару (текст → вектор) для регенерации фикстуры.
+    struct RecordingEmbedder {
+        inner: OpenAiEmbedder,
+        docs: Mutex<BTreeMap<String, Vec<f32>>>,
+        queries: Mutex<BTreeMap<String, Vec<f32>>>,
+    }
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for RecordingEmbedder {
+        async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
+            let vecs = self.inner.embed_documents(texts).await?;
+            let mut g = self.docs.lock().unwrap();
+            for (t, v) in texts.iter().zip(&vecs) {
+                g.insert((*t).to_string(), v.clone());
+            }
+            Ok(vecs)
+        }
+        async fn embed_query(&self, text: &str) -> crate::ai::AiResult<Vec<f32>> {
+            let v = self.inner.embed_query(text).await?;
+            self.queries
+                .lock()
+                .unwrap()
+                .insert(text.to_string(), v.clone());
+            Ok(v)
+        }
+        fn dim(&self) -> usize {
+            self.inner.dim()
+        }
+        fn model_id(&self) -> &str {
+            self.inner.model_id()
+        }
+    }
+
+    /// Воспроизводит замороженные векторы фикстуры (без сети). Промах ключа = фикстура устарела
+    /// (изменились golden/чанкер) → паника с подсказкой пере-генерировать.
+    struct ReplayEmbedder {
+        dim: usize,
+        docs: BTreeMap<String, Vec<f32>>,
+        queries: BTreeMap<String, Vec<f32>>,
+    }
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for ReplayEmbedder {
+        async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    self.docs.get(*t).cloned().unwrap_or_else(|| {
+                        panic!(
+                            "eval-фикстура: нет вектора чанка (len {}) — пере-генерируй: \
+                             cargo test regen_eval_fixture -- --ignored --nocapture",
+                            t.len()
+                        )
+                    })
+                })
+                .collect())
+        }
+        async fn embed_query(&self, text: &str) -> crate::ai::AiResult<Vec<f32>> {
+            Ok(self.queries.get(text).cloned().unwrap_or_else(|| {
+                panic!("eval-фикстура: нет вектора запроса «{text}» — пере-генерируй фикстуру")
+            }))
+        }
+        fn dim(&self) -> usize {
+            self.dim
+        }
+        fn model_id(&self) -> &str {
+            "bge-m3-replay"
+        }
+    }
+
+    /// Регенерация фикстуры (ignored-тест): прогон golden через ЖИВОЙ bge-m3 → запись реальных векторов в
+    /// `eval/fixture_bge_m3.json`. Пишет ТОЛЬКО если метрики ≥ baseline (не фиксируем плохой прогон).
+    /// `NEXUS_EMBED_URL=http://192.168.0.29:8083 cargo test regen_eval_fixture -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "разовая регенерация: нужен живой bge-m3 (NEXUS_EMBED_URL или baseline server)"]
+    async fn regen_eval_fixture() {
+        use crate::ai::default_prefixes;
+        let golden = load_golden();
+        let baseline = load_baseline();
+        let cond = &baseline.conditions;
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let real = OpenAiEmbedder::new(
+            &live_embed_url(cond),
+            &cond.embedding_model,
+            cond.embedding_dim,
+            default_prefixes(&cond.embedding_model),
+        )
+        .unwrap();
+        let rec = Arc::new(RecordingEmbedder {
+            inner: real,
+            docs: Mutex::new(BTreeMap::new()),
+            queries: Mutex::new(BTreeMap::new()),
+        });
+        let embedder: Arc<dyn EmbeddingProvider> = rec.clone();
+
+        let vectors = Arc::new(
+            VectorIndex::open(root.join(".nexus/vectors.usearch"), cond.embedding_dim).unwrap(),
+        );
+        let db = index_corpus(&root, &golden.corpus, embedder.clone(), vectors.clone())
+            .await
+            .unwrap();
+        let report = run_eval(
+            db.reader(),
+            &vectors,
+            embedder.as_ref(),
+            &golden.cases,
+            cond.k,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            report.recall_at_k >= baseline.metrics.recall_at_k
+                && report.ndcg_at_k >= baseline.metrics.ndcg_at_k
+                && report.mrr >= baseline.metrics.mrr,
+            "live прогон НИЖЕ baseline — фикстуру не пишу: r={:.3} ndcg={:.3} mrr={:.3}",
+            report.recall_at_k,
+            report.ndcg_at_k,
+            report.mrr
+        );
+
+        let fixture = EvalFixture {
+            model: cond.embedding_model.clone(),
+            dim: cond.embedding_dim,
+            golden_hash: golden_hash(),
+            docs: rec.docs.lock().unwrap().clone(),
+            queries: rec.queries.lock().unwrap().clone(),
+        };
+        let json = serde_json::to_string_pretty(&fixture).unwrap();
+        std::fs::write("eval/fixture_bge_m3.json", json).unwrap();
+        eprintln!(
+            "\n=== fixture записана: {} чанков, {} запросов → eval/fixture_bge_m3.json ===\n\
+             r@{}={:.3} nDCG@{}={:.3} MRR={:.3}",
+            fixture.docs.len(),
+            fixture.queries.len(),
+            cond.k,
+            report.recall_at_k,
+            cond.k,
+            report.ndcg_at_k,
+            report.mrr
+        );
+    }
+
+    /// CI-ГЕЙТ на РЕАЛЬНОМ качестве bge-m3 БЕЗ живого сервера (обычный `cargo test`): воспроизводит
+    /// замороженные векторы фикстуры → `index_corpus`/`run_eval` → метрики ≥ baseline (AC-EVAL-3).
+    #[tokio::test]
+    async fn eval_fixture_meets_baseline() {
+        let baseline = load_baseline();
+        let cond = &baseline.conditions;
+        let golden = load_golden();
+        let fixture: EvalFixture =
+            serde_json::from_str(include_str!("../../eval/fixture_bge_m3.json"))
+                .expect("eval/fixture_bge_m3.json валиден");
+
+        // Guard: фикстура соответствует текущим golden/модели/dim — иначе пере-генерировать.
+        assert_eq!(
+            fixture.golden_hash,
+            golden_hash(),
+            "golden.json изменился — пере-генерируй: cargo test regen_eval_fixture -- --ignored"
+        );
+        assert_eq!(
+            fixture.model, cond.embedding_model,
+            "модель фикстуры != baseline"
+        );
+        assert_eq!(fixture.dim, cond.embedding_dim, "dim фикстуры != baseline");
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(ReplayEmbedder {
+            dim: fixture.dim,
+            docs: fixture.docs,
+            queries: fixture.queries,
+        });
+        let vectors = Arc::new(
+            VectorIndex::open(root.join(".nexus/vectors.usearch"), cond.embedding_dim).unwrap(),
+        );
+        let db = index_corpus(&root, &golden.corpus, embedder.clone(), vectors.clone())
+            .await
+            .unwrap();
+        let report = run_eval(
+            db.reader(),
+            &vectors,
+            embedder.as_ref(),
+            &golden.cases,
+            cond.k,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            report.recall_at_k >= baseline.metrics.recall_at_k,
+            "recall@{} {:.3} < baseline {:.3} (реальные векторы bge-m3, AC-EVAL-3)",
+            cond.k,
+            report.recall_at_k,
+            baseline.metrics.recall_at_k
+        );
+        assert!(
+            report.ndcg_at_k >= baseline.metrics.ndcg_at_k,
+            "nDCG@{} {:.3} < baseline {:.3}",
+            cond.k,
+            report.ndcg_at_k,
+            baseline.metrics.ndcg_at_k
+        );
+        assert!(
+            report.mrr >= baseline.metrics.mrr,
+            "MRR {:.3} < baseline {:.3}",
+            report.mrr,
+            baseline.metrics.mrr
+        );
+    }
+
     /// V4.5 — офлайн eval-ГЕЙТ на ФИКСИРОВАННЫХ синтетических векторах. Релевантные находятся по
     /// ВЕКТОРНОЙ близости (cosine): токенов запроса (QRY*) в телах НЕТ → FTS по ним пуст, поэтому
     /// ранжирование чисто векторное → пиннит проводку vector → RRF → метрики БЕЗ живого сервера.
@@ -439,9 +686,10 @@ mod tests {
         let root = dir.path().to_path_buf();
 
         // Эмбеддер и k — строго из условий baseline (AC-EVAL-4: прогон в зафиксированных условиях).
+        // URL сервера — из env `NEXUS_EMBED_URL` (если задан), иначе из baseline (сервер мог переехать).
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                &cond.embedding_server,
+                &live_embed_url(cond),
                 &cond.embedding_model,
                 cond.embedding_dim,
                 default_prefixes(&cond.embedding_model),
