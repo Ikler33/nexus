@@ -19,6 +19,8 @@ pub mod crash;
 pub mod db;
 /// «Дайджест изменений» (#35): первый LLM-kind планировщика (суммаризация недавних заметок).
 pub mod digest;
+/// Единый тип ошибки командного слоя (кросс-план #9): доменные ошибки через `?`, JS видит строку.
+pub mod error;
 /// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
 pub mod eval;
 /// git-sync (Фаза 3, §8): vault как git-репозиторий — фундамент (open/init, .gitignore, status).

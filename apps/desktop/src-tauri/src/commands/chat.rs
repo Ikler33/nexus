@@ -8,6 +8,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{build_chat_messages, build_rag_messages, injection_marker};
+use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
 use crate::state::AppState;
 
@@ -39,12 +40,11 @@ pub async fn chat_rag(
     k: Option<usize>,
     center: Option<String>,
     grounded: Option<bool>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let grounded = grounded.unwrap_or(true);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
     let (reader, vectors, embedder, chat) = {
-        let guard = state.vault.read().await;
-        let ctx = guard.as_ref().ok_or("vault не открыт")?;
+        let ctx = state.vault().await?;
         (
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
@@ -88,9 +88,7 @@ pub async fn chat_rag(
 
         // 2) Контекст из полного содержимого чанков (в порядке релевантности).
         let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
-        let texts = search::fetch_chunk_contexts(&reader, &ids)
-            .await
-            .map_err(|e| e.to_string())?;
+        let texts = search::fetch_chunk_contexts(&reader, &ids).await?;
         let contexts: Vec<(String, String)> = hits
             .iter()
             .filter_map(|h| texts.get(&h.chunk_id).cloned())
@@ -130,7 +128,7 @@ pub async fn chat_rag(
 
 /// Отменяет активный чат-стрим (если есть). Идемпотентно.
 #[tauri::command]
-pub async fn chat_cancel(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn chat_cancel(state: State<'_, AppState>) -> AppResult<()> {
     state.cancel_active_chat();
     Ok(())
 }

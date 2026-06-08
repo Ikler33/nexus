@@ -7,6 +7,7 @@ use std::path::Path;
 use tauri::State;
 
 use crate::ai::EmbeddingProvider;
+use crate::error::{AppError, AppResult};
 use crate::plugin::{self, ApiRequest, CapToken, PluginInfo, PluginSession};
 use crate::search;
 use crate::state::AppState;
@@ -15,29 +16,20 @@ use crate::vector::VectorIndex;
 
 /// Список установленных плагинов vault (`.nexus/plugins/*`) с их статусом совместимости.
 #[tauri::command]
-pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
-    let root = {
-        let guard = state.vault.read().await;
-        guard.as_ref().ok_or("vault не открыт")?.root.clone()
-    };
+pub async fn list_plugins(state: State<'_, AppState>) -> AppResult<Vec<PluginInfo>> {
+    let root = state.vault().await?.root.clone();
     let dir = root.join(".nexus").join("plugins");
     tokio::task::spawn_blocking(move || plugin::scan_plugins(&dir))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::Msg(e.to_string()))
 }
 
 /// Открывает сессию плагина (`.nexus/plugins/<dir>`): читает манифест, проверяет совместимость,
 /// заводит сессию с его scoped-правами в брокере и возвращает **capability-токен** (§7.9). Фронт
 /// передаёт токен с каждым `plugin_invoke`. Несовместимый/битый манифест → ошибка (не загружаем).
 #[tauri::command]
-pub async fn plugin_open_session(
-    state: State<'_, AppState>,
-    dir: String,
-) -> Result<String, String> {
-    let root = {
-        let guard = state.vault.read().await;
-        guard.as_ref().ok_or("vault не открыт")?.root.clone()
-    };
+pub async fn plugin_open_session(state: State<'_, AppState>, dir: String) -> AppResult<String> {
+    let root = state.vault().await?.root.clone();
     let manifest_path = root
         .join(".nexus")
         .join("plugins")
@@ -45,9 +37,9 @@ pub async fn plugin_open_session(
         .join("manifest.json");
     let json = tokio::fs::read_to_string(&manifest_path)
         .await
-        .map_err(|e| format!("manifest: {e}"))?;
-    let manifest =
-        plugin::load_manifest(&json, plugin::CORE_API_VERSION).map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::Msg(format!("manifest: {e}")))?;
+    let manifest = plugin::load_manifest(&json, plugin::CORE_API_VERSION)
+        .map_err(|e| AppError::Msg(e.to_string()))?;
 
     let session = PluginSession {
         id: manifest.id,
@@ -65,7 +57,7 @@ pub async fn plugin_open_session(
 /// Закрывает сессию плагина: мгновенно отзывает токен в брокере (§7.9). Вызывается фронтом при
 /// размонтировании плагина (закрытие панели/iframe) — иначе сессии копятся в брокере. Идемпотентно.
 #[tauri::command]
-pub async fn plugin_close_session(state: State<'_, AppState>, token: String) -> Result<(), String> {
+pub async fn plugin_close_session(state: State<'_, AppState>, token: String) -> AppResult<()> {
     let token = CapToken::from_ipc(token);
     state
         .plugins
@@ -87,7 +79,7 @@ pub async fn plugin_invoke(
     method: String,
     path: Option<String>,
     content: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> AppResult<serde_json::Value> {
     let token = CapToken::from_ipc(token);
 
     // Для `net.fetch` хост берём из URL (в `path`) — он нужен брокеру для allowlist-проверки.
@@ -124,8 +116,7 @@ pub async fn plugin_invoke(
     // отпускаем его ДО сетевого эмбеддинга (как в `search_content`). Текст/запрос — в `content`.
     if method.starts_with("ai.") {
         let (reader, vectors, embedder) = {
-            let guard = state.vault.read().await;
-            let ctx = guard.as_ref().ok_or("vault не открыт")?;
+            let ctx = state.vault().await?;
             (
                 ctx.db.reader().clone(),
                 ctx.vectors.clone(),
@@ -140,7 +131,8 @@ pub async fn plugin_invoke(
             &method,
             content.as_deref(),
         )
-        .await;
+        .await
+        .map_err(AppError::Msg);
     }
 
     // `net.fetch` — egress по allowlist (проверен брокером выше) + SSRF-гард: даже разрешённый хост
@@ -149,13 +141,15 @@ pub async fn plugin_invoke(
         let url = path.as_deref().ok_or("нет аргумента path (url)")?;
         let host = net_host.ok_or("некорректный URL")?;
         if crate::plugin::is_private_host(&host) {
-            return Err(format!("SSRF: приватный/loopback хост запрещён: {host}"));
+            return Err(format!("SSRF: приватный/loopback хост запрещён: {host}").into());
         }
-        return dispatch_net(url).await;
+        return dispatch_net(url).await.map_err(AppError::Msg);
     }
 
     // Реальный I/O — вне лока, через тестируемый dispatch.
-    dispatch_vault(&vault_root, &method, path.as_deref(), content.as_deref()).await
+    dispatch_vault(&vault_root, &method, path.as_deref(), content.as_deref())
+        .await
+        .map_err(AppError::Msg)
 }
 
 /// `net.fetch`: GET по уже авторизованному (allowlist) + SSRF-проверенному URL. Без следования
