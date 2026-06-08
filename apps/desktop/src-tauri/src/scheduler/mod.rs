@@ -216,6 +216,22 @@ pub async fn counts(reader: &ReadPool) -> DbResult<JobCounts> {
         .await
 }
 
+/// Есть ли активная (`pending`|`running`) джоба этого `kind` — для дедупа ручного запуска (нет двух
+/// одновременных дайджестов/поисков противоречий). Read-only.
+pub async fn has_active(reader: &ReadPool, kind: &str) -> DbResult<bool> {
+    let kind = kind.to_string();
+    reader
+        .query(move |c| {
+            let n: i64 = c.query_row(
+                "SELECT count(*) FROM jobs WHERE kind=?1 AND state IN ('pending','running')",
+                [kind],
+                |r| r.get(0),
+            )?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// Backpressure (S5): отложить заклеймленную джобу обратно в `pending` с новым `run_at`, **без** штрафа
 /// `attempts` (это не неудача, а уступка интерактивному LLM). Воркер так уступает дайджест, пока
 /// пользователь занят чатом/inline.

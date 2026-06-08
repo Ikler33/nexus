@@ -50,6 +50,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/005_digests.sql"),
         rebuild_fts: false,
     },
+    Migration {
+        version: 6,
+        name: "contradictions",
+        sql: include_str!("migrations/006_contradictions.sql"),
+        rebuild_fts: false,
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

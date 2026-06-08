@@ -81,6 +81,17 @@ pub async fn open_vault(
             ));
         registry.insert(crate::digest::KIND_DIGEST.to_string(), handler);
     }
+    // «Поиск противоречий» (#vision) — нужен chat И векторы (пары-кандидаты по эмбеддингам → судья).
+    if let (Some(chat), Some(vectors)) = (&chat, &vectors) {
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::contradictions::ContradictionHandler::new(
+                db.reader().clone(),
+                vectors.clone(),
+                chat.clone(),
+                db.writer().clone(),
+            ));
+        registry.insert(crate::contradictions::KIND_CONTRA.to_string(), handler);
+    }
     crate::scheduler::spawn_worker(db.writer().clone(), app, Arc::new(registry));
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
@@ -90,6 +101,17 @@ pub async fn open_vault(
             .unwrap_or(false)
     {
         let _ = crate::scheduler::enqueue(db.writer(), crate::digest::KIND_DIGEST, "", 0, 2).await;
+    }
+    // Поиск противоречий — run-if-overdue (нужны и chat, и векторы).
+    if chat.is_some()
+        && vectors.is_some()
+        && crate::contradictions::should_generate(db.reader())
+            .await
+            .unwrap_or(false)
+    {
+        let _ =
+            crate::scheduler::enqueue(db.writer(), crate::contradictions::KIND_CONTRA, "", 0, 2)
+                .await;
     }
 
     *state.vault.write().await = Some(VaultContext {
