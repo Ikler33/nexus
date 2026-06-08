@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Рефакторинг: декомпозиция `indexer/mod.rs` (кросс-план #28, Wave B)
+
+- **Файл-монолит разрезан по швам.** `indexer/mod.rs` (1302 строки) → когезивные подмодули:
+  `links` (резолв ссылок: `resolve_target`/`resolve_all_dangling`/`path_forms`), `fs` (обход vault +
+  нормализация путей/времени), `events` (watcher-петля `spawn` + `vault:changed`), `rag` (механика
+  эмбеддинга/reconcile/persist векторов как `impl Indexer`), `tests`. В `mod.rs` осталась оркестрация —
+  `Indexer`/`Rag`, конструкторы и 4 ядровых метода (`index_file`/`remove_file`/`rename_file`/
+  `scan_vault`): **1302 → 493 строки**.
+- Подмодули используют доступ дочернего модуля к приватным полям родителя (`Indexer.{writer,reader,
+  root,rag,force}`), методы — `pub(super)`; публичный контракт (`Indexer::*`, `indexer::spawn`)
+  сохранён через `pub use events::spawn`. Чистый рефактор, поведение 1-в-1: те же 164 теста + clippy
+  `-D warnings` + `test-all.sh` зелёные.
+
 ### Рефакторинг: типизированный `AppError` в командном слое (кросс-план #9, Wave B)
 
 - **Конец stringly-typed ошибкам команд.** Раньше каждая из ~30 IPC-команд возвращала `Result<T,

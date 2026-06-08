@@ -301,7 +301,7 @@
 
 **🟡 Wave B — фундамент (M/L, автономно, СТРОГИЙ порядок):**
 - ~~`#13` примитив rebuild FTS5/usearch в раннере миграций~~ **✅** (`rebuild_fts`-флаг на `Migration`)
-- ~~`#9` AppState-аксессоры + типизированный `AppError`~~ **✅** (`error::AppError` + `AppState::vault()`; см. журнал) · `#12` Rust integration-крейт (git_* непокрыты; нужна git-identity в CI) · `#28` декомпозиция `indexer/mod.rs` (1290 строк)
+- ~~`#9` AppState-аксессоры + типизированный `AppError`~~ **✅** (`error::AppError` + `AppState::vault()`; см. журнал) · `#12` Rust integration-крейт (git_* непокрыты; нужна git-identity в CI) · ~~`#28` декомпозиция `indexer/mod.rs`~~ **✅** (1302→493; подмодули links/fs/events/rag/tests)
 - `#10` выборочный git-стейдж по одобренным типам (defense-in-depth; дизайн списка типов — `themes/**`=JS) · `#22` пагинация `list_notes` · `#25` discriminated Buffer (под граф-во-вкладку) · ~~`#17` персист истории чата~~ **✅** · ~~`#27` DNS-rebinding гард plugin-fetch~~ **✅**
 - **perf-эпик строго:** `#14` реальный токенайзер → `#15` cross-file batching (L, ломает инвариант одной задачи) → `#6` квантизация
 - ~~`#11` LLM-настройки UI (11a форма + 11b hot-apply)~~ **✅** (раздел «AI / Модели» + hot-apply chat)
@@ -324,9 +324,13 @@
   `try_map`). 14 command-модулей сняты с `Result<T, String>`/`.map_err(to_string)` → `?`; внутренние
   хелперы (dispatch_*, get/set_setting, apply_ai) намеренно оставлены строковыми (тестируются прямо).
   Контракт фронта неизменен (JS видит строку). −68 строк, +4 теста, всё зелёное.
-- **Осталось автономно в Wave B:** `#12` integration-крейт (git_* + git-identity в CI), `#28`
-  декомпозиция `indexer/mod.rs` (1290 строк), `#22` пагинация `list_notes`, `#25` discriminated Buffer,
-  `#10` выборочный git-стейдж; perf-эпик `#14→#15→#6`; `#3` de-risk `tauri build`, `#18` per-path coverage.
+- **`#28` сделан** (декомпозиция `indexer/mod.rs`): 1302→493 строки, вынесены подмодули `links` (резолв
+  ссылок), `fs` (обход/пути/время), `events` (watcher-петля `spawn`), `rag` (механика векторов),
+  `tests`. Доступ дочерних модулей к приватным полям `Indexer`, методы `pub(super)`, `pub use
+  events::spawn`. Поведение 1-в-1, 164 теста зелёные.
+- **Осталось автономно в Wave B:** `#12` integration-крейт (git_* + git-identity в CI), `#22` пагинация
+  `list_notes`, `#25` discriminated Buffer, `#10` выборочный git-стейдж; perf-эпик `#14→#15→#6`;
+  `#3` de-risk `tauri build`, `#18` per-path coverage.
 
 ### 🏁 Сделано до кросс-плана (дневная сессия)
 граф v2d (#44), V2.2 rename (#45), V4.4 общий чат (#46), V4.3 анти-инъекция (#47), V4.5 eval-гейт (#48),
