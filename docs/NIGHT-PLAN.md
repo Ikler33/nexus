@@ -346,6 +346,14 @@
   медленно и иногда ПУСТОЙ ответ. Reasoning гасится `chat_template_kwargs:{enable_thinking:false}`
   (другие способы не работают). Отдельная быстрая модель НЕ обязательна.
 
+> ### ⚠️ НЕЗАКРЫТЫЕ ХВОСТЫ СЕССИИ 2026-06-09 (разобрать ПЕРВЫМ):
+> - **#91** (интеграционные тесты git-sync, #12) — PR ОТКРЫТ, не смержен: на windows-latest падал
+>   НЕ git-тест, а `eval_fixture_meets_baseline` (CRLF, см. ниже). После мержа CRLF-фикса: `git fetch`,
+>   пересоздать ветку от свежего origin/main (или rebase), дождаться ЗЕЛЁНОГО CI → `gh pr merge 91
+>   --squash --delete-branch -R Ikler33/nexus`. git_sync на Windows проходит — пробка только в eval.
+> - **CRLF-фикс** (PR #93, `track/60-eval-crlf`) — чинит красный main на Windows. Смержить ПЕРВЫМ на
+>   зелёном CI (особенно windows-latest). После — разблокирует #91.
+>
 > ### 🔴 СЛЕДУЮЩАЯ ЗАДАЧА ДЛЯ КРОНА (приоритет, есть AC+offline-тест):
 > Реализовать R1+R2 из `docs/reviews/LLM_FUNCTIONAL_REVIEW.md`:
 > - **R1** (`ai/chat.rs`): `reasoning_content: Option<String>` в `struct Delta`; в `parse_sse_delta`
