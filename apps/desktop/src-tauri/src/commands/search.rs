@@ -2,23 +2,16 @@
 
 use tauri::State;
 
+use crate::error::AppResult;
 use crate::search::{self, SearchFilter, SearchHit, SearchOptions};
 use crate::state::AppState;
 use crate::vault::NoteRef;
 
 /// Поиск заметок по подстроке (path/title/tags).
 #[tauri::command]
-pub async fn search_vault(
-    state: State<'_, AppState>,
-    query: String,
-) -> Result<Vec<NoteRef>, String> {
-    let reader = {
-        let guard = state.vault.read().await;
-        guard.as_ref().ok_or("vault не открыт")?.db.reader().clone()
-    };
-    search::search_notes(&reader, query)
-        .await
-        .map_err(|e| e.to_string())
+pub async fn search_vault(state: State<'_, AppState>, query: String) -> AppResult<Vec<NoteRef>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(search::search_notes(&reader, query).await?)
 }
 
 /// Гибридный поиск по ТЕЛУ заметок (вектор + FTS5 → RRF, §6.2). `limit` по умолчанию 10, потолок 50.
@@ -32,11 +25,10 @@ pub async fn search_content(
     folder: Option<String>,
     tag: Option<String>,
     center: Option<String>,
-) -> Result<Vec<SearchHit>, String> {
+) -> AppResult<Vec<SearchHit>> {
     // Снимаем нужное из контекста и отпускаем лок ДО сетевого эмбеддинга запроса.
     let (reader, vectors, embedder) = {
-        let guard = state.vault.read().await;
-        let ctx = guard.as_ref().ok_or("vault не открыт")?;
+        let ctx = state.vault().await?;
         (
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
@@ -49,13 +41,12 @@ pub async fn search_content(
         filter,
         center,
     };
-    search::hybrid_search(
+    Ok(search::hybrid_search(
         &reader,
         vectors.as_deref(),
         embedder.as_deref(),
         query,
         opts,
     )
-    .await
-    .map_err(|e| e.to_string())
+    .await?)
 }

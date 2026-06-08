@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 use crate::ai::{ChatProvider, EmbeddingProvider};
 use crate::db::Database;
+use crate::error::{AppError, AppResult};
 use crate::vector::VectorIndex;
 
 /// Состояние приложения: текущий открытый vault (или его отсутствие).
@@ -50,6 +51,22 @@ impl AppState {
             git_lock: tokio::sync::Mutex::new(()),
             interactive_llm: AtomicUsize::new(0),
         }
+    }
+
+    /// Контекст открытого vault — или [`AppError::NoVault`], если vault не открыт (кросс-план #9).
+    ///
+    /// Единая замена ручному `let g = state.vault.read().await; match g.as_ref() { Some(ctx) => …,
+    /// None => return Err(…) }`, разбросанному по командам. Результат — read-гард, спроецированный на
+    /// `VaultContext`; read-лок держится, пока жив гард:
+    /// - короткая операция → используем напрямую: `let ctx = state.vault().await?; … ctx.db …`;
+    /// - долгий `await` (стрим LLM) → клонируем хендлы в блоке и отпускаем гард, чтобы не блокировать
+    ///   запись в vault: `let chat = { state.vault().await?.chat.clone() };`.
+    ///
+    /// Команды, которые при отсутствии vault возвращают значение по умолчанию (а не ошибку), читают
+    /// `self.vault` напрямую — для них `?`-семантика не подходит.
+    pub async fn vault(&self) -> AppResult<RwLockReadGuard<'_, VaultContext>> {
+        let guard = self.vault.read().await;
+        RwLockReadGuard::try_map(guard, |o| o.as_ref()).map_err(|_| AppError::NoVault)
     }
 
     /// Помечает начало интерактивной LLM-операции (чат/inline); гард уменьшит счётчик на `Drop`.

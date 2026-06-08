@@ -7,6 +7,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{build_inline_messages, injection_marker, InlineMode};
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 /// Событие inline-стрима для фронта (дискриминированное по `type`, camelCase). Без `Sources`: inline
@@ -34,9 +35,9 @@ pub async fn inline_complete(
     mode: String,
     context: String,
     selection: Option<String>,
-) -> Result<(), String> {
-    let mode =
-        InlineMode::parse(&mode).ok_or_else(|| format!("неизвестный режим inline: {mode}"))?;
+) -> AppResult<()> {
+    let mode = InlineMode::parse(&mode)
+        .ok_or_else(|| AppError::Msg(format!("неизвестный режим inline: {mode}")))?;
 
     // Текст для обработки по режиму (D2): выделение для Rewrite/Summarize, текст до курсора для Continue.
     let payload = if mode.needs_selection() {
@@ -53,11 +54,7 @@ pub async fn inline_complete(
     };
 
     // Берём chat-провайдер и отпускаем лок ДО сетевого стрима.
-    let chat = {
-        let guard = state.vault.read().await;
-        let ctx = guard.as_ref().ok_or("vault не открыт")?;
-        ctx.chat.clone()
-    };
+    let chat = state.vault().await?.chat.clone();
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
     };
@@ -89,7 +86,7 @@ pub async fn inline_complete(
 
 /// Отменяет активный inline-стрим (если есть). Идемпотентно (AC-IL-6).
 #[tauri::command]
-pub async fn inline_cancel(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn inline_cancel(state: State<'_, AppState>) -> AppResult<()> {
     state.cancel_active_inline();
     Ok(())
 }
