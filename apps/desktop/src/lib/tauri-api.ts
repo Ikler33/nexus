@@ -130,6 +130,13 @@ export interface Digest {
   noteCount: number;
 }
 
+/** Сводка очереди планировщика для StatusBar (зеркалит Rust `scheduler::JobCounts`, ADR-007 срез 5). */
+export interface JobCounts {
+  pending: number;
+  running: number;
+  dead: number;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -317,6 +324,14 @@ export const tauriApi = {
      */
     generate: (): Promise<void> =>
       isTauri() ? invoke<void>('generate_digest') : Promise.resolve(),
+  },
+
+  scheduler: {
+    /** Счётчики джоб (pending/running/dead) для индикатора в StatusBar (ADR-007 срез 5). Вне Tauri — нули. */
+    counts: (): Promise<JobCounts> =>
+      isTauri()
+        ? invoke<JobCounts>('get_job_counts')
+        : Promise.resolve({ pending: 0, running: 0, dead: 0 }),
   },
 
   events: {

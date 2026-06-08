@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
-use crate::db::{DbResult, WriteActor};
+use crate::db::{DbResult, ReadPool, WriteActor};
 
 /// База экспоненциального backoff ретрая (сек) и потолок задержки.
 const BACKOFF_BASE_SECS: i64 = 30;
@@ -180,6 +180,57 @@ pub async fn gc_done(writer: &WriteActor, before: i64) -> DbResult<usize> {
         .await
 }
 
+/// Сводка очереди для StatusBar (S7/S8 — видимость состояния). `done` не считаем (их чистит gc).
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCounts {
+    /// Ожидают выполнения (в т.ч. отложенные backpressure'ом).
+    pub pending: i64,
+    /// Выполняются сейчас.
+    pub running: i64,
+    /// Исчерпали ретраи — видимый «мёртвый» (S7), нужен взгляд пользователя.
+    pub dead: i64,
+}
+
+/// Считает джобы по состояниям (для StatusBar N/M). Один GROUP BY — дёшево по `idx_jobs_claim`.
+pub async fn counts(reader: &ReadPool) -> DbResult<JobCounts> {
+    reader
+        .query(|c| {
+            let mut out = JobCounts::default();
+            let mut stmt = c.prepare(
+                "SELECT state, count(*) FROM jobs \
+                 WHERE state IN ('pending','running','dead') GROUP BY state",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (state, n) = row?;
+                match state.as_str() {
+                    "pending" => out.pending = n,
+                    "running" => out.running = n,
+                    "dead" => out.dead = n,
+                    _ => {}
+                }
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// Backpressure (S5): отложить заклеймленную джобу обратно в `pending` с новым `run_at`, **без** штрафа
+/// `attempts` (это не неудача, а уступка интерактивному LLM). Воркер так уступает дайджест, пока
+/// пользователь занят чатом/inline.
+pub async fn defer(writer: &WriteActor, id: i64, run_at: i64) -> DbResult<()> {
+    writer
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE jobs SET state='pending', run_at=?2, updated_at=?3 WHERE id=?1",
+                params![id, run_at, now_secs()],
+            )
+            .map(|_| ())
+        })
+        .await
+}
+
 // ── slice 2: движок диспатча ──────────────────────────────────────────────────────────────────
 
 /// Обработчик джобы конкретного kind. Реализация держит свои зависимости (db/embedder/chat).
@@ -187,6 +238,13 @@ pub async fn gc_done(writer: &WriteActor, before: i64) -> DbResult<usize> {
 pub trait JobHandler: Send + Sync {
     /// Выполнить джобу: `Ok` → `done`; `Err(msg)` → retry/dead (S7).
     async fn handle(&self, job: &Job) -> Result<(), String>;
+
+    /// Уступать ли эту джобу интерактивному LLM (S5 backpressure). `true` для тяжёлых фоновых
+    /// LLM-kind (дайджест/карта/противоречия) — пока идёт чат/inline, такие джобы откладываются.
+    /// `false` (по умолчанию) — лёгкие/не-LLM (gc) выполняются всегда.
+    fn defer_under_interactive(&self) -> bool {
+        false
+    }
 }
 
 /// Реестр обработчиков по `kind`.
@@ -194,13 +252,26 @@ pub type Registry = HashMap<String, Arc<dyn JobHandler>>;
 
 /// Прогоняет готовые джобы (claim → dispatch → complete/fail), не более `MAX_PER_TICK` за вызов.
 /// Неизвестный `kind` → `fail` (после ретраев — видимый `dead`). Возвращает число обработанных.
-pub async fn run_due(writer: &WriteActor, registry: &Registry, now: i64) -> DbResult<usize> {
+/// `busy` (S5) — идёт ли интерактивный LLM: тогда `defer_under_interactive`-джобы откладываются
+/// (`run_at = now + TICK`), не выполняются и не считаются обработанными (уступка чату/inline).
+pub async fn run_due(
+    writer: &WriteActor,
+    registry: &Registry,
+    now: i64,
+    busy: bool,
+) -> DbResult<usize> {
     let mut n = 0;
     while n < MAX_PER_TICK {
         let Some(job) = claim_next(writer, now).await? else {
             break;
         };
-        let result = match registry.get(&job.kind) {
+        let handler = registry.get(&job.kind);
+        // Backpressure (S5): уступаем тяжёлые LLM-джобы интерактиву → откладываем за текущий тик.
+        if busy && handler.is_some_and(|h| h.defer_under_interactive()) {
+            defer(writer, job.id, now + TICK_SECS as i64).await?;
+            continue; // run_at в будущем → этот же job в этом тике повторно не заклеймится
+        }
+        let result = match handler {
             Some(h) => h.handle(&job).await,
             None => Err(format!("неизвестный kind: {}", job.kind)),
         };
@@ -215,8 +286,10 @@ pub async fn run_due(writer: &WriteActor, registry: &Registry, now: i64) -> DbRe
 
 /// Воркер-луп (S1): tokio-interval опрашивает очередь и прогоняет готовые джобы. На старте — crash-
 /// recovery (S8). После продуктивного тика шлёт `jobs:changed` (для StatusBar — срез UI). Живёт, пока
-/// жив токен задачи (спавнится на vault-open — срез триггеров). Backpressure чата (S5) — с LLM-kind.
+/// жив токен задачи. **Backpressure (S5):** каждый тик снимает «занят ли интерактивный LLM» из
+/// `AppState` и уступает фоновые LLM-джобы, пока идёт чат/inline.
 pub fn spawn_worker(writer: WriteActor, app: tauri::AppHandle, registry: Arc<Registry>) {
+    use tauri::Manager;
     tokio::spawn(async move {
         if let Err(e) = requeue_running(&writer).await {
             tracing::warn!(error = %e, "scheduler crash-recovery failed");
@@ -224,7 +297,8 @@ pub fn spawn_worker(writer: WriteActor, app: tauri::AppHandle, registry: Arc<Reg
         let mut interval = tokio::time::interval(Duration::from_secs(TICK_SECS));
         loop {
             interval.tick().await;
-            match run_due(&writer, &registry, now_secs()).await {
+            let busy = app.state::<crate::state::AppState>().is_interactive_busy();
+            match run_due(&writer, &registry, now_secs(), busy).await {
                 Ok(n) if n > 0 => emit_jobs_changed(&app),
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
@@ -291,13 +365,17 @@ mod tests {
         (dir, db)
     }
 
-    /// Обработчик-счётчик (опц. падающий) для проверки диспатча.
+    /// Обработчик-счётчик (опц. падающий / уступающий интерактиву) для проверки диспатча.
     struct Counting {
         calls: Arc<AtomicUsize>,
         fail: bool,
+        defer: bool,
     }
     #[async_trait]
     impl JobHandler for Counting {
+        fn defer_under_interactive(&self) -> bool {
+            self.defer
+        }
         async fn handle(&self, _job: &Job) -> Result<(), String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail {
@@ -375,6 +453,7 @@ mod tests {
             Arc::new(Counting {
                 calls: calls.clone(),
                 fail: false,
+                defer: false,
             }),
         );
         reg.insert(
@@ -382,20 +461,75 @@ mod tests {
             Arc::new(Counting {
                 calls: calls.clone(),
                 fail: true,
+                defer: false,
             }),
         );
         enqueue(w, "ok", "", 0, 5).await.unwrap();
         enqueue(w, "bad", "", 0, 5).await.unwrap();
         enqueue(w, "ghost", "", 0, 1).await.unwrap(); // нет хендлера, max=1 → сразу dead
 
-        let n = run_due(w, &reg, 100).await.unwrap();
+        let n = run_due(w, &reg, 100, false).await.unwrap();
         assert_eq!(n, 3, "три готовые обработаны");
         assert_eq!(calls.load(Ordering::SeqCst), 2, "вызваны только ok+bad");
         // ok→done, bad→backoff (не готова), ghost→dead → готовых нет
         assert!(
-            run_due(w, &reg, 100).await.unwrap() == 0,
+            run_due(w, &reg, 100, false).await.unwrap() == 0,
             "повторно готовых нет"
         );
+    }
+
+    /// S5 backpressure: `defer_under_interactive`-джоба при `busy` откладывается (не выполняется,
+    /// не считается), при `!busy` — выполняется. Лёгкие джобы (defer=false) под busy идут как обычно.
+    #[tokio::test]
+    async fn run_due_defers_llm_job_under_interactive() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut reg: Registry = HashMap::new();
+        reg.insert(
+            "digest".into(),
+            Arc::new(Counting {
+                calls: calls.clone(),
+                fail: false,
+                defer: true,
+            }),
+        );
+        enqueue(w, "digest", "", 0, 5).await.unwrap();
+
+        // busy → отложена: handle не вызван, n=0, и в этом тике повторно не клеймится (run_at в будущем).
+        assert_eq!(run_due(w, &reg, 100, true).await.unwrap(), 0);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "под интерактивом не выполняется"
+        );
+        assert!(
+            claim_next(w, 100).await.unwrap().is_none(),
+            "отложена за текущий тик"
+        );
+
+        // не busy (позже, когда run_at наступил) → выполняется.
+        assert_eq!(run_due(w, &reg, 1000, false).await.unwrap(), 1);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "без интерактива выполнилась"
+        );
+    }
+
+    /// `counts` отражает состояния очереди для StatusBar (pending/running/dead).
+    #[tokio::test]
+    async fn counts_reports_states() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        enqueue(w, "a", "", 0, 5).await.unwrap(); // готовая → заклеймим в running
+        enqueue(w, "b", "", 1000, 5).await.unwrap(); // будущая → остаётся pending
+        let _running = claim_next(w, 100).await.unwrap().expect("a готова");
+
+        let c = counts(db.reader()).await.unwrap();
+        assert_eq!(c.running, 1, "a выполняется");
+        assert_eq!(c.pending, 1, "b ждёт");
+        assert_eq!(c.dead, 0);
     }
 
     /// Встроенный kind `gc` зарегистрирован в `default_registry`, прогоняется воркером и завершается
@@ -409,7 +543,7 @@ mod tests {
 
         enqueue(w, KIND_GC, "", 0, 3).await.unwrap();
         assert_eq!(
-            run_due(w, &reg, now_secs()).await.unwrap(),
+            run_due(w, &reg, now_secs(), false).await.unwrap(),
             1,
             "gc-джоба обработана"
         );

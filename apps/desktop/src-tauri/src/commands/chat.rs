@@ -105,7 +105,9 @@ pub async fn chat_rag(
         build_chat_messages(&question)
     };
 
-    // 3) Стриминг ответа в канал (с поддержкой отмены).
+    // 3) Стриминг ответа в канал (с поддержкой отмены). Помечаем интерактивную LLM-операцию (S5):
+    // планировщик уступит фоновые LLM-джобы (дайджест), пока идёт чат.
+    let _llm_busy = state.enter_interactive_llm();
     let cancel = state.begin_chat();
     let result = {
         let mut on_token = |t: String| {

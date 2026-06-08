@@ -1,7 +1,7 @@
 //! Глобальное состояние приложения (Tauri managed state).
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::RwLock;
@@ -26,6 +26,18 @@ pub struct AppState {
     /// sync-lock git-операций (§8): один синк/коммит за раз. `tokio::Mutex` — держится через `await`
     /// (захват до `spawn_blocking` с libgit2-I/O и до его завершения).
     pub git_lock: tokio::sync::Mutex<()>,
+    /// Счётчик активных ИНТЕРАКТИВНЫХ LLM-операций (чат + inline). Планировщик (S5) уступает фоновые
+    /// LLM-джобы (дайджест), пока он > 0 — чтобы пользовательский чат/inline не делил локальную модель
+    /// с фоном. Инкремент/декремент — RAII-гард [`AppState::enter_interactive_llm`].
+    pub interactive_llm: AtomicUsize,
+}
+
+/// RAII-гард активной интерактивной LLM-операции: на `Drop` уменьшает счётчик (S5 backpressure).
+pub struct InteractiveLlmGuard<'a>(&'a AtomicUsize);
+impl Drop for InteractiveLlmGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl AppState {
@@ -36,7 +48,20 @@ impl AppState {
             inline_cancel: Mutex::new(None),
             plugins: Mutex::new(crate::plugin::PluginBroker::new()),
             git_lock: tokio::sync::Mutex::new(()),
+            interactive_llm: AtomicUsize::new(0),
         }
+    }
+
+    /// Помечает начало интерактивной LLM-операции (чат/inline); гард уменьшит счётчик на `Drop`.
+    /// Планировщик уступает фоновые LLM-джобы, пока есть хоть одна (S5).
+    pub fn enter_interactive_llm(&self) -> InteractiveLlmGuard<'_> {
+        self.interactive_llm.fetch_add(1, Ordering::Relaxed);
+        InteractiveLlmGuard(&self.interactive_llm)
+    }
+
+    /// Идёт ли сейчас интерактивная LLM-операция (для backpressure планировщика, S5).
+    pub fn is_interactive_busy(&self) -> bool {
+        self.interactive_llm.load(Ordering::Relaxed) > 0
     }
 
     /// Взводит флаг отмены текущего чат-стрима (если есть).
