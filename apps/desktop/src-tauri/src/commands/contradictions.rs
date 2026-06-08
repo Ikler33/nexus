@@ -38,7 +38,7 @@ pub async fn generate_contradictions(state: State<'_, AppState>) -> Result<(), S
     if !ready {
         return Err("нужны chat (LLM) и эмбеддинги — настройте в «AI / Модели»".into());
     }
-    if scheduler::has_active(&reader, KIND_CONTRA)
+    if scheduler::has_ready_job(&reader, KIND_CONTRA, scheduler::now_secs())
         .await
         .map_err(|e| e.to_string())?
     {

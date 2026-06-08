@@ -92,7 +92,17 @@ pub async fn open_vault(
             ));
         registry.insert(crate::contradictions::KIND_CONTRA.to_string(), handler);
     }
-    crate::scheduler::spawn_worker(db.writer().clone(), app, Arc::new(registry));
+    // Recurring (slice 6): LLM-фичи сами переназначаются после прогона — авто-обновление раз в сутки
+    // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.
+    const DAY_SECS: i64 = 24 * 3600;
+    let mut recurring: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    if chat.is_some() {
+        recurring.insert(crate::digest::KIND_DIGEST.to_string(), DAY_SECS);
+    }
+    if chat.is_some() && vectors.is_some() {
+        recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
+    }
+    crate::scheduler::spawn_worker(db.writer().clone(), app, Arc::new(registry), recurring);
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
     if chat.is_some()

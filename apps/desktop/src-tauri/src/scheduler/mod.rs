@@ -216,18 +216,50 @@ pub async fn counts(reader: &ReadPool) -> DbResult<JobCounts> {
         .await
 }
 
-/// Есть ли активная (`pending`|`running`) джоба этого `kind` — для дедупа ручного запуска (нет двух
-/// одновременных дайджестов/поисков противоречий). Read-only.
-pub async fn has_active(reader: &ReadPool, kind: &str) -> DbResult<bool> {
+/// Есть ли **готовая или выполняющаяся** джоба этого `kind` (`running` ИЛИ `pending` с `run_at<=now`) —
+/// для дедупа ручного запуска. Будущая периодическая джоба (`run_at>now`) НЕ считается, чтобы ручной
+/// запуск всегда срабатывал немедленно, даже когда в очереди ждёт отложенный recurring (slice 6).
+pub async fn has_ready_job(reader: &ReadPool, kind: &str, now: i64) -> DbResult<bool> {
     let kind = kind.to_string();
     reader
         .query(move |c| {
             let n: i64 = c.query_row(
-                "SELECT count(*) FROM jobs WHERE kind=?1 AND state IN ('pending','running')",
-                [kind],
+                "SELECT count(*) FROM jobs WHERE kind=?1 \
+                 AND (state='running' OR (state='pending' AND run_at<=?2))",
+                params![kind, now],
                 |r| r.get(0),
             )?;
             Ok(n > 0)
+        })
+        .await
+}
+
+/// Recurring (slice 6): ставит следующий запуск `kind` на `run_at`, **только если** нет уже ожидающей
+/// (`pending`) джобы этого kind — анти-стакинг (одна будущая периодическая за раз). Атомарно (один
+/// write-actor). Так дайджест/поиск противоречий сами переназначаются после каждого прогона.
+pub async fn reschedule_if_absent(
+    writer: &WriteActor,
+    kind: &str,
+    run_at: i64,
+    max_attempts: i64,
+) -> DbResult<()> {
+    let kind = kind.to_string();
+    writer
+        .transaction(move |tx| {
+            let pending: i64 = tx.query_row(
+                "SELECT count(*) FROM jobs WHERE kind=?1 AND state='pending'",
+                [&kind],
+                |r| r.get(0),
+            )?;
+            if pending == 0 {
+                let ts = now_secs();
+                tx.execute(
+                    "INSERT INTO jobs(kind,payload,state,run_at,attempts,max_attempts,created_at,updated_at) \
+                     VALUES(?1,'','pending',?2,0,?3,?4,?4)",
+                    params![kind, run_at, max_attempts, ts],
+                )?;
+            }
+            Ok(())
         })
         .await
 }
@@ -270,11 +302,14 @@ pub type Registry = HashMap<String, Arc<dyn JobHandler>>;
 /// Неизвестный `kind` → `fail` (после ретраев — видимый `dead`). Возвращает число обработанных.
 /// `busy` (S5) — идёт ли интерактивный LLM: тогда `defer_under_interactive`-джобы откладываются
 /// (`run_at = now + TICK`), не выполняются и не считаются обработанными (уступка чату/inline).
+/// `recurring` (slice 6) — `kind → интервал(сек)`: после успешного прогона такой kind переназначается на
+/// `now + интервал` (анти-стакинг через `reschedule_if_absent`) → дайджест/противоречия «живут» сами.
 pub async fn run_due(
     writer: &WriteActor,
     registry: &Registry,
     now: i64,
     busy: bool,
+    recurring: &HashMap<String, i64>,
 ) -> DbResult<usize> {
     let mut n = 0;
     while n < MAX_PER_TICK {
@@ -292,7 +327,14 @@ pub async fn run_due(
             None => Err(format!("неизвестный kind: {}", job.kind)),
         };
         match result {
-            Ok(()) => complete(writer, job.id).await?,
+            Ok(()) => {
+                complete(writer, job.id).await?;
+                // Recurring (slice 6): переназначить следующий прогон (если ещё не запланирован).
+                if let Some(&interval) = recurring.get(&job.kind) {
+                    reschedule_if_absent(writer, &job.kind, now + interval, job.max_attempts)
+                        .await?;
+                }
+            }
             Err(e) => fail(writer, job.id, &e, now).await?,
         }
         n += 1;
@@ -304,7 +346,12 @@ pub async fn run_due(
 /// recovery (S8). После продуктивного тика шлёт `jobs:changed` (для StatusBar — срез UI). Живёт, пока
 /// жив токен задачи. **Backpressure (S5):** каждый тик снимает «занят ли интерактивный LLM» из
 /// `AppState` и уступает фоновые LLM-джобы, пока идёт чат/inline.
-pub fn spawn_worker(writer: WriteActor, app: tauri::AppHandle, registry: Arc<Registry>) {
+pub fn spawn_worker(
+    writer: WriteActor,
+    app: tauri::AppHandle,
+    registry: Arc<Registry>,
+    recurring: HashMap<String, i64>,
+) {
     use tauri::Manager;
     tokio::spawn(async move {
         if let Err(e) = requeue_running(&writer).await {
@@ -314,7 +361,7 @@ pub fn spawn_worker(writer: WriteActor, app: tauri::AppHandle, registry: Arc<Reg
         loop {
             interval.tick().await;
             let busy = app.state::<crate::state::AppState>().is_interactive_busy();
-            match run_due(&writer, &registry, now_secs(), busy).await {
+            match run_due(&writer, &registry, now_secs(), busy, &recurring).await {
                 Ok(n) if n > 0 => emit_jobs_changed(&app),
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
@@ -484,12 +531,12 @@ mod tests {
         enqueue(w, "bad", "", 0, 5).await.unwrap();
         enqueue(w, "ghost", "", 0, 1).await.unwrap(); // нет хендлера, max=1 → сразу dead
 
-        let n = run_due(w, &reg, 100, false).await.unwrap();
+        let n = run_due(w, &reg, 100, false, &HashMap::new()).await.unwrap();
         assert_eq!(n, 3, "три готовые обработаны");
         assert_eq!(calls.load(Ordering::SeqCst), 2, "вызваны только ok+bad");
         // ok→done, bad→backoff (не готова), ghost→dead → готовых нет
         assert!(
-            run_due(w, &reg, 100, false).await.unwrap() == 0,
+            run_due(w, &reg, 100, false, &HashMap::new()).await.unwrap() == 0,
             "повторно готовых нет"
         );
     }
@@ -513,7 +560,10 @@ mod tests {
         enqueue(w, "digest", "", 0, 5).await.unwrap();
 
         // busy → отложена: handle не вызван, n=0, и в этом тике повторно не клеймится (run_at в будущем).
-        assert_eq!(run_due(w, &reg, 100, true).await.unwrap(), 0);
+        assert_eq!(
+            run_due(w, &reg, 100, true, &HashMap::new()).await.unwrap(),
+            0
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
@@ -525,7 +575,12 @@ mod tests {
         );
 
         // не busy (позже, когда run_at наступил) → выполняется.
-        assert_eq!(run_due(w, &reg, 1000, false).await.unwrap(), 1);
+        assert_eq!(
+            run_due(w, &reg, 1000, false, &HashMap::new())
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
@@ -559,13 +614,76 @@ mod tests {
 
         enqueue(w, KIND_GC, "", 0, 3).await.unwrap();
         assert_eq!(
-            run_due(w, &reg, now_secs(), false).await.unwrap(),
+            run_due(w, &reg, now_secs(), false, &HashMap::new())
+                .await
+                .unwrap(),
             1,
             "gc-джоба обработана"
         );
         assert!(
             claim_next(w, now_secs() + 1).await.unwrap().is_none(),
             "gc завершилась (done), не ушла в retry/dead"
+        );
+    }
+
+    /// slice 6: recurring-kind после успешного прогона сам переназначается на `now+интервал`.
+    #[tokio::test]
+    async fn run_due_reschedules_recurring_kind() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut reg: Registry = HashMap::new();
+        reg.insert(
+            "digest".into(),
+            Arc::new(Counting {
+                calls,
+                fail: false,
+                defer: false,
+            }),
+        );
+        let recurring = HashMap::from([("digest".to_string(), 3600i64)]);
+        enqueue(w, "digest", "", 0, 5).await.unwrap();
+
+        // Прогон при now=100: выполнит + переназначит на 100+3600.
+        assert_eq!(run_due(w, &reg, 100, false, &recurring).await.unwrap(), 1);
+        // На now=100 готовых нет (следующая в будущем), а на now=4000 — готова снова.
+        assert!(
+            claim_next(w, 100).await.unwrap().is_none(),
+            "переназначено в будущее"
+        );
+        let next = claim_next(w, 4000)
+            .await
+            .unwrap()
+            .expect("recurring снова готов");
+        assert_eq!(next.kind, "digest");
+    }
+
+    /// slice 6: `reschedule_if_absent` не плодит дубли — при уже ожидающей джобе второй вызов no-op.
+    #[tokio::test]
+    async fn reschedule_if_absent_is_idempotent() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        reschedule_if_absent(w, "digest", 5000, 2).await.unwrap();
+        reschedule_if_absent(w, "digest", 6000, 2).await.unwrap(); // уже есть pending → no-op
+        let c = counts(db.reader()).await.unwrap();
+        assert_eq!(c.pending, 1, "одна ожидающая, не две");
+    }
+
+    /// slice 6: `has_ready_job` — true для готовой/выполняющейся, false для будущей (дедуп ручного пуска
+    /// не ломается о запланированный recurring).
+    #[tokio::test]
+    async fn has_ready_job_ignores_future() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        enqueue(w, "digest", "", 1000, 5).await.unwrap(); // будущая
+        assert!(
+            !has_ready_job(db.reader(), "digest", 100).await.unwrap(),
+            "будущая не считается готовой"
+        );
+        enqueue(w, "digest", "", 0, 5).await.unwrap(); // готовая
+        assert!(
+            has_ready_job(db.reader(), "digest", 100).await.unwrap(),
+            "готовая → дедуп срабатывает"
         );
     }
 }
