@@ -56,6 +56,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/006_contradictions.sql"),
         rebuild_fts: false,
     },
+    Migration {
+        version: 7,
+        name: "contradiction_cache",
+        sql: include_str!("migrations/007_contradiction_cache.sql"),
+        rebuild_fts: false,
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
