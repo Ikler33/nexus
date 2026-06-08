@@ -4,11 +4,12 @@
 //! таблица `contradictions`. Регистрируется ТОЛЬКО при наличии chat И векторов. Уступает интерактиву (S5).
 
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{injection_marker, ChatMessage, ChatProvider};
@@ -181,6 +182,82 @@ async fn store_all(writer: &WriteActor, items: Vec<Contradiction>) -> DbResult<(
         .await
 }
 
+/// Хэш сниппета (вход судьи) — ключ кэша CT-3: изменился сниппет → хэш другой → пере-судим.
+fn hash_snippet(s: &str) -> i64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish() as i64
+}
+
+/// CT-3: кэшированный вердикт пары `(hash_a, hash_b, contradiction, ctype, explanation)` или `None`.
+async fn cache_lookup(
+    reader: &ReadPool,
+    path_a: &str,
+    path_b: &str,
+) -> DbResult<Option<(i64, i64, bool, String, String)>> {
+    let (a, b) = (path_a.to_string(), path_b.to_string());
+    reader
+        .query(move |c| {
+            c.query_row(
+                "SELECT hash_a,hash_b,contradiction,ctype,explanation FROM contradiction_cache \
+                 WHERE path_a=?1 AND path_b=?2",
+                params![a, b],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)? != 0,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()
+        })
+        .await
+}
+
+/// CT-3: записать/обновить вердикт пары в кэш (по ключу путей).
+#[allow(clippy::too_many_arguments)]
+async fn cache_put(
+    writer: &WriteActor,
+    path_a: &str,
+    path_b: &str,
+    hash_a: i64,
+    hash_b: i64,
+    contradiction: bool,
+    ctype: &str,
+    explanation: &str,
+    judged_at: i64,
+) -> DbResult<()> {
+    let (a, b, ct, ex) = (
+        path_a.to_string(),
+        path_b.to_string(),
+        ctype.to_string(),
+        explanation.to_string(),
+    );
+    writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT OR REPLACE INTO contradiction_cache \
+                 (path_a,path_b,hash_a,hash_b,contradiction,ctype,explanation,judged_at) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    a,
+                    b,
+                    hash_a,
+                    hash_b,
+                    contradiction as i64,
+                    ct,
+                    ex,
+                    judged_at
+                ],
+            )
+            .map(|_| ())
+        })
+        .await
+}
+
 /// Список найденных противоречий (для UI), новейшие прогоны сверху по `created_at`.
 pub async fn list(reader: &ReadPool) -> DbResult<Vec<Contradiction>> {
     reader
@@ -266,24 +343,42 @@ impl JobHandler for ContradictionHandler {
             if a_snip.is_empty() || b_snip.is_empty() {
                 continue;
             }
-            let messages = build_judge_messages(&a, &a_snip, &b, &b_snip, &injection_marker());
-            let mut sink = |_t: String| {};
-            let cancel = Arc::new(AtomicBool::new(false));
-            let answer = self
-                .chat
-                .stream_chat(&messages, &mut sink, &cancel)
+            let (ha, hb) = (hash_snippet(&a_snip), hash_snippet(&b_snip));
+            // CT-3: если пара уже судилась на тех же сниппетах — переиспользуем вердикт (без LLM-вызова).
+            let cached = cache_lookup(&self.reader, &a, &b)
                 .await
                 .map_err(|e| e.to_string())?;
-            if let Some((is_contra, ctype, explanation)) = parse_judgment(&answer) {
-                if is_contra {
-                    found.push(Contradiction {
-                        path_a: a,
-                        path_b: b,
-                        ctype,
-                        explanation,
-                        created_at: now,
-                    });
+            let (is_contra, ctype, explanation) = match cached {
+                Some((cha, chb, contra, ctype, expl)) if cha == ha && chb == hb => {
+                    (contra, ctype, expl)
                 }
+                _ => {
+                    let messages =
+                        build_judge_messages(&a, &a_snip, &b, &b_snip, &injection_marker());
+                    let mut sink = |_t: String| {};
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    let answer = self
+                        .chat
+                        .stream_chat(&messages, &mut sink, &cancel)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    // Нераспознанный ответ кэшируем как «нет противоречия» — чтобы не пере-судить мусор.
+                    let v =
+                        parse_judgment(&answer).unwrap_or((false, "soft".into(), String::new()));
+                    cache_put(&self.writer, &a, &b, ha, hb, v.0, &v.1, &v.2, now)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    v
+                }
+            };
+            if is_contra {
+                found.push(Contradiction {
+                    path_a: a,
+                    path_b: b,
+                    ctype,
+                    explanation,
+                    created_at: now,
+                });
             }
         }
         // Прогон заменяет прошлый результат (даже если пусто — чистим устаревшее, AC-CT-4).
@@ -349,6 +444,27 @@ mod tests {
         }
         fn model_id(&self) -> &str {
             "fake"
+        }
+    }
+
+    /// Мок-судья со счётчиком вызовов — для проверки кэша (CT-3): второй прогон не должен звать LLM.
+    struct CountingJudge {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        resp: &'static str,
+    }
+    #[async_trait]
+    impl ChatProvider for CountingJudge {
+        async fn stream_chat(
+            &self,
+            _m: &[ChatMessage],
+            _on: &mut (dyn FnMut(String) + Send),
+            _c: &Arc<AtomicBool>,
+        ) -> AiResult<String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.resp.to_string())
+        }
+        fn model_id(&self) -> &str {
+            "counting"
         }
     }
 
@@ -430,6 +546,37 @@ mod tests {
         assert!(
             list(db.reader()).await.unwrap().is_empty(),
             "нет противоречий → набор заменён пустым (стейл вычищен)"
+        );
+    }
+
+    /// CT-3: второй прогон по неизменённым заметкам берёт вердикт из кэша — LLM не вызывается повторно.
+    #[tokio::test]
+    async fn cache_skips_llm_on_unchanged_pair() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (_d, db, vectors) = db_two_similar().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let judge = Arc::new(CountingJudge {
+            calls: calls.clone(),
+            resp: r#"{"contradiction": true, "type": "hard", "explanation": "x"}"#,
+        });
+        let h = ContradictionHandler::new(db.reader().clone(), vectors, judge, db.writer().clone());
+
+        h.handle(&dummy_job()).await.unwrap();
+        let after_first = calls.load(Ordering::SeqCst);
+        assert!(after_first >= 1, "на первом прогоне судья вызван");
+        assert_eq!(list(db.reader()).await.unwrap().len(), 1);
+
+        // Сниппеты не менялись → второй прогон попадает в кэш, без новых LLM-вызовов.
+        h.handle(&dummy_job()).await.unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            after_first,
+            "кэш CT-3 → без повторного LLM-вызова"
+        );
+        assert_eq!(
+            list(db.reader()).await.unwrap().len(),
+            1,
+            "противоречие всё ещё в наборе"
         );
     }
 }

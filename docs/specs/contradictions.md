@@ -43,7 +43,8 @@
 1. **CT-1 Бэкенд:** миграция `contradictions`; модуль (candidate_pairs · judge-промпт · parse · handler ·
    list) + команды; Rust-тесты (FakeChat).
 2. **CT-2 UI:** панель из титлбара + стор + `tauriApi.contradictions.*` + i18n + refetch по `jobs:changed`.
-3. **CT-3 (отложено):** кэш по контент-хэшу пар (не пере-судить неизменённое); действия разрешения.
+3. **CT-3 ✅ кэш** по хэшу сниппетов пар (`contradiction_cache`, миграция 007 — не пере-судим
+   неизменённое). Отложено: **действия** «разрешить/объединить/архив» + GC стейл-кэша (BACKLOG).
 
 ## 5. Зависимости
 - **Планировщик (ADR-007)** + **backpressure (S5)** — ✅. **bge-m3 эмбеддинги/usearch** — ✅ (`get_related_notes`).
