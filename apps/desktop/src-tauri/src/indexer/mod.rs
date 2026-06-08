@@ -1248,7 +1248,7 @@ mod tests {
     /// Живой end-to-end против nomic на :8081 (`cargo test -- --ignored`): индексируем два файла,
     /// семантический запрос про кошку находит чанк именно из cat.md (а не из физики).
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 127.0.0.1:8081"]
+    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
     async fn live_rag_index_and_semantic_search() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
@@ -1266,7 +1266,7 @@ mod tests {
         let db = open(&root).await;
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                "http://127.0.0.1:8081",
+                "http://192.168.0.29:8081",
                 "nomic-embed-text",
                 768,
                 default_prefixes("nomic-embed-text"),

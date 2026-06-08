@@ -533,7 +533,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                "http://127.0.0.1:8083",
+                "http://192.168.0.29:8083",
                 "bge-m3",
                 1024,
                 default_prefixes("bge-m3"),
@@ -631,7 +631,7 @@ mod tests {
         // 2) Полный пайплайн с живым эмбеддером bge-m3.
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                "http://127.0.0.1:8083",
+                "http://192.168.0.29:8083",
                 "bge-m3",
                 1024,
                 default_prefixes("bge-m3"),

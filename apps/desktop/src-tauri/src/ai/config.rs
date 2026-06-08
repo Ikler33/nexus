@@ -13,7 +13,7 @@ pub struct LocalConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AiConfig {
-    /// Chat-провайдер (Qwen3 и т.п.) — отдельный хост (ADR-005).
+    /// Chat-провайдер (Gemma и т.п.) — отдельный хост (ADR-005).
     pub chat: Option<ChatConfig>,
     /// Embedding-провайдер (мультиязычный) — отдельный хост (ADR-005).
     pub embedding: Option<EmbeddingConfig>,
@@ -53,18 +53,18 @@ mod tests {
         // Форма из ARCHITECTURE §5 (.nexus/local.json).
         let json = r#"{
           "ai": {
-            "chat":      { "url": "http://192.168.0.172:8080", "model": "qwen3", "context_window": 32768 },
-            "embedding": { "url": "http://127.0.0.1:8081", "model": "nomic-embed-text", "dim": 768 },
-            "reranker":  { "url": "http://127.0.0.1:8082", "enabled": false }
+            "chat":      { "url": "http://192.168.0.29:8080", "model": "gemma-4-26B-A4B-it", "context_window": 32768 },
+            "embedding": { "url": "http://192.168.0.29:8081", "model": "nomic-embed-text", "dim": 768 },
+            "reranker":  { "url": "http://192.168.0.29:8082", "enabled": false }
           },
           "sync": { "remote": null }
         }"#;
         let cfg = LocalConfig::parse(json).unwrap();
         let chat = cfg.ai.chat.unwrap();
-        assert_eq!(chat.url, "http://192.168.0.172:8080");
+        assert_eq!(chat.url, "http://192.168.0.29:8080");
         assert_eq!(chat.context_window, Some(32768));
         let emb = cfg.ai.embedding.unwrap();
-        assert_eq!(emb.url, "http://127.0.0.1:8081");
+        assert_eq!(emb.url, "http://192.168.0.29:8081");
         assert_eq!(emb.dim, Some(768));
     }
 

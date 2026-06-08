@@ -56,7 +56,7 @@ pub trait ChatProvider: Send + Sync {
     fn model_id(&self) -> &str;
 }
 
-/// Chat через OpenAI-совместимый `POST {base}/v1/chat/completions` (llama.cpp-server, Qwen).
+/// Chat через OpenAI-совместимый `POST {base}/v1/chat/completions` (llama.cpp-server, напр. Gemma).
 pub struct OpenAiChatProvider {
     client: reqwest::Client,
     endpoint: String,
@@ -421,12 +421,13 @@ mod tests {
         assert!(sm[1].content.contains("Суммируй"));
     }
 
-    /// Живой стриминг против Qwen на 192.168.0.172:8080 (`cargo test -- --ignored`).
+    /// Живой стриминг против Gemma на 192.168.0.29:8080 (`cargo test -- --ignored`).
     #[tokio::test]
-    #[ignore = "нужен chat-сервер на 192.168.0.172:8080"]
+    #[ignore = "нужен chat-сервер на 192.168.0.29:8080"]
     async fn live_chat_streams_tokens() {
         let provider =
-            OpenAiChatProvider::new("http://192.168.0.172:8080", "qwen3", Some(0.0)).unwrap();
+            OpenAiChatProvider::new("http://192.168.0.29:8080", "gemma-4-26B-A4B-it", Some(0.0))
+                .unwrap();
         let msgs = vec![ChatMessage::user("Ответь одним словом: столица Франции?")];
         let mut tokens = 0usize;
         let cancel = Arc::new(AtomicBool::new(false));
