@@ -34,8 +34,15 @@ export const useContradictionsStore = create<ContradictionsState>((set, get) => 
     try {
       const items = await tauriApi.contradictions.list();
       const { generating, baseline } = get();
-      const done = generating && stamp(items) !== baseline;
-      set({ items, loading: false, ...(done ? { generating: false } : {}) });
+      let stillGenerating = generating;
+      if (generating) {
+        const gotNew = stamp(items) !== baseline;
+        // Завершилось: новый прогон ИЛИ джоба больше не активна (упала/таймаут) → гасим «Ищу…».
+        if (gotNew || !(await tauriApi.scheduler.jobActive('contradictions'))) {
+          stillGenerating = false;
+        }
+      }
+      set({ items, loading: false, generating: stillGenerating });
     } catch {
       set({ loading: false });
     }

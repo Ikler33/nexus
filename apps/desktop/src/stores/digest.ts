@@ -35,9 +35,14 @@ export const useDigestStore = create<DigestState>((set, get) => ({
     try {
       const latest = await tauriApi.digest.latest();
       const { generating, baseline } = get();
-      // Пришёл дайджест свежее baseline → генерация завершилась.
-      const done = generating && latest != null && latest.createdAt !== baseline;
-      set({ latest, loading: false, ...(done ? { generating: false } : {}) });
+      let stillGenerating = generating;
+      if (generating) {
+        const gotNew = latest != null && latest.createdAt !== baseline;
+        // Завершилось: либо пришёл свежий дайджест, либо джоба больше не активна (упала/таймаут/no-op)
+        // — гасим «Генерирю…», чтобы кнопка не висела вечно при сбое (а не только при успехе).
+        if (gotNew || !(await tauriApi.scheduler.jobActive('digest'))) stillGenerating = false;
+      }
+      set({ latest, loading: false, generating: stillGenerating });
     } catch {
       set({ loading: false });
     }

@@ -99,6 +99,7 @@ pub fn run() {
             commands::contradictions::get_contradictions,
             commands::contradictions::generate_contradictions,
             commands::scheduler::get_job_counts,
+            commands::scheduler::job_active,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
             commands::settings::test_ai_connection,
