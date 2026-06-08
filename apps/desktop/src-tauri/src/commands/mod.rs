@@ -8,6 +8,7 @@ pub mod goals;
 pub mod graph;
 pub mod inline;
 pub mod plugin;
+pub mod scheduler;
 pub mod search;
 pub mod settings;
 pub mod suggest;

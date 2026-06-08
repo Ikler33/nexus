@@ -199,6 +199,9 @@
     "errNoText": "Place the cursor after some text — nothing to continue",
     "errNoSelection": "Select text for this action"
   },
+  "status": {
+    "jobsTitle": "Background tasks: {{running}} running · {{pending}} queued · {{dead}} failed"
+  },
   "plugins": {
     "title": "Plugins",
     "sandbox": "sandbox",

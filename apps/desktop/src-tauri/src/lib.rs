@@ -94,6 +94,7 @@ pub fn run() {
             commands::goals::list_goals,
             commands::digest::get_latest_digest,
             commands::digest::generate_digest,
+            commands::scheduler::get_job_counts,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
             commands::settings::test_ai_connection,

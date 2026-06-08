@@ -65,6 +65,8 @@ pub async fn inline_complete(
     let messages = build_inline_messages(mode, &payload, &injection_marker());
 
     // Стрим в канал с отменой: begin_inline отменяет прошлый inline-стрим (один активный, AC-IL-8).
+    // Помечаем интерактивную LLM-операцию (S5) — планировщик уступит фоновые LLM-джобы, пока идёт inline.
+    let _llm_busy = state.enter_interactive_llm();
     let cancel = state.begin_inline();
     let result = {
         let mut on_token = |t: String| {

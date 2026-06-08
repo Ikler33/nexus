@@ -152,6 +152,11 @@ impl DigestHandler {
 
 #[async_trait]
 impl JobHandler for DigestHandler {
+    /// Дайджест — тяжёлый фоновый LLM-проход: уступает интерактивному чату/inline (S5 backpressure).
+    fn defer_under_interactive(&self) -> bool {
+        true
+    }
+
     async fn handle(&self, _job: &Job) -> Result<(), String> {
         let since = now_secs() - WINDOW_SECS;
         let notes = recent_notes(&self.reader, since)
