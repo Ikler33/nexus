@@ -690,7 +690,7 @@ mod tests {
 
     /// Живой гибрид на nomic :8081: запрос БЕЗ лексических пересечений → решает вектор (семантика).
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 127.0.0.1:8081"]
+    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
     async fn live_hybrid_ranks_semantically() {
         use crate::ai::{default_prefixes, OpenAiEmbedder};
         let dir = TempDir::new().unwrap();
@@ -708,7 +708,7 @@ mod tests {
         let db = open_db(&root).await;
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                "http://127.0.0.1:8081",
+                "http://192.168.0.29:8081",
                 "nomic-embed-text",
                 768,
                 default_prefixes("nomic-embed-text"),

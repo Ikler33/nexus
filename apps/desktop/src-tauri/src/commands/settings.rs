@@ -179,10 +179,10 @@ mod tests {
         let mut doc = serde_json::json!({ "sync": { "remote": "x" } });
         let chat = EndpointDto {
             url: "http://h:8080".into(),
-            model: Some("qwen3".into()),
+            model: Some("gemma-4-26B-A4B-it".into()),
         };
         let emb = EndpointDto {
-            url: "http://127.0.0.1:8083".into(),
+            url: "http://192.168.0.29:8083".into(),
             model: Some("bge-m3".into()),
         };
         let changed = apply_ai(&mut doc, Some(&chat), Some(&emb)).unwrap();

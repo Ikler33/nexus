@@ -240,10 +240,10 @@ mod tests {
 
     /// Живой smoke против nomic на :8081 (запуск: `cargo test -- --ignored`). В CI пропускается.
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 127.0.0.1:8081"]
+    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
     async fn live_nomic_embeds_and_ranks_semantically() {
         let e = OpenAiEmbedder::new(
-            "http://127.0.0.1:8081",
+            "http://192.168.0.29:8081",
             "nomic-embed-text",
             768,
             Some(("search_query: ".into(), "search_document: ".into())),

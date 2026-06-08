@@ -359,7 +359,7 @@ mod tests {
     /// на коротких RU-текстах кучкует similarity высоко (зафиксированный риск ADR-005) — значима
     /// именно относительная близость. Векторы реальные (не mock).
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 127.0.0.1:8081"]
+    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
     async fn live_suggests_topically_similar() {
         use crate::ai::{default_prefixes, OpenAiEmbedder};
         let dir = TempDir::new().unwrap();
@@ -383,7 +383,7 @@ mod tests {
         let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             OpenAiEmbedder::new(
-                "http://127.0.0.1:8081",
+                "http://192.168.0.29:8081",
                 "nomic-embed-text",
                 768,
                 default_prefixes("nomic-embed-text"),
