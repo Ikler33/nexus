@@ -102,7 +102,16 @@ pub async fn open_vault(
     if chat.is_some() && vectors.is_some() {
         recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
     }
-    crate::scheduler::spawn_worker(db.writer().clone(), app, Arc::new(registry), recurring);
+    // On-change (slice 7): те же LLM-kind перезапускаются после правок vault (с дебаунсом).
+    let on_change: Vec<String> = recurring.keys().cloned().collect();
+    crate::scheduler::spawn_worker(
+        db.writer().clone(),
+        app,
+        Arc::new(registry),
+        recurring,
+        db.reader().clone(),
+        on_change,
+    );
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
     if chat.is_some()

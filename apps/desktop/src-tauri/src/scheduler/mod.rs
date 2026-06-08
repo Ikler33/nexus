@@ -26,6 +26,9 @@ const BACKOFF_MAX_SECS: i64 = 3600;
 const TICK_SECS: u64 = 5;
 /// Потолок джоб за один тик — анти-голодание (no silent caps: излишек растащится на следующие тики).
 const MAX_PER_TICK: usize = 64;
+/// On-change (S4, slice 7): сколько ждать «тишины» после правок vault перед перезапуском on-change-kind
+/// (дебаунс — чтобы пачка правок дала один прогон, а не сотню).
+const ONCHANGE_DEBOUNCE_SECS: i64 = 120;
 
 /// Джоба очереди планировщика.
 #[derive(Debug, Clone, Serialize)]
@@ -342,15 +345,78 @@ pub async fn run_due(
     Ok(n)
 }
 
+/// Максимальный `updated_at` среди не-удалённых заметок (0 — пусто) — индикатор «когда vault менялся
+/// в последний раз» для on-change-триггера (S4). Дёшево (индекс/скан столбца).
+pub async fn max_file_mtime(reader: &ReadPool) -> DbResult<i64> {
+    reader
+        .query(|c| {
+            c.query_row(
+                "SELECT COALESCE(MAX(updated_at),0) FROM files WHERE is_deleted=0",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+}
+
+/// Состояние детектора правок (on-change, S4): последний виденный `mtime` vault и момент незакрытого
+/// «всплеска» правок.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OnChangeState {
+    last_mtime: i64,
+    /// Когда впервые заметили новый `mtime` (ждём `ONCHANGE_DEBOUNCE_SECS` тишины). `None` — всплеска нет.
+    pending_since: Option<i64>,
+}
+
+/// Чистый шаг детектора правок: по новому `mtime` и `now` решает, пора ли перезапускать on-change-kind.
+/// Новый `mtime` → запоминаем всплеск; когда после него прошло ≥ дебаунса без новых правок → `fire=true`.
+/// Детерминированно (без часов внутри) → юнит-тестируемо.
+pub fn onchange_step(state: OnChangeState, mtime: i64, now: i64) -> (OnChangeState, bool) {
+    // Первый замер (last_mtime==0): просто запоминаем базу, не считаем правкой.
+    if state.last_mtime == 0 {
+        return (
+            OnChangeState {
+                last_mtime: mtime,
+                pending_since: None,
+            },
+            false,
+        );
+    }
+    if mtime > state.last_mtime {
+        // Новая правка → (пере)взводим всплеск, ждём тишины.
+        return (
+            OnChangeState {
+                last_mtime: mtime,
+                pending_since: Some(now),
+            },
+            false,
+        );
+    }
+    match state.pending_since {
+        Some(since) if now - since >= ONCHANGE_DEBOUNCE_SECS => (
+            // Тишина после правок выдержана → пора перезапускать; всплеск закрыт.
+            OnChangeState {
+                last_mtime: state.last_mtime,
+                pending_since: None,
+            },
+            true,
+        ),
+        _ => (state, false),
+    }
+}
+
 /// Воркер-луп (S1): tokio-interval опрашивает очередь и прогоняет готовые джобы. На старте — crash-
 /// recovery (S8). После продуктивного тика шлёт `jobs:changed` (для StatusBar — срез UI). Живёт, пока
 /// жив токен задачи. **Backpressure (S5):** каждый тик снимает «занят ли интерактивный LLM» из
-/// `AppState` и уступает фоновые LLM-джобы, пока идёт чат/inline.
+/// `AppState`. **On-change (S4, slice 7):** опрашивает `max_file_mtime`; когда после правок vault
+/// настала тишина (дебаунс), перезапускает `on_change`-kind (готовый job, дедуп `has_ready_job`).
 pub fn spawn_worker(
     writer: WriteActor,
     app: tauri::AppHandle,
     registry: Arc<Registry>,
     recurring: HashMap<String, i64>,
+    reader: ReadPool,
+    on_change: Vec<String>,
 ) {
     use tauri::Manager;
     tokio::spawn(async move {
@@ -358,10 +424,28 @@ pub fn spawn_worker(
             tracing::warn!(error = %e, "scheduler crash-recovery failed");
         }
         let mut interval = tokio::time::interval(Duration::from_secs(TICK_SECS));
+        let mut oc = OnChangeState::default();
         loop {
             interval.tick().await;
+            let now = now_secs();
             let busy = app.state::<crate::state::AppState>().is_interactive_busy();
-            match run_due(&writer, &registry, now_secs(), busy, &recurring).await {
+
+            // On-change (S4): правки vault → после тишины перезапустить on-change-kind.
+            if !on_change.is_empty() {
+                if let Ok(mtime) = max_file_mtime(&reader).await {
+                    let (next, fire) = onchange_step(oc, mtime, now);
+                    oc = next;
+                    if fire {
+                        for kind in &on_change {
+                            if !has_ready_job(&reader, kind, now).await.unwrap_or(true) {
+                                let _ = enqueue(&writer, kind, "", now, 2).await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            match run_due(&writer, &registry, now, busy, &recurring).await {
                 Ok(n) if n > 0 => emit_jobs_changed(&app),
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
@@ -685,5 +769,53 @@ mod tests {
             has_ready_job(db.reader(), "digest", 100).await.unwrap(),
             "готовая → дедуп срабатывает"
         );
+    }
+
+    /// slice 7: пустой vault → mtime 0.
+    #[tokio::test]
+    async fn max_file_mtime_empty_is_zero() {
+        let (_d, db) = open().await;
+        assert_eq!(max_file_mtime(db.reader()).await.unwrap(), 0);
+    }
+
+    /// slice 7: on-change-детектор дебаунсит всплеск правок и палит один раз после тишины.
+    #[test]
+    fn onchange_step_debounces_then_fires_once() {
+        let s0 = OnChangeState::default();
+        // Первый замер — база (не правка).
+        let (s1, f1) = onchange_step(s0, 1000, 100);
+        assert!(!f1);
+        assert_eq!(s1.last_mtime, 1000);
+        // Правка (mtime вырос) → взвели всплеск.
+        let (s2, f2) = onchange_step(s1, 1001, 200);
+        assert!(!f2);
+        assert_eq!(s2.pending_since, Some(200));
+        // До истечения дебаунса — молчим.
+        let (s3, f3) = onchange_step(s2, 1001, 200 + ONCHANGE_DEBOUNCE_SECS - 1);
+        assert!(!f3);
+        // Тишина выдержана → палим, всплеск закрыт.
+        let (s4, f4) = onchange_step(s3, 1001, 200 + ONCHANGE_DEBOUNCE_SECS);
+        assert!(f4);
+        assert_eq!(s4.pending_since, None);
+        // Без новых правок больше не палит.
+        let (_s5, f5) = onchange_step(s4, 1001, 200 + 10_000);
+        assert!(!f5);
+    }
+
+    /// slice 7: новая правка в окне дебаунса пере-взводит таймер (всплеск не закрывается раньше тишины).
+    #[test]
+    fn onchange_step_rearms_on_new_edit() {
+        let s = OnChangeState {
+            last_mtime: 1000,
+            pending_since: Some(100),
+        };
+        let (s2, fire) = onchange_step(s, 1005, 150); // правка до истечения дебаунса
+        assert!(!fire);
+        assert_eq!(
+            s2.pending_since,
+            Some(150),
+            "таймер пере-взведён на новую правку"
+        );
+        assert_eq!(s2.last_mtime, 1005);
     }
 }
