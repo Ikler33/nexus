@@ -1,6 +1,7 @@
 import type {
   BacklinkEntry,
   ChatStreamEvent,
+  Contradiction,
   Digest,
   FileEntry,
   FullGraph,
@@ -259,6 +260,26 @@ export function streamChat(
   return () => {
     cancelled = true;
   };
+}
+
+/** Мок «Противоречий» (#vision) для превью/тестов: пара примеров разных типов. */
+export async function getContradictions(): Promise<Contradiction[]> {
+  return [
+    {
+      pathA: 'Notes/Idea.md',
+      pathB: 'Notes/Meeting.md',
+      ctype: 'temporal',
+      explanation: 'В «Idea» план на Q1, в «Meeting» он уже перенесён на Q2 — одна заметка устарела.',
+      createdAt: 1_733_000_000,
+    },
+    {
+      pathA: 'Projects/Roadmap.md',
+      pathB: 'Projects/Alpha/Spec.md',
+      ctype: 'hard',
+      explanation: 'Roadmap обещает фичу X, спека Alpha явно выносит X из скоупа — прямое противоречие.',
+      createdAt: 1_733_000_000,
+    },
+  ];
 }
 
 /** Симуляция inline-стрима (IL-2) для превью/тестов: несколько токенов по режиму → done. */

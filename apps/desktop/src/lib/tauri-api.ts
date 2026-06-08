@@ -137,6 +137,15 @@ export interface JobCounts {
   dead: number;
 }
 
+/** Найденное противоречие (зеркалит Rust `contradictions::Contradiction`). `ctype` — hard|soft|temporal. */
+export interface Contradiction {
+  pathA: string;
+  pathB: string;
+  ctype: string;
+  explanation: string;
+  createdAt: number;
+}
+
 /** Обратная ссылка (зеркалит Rust `graph::BacklinkEntry`). */
 export interface BacklinkEntry {
   sourcePath: string;
@@ -332,6 +341,19 @@ export const tauriApi = {
       isTauri()
         ? invoke<JobCounts>('get_job_counts')
         : Promise.resolve({ pending: 0, running: 0, dead: 0 }),
+  },
+
+  contradictions: {
+    /** Найденные противоречия (или `[]`). #vision, спека `docs/specs/contradictions.md`. Вне Tauri — мок. */
+    list: (): Promise<Contradiction[]> =>
+      isTauri() ? invoke<Contradiction[]>('get_contradictions') : mockVault.getContradictions(),
+
+    /**
+     * Ставит поиск противоречий в очередь (воркер выполнит фоном). Требует chat + эмбеддинги; дедуп
+     * активной джобы. Завершение — по событию `jobs:changed`. Вне Tauri — no-op.
+     */
+    generate: (): Promise<void> =>
+      isTauri() ? invoke<void>('generate_contradictions') : Promise.resolve(),
   },
 
   events: {

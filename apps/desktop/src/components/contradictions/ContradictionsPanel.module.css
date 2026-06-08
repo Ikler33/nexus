@@ -1,0 +1,158 @@
+/* Панель «Поиск противоречий» (#vision): модалка со списком конфликтующих пар. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: var(--space-4);
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, 94vw);
+  max-height: min(700px, 86vh);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  overflow: hidden;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.spacer {
+  flex: 1;
+}
+.genBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-on-accent, white);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.genBtn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.genBtn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.iconBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.iconBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+.empty {
+  padding: var(--space-5);
+  color: var(--color-text-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+.error {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-danger, oklch(0.6 0.2 25));
+  font-size: var(--text-xs);
+  border-bottom: 1px solid var(--color-border);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.row {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}
+.row:hover {
+  background: var(--color-surface-hover);
+}
+.pair {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.note {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-link);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.note:hover {
+  text-decoration: underline;
+}
+.vs {
+  color: var(--color-text-faint);
+}
+.badge {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+.hard {
+  color: var(--color-danger, oklch(0.6 0.2 25));
+  border-color: currentColor;
+}
+.temporal {
+  color: var(--color-accent);
+  border-color: currentColor;
+}
+.soft {
+  color: var(--color-text-muted);
+}
+.explanation {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}

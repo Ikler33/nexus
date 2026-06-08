@@ -187,6 +187,21 @@
     "refresh": "Refresh",
     "close": "Close"
   },
+  "contradictions": {
+    "title": "Contradiction finder",
+    "loading": "Loading…",
+    "empty": "No contradictions found. Click “Find” — the model will compare topically close notes.",
+    "queued": "Search started — results will appear here once the model finishes.",
+    "generate": "Find",
+    "generating": "Searching…",
+    "refresh": "Refresh",
+    "close": "Close",
+    "type": {
+      "hard": "factual",
+      "soft": "soft",
+      "temporal": "outdated"
+    }
+  },
   "inline": {
     "continue": "Continue",
     "rewrite": "Rewrite",
@@ -262,6 +277,7 @@
     "view.sync": "Sync (git)",
     "view.goals": "Goals",
     "view.digest": "Changes digest",
+    "view.contradictions": "Contradiction finder",
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
     "view.settings": "Settings"
