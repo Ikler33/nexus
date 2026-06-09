@@ -85,20 +85,22 @@ pub async fn open_vault(
     // HOME-виджеты (H2-фундамент): реестр `key → kind планировщика, который его генерирует` — по нему
     // `refresh_widget` ставит джобу и дедупит. Наполняется ниже (H3+); пуст, если LLM не сконфигурирован.
     let mut widget_registry = crate::home::widgets::WidgetRegistry::new();
+    // Сток событий HOME-виджетов (H2: `home:widget-updated`) — один на vault, шарится дайджестом (H3) и
+    // stale-radar (H4). Конструируется всегда; используется только зарегистрированными виджетами.
+    let widget_sink: Arc<dyn crate::home::widgets::WidgetSink> =
+        Arc::new(crate::home::widgets::TauriWidgetSink(app.clone()));
     // Дайджест/судья — это примитивы: берут «быстрый» chat без reasoning (R2).
     if let Some(fast) = &chat_fast {
         // H3: дайджест недавних изменений — это HOME-виджет «Daily brief» (зона 2, on-open). После
         // генерации дайджест зеркалится в кэш `home_widgets` + событие `home:widget-updated`; виджет
         // бэкает тот же kind `digest` (одна генерация на обе поверхности — панель дайджеста и HOME).
-        let sink: Arc<dyn crate::home::widgets::WidgetSink> =
-            Arc::new(crate::home::widgets::TauriWidgetSink(app.clone()));
         let handler: Arc<dyn crate::scheduler::JobHandler> = Arc::new(
             crate::digest::DigestHandler::new(
                 db.reader().clone(),
                 fast.clone(),
                 db.writer().clone(),
             )
-            .with_home_widget(sink),
+            .with_home_widget(widget_sink.clone()),
         );
         registry.insert(crate::digest::KIND_DIGEST.to_string(), handler);
         widget_registry.register(crate::digest::KEY_DAILY_BRIEF, crate::digest::KIND_DIGEST);
@@ -115,6 +117,19 @@ pub async fn open_vault(
                 db.writer().clone(),
             ));
         registry.insert(crate::contradictions::KIND_CONTRA.to_string(), handler);
+    }
+    // «Stale radar» (H4) — слой 2: LLM-обогащение топ-N устаревших заметок (причина/действие/подсказка).
+    // Судья-подобный примитив → утилитарная `chat_util`. Manual-only (концепт: слой 1 on-open, слой 2
+    // вручную): без recurring/on-change/seed — джобу ставит только команда `refresh_stale_radar`.
+    if let Some(util) = &chat_util {
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::home::stale::StaleRadarHandler::new(
+                db.reader().clone(),
+                util.clone(),
+                db.writer().clone(),
+                widget_sink.clone(),
+            ));
+        registry.insert(crate::home::stale::KIND_STALE.to_string(), handler);
     }
     // Recurring (slice 6): LLM-фичи сами переназначаются после прогона — авто-обновление раз в сутки
     // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.

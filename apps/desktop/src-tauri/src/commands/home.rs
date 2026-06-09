@@ -5,6 +5,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
+use crate::home::stale::{self, StaleNote};
 use crate::home::widgets::{self, Widget};
 use crate::home::{self, HomeData};
 use crate::scheduler;
@@ -52,5 +53,42 @@ pub async fn refresh_widget(state: State<'_, AppState>, key: String) -> AppResul
         return Ok(()); // уже в очереди/выполняется — дедуп
     }
     scheduler::enqueue(&writer, &kind, "", 0, 2).await?;
+    Ok(())
+}
+
+/// «Stale radar» (H4): ранжированный список устаревших заметок. Слой 1 (скоринг) считается на лету;
+/// слой 2 (LLM-причина/действие/подсказка) приходит из кэша, если заметку уже обогащали. Мгновенно,
+/// on-open. Без открытого vault — пусто (панель просто не покажет).
+#[tauri::command]
+pub async fn get_stale_radar(state: State<'_, AppState>) -> AppResult<Vec<StaleNote>> {
+    let reader = {
+        let g = state.vault.read().await;
+        match g.as_ref() {
+            Some(ctx) => ctx.db.reader().clone(),
+            None => return Ok(Vec::new()),
+        }
+    };
+    Ok(stale::scan(&reader, scheduler::now_secs()).await?)
+}
+
+/// Ручной запуск LLM-обогащения «Stale radar» (слой 2, manual): топ-N устаревших → причина/действие/
+/// подсказка, кэш 24ч. Требует chat (LLM); дедуп активной джобы. Результат — событие `home:widget-updated`.
+#[tauri::command]
+pub async fn refresh_stale_radar(state: State<'_, AppState>) -> AppResult<()> {
+    let (writer, reader, has_chat) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.writer().clone(),
+            ctx.db.reader().clone(),
+            ctx.chat.is_some(),
+        )
+    };
+    if !has_chat {
+        return Err("chat (LLM) не сконфигурирован — настройте в «AI / Модели»".into());
+    }
+    if scheduler::has_ready_job(&reader, stale::KIND_STALE, scheduler::now_secs()).await? {
+        return Ok(()); // уже в очереди/выполняется — дедуп
+    }
+    scheduler::enqueue(&writer, stale::KIND_STALE, "", 0, 2).await?;
     Ok(())
 }

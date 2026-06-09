@@ -101,6 +101,8 @@ pub fn run() {
             commands::home::get_home_data,
             commands::home::get_widget,
             commands::home::refresh_widget,
+            commands::home::get_stale_radar,
+            commands::home::refresh_stale_radar,
             commands::digest::get_latest_digest,
             commands::digest::generate_digest,
             commands::contradictions::get_contradictions,
