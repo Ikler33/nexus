@@ -7,6 +7,7 @@ pub mod digest;
 pub mod git;
 pub mod goals;
 pub mod graph;
+pub mod home;
 pub mod inline;
 pub mod plugin;
 pub mod scheduler;

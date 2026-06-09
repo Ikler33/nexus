@@ -122,6 +122,20 @@ export interface GoalEntry {
   progress: number | null;
 }
 
+/** HOME-дашборд: статические/динамические виджеты (зеркалит Rust `home::HomeData`, H1). LLM-виджеты —
+ *  отдельным API (H2+, см. `docs/dev/HOME_BACKEND_PLAN.md`). Визуал строит дизайн-чат поверх этого. */
+export interface HomeStats {
+  notes: number;
+  tags: number;
+  links: number;
+  words: number;
+}
+export interface HomeData {
+  stats: HomeStats;
+  recent: NoteRef[];
+  goals: GoalEntry[];
+}
+
 /** Дайджест недавних изменений (зеркалит Rust `digest::Digest`, ADR-007 slice 4). Время — Unix-секунды. */
 export interface Digest {
   createdAt: number;
@@ -320,6 +334,19 @@ export const tauriApi = {
     /** Все заметки-цели (инлайн-тег `#goal`) с прогрессом (#35). Офлайн, без LLM. Вне Tauri — мок. */
     list: (): Promise<GoalEntry[]> =>
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
+  },
+
+  /** HOME-дашборд (бэкенд H1). Визуал собирает дизайн-чат поверх этого API. */
+  home: {
+    /** Статические/динамические данные HOME (stats/recent/goals) одним запросом, без LLM. Вне Tauri — пусто. */
+    data: (): Promise<HomeData> =>
+      isTauri()
+        ? invoke<HomeData>('get_home_data')
+        : Promise.resolve({
+            stats: { notes: 0, tags: 0, links: 0, words: 0 },
+            recent: [],
+            goals: [],
+          }),
   },
 
   digest: {

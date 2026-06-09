@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### HOME-дашборд (бэкенд H1): статические/динамические виджеты
+
+- Команда `get_home_data` → `{ stats, recent, goals }` для статических/динамических зон HOME (концепт
+  `PKM_Home_Concepts.md`, зоны 2–3): счётчики базы (заметки/теги/связи/слова), недавние (топ-8 по
+  `updated_at`), прогресс целей (`#goal`). Чистый SQL, без LLM/кэша. Фронт — `tauriApi.home.data()`.
+- Визуал HOME собирается отдельно (дизайн-чат) поверх этого API; LLM-виджеты + кэш/refresh — H2+ (план
+  `docs/dev/HOME_BACKEND_PLAN.md`). +тест агрегации.
+
 ### LLM R1 (backend): живая сводка размышлений reasoning-модели в чате
 
 - gemma в RAG-чате — reasoning-модель: до ответа идёт долгий chain-of-thought, а UI всё это время молчал
