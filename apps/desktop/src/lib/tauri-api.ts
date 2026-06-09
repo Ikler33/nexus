@@ -136,6 +136,18 @@ export interface HomeData {
   goals: GoalEntry[];
 }
 
+/** Кэшированный LLM-виджет HOME (зеркалит Rust `home::widgets::Widget`, H2). `content` непрозрачен
+ *  (текст/JSON — парсит конкретный виджет). `stale` — vault менялся с момента генерации (кэш устарел);
+ *  `status` — `ready` (контент валиден) | `error` (последний refresh упал, показан прежний контент). */
+export interface Widget {
+  key: string;
+  content: string;
+  generatedAt: number;
+  sourceHash: number;
+  status: string;
+  stale: boolean;
+}
+
 /** Дайджест недавних изменений (зеркалит Rust `digest::Digest`, ADR-007 slice 4). Время — Unix-секунды. */
 export interface Digest {
   createdAt: number;
@@ -336,7 +348,7 @@ export const tauriApi = {
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
   },
 
-  /** HOME-дашборд (бэкенд H1). Визуал собирает дизайн-чат поверх этого API. */
+  /** HOME-дашборд (бэкенд H1/H2). Визуал собирает дизайн-чат поверх этого API. */
   home: {
     /** Статические/динамические данные HOME (stats/recent/goals) одним запросом, без LLM. Вне Tauri — пусто. */
     data: (): Promise<HomeData> =>
@@ -347,6 +359,16 @@ export const tauriApi = {
             recent: [],
             goals: [],
           }),
+
+    /** Кэшированный LLM-виджет по ключу (или `null`, если ещё не генерировался). Мгновенно — НЕ ждёт
+     *  LLM (генерация фоном; готовность — событие `home:widget-updated`). H2. Вне Tauri — `null`. */
+    widget: (key: string): Promise<Widget | null> =>
+      isTauri() ? invoke<Widget | null>('get_widget', { key }) : Promise.resolve(null),
+
+    /** Ручной refresh виджета (manual): ставит фоновую генерацию в очередь (требует зарегистрированный
+     *  виджет; дедуп активной джобы). Завершение — событие `home:widget-updated`. H2. Вне Tauri — no-op. */
+    refresh: (key: string): Promise<void> =>
+      isTauri() ? invoke<void>('refresh_widget', { key }) : Promise.resolve(),
   },
 
   digest: {
@@ -405,6 +427,16 @@ export const tauriApi = {
     onJobsChanged: async (cb: () => void): Promise<() => void> => {
       if (!isTauri()) return () => {};
       return listen('jobs:changed', () => cb());
+    },
+
+    /**
+     * Подписка на «HOME-виджет обновился» (backend `emit("home:widget-updated", key)` после записи кэша
+     * виджета — H2). Колбэк получает ключ виджета → фронт перечитывает его `tauriApi.home.widget(key)`.
+     * Возвращает функцию отписки. Вне Tauri — no-op (мок-бэкенд не генерирует виджеты).
+     */
+    onWidgetUpdated: async (cb: (key: string) => void): Promise<() => void> => {
+      if (!isTauri()) return () => {};
+      return listen<string>('home:widget-updated', (e) => cb(e.payload));
     },
   },
 

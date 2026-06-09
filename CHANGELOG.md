@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### HOME-дашборд (бэкенд H2): кэш LLM-виджетов + refresh-режимы (фундамент)
+
+- Таблица-кэш `home_widgets` (миграция 008, `key → content, generated_at, source_hash, status`): LLM-виджеты
+  дашборда генерируются ФОНОМ (планировщик ADR-007) и читаются мгновенно из кэша — модель никогда не
+  блокирует загрузку HOME (концепт `PKM_Home_Concepts.md` §«Принципы»). Инвалидация по правкам vault:
+  `source_hash` = `max_file_mtime` на момент генерации; текущий mtime больше ⇒ виджет `stale`.
+- Фреймворк `home::widgets`: трейт `WidgetGenerator` (конкретный виджет генерит контент) → обобщённый kind
+  планировщика `WidgetHandler` (снять mtime → сгенерировать → положить в кэш → уведомить фронт) → трейт
+  `WidgetSink` (Tauri-эмиттер `home:widget-updated`, в тестах — заглушка). Refresh-режимы поверх ADR-007:
+  on-open (`is_overdue` run-if-overdue), scheduled (recurring), on-change, manual. Ошибка генерации
+  помечает кэш `error` (прежний удачный контент сохраняется), Err проброшен планировщику (ретрай/dead, S7).
+- Команды `get_widget(key)` (кэш, мгновенно; вне vault — `null`) и `refresh_widget(key)` (ручной refresh:
+  ставит фон-джобу `home_widget:<key>`, дедуп активной, проверка зарегистрированного ключа). Фронт —
+  `tauriApi.home.widget(key)` / `tauriApi.home.refresh(key)` + событие `tauriApi.events.onWidgetUpdated`.
+- Фундамент: конкретные LLM-виджеты (Daily brief — H3, Stale radar — H4, Open questions/Context drift — H5)
+  регистрируются в `open_vault` поверх этого слоя. +юнит-тесты (генерация/кэш/событие, stale-инвалидация,
+  run-if-overdue, ошибка→статус/сохранение контента, реестр ключей).
+
 ### HOME-дашборд (бэкенд H1): статические/динамические виджеты
 
 - Команда `get_home_data` → `{ stats, recent, goals }` для статических/динамических зон HOME (концепт
