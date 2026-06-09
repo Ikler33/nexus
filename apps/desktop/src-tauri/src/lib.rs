@@ -118,6 +118,7 @@ pub fn run() {
             commands::plugin::plugin_close_session,
             commands::git::git_status,
             commands::git::git_commit,
+            commands::git::git_commit_paths,
             commands::git::git_set_token,
             commands::git::git_clear_token,
             commands::git::git_has_token,

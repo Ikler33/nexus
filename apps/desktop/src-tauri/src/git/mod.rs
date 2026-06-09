@@ -7,6 +7,7 @@
 
 pub mod creds;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use git2::{Repository, StatusOptions};
@@ -214,11 +215,28 @@ impl GitSync {
         &self.root
     }
 
-    /// Авто-коммит: стейджит все не-игнорируемые изменения, **сканирует содержимое на секреты**
-    /// (AC-SEC-3) — при находке коммит НЕ делается; иначе коммитит с авто-сообщением. Идемпотентно
-    /// (нет изменений → `NothingToCommit`). Удаления тоже учитываются (`update_all`).
+    /// Авто-коммит ВСЕХ не-игнорируемых изменений (как раньше). Делегирует в [`Self::commit_selected`].
     pub fn commit_all(&self) -> GitResult<CommitOutcome> {
-        let status = self.status()?;
+        self.commit_selected(None)
+    }
+
+    /// Выборочный коммит (#10): стейджит и коммитит ТОЛЬКО `paths` (пересечение с реальными изменениями
+    /// из `status`); прочие изменения остаются НЕ закоммиченными (видны в следующем `status`). Secret-scan
+    /// — по коммитимым файлам (секрет в НЕвыбранном файле не блокирует). Пустое пересечение (нечего из
+    /// выбранного коммитить / устаревший выбор) → `NothingToCommit`. Пути — как в `status` (рел. от корня).
+    pub fn commit_paths(&self, paths: &[String]) -> GitResult<CommitOutcome> {
+        self.commit_selected(Some(paths))
+    }
+
+    /// Ядро коммита: стейджит изменения (все при `select=None`, иначе только пути из `select`),
+    /// **сканирует коммитимое на секреты** (AC-SEC-3) — при находке коммит НЕ делается; иначе коммитит с
+    /// авто-сообщением. Идемпотентно (нечего коммитить → `NothingToCommit`).
+    fn commit_selected(&self, select: Option<&[String]>) -> GitResult<CommitOutcome> {
+        let mut status = self.status()?;
+        if let Some(sel) = select {
+            let set: HashSet<&str> = sel.iter().map(String::as_str).collect();
+            status.retain(|e| set.contains(e.path.as_str()));
+        }
         if status.is_empty() {
             return Ok(CommitOutcome::NothingToCommit);
         }
@@ -244,10 +262,30 @@ impl GitSync {
             return Ok(CommitOutcome::BlockedBySecrets { findings: secrets });
         }
 
-        // Стейдж: add_all (new/modified, уважает .gitignore) + update_all (удаления tracked-файлов).
+        // Стейдж.
         let mut index = self.repo.index()?;
-        index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
-        index.update_all(["*"].iter(), None)?;
+        match select {
+            // Выборочно: индекс к HEAD (не тащим случайно застейдженное/невыбранное), затем только
+            // выбранные пути: существующие → add_path, удалённые → remove_path.
+            Some(_) => {
+                if let Ok(tree) = self.repo.head().and_then(|h| h.peel_to_tree()) {
+                    index.read_tree(&tree)?;
+                }
+                for e in &status {
+                    let p = Path::new(&e.path);
+                    if e.kind == ChangeKind::Deleted {
+                        index.remove_path(p)?;
+                    } else {
+                        index.add_path(p)?;
+                    }
+                }
+            }
+            // Всё: add_all (new/modified, уважает .gitignore) + update_all (удаления tracked-файлов).
+            None => {
+                index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+                index.update_all(["*"].iter(), None)?;
+            }
+        }
         index.write()?;
         let tree = self.repo.find_tree(index.write_tree()?)?;
 
@@ -669,6 +707,75 @@ mod tests {
         }
         // Секрет не закоммичен → всё ещё в статусе.
         assert!(git.status().unwrap().iter().any(|e| e.path == "leak.md"));
+    }
+
+    /// #10: выборочный коммит стейджит ТОЛЬКО выбранные пути; прочее остаётся; устаревший выбор → no-op.
+    #[test]
+    fn commit_paths_stages_only_selected() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let git = GitSync::open_or_init(root).unwrap();
+        git.ensure_gitignore().unwrap();
+        std::fs::write(root.join("a.md"), "# A").unwrap();
+        std::fs::write(root.join("b.md"), "# B").unwrap();
+
+        // Коммитим только a.md → b.md и .gitignore остаются не закоммиченными.
+        match git.commit_paths(&["a.md".into()]).unwrap() {
+            CommitOutcome::Committed { files, .. } => assert_eq!(files, 1, "только a.md"),
+            other => panic!("ожидали Committed, получили {other:?}"),
+        }
+        let pending: Vec<String> = git.status().unwrap().into_iter().map(|e| e.path).collect();
+        assert!(!pending.contains(&"a.md".to_string()), "a.md закоммичен");
+        assert!(pending.contains(&"b.md".to_string()), "b.md остался");
+        assert!(
+            pending.iter().any(|p| p == ".gitignore"),
+            ".gitignore остался"
+        );
+
+        // Устаревший / несовпавший выбор → нечего коммитить.
+        assert_eq!(
+            git.commit_paths(&["ghost.md".into()]).unwrap(),
+            CommitOutcome::NothingToCommit
+        );
+    }
+
+    /// #10: выборочный коммит коммитит удаление; секрет в НЕвыбранном файле не блокирует, в выбранном — да.
+    #[test]
+    fn commit_paths_handles_delete_and_scopes_secret_scan() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let git = GitSync::open_or_init(root).unwrap();
+        git.ensure_gitignore().unwrap();
+        std::fs::write(root.join("keep.md"), "# keep").unwrap();
+        std::fs::write(root.join("drop.md"), "# drop").unwrap();
+        git.commit_all().unwrap(); // обе в истории
+
+        // Удаляем drop.md и кладём секрет в keep.md.
+        std::fs::remove_file(root.join("drop.md")).unwrap();
+        std::fs::write(
+            root.join("keep.md"),
+            "ключ: sk-ABCDEFGHIJKLMNOPQRSTUVWX1234567890",
+        )
+        .unwrap();
+
+        // Выбор только удаления drop.md → секрет в keep.md (не выбран) НЕ блокирует.
+        match git.commit_paths(&["drop.md".into()]).unwrap() {
+            CommitOutcome::Committed { files, .. } => assert_eq!(files, 1, "удаление закоммичено"),
+            other => panic!("ожидали Committed, получили {other:?}"),
+        }
+        assert!(!root.join("drop.md").exists());
+        assert!(
+            git.status().unwrap().iter().any(|e| e.path == "keep.md"),
+            "правка keep.md ещё не закоммичена"
+        );
+
+        // Теперь выбор keep.md с секретом → блок (коммит не сделан).
+        match git.commit_paths(&["keep.md".into()]).unwrap() {
+            CommitOutcome::BlockedBySecrets { findings } => {
+                assert!(findings.iter().any(|f| f.path == "keep.md"));
+            }
+            other => panic!("ожидали BlockedBySecrets, получили {other:?}"),
+        }
     }
 
     #[test]
