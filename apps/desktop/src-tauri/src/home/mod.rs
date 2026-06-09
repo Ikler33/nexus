@@ -4,6 +4,7 @@
 //! + refresh-режимы поверх планировщика ADR-007. Конкретные LLM-виджеты (daily brief / stale radar / …)
 //! — отдельными срезами H3+ (см. `docs/dev/HOME_BACKEND_PLAN.md`).
 
+pub mod insights;
 pub mod stale;
 pub mod widgets;
 

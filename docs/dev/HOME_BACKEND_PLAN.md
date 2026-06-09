@@ -59,6 +59,11 @@ E2E; `#16` egress-ADR/web-агент; vision→AC (умные шаблоны / N
   (причина/действие/подсказка), кэш `stale_cache` (миграция 009) 24ч + инвалидация по `source_mtime`,
   команда `refresh_stale_radar`, событие `home:widget-updated`.
 - **H5 — Open questions** (LLM, manual) + **Context drift** (LLM, scheduled). На `chat_util`/`chat_fast`.
+  **✅ реализовано** (`home::insights`, первые генераторы на фреймворке H2): Open questions — последние 20
+  заметок → JSON `[{question,path}]` (путь валидируется), kind `home_widget:open_questions`, manual;
+  Context drift — фокус vs цели (`#goal`/`#priority`) → абзац, kind `home_widget:context_drift`, recurring
+  раз/сутки + on-open (`is_overdue`), НЕ on-change. Хелперы `tauriApi.home.openQuestions()`/`contextDrift()`.
+  **HOME-бэкенд H1–H5 закрыт.**
 
 Каждый срез — отдельный линейный PR со своим тестом + CHANGELOG. Мерж только на зелёном CI вручную.
 
