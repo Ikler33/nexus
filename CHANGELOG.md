@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Тесты: интеграционный крейт git-sync (кросс-план #12, Wave B)
+
+- **git-sync покрыт end-to-end как внешний потребитель.** Новый `tests/git_sync.rs` (отдельная
+  cargo-цель, линкуется с `nexus_desktop_lib`) — 3 теста: (1) локальный flow commit/status + secret-scan
+  блокирует коммит; (2) реальный сетевой round-trip `push` → клон → `pull` fast-forward; (3) расхождение
+  историй → `MergeRequired`. Закрывает пробел unit-тестов `git/mod.rs`: `pull`/`push`/fast-forward/
+  `MergeRequired` раньше не покрывались (нужен был remote).
+- Remote — **локальный bare-репозиторий**: для local-транспорта libgit2 не дёргает credentials-callback,
+  поэтому в CI **не нужны ни сеть, ни git-identity** (`GitSync::signature()` ставит дефолтную подпись).
+  `git2` добавлен в `dev-dependencies` (теми же фичами → без второй сборки libgit2).
+
 ### Eval: CI-гейт на РЕАЛЬНОМ качестве bge-m3 без живого сервера (AC-EVAL-3)
 
 - **Реальные эмбеддинги bge-m3 заморожены в фикстуру** `eval/fixture_bge_m3.json` (18 чанков + 10

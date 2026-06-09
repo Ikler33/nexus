@@ -301,7 +301,7 @@
 
 **🟡 Wave B — фундамент (M/L, автономно, СТРОГИЙ порядок):**
 - ~~`#13` примитив rebuild FTS5/usearch в раннере миграций~~ **✅** (`rebuild_fts`-флаг на `Migration`)
-- ~~`#9` AppState-аксессоры + типизированный `AppError`~~ **✅** (`error::AppError` + `AppState::vault()`; см. журнал) · `#12` Rust integration-крейт (git_* непокрыты; нужна git-identity в CI) · ~~`#28` декомпозиция `indexer/mod.rs`~~ **✅** (1302→493; подмодули links/fs/events/rag/tests)
+- ~~`#9` AppState-аксессоры + типизированный `AppError`~~ **✅** (`error::AppError` + `AppState::vault()`; см. журнал) · ~~`#12` Rust integration-крейт git-sync~~ **✅** (`tests/git_sync.rs`: push/pull/FF/MergeRequired через локальный bare-remote; git-identity НЕ нужна) · ~~`#28` декомпозиция `indexer/mod.rs`~~ **✅** (1302→493; подмодули links/fs/events/rag/tests)
 - `#10` выборочный git-стейдж по одобренным типам (defense-in-depth; дизайн списка типов — `themes/**`=JS) · `#22` пагинация `list_notes` · `#25` discriminated Buffer (под граф-во-вкладку) · ~~`#17` персист истории чата~~ **✅** · ~~`#27` DNS-rebinding гард plugin-fetch~~ **✅**
 - **perf-эпик строго:** `#14` реальный токенайзер → `#15` cross-file batching (L, ломает инвариант одной задачи) → `#6` квантизация
 - ~~`#11` LLM-настройки UI (11a форма + 11b hot-apply)~~ **✅** (раздел «AI / Модели» + hot-apply chat)
