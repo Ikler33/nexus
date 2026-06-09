@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### git-sync (#10): выборочный коммит (selective staging)
+
+- Команда `git_commit_paths(paths)` + метод `GitSync::commit_paths` — коммитит **только выбранные пути**
+  (из `git_status`), а не всё-или-ничего (`git_commit`/`commit_all` без изменений). Под капотом — общее
+  ядро `commit_selected(Option<&[paths]>)`: при выборе индекс сбрасывается к HEAD, затем стейджатся
+  только выбранные (`add_path` для новых/изменённых, `remove_path` для удалённых) → прочие изменения
+  остаются не закоммиченными (видны в следующем `status`). **Secret-scan скоупится по коммитимым** —
+  секрет в НЕвыбранном файле не блокирует; устаревший/пустой выбор → `nothing-to-commit`.
+- Фронт — `tauriApi.git.commitPaths(paths)`. +юнит-тесты (только выбранное; удаление + скоуп secret-scan)
+  и интеграционный (внешний потребитель `commit_paths`). UI-пикер файлов — фронт/дизайн-чат. `test-all.sh`
+  зелёный.
+
 ### Тест-инфра (#18): per-module coverage-ратчет (TESTING_STRATEGY §6 / AC-Q-2)
 
 - CI-джоба «Coverage (Rust)» теперь, помимо глобального floor, проверяет **per-path покрытие критичных

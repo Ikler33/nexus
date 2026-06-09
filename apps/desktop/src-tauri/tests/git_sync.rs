@@ -145,3 +145,26 @@ fn divergent_history_signals_merge_required() {
         "расходящиеся истории → MergeRequired"
     );
 }
+
+/// #10 (внешний потребитель): выборочный коммит `commit_paths` стейджит только выбранный путь;
+/// прочие изменения остаются не закоммиченными.
+#[test]
+fn selective_commit_stages_only_chosen_paths() {
+    let v = TempDir::new().unwrap();
+    let git = GitSync::open_or_init(v.path()).unwrap();
+    git.ensure_gitignore().unwrap();
+    fs::write(v.path().join("a.md"), "# A\n").unwrap();
+    fs::write(v.path().join("b.md"), "# B\n").unwrap();
+
+    let out = git.commit_paths(&["a.md".to_string()]).unwrap();
+    assert!(
+        matches!(out, CommitOutcome::Committed { files: 1, .. }),
+        "закоммичен ровно один файл (a.md)"
+    );
+    let pending: Vec<String> = git.status().unwrap().into_iter().map(|e| e.path).collect();
+    assert!(
+        pending.iter().any(|p| p == "b.md"),
+        "b.md остался не закоммичен"
+    );
+    assert!(!pending.iter().any(|p| p == "a.md"), "a.md закоммичен");
+}

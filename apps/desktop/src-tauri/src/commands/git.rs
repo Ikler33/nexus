@@ -48,6 +48,24 @@ pub async fn git_commit(state: State<'_, AppState>) -> AppResult<CommitOutcome> 
     .map_err(join_err)?
 }
 
+/// Выборочный коммит (#10): коммитит ТОЛЬКО переданные пути (из `git_status`), а не всё-или-ничего.
+/// Secret-scan по коммитимым файлам; устаревший/пустой выбор → `nothing-to-commit`. Под sync-локом.
+#[tauri::command]
+pub async fn git_commit_paths(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> AppResult<CommitOutcome> {
+    let root = vault_root(&state).await?;
+    let _lock = state.git_lock.lock().await;
+    tokio::task::spawn_blocking(move || -> AppResult<CommitOutcome> {
+        let git = GitSync::open_or_init(&root)?;
+        git.ensure_gitignore()?;
+        Ok(git.commit_paths(&paths)?)
+    })
+    .await
+    .map_err(join_err)?
+}
+
 /// Сохранить токен доступа к remote в системном keychain (Ф3-3b, AC-SEC-3): на диск НЕ пишется.
 /// Аккаунт записи — путь vault (разные vault → разные токены). keychain-I/O синхронный → spawn_blocking.
 #[tauri::command]

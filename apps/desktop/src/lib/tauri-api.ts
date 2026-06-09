@@ -588,6 +588,11 @@ export const tauriApi = {
     commit: (): Promise<GitCommitOutcome> =>
       isTauri() ? invoke<GitCommitOutcome>('git_commit') : mockGit.commit(),
 
+    /** Выборочный коммит (#10): коммитит ТОЛЬКО выбранные пути (из `git.status()`), а не всё-или-ничего.
+     *  Secret-scan по выбранным; устаревший/пустой выбор → `nothing-to-commit`. Вне Tauri — мок. */
+    commitPaths: (paths: string[]): Promise<GitCommitOutcome> =>
+      isTauri() ? invoke<GitCommitOutcome>('git_commit_paths', { paths }) : mockGit.commit(),
+
     /** Сохранить токен доступа к remote в системном keychain (на диск не пишется). Ф3-3b. */
     setToken: (token: string): Promise<void> =>
       isTauri() ? invoke<void>('git_set_token', { token }) : mockGit.setToken(token),
