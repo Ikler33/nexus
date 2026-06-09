@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### ADR: egress-контроль ядра — web-аддендум + фундамент-спека (#16, doc-first)
+
+- **ARCHITECTURE.md §0** (ADR-005-ext): добавлен **web-эгресс-аддендум** (решения владельца W1–W4,
+  2026-06-10) — web-агент (3-й режим чата «Web» через self-hosted SearXNG с цитатами), News Feed
+  (RSS/API → keyword→LLM → vault, scheduled), cloud-fallback как новые `EgressFeature::{Web,NewsFeed,
+  CloudFallback}` поверх фундамента E1–E10: SearXNG-host — consent-on-save (W2), жёсткие лимиты v1 —
+  ≤3 поиска/чат-ход, News Feed раз/сутки, body-cap ~2 MB, timeout 20 с (W3), outbound `scan_secrets`
+  перед отправкой (W4), `allow_private=false` + DNS-rebinding-гард для web; tool-use заблокирован до
+  untrusted-канала. Фикс §4.3-фантома `AIClient` (тонкий фасад `{chat,embedder,policy}`; cloud_fallback/
+  guard_first_token помечены «план, вне ADR»).
+- **AC-EGR-1..14** в `ACCEPTANCE.md` (+ traceability `pending`) — критерии egress-фундамента. Дев-дока со
+  срезами — `docs/dev/net.md` (срез 1 фундамент `net::GuardedClient`, срез 2 UI/контроль, срез 3 cloud,
+  срез 4 web/News Feed). Doc-first: реализация фундамента — следующим срезом.
+
 ### git-sync (#10): выборочный коммит (selective staging)
 
 - Команда `git_commit_paths(paths)` + метод `GitSync::commit_paths` — коммитит **только выбранные пути**

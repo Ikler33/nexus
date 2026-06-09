@@ -99,6 +99,23 @@
 - **AC-SEC-7** Prompt-injection: заметка с `</note>`/«ignore previous instructions» не ломает контекст и не управляет suggest (разделители + валидация JSON-ответа).
 - **AC-SEC-8** (опц.) При включённом at-rest шифровании `nexus.db` нечитаема без ключа из keychain.
 
+### Egress-контроль ядра (ADR-005-ext, решения владельца E1–E10)
+
+- **AC-EGR-1** Единственный конструктор HTTP-клиента ядра — `net::guarded_client`; CI-grep-линт падает при `reqwest::Client::builder()`/`core_client_builder()` вне `net/`. **WHITELIST:** (а) сам `net/`; (б) явное исключение `dispatch_net` (`commands/plugin.rs`, своя политика, миграция вне скоупа) с комментарием-обоснованием.
+- **AC-EGR-2** Host вне allowlist → `EgressDenied::HostNotAllowed`, **0 сетевых коннектов** (отказ ДО сокета; юнит + интеграция с мок-listener, который обязан НЕ принять соединение).
+- **AC-EGR-3** kill-switch=«офлайн» блокирует эгресс на **публичный** хост ДО сокета; LAN/loopback (local-first) при «офлайн» работают (E2).
+- **AC-EGR-4** Каждый вызов (успех И отказ) → ровно одна неотключаемая запись `{feature, host, bytes_out?, decision}`; журнал **append-only**, `record()` приватный, публичны только `entries()`/`len()`/`is_empty()`; host через `Redacted` (Debug не печатает); без полного URL/тела.
+- **AC-EGR-5** Per-feature opt-in: выключенная фича → `FeatureNotEnabled`, audit `allowed=false`; включение → проходит. Отключение cloud-фичи не трогает локальный chat.
+- **AC-EGR-6** `test_ai_connection` (GET) и `probe_dim` идут через `guarded_client`: url вне allowlist → `Denied` ДО сети, НЕ reqwest-ошибка (закрывает «первый egress-вектор»).
+- **AC-EGR-7** `redirect=none` сохранён после рефактора: тест `core_client_does_not_follow_redirects` зелёный + кейс `302→169.254.169.254` через guarded-клиент.
+- **AC-EGR-8** `is_private_host` **НЕ дублируется**: ровно одно `fn is_private_host`; `net/` импортирует из ре-экспорта (`plugin/mod.rs`). Metadata-блок — **отдельный** предикат рядом (не реюз, не нарушает это AC).
+- **AC-EGR-9** Local-first smoke: чистый `local.json` работает с локальным LLM (`127.0.0.1`/`192.168.x` для Chat/Embed/Probe не блокируются) без клика по сети; vault/редактор/поиск живут при kill-switch=«офлайн» (AI отключается, ядро живёт).
+- **AC-EGR-10** `bytes_out` best-effort `Option`: для не-стрим post — `Some(Content-Length)`; для стрима — `None`/`Some(len(messages))`. Явно: тело **запроса**, не ответ.
+- **AC-EGR-11** Взведённый «офлайн» рвёт активный chat-стрим, **ВЗВОДЯ существующий `chat_cancel`** (`cancel_active_chat`), переиспользуя per-chunk `cancel.load()` (`chat.rs`). Никакого нового механизма отмены.
+- **AC-EGR-12** Metadata `169.254.169.254` → `Denied` **ВСЕГДА** (отдельный предикат `blocks_cloud_metadata`), даже если `is_private_host`==true для LAN (E7).
+- **AC-EGR-13** Composition-root: фасад `AIClient { chat, embedder, policy }` строится в `build_rag`/`build_chat`, один `policy`; hot-swap chat переустанавливает уже-guarded клиент, cold embedder сохраняется.
+- **AC-EGR-14** No-silent-caps (зависит от #9 typed errors, сделан): любой отказ → структурированная причина (enum `EgressDenied`), без `reqwest`/`error sending request` в backend-результате; i18n-рендер RU+EN — отдельным фронт-срезом.
+
 ---
 
 ## 4. Производительность (раздел 10) — пороги pass/fail
