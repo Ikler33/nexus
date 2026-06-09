@@ -179,12 +179,16 @@ export interface FullGraph {
 }
 
 /**
- * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`).
- * Порядок: `sources` → много `token` → `done` (или `error`).
+ * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`, camelCase).
+ * Порядок: `sources` → (для reasoning-модели — живые `reasoningSummary`/`reasoning`) → много `token`
+ * → `done` (или `error`). `reasoning` — сырой chain-of-thought (спойлер), `reasoningSummary` —
+ * короткая живая сводка CoT («💭 …», R1); оба могут не приходить (non-reasoning модель).
  */
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'token'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'reasoningSummary'; text: string }
   | { type: 'done'; full: string }
   | { type: 'error'; message: string };
 

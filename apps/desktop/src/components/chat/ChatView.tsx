@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { type ChatMessage, useChatStore } from '../../stores/chat';
@@ -56,11 +57,38 @@ export function ChatView() {
     setInput('');
   };
 
+  // Клик по suggestion-pill в пустом состоянии — сразу отправляет готовый вопрос.
+  const ask = (q: string) => {
+    if (streaming) return;
+    atBottom.current = true;
+    send(q, center ?? undefined);
+  };
+
+  const pills = [t('chat.ask1'), t('chat.ask2'), t('chat.ask3')];
+
   return (
     <>
       <div className={styles.feed} ref={feedRef} onScroll={onScroll}>
         {messages.length === 0 ? (
-          <p className={styles.empty}>{t('chat.empty')}</p>
+          <div className={styles.emptyState}>
+            <div className={styles.emptyGlyph} aria-hidden>
+              <Sparkles size={24} />
+            </div>
+            <div className={styles.emptyTitle}>{t('chat.emptyTitle')}</div>
+            <p className={styles.empty}>{t('chat.empty')}</p>
+            <div className={styles.suggestPills}>
+              {pills.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={styles.suggestPill}
+                  onClick={() => ask(p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : (
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
             {virtualizer.getVirtualItems().map((vItem) => (
@@ -140,6 +168,19 @@ export function ChatView() {
           </button>
         )}
       </form>
+
+      <div className={styles.composerFoot}>
+        {streaming ? (
+          <span className={styles.footStatus}>
+            <span className={styles.footPulse} aria-hidden />
+            {t('chat.thinking')}
+          </span>
+        ) : (
+          <span className={styles.footHint}>
+            <kbd className={styles.kbd}>↵</kbd> {t('chat.hintSend')}
+          </span>
+        )}
+      </div>
     </>
   );
 }
@@ -155,13 +196,23 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
         <p className={styles.error}>{t('chat.error', { message: message.error })}</p>
       ) : (
         <>
+          {message.reasoning && (
+            <details className={styles.reasoning}>
+              <summary className={styles.reasoningToggle}>{t('chat.reasoningLabel')}</summary>
+              <div className={styles.reasoningBody}>{message.reasoning}</div>
+            </details>
+          )}
+          {message.streaming && message.reasoningSummary && (
+            <div className={styles.liveSummary}>💭 {message.reasoningSummary}</div>
+          )}
           {message.content ? (
             <div className={styles.answer}>
               {message.content}
               {message.streaming && <span className={styles.caret} aria-hidden />}
             </div>
           ) : (
-            message.streaming && <div className={styles.thinking}>{t('chat.thinking')}</div>
+            message.streaming &&
+            !message.reasoningSummary && <div className={styles.thinking}>{t('chat.thinking')}</div>
           )}
           {message.sources && message.sources.length > 0 && (
             <ul className={styles.sources} aria-label={t('chat.sources')}>

@@ -22,6 +22,10 @@ export interface ChatMessage {
   streaming?: boolean;
   /** Текст ошибки (retrieve/LLM), если стрим завершился неудачно. */
   error?: string;
+  /** Сырой chain-of-thought reasoning-модели (R1) — для спойлера «развернуть». НЕ персистится. */
+  reasoning?: string;
+  /** Живая короткая сводка размышления («💭 …», R1), обновляется по ходу стрима. НЕ персистится. */
+  reasoningSummary?: string;
 }
 
 interface ChatState {
@@ -65,7 +69,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     try {
       const msgs = get()
         .messages.slice(-MAX_PERSISTED)
-        .map((m) => ({ ...m, streaming: false }));
+        // Сырой CoT/сводку не персистим: live-индикатор эфемерен, raw CoT может быть большим.
+        .map((m) => ({ ...m, streaming: false, reasoning: undefined, reasoningSummary: undefined }));
       localStorage.setItem(vaultKey, JSON.stringify(msgs));
     } catch {
       /* недоступно/переполнено — не критично */
@@ -75,6 +80,8 @@ export const useChatStore = create<ChatState>((set, get) => {
   // Троттлинг рендера токенов (AC-Б10-4 / ревью C9): копим текст в буфер и применяем одним set()
   // на кадр (requestAnimationFrame) — ≤~60 ре-рендеров/сек вместо O(токенов). Один стрим за раз.
   let pending = '';
+  // Буфер сырого CoT (`reasoning`) — троттлим тем же rAF, что и токены ответа (может идти часто).
+  let pendingReasoning = '';
   let rafId: number | null = null;
   const cancelFlush = () => {
     if (rafId != null) {
@@ -105,16 +112,23 @@ export const useChatStore = create<ChatState>((set, get) => {
       const replyId = nextId();
       const reply: ChatMessage = { id: replyId, role: 'assistant', content: '', streaming: true };
       pending = '';
+      pendingReasoning = '';
       cancelFlush();
       set((s) => ({ messages: [...s.messages, userMsg, reply], streaming: true }));
 
-      // Применяет накопленный буфер одним апдейтом (вызывается из rAF).
+      // Применяет накопленные буферы (ответ + сырой CoT) одним кадром (вызывается из rAF).
       const flush = () => {
         rafId = null;
-        if (!pending) return;
-        const chunk = pending;
-        pending = '';
-        patch(replyId, (m) => ({ ...m, content: m.content + chunk }));
+        if (pending) {
+          const chunk = pending;
+          pending = '';
+          patch(replyId, (m) => ({ ...m, content: m.content + chunk }));
+        }
+        if (pendingReasoning) {
+          const chunk = pendingReasoning;
+          pendingReasoning = '';
+          patch(replyId, (m) => ({ ...m, reasoning: (m.reasoning ?? '') + chunk }));
+        }
       };
       const scheduleFlush = () => {
         if (rafId == null) rafId = requestAnimationFrame(flush);
@@ -130,13 +144,25 @@ export const useChatStore = create<ChatState>((set, get) => {
             pending += event.text;
             scheduleFlush();
             break;
+          case 'reasoning':
+            // Сырой CoT (для спойлера) — копим в буфер, как токены (может идти часто).
+            pendingReasoning += event.text;
+            scheduleFlush();
+            break;
+          case 'reasoningSummary':
+            // Живая короткая сводка («💭 …») — редкое событие (~1.5с), патчим напрямую.
+            patch(replyId, (m) => ({ ...m, reasoningSummary: event.text }));
+            break;
           case 'done': {
             cancelFlush();
             const tail = pending;
+            const rTail = pendingReasoning;
             pending = '';
+            pendingReasoning = '';
             patch(replyId, (m) => ({
               ...m,
               content: event.full || m.content + tail,
+              reasoning: rTail ? (m.reasoning ?? '') + rTail : m.reasoning,
               streaming: false,
             }));
             cancelFn = null;
@@ -147,10 +173,13 @@ export const useChatStore = create<ChatState>((set, get) => {
           case 'error': {
             cancelFlush();
             const tail = pending;
+            const rTail = pendingReasoning;
             pending = '';
+            pendingReasoning = '';
             patch(replyId, (m) => ({
               ...m,
               content: m.content + tail,
+              reasoning: rTail ? (m.reasoning ?? '') + rTail : m.reasoning,
               error: event.message,
               streaming: false,
             }));
@@ -170,11 +199,20 @@ export const useChatStore = create<ChatState>((set, get) => {
       cancelFn = null;
       cancelFlush();
       const tail = pending;
+      const rTail = pendingReasoning;
       pending = '';
+      pendingReasoning = '';
       set((s) => ({
         streaming: false,
         messages: s.messages.map((m) =>
-          m.streaming ? { ...m, content: m.content + tail, streaming: false } : m,
+          m.streaming
+            ? {
+                ...m,
+                content: m.content + tail,
+                reasoning: rTail ? (m.reasoning ?? '') + rTail : m.reasoning,
+                streaming: false,
+              }
+            : m,
         ),
       }));
       save();
