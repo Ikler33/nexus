@@ -361,7 +361,8 @@ export const tauriApi = {
           }),
 
     /** Кэшированный LLM-виджет по ключу (или `null`, если ещё не генерировался). Мгновенно — НЕ ждёт
-     *  LLM (генерация фоном; готовность — событие `home:widget-updated`). H2. Вне Tauri — `null`. */
+     *  LLM (генерация фоном; готовность — событие `home:widget-updated`). H2. Известные ключи:
+     *  `'daily_brief'` (H3 — сводка изменений vault за сутки, зона 2). Вне Tauri — `null`. */
     widget: (key: string): Promise<Widget | null> =>
       isTauri() ? invoke<Widget | null>('get_widget', { key }) : Promise.resolve(null),
 

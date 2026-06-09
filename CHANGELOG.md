@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### HOME-дашборд (бэкенд H3): Daily brief — дайджест как home-виджет
+
+- «Сводка дня» (зона 2 концепта, LLM, on-open) поверх фундамента H2: существующий **дайджест изменений**
+  экспонирован как HOME-виджет `daily_brief` без дублирования генерации — обработчик дайджеста после
+  суммаризации **зеркалит результат в кэш `home_widgets`** (`source_hash = created_at` → виджет `stale`,
+  если vault правился позже) и шлёт событие `home:widget-updated`. Одна генерация — обе поверхности
+  (титлбар-панель дайджеста и HOME-виджет).
+- Виджет бэкает существующий kind `digest`: `WidgetRegistry` теперь хранит `key → kind`, и
+  `refresh_widget("daily_brief")` ставит/дедупит именно дайджест-джобу (ручной refresh = регенерация,
+  делит дедуп с кнопкой панели дайджеста). on-open/recurring/on-change приходят даром от планировщика
+  дайджеста; на открытии vault — бутстрап `mirror_latest_to_widget` (показать последнюю сводку сразу).
+- Фронт: `tauriApi.home.widget('daily_brief')` / `tauriApi.home.refresh('daily_brief')` + событие
+  `onWidgetUpdated`. +тесты зеркалирования (генерация→кэш+событие) и бутстрапа. `test-all.sh` зелёный.
+
 ### HOME-дашборд (бэкенд H2): кэш LLM-виджетов + refresh-режимы (фундамент)
 
 - Таблица-кэш `home_widgets` (миграция 008, `key → content, generated_at, source_hash, status`): LLM-виджеты

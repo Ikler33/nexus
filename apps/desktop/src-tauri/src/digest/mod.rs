@@ -12,10 +12,14 @@ use serde::Serialize;
 
 use crate::ai::{ChatMessage, ChatProvider};
 use crate::db::{DbResult, ReadPool, WriteActor};
+use crate::home::widgets::{self, WidgetSink};
 use crate::scheduler::{now_secs, Job, JobHandler};
 
 /// kind «digest» (ключ реестра обработчиков планировщика).
 pub const KIND_DIGEST: &str = "digest";
+/// Ключ HOME-виджета «Daily brief» (H3): дайджест экспонируется как виджет зоны 2 через кэш
+/// `home_widgets` (`tauriApi.home.widget("daily_brief")`).
+pub const KEY_DAILY_BRIEF: &str = "daily_brief";
 /// Окно «недавних» изменений (сек).
 const WINDOW_SECS: i64 = 24 * 3600;
 /// Не раздувать промпт: максимум заметок и длина сниппета на заметку.
@@ -132,12 +136,32 @@ pub async fn should_generate(reader: &ReadPool) -> DbResult<bool> {
         .await
 }
 
+/// H3-бутстрап: отражает последний дайджест в кэш HOME-виджета «Daily brief» — чтобы виджет показывал
+/// последнюю сводку сразу на открытии vault, до следующей генерации. No-op, если дайджеста ещё нет.
+/// `source_hash = created_at` → виджет помечается stale, если vault правился после генерации дайджеста.
+pub async fn mirror_latest_to_widget(reader: &ReadPool, writer: &WriteActor) -> DbResult<()> {
+    if let Some(d) = latest(reader).await? {
+        widgets::store_ready(
+            writer,
+            KEY_DAILY_BRIEF,
+            &d.content,
+            d.created_at,
+            d.created_at,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Обработчик kind «digest»: собрать недавние заметки → LLM-суммаризация → сохранить. Держит свои
 /// зависимости (reader/chat/writer). Если изменений нет — успех без записи (нечего суммировать).
 pub struct DigestHandler {
     reader: ReadPool,
     chat: Arc<dyn ChatProvider>,
     writer: WriteActor,
+    /// H3: если задан — после генерации дайджест зеркалится в HOME-виджет «Daily brief» (кэш
+    /// `home_widgets` + событие `home:widget-updated`). `None` в тестах / без HOME-обвязки.
+    home_sink: Option<Arc<dyn WidgetSink>>,
 }
 
 impl DigestHandler {
@@ -146,7 +170,15 @@ impl DigestHandler {
             reader,
             chat,
             writer,
+            home_sink: None,
         }
+    }
+
+    /// Подключает зеркалирование результата в HOME-виджет «Daily brief» (H3): после успешной генерации
+    /// дайджест кладётся в кэш `home_widgets` и шлётся событие `home:widget-updated`.
+    pub fn with_home_widget(mut self, sink: Arc<dyn WidgetSink>) -> Self {
+        self.home_sink = Some(sink);
+        self
     }
 }
 
@@ -166,24 +198,39 @@ impl JobHandler for DigestHandler {
             return Ok(()); // нечего суммировать — дайджест не пишем
         }
         let messages = build_prompt(&notes);
-        let mut sink = |_t: String| {}; // не-стрим: берём полный текст из результата
+        let mut token_sink = |_t: String| {}; // не-стрим: берём полный текст из результата
         let cancel = Arc::new(AtomicBool::new(false));
         let content = self
             .chat
-            .stream_chat(&messages, &mut sink, &cancel)
+            .stream_chat(&messages, &mut token_sink, &cancel)
             .await
             .map_err(|e| e.to_string())?;
+        let created_at = now_secs();
         store(
             &self.writer,
             Digest {
-                created_at: now_secs(),
+                created_at,
                 since,
-                content,
+                content: content.clone(),
                 note_count: notes.len() as i64,
             },
         )
         .await
         .map_err(|e| e.to_string())?;
+        // H3: дайджест — это HOME-виджет «Daily brief». Зеркалим в кэш `home_widgets` (`source_hash =
+        // created_at` → виджет stale, если файл правился позже генерации) + событие `home:widget-updated`.
+        if let Some(home) = &self.home_sink {
+            widgets::store_ready(
+                &self.writer,
+                KEY_DAILY_BRIEF,
+                &content,
+                created_at,
+                created_at,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            home.widget_updated(KEY_DAILY_BRIEF);
+        }
         Ok(())
     }
 }
@@ -278,5 +325,62 @@ mod tests {
             latest(db.reader()).await.unwrap().is_none(),
             "нет недавних заметок → дайджест не создан"
         );
+    }
+
+    /// Запоминающий сток событий виджета — для проверки H3-зеркалирования.
+    struct RecSink(std::sync::Mutex<Vec<String>>);
+    impl WidgetSink for RecSink {
+        fn widget_updated(&self, key: &str) {
+            self.0.lock().unwrap().push(key.to_string());
+        }
+    }
+
+    /// H3: с подключённым `home_sink` дайджест после генерации зеркалится в HOME-виджет «Daily brief»
+    /// (кэш `home_widgets` + событие). Та же генерация — обе поверхности (панель дайджеста и HOME).
+    #[tokio::test]
+    async fn mirrors_digest_to_home_widget() {
+        let (_d, db) = db_with_note("# A\n\nважные изменения\n").await;
+        let sink = Arc::new(RecSink(std::sync::Mutex::new(Vec::new())));
+        let h = DigestHandler::new(db.reader().clone(), Arc::new(FakeChat), db.writer().clone())
+            .with_home_widget(sink.clone());
+        h.handle(&dummy_job()).await.unwrap();
+
+        // Дайджест — в своей таблице…
+        assert!(latest(db.reader()).await.unwrap().is_some());
+        // …и отражён в HOME-виджете daily_brief + послано событие.
+        let w = widgets::get(db.reader(), KEY_DAILY_BRIEF)
+            .await
+            .unwrap()
+            .expect("виджет daily_brief в кэше");
+        assert_eq!(w.content, "дайджест: всё ок");
+        assert_eq!(w.status, widgets::STATUS_READY);
+        assert_eq!(sink.0.lock().unwrap().as_slice(), [KEY_DAILY_BRIEF]);
+    }
+
+    /// H3-бутстрап: без `home_sink` дайджест в виджет НЕ зеркалится; `mirror_latest_to_widget` отражает
+    /// последний дайджест в кэш виджета (показ на открытии vault до следующей генерации).
+    #[tokio::test]
+    async fn mirror_latest_seeds_widget() {
+        let (_d, db) = db_with_note("# A\n\nx\n").await;
+        DigestHandler::new(db.reader().clone(), Arc::new(FakeChat), db.writer().clone())
+            .handle(&dummy_job())
+            .await
+            .unwrap();
+        assert!(
+            widgets::get(db.reader(), KEY_DAILY_BRIEF)
+                .await
+                .unwrap()
+                .is_none(),
+            "без sink дайджест не зеркалится в виджет"
+        );
+
+        mirror_latest_to_widget(db.reader(), db.writer())
+            .await
+            .unwrap();
+        let w = widgets::get(db.reader(), KEY_DAILY_BRIEF)
+            .await
+            .unwrap()
+            .expect("после mirror виджет есть");
+        assert_eq!(w.content, "дайджест: всё ок");
     }
 }
