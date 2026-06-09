@@ -142,7 +142,10 @@ pub struct VaultContext {
     /// `None`, если в `local.json` нет `ai.chat`. Независим от embedder. С reasoning ON (точность
     /// на сложных выводах).
     pub chat: Option<Arc<dyn ChatProvider>>,
-    /// «Быстрый» chat без reasoning (R2) — для примитивов (inline/дайджест/судья): тот же сервер/модель,
-    /// но `enable_thinking=false` → нет CoT-паузы. Строится вместе с `chat` (есть/нет синхронно).
+    /// «Быстрый» chat без reasoning (R2) на ОСНОВНОЙ модели (gemma) — для дайджеста: ему нужен большой
+    /// контекст (агрегирует до 40 заметок), но не нужен reasoning. Строится вместе с `chat`.
     pub chat_fast: Option<Arc<dyn ChatProvider>>,
+    /// «Утилитарная» мелкая модель (`ai.fast`, напр. Qwen3-4B на :8084) — для коротких примитивов
+    /// (inline/судья): низкая латентность. Если `ai.fast` не задан — fallback на `chat_fast` (gemma).
+    pub chat_util: Option<Arc<dyn ChatProvider>>,
 }

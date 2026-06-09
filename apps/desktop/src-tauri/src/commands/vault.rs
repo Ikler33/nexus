@@ -68,6 +68,13 @@ pub async fn open_vault(
         },
         None => (None, None),
     };
+    // Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B :8084) для коротких примитивов (inline/судья).
+    // Нет секции `ai.fast` → fallback на gemma-fast (chat_fast), чтобы ничего не сломалось.
+    let chat_util = match &local_cfg {
+        Some(cfg) => build_util_chat(cfg),
+        None => None,
+    }
+    .or_else(|| chat_fast.clone());
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     crate::indexer::spawn(indexer, app.clone());
@@ -85,13 +92,13 @@ pub async fn open_vault(
             ));
         registry.insert(crate::digest::KIND_DIGEST.to_string(), handler);
     }
-    // «Поиск противоречий» (#vision) — нужен chat И векторы (пары-кандидаты по эмбеддингам → судья).
-    if let (Some(fast), Some(vectors)) = (&chat_fast, &vectors) {
+    // «Поиск противоречий» (#vision) — судья: короткие пары → утилитарная модель (chat_util). Нужны векторы.
+    if let (Some(util), Some(vectors)) = (&chat_util, &vectors) {
         let handler: Arc<dyn crate::scheduler::JobHandler> =
             Arc::new(crate::contradictions::ContradictionHandler::new(
                 db.reader().clone(),
                 vectors.clone(),
-                fast.clone(),
+                util.clone(),
                 db.writer().clone(),
             ));
         registry.insert(crate::contradictions::KIND_CONTRA.to_string(), handler);
@@ -144,6 +151,7 @@ pub async fn open_vault(
         embedder,
         chat,
         chat_fast,
+        chat_util,
     });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
@@ -211,6 +219,21 @@ async fn build_chat(cfg: &LocalConfig) -> Option<(Arc<dyn ChatProvider>, Arc<dyn
     let fast = build()?.without_reasoning();
     tracing::info!(model = %model, "chat-провайдеры включены (reasoning + fast)");
     Some((Arc::new(normal), Arc::new(fast)))
+}
+
+/// Утилитарная chat-модель из `ai.fast` (мелкая non-reasoning, напр. Qwen3-4B :8084). `None` — секции
+/// нет / клиент не создался → вызывающий делает fallback на gemma-fast. Plain-провайдер (без
+/// `enable_thinking` — модель не reasoning, лишний kwarg ей не нужен).
+fn build_util_chat(cfg: &LocalConfig) -> Option<Arc<dyn ChatProvider>> {
+    let fast = cfg.ai.fast.as_ref()?;
+    let model = fast.model.clone().unwrap_or_else(|| "fast".to_string());
+    let provider = OpenAiChatProvider::new(&fast.url, &model, None)
+        .map_err(
+            |e| tracing::warn!(error = %e, "ai.fast: провайдер не создан — fallback на gemma-fast"),
+        )
+        .ok()?;
+    tracing::info!(model = %model, url = %fast.url, "ai.fast (утилитарная модель) включена");
+    Some(Arc::new(provider))
 }
 
 /// Сверяет активную модель/размерность эмбеддера с `settings`. При расхождении на НЕпервом запуске
