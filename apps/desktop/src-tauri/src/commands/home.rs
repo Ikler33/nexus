@@ -80,7 +80,7 @@ pub async fn refresh_stale_radar(state: State<'_, AppState>) -> AppResult<()> {
         (
             ctx.db.writer().clone(),
             ctx.db.reader().clone(),
-            ctx.chat.is_some(),
+            ctx.ai.chat.is_some(),
         )
     };
     if !has_chat {

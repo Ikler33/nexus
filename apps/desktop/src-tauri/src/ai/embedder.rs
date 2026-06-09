@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use super::{AiError, AiResult};
+use crate::net::{EgressFeature, GuardedClient};
 
 /// Провайдер эмбеддингов (**ADR-005**): отдельная сущность от chat. `query`/`document` —
 /// асимметрия задач (nomic/bge требуют разные префиксы); L2-нормализация — внутри.
@@ -43,7 +44,10 @@ pub fn default_prefixes(model: &str) -> Option<(String, String)> {
 /// Эмбеддер через OpenAI-совместимый `POST {base}/v1/embeddings` (llama.cpp-server).
 /// Применяет task-префиксы (nomic: `search_query:` / `search_document:`) и L2-нормализацию.
 pub struct OpenAiEmbedder {
-    client: reqwest::Client,
+    /// Guarded-клиент ядра (ADR-005-ext): политика+audit на каждый запрос (AC-EGR-1/6).
+    client: GuardedClient,
+    /// Feature-тег эгресса — задаёт composition-root (обычно [`EgressFeature::Embed`]).
+    feature: EgressFeature,
     endpoint: String,
     model: String,
     dim: usize,
@@ -63,42 +67,37 @@ struct EmbeddingItem {
 
 impl OpenAiEmbedder {
     /// `prefixes` = `(query_prefix, document_prefix)` (для nomic; для моделей без префиксов — `None`).
+    /// Таймауты — у guarded-клиента (профиль [`GuardedClient::for_embedding`], 60 с).
     pub fn new(
+        client: &GuardedClient,
+        feature: EgressFeature,
         base_url: &str,
         model: &str,
         dim: usize,
         prefixes: Option<(String, String)>,
-    ) -> AiResult<Self> {
-        let client = super::core_client_builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .map_err(|e| AiError::Http(e.to_string()))?;
+    ) -> Self {
         let (query_prefix, document_prefix) = prefixes.unwrap_or_default();
-        Ok(Self {
-            client,
+        Self {
+            client: client.clone(),
+            feature,
             endpoint: format!("{}/v1/embeddings", base_url.trim_end_matches('/')),
             model: model.to_string(),
             dim,
             query_prefix,
             document_prefix,
-        })
+        }
     }
 
     /// Узнаёт размерность модели одним пробным эмбеддингом (когда `embedding.dim` не задан
-    /// в `local.json`). Не применяет проверку/префиксы — только длину вектора.
-    pub async fn probe_dim(base_url: &str, model: &str) -> AiResult<usize> {
-        let client = super::core_client_builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| AiError::Http(e.to_string()))?;
+    /// в `local.json`). Не применяет проверку/префиксы — только длину вектора. Через guarded
+    /// с [`EgressFeature::Probe`] (AC-EGR-6): url вне политики → `Denied` ДО сети.
+    pub async fn probe_dim(client: &GuardedClient, base_url: &str, model: &str) -> AiResult<usize> {
         let endpoint = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
         let body = serde_json::json!({ "model": model, "input": ["dim probe"] });
         let resp = client
-            .post(&endpoint)
-            .json(&body)
-            .send()
+            .post_json(&endpoint, EgressFeature::Probe, &body)
             .await
-            .map_err(|e| AiError::Http(e.to_string()))?;
+            .map_err(AiError::from)?;
         if !resp.status().is_success() {
             return Err(AiError::Http(format!("статус {}", resp.status())));
         }
@@ -118,11 +117,9 @@ impl OpenAiEmbedder {
         let body = serde_json::json!({ "model": self.model, "input": inputs });
         let resp = self
             .client
-            .post(&self.endpoint)
-            .json(&body)
-            .send()
+            .post_json(&self.endpoint, self.feature, &body)
             .await
-            .map_err(|e| AiError::Http(e.to_string()))?;
+            .map_err(AiError::from)?;
         if !resp.status().is_success() {
             return Err(AiError::Http(format!("статус {}", resp.status())));
         }
@@ -238,17 +235,41 @@ mod tests {
         assert_ne!(a, c);
     }
 
+    /// AC-EGR-6: `probe_dim` идёт через guarded с `Feature::Probe` — отказ политики (выключенный
+    /// Probe-opt-in) возвращается ТИПИЗИРОВАННЫМ `AiError::Denied` ДО любых сетевых действий.
+    #[tokio::test]
+    async fn probe_dim_is_guarded() {
+        use crate::net::{EgressAudit, EgressDenied, EgressPolicy};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        policy.set_feature_enabled(EgressFeature::Probe, false);
+        let guarded = GuardedClient::new(policy, Arc::new(EgressAudit::default()), |b| b).unwrap();
+        let res = OpenAiEmbedder::probe_dim(&guarded, "http://127.0.0.1:9", "m").await;
+        assert!(
+            matches!(
+                res,
+                Err(AiError::Denied(EgressDenied::FeatureNotEnabled(
+                    EgressFeature::Probe
+                )))
+            ),
+            "ожидали типизированный отказ политики: {res:?}"
+        );
+    }
+
     /// Живой smoke против nomic на :8081 (запуск: `cargo test -- --ignored`). В CI пропускается.
     #[tokio::test]
     #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
     async fn live_nomic_embeds_and_ranks_semantically() {
         let e = OpenAiEmbedder::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Embed,
             "http://192.168.0.29:8081",
             "nomic-embed-text",
             768,
             Some(("search_query: ".into(), "search_document: ".into())),
-        )
-        .unwrap();
+        );
 
         let docs = e
             .embed_documents(&[

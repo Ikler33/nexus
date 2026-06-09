@@ -263,6 +263,23 @@ pub fn is_private_host(host: &str) -> bool {
     }
 }
 
+/// Cloud-metadata-блок (E7, AC-EGR-12): хост — это `169.254.169.254` (IMDS AWS/GCP/Azure/…).
+/// ОТДЕЛЬНЫЙ предикат, НЕ реюз [`is_private_host`]: тот склеивает `{private|loopback|link_local}`
+/// в один `bool`, которым нельзя отклонить metadata, не отклонив `192.168.*` (LAN-LLM by design).
+/// Точный IP, а не весь `169.254/16`: остальной link-local для ядра решает общая политика; правило
+/// «metadata — никогда» применяется ПЕРВЫМ и безусловно (даже к allowlist). Домены (`metadata.google.
+/// internal`) не резолвим — DNS-rebinding-гард приходит с web-срезом (ADR-005-ext W-аддендум).
+pub fn blocks_cloud_metadata(host: &str) -> bool {
+    const METADATA_V4: std::net::Ipv4Addr = std::net::Ipv4Addr::new(169, 254, 169, 254);
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    match h.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4 == METADATA_V4,
+        // `::ffff:169.254.169.254` — тот же адрес в IPv4-mapped-форме (обход через v6-литерал).
+        Ok(std::net::IpAddr::V6(v6)) => v6.to_ipv4_mapped() == Some(METADATA_V4),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,6 +506,36 @@ mod tests {
         }
         for h in ["example.com", "93.184.216.34", "api.openai.com", "8.8.8.8"] {
             assert!(!is_private_host(h), "{h} НЕ должен блокироваться");
+        }
+    }
+
+    /// E7/AC-EGR-12: metadata-предикат бьёт ТОЧНО по 169.254.169.254 (вкл. IPv4-mapped-v6-форму),
+    /// не задевая LAN/loopback (их судьбу решает общая политика) и прочий link-local.
+    #[test]
+    fn cloud_metadata_predicate_is_exact() {
+        for h in [
+            "169.254.169.254",
+            " 169.254.169.254 ",
+            "::ffff:169.254.169.254",
+            "[::ffff:169.254.169.254]",
+        ] {
+            assert!(
+                blocks_cloud_metadata(h),
+                "{h} — cloud metadata, блок всегда"
+            );
+        }
+        for h in [
+            "192.168.1.5", // LAN — НЕ metadata (E7: «LAN ок, metadata — никогда»)
+            "127.0.0.1",   // loopback
+            "169.254.0.1", // link-local, но не metadata-IP
+            "example.com", // домен — без резолва (web-срез)
+            "metadata.google.internal",
+            "8.8.8.8",
+        ] {
+            assert!(
+                !blocks_cloud_metadata(h),
+                "{h} НЕ должен попадать под metadata-блок"
+            );
         }
     }
 

@@ -33,6 +33,8 @@ pub mod graph;
 pub mod home;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
 pub mod indexer;
+/// Egress-граница ядра (ADR-005-ext): `GuardedClient` + политика + audit — единый chokepoint HTTP.
+pub mod net;
 /// Markdown-парсер (frontmatter, ссылки, теги).
 pub mod parser;
 /// Plugin loader (минимум): manifest + совместимость версии API (без broker — Ф2).

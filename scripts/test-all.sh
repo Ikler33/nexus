@@ -10,10 +10,11 @@ source "$HOME/.cargo/env" 2>/dev/null || true
 echo "── preflight (гигиена дерева) ──"
 node scripts/preflight.mjs
 
-echo "── traceability (AC↔тест + имена) + #[ignore] + версия ──"
+echo "── traceability (AC↔тест + имена) + #[ignore] + версия + egress-линт ──"
 node scripts/check-traceability.mjs
 node scripts/check-ignored.mjs
 node scripts/check-versions.mjs
+node scripts/check-egress.mjs
 
 echo "── Rust: fmt · clippy · test ──"
 (

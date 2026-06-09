@@ -46,6 +46,26 @@ impl LocalConfig {
     pub fn parse(json: &str) -> AiResult<Self> {
         serde_json::from_str(json).map_err(|e| AiError::Config(e.to_string()))
     }
+
+    /// Хосты явно сконфигурированных `ai.*`-эндпоинтов — для авто-allowlist политики эгресса
+    /// (ADR-005-ext E4: «явные `ai.*.url` разрешены», уточнённый AC-SEC-4/E3). Только хост (без
+    /// порта/пути) — allowlist exact-host, как у брокера. Невалидные URL пропускаются (провайдер
+    /// по ним всё равно не построится; политика — fail-closed).
+    pub fn egress_hosts(&self) -> Vec<String> {
+        [
+            self.ai.chat.as_ref().map(|c| c.url.as_str()),
+            self.ai.embedding.as_ref().map(|e| e.url.as_str()),
+            self.ai.fast.as_ref().map(|f| f.url.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|u| {
+            reqwest::Url::parse(u)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+        })
+        .collect()
+    }
 }
 
 #[cfg(test)]
@@ -77,6 +97,26 @@ mod tests {
         let cfg = LocalConfig::parse(r#"{"ai":{"embedding":{"url":"http://x:8081"}}}"#).unwrap();
         assert!(cfg.ai.chat.is_none());
         assert_eq!(cfg.ai.embedding.unwrap().dim, None);
+    }
+
+    /// E4: авто-allowlist берёт ИМЕННО хосты явных `ai.*.url` (chat/embedding/fast), без порта;
+    /// битый URL пропускается, пустой конфиг → пусто (fail-closed).
+    #[test]
+    fn egress_hosts_extracts_explicit_ai_hosts() {
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{
+                "chat":      { "url": "https://api.example.com/v1" },
+                "embedding": { "url": "http://192.168.0.29:8083" },
+                "fast":      { "url": "not a url" }
+            }}"#,
+        )
+        .unwrap();
+        let hosts = cfg.egress_hosts();
+        assert_eq!(
+            hosts,
+            vec!["api.example.com".to_string(), "192.168.0.29".to_string()]
+        );
+        assert!(LocalConfig::default().egress_hosts().is_empty());
     }
 
     #[test]

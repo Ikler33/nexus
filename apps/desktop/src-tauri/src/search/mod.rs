@@ -706,15 +706,14 @@ mod tests {
         )
         .unwrap();
         let db = open_db(&root).await;
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            OpenAiEmbedder::new(
-                "http://192.168.0.29:8081",
-                "nomic-embed-text",
-                768,
-                default_prefixes("nomic-embed-text"),
-            )
-            .unwrap(),
-        );
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
+            &crate::net::GuardedClient::unchecked(),
+            crate::net::EgressFeature::Embed,
+            "http://192.168.0.29:8081",
+            "nomic-embed-text",
+            768,
+            default_prefixes("nomic-embed-text"),
+        ));
         let vectors =
             Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 768).unwrap());
         let idx = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);

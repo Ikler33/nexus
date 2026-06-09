@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{AiError, AiResult};
+use crate::net::{EgressFeature, GuardedClient};
 
 /// Сообщение чата (роль + текст). Сериализуется в тело запроса к модели.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +80,11 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// Chat через OpenAI-совместимый `POST {base}/v1/chat/completions` (llama.cpp-server, напр. Gemma).
 pub struct OpenAiChatProvider {
-    client: reqwest::Client,
+    /// Guarded-клиент ядра (ADR-005-ext): политика+audit на каждый запрос, провайдер своего
+    /// `reqwest::Client` не строит (AC-EGR-1/6).
+    client: GuardedClient,
+    /// Feature-тег эгресса — задаёт composition-root (обычно [`EgressFeature::Chat`]).
+    feature: EgressFeature,
     endpoint: String,
     model: String,
     temperature: f32,
@@ -92,21 +97,24 @@ pub struct OpenAiChatProvider {
 }
 
 impl OpenAiChatProvider {
-    pub fn new(base_url: &str, model: &str, temperature: Option<f32>) -> AiResult<Self> {
-        // Общего timeout нет (стрим долгий), но есть idle-таймаут на каждый чанк (см. stream_chat).
-        // Connect-timeout страхует от зависшего коннекта.
-        let client = super::core_client_builder()
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| AiError::Http(e.to_string()))?;
-        Ok(Self {
-            client,
+    /// Таймауты — у guarded-клиента (профиль [`GuardedClient::for_chat`]: connect-timeout без
+    /// общего); здесь остаётся только idle-таймаут стрима (см. `stream_chat`).
+    pub fn new(
+        client: &GuardedClient,
+        feature: EgressFeature,
+        base_url: &str,
+        model: &str,
+        temperature: Option<f32>,
+    ) -> Self {
+        Self {
+            client: client.clone(),
+            feature,
             endpoint: format!("{}/v1/chat/completions", base_url.trim_end_matches('/')),
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
             idle_timeout: STREAM_IDLE_TIMEOUT,
             enable_thinking: true,
-        })
+        }
     }
 
     /// «Быстрый» вариант провайдера БЕЗ reasoning (для примитивов: inline/дайджест/судья). Тот же
@@ -161,11 +169,12 @@ impl ChatProvider for OpenAiChatProvider {
         cancel: &Arc<AtomicBool>,
     ) -> AiResult<String> {
         let body = self.request_body(messages);
-        let send_fut = self.client.post(&self.endpoint).json(&body).send();
+        // Через guarded-клиент: политика+audit ДО сокета; отказ — типизированный `AiError::Denied`.
+        let send_fut = self.client.post_json(&self.endpoint, self.feature, &body);
         let mut resp = tokio::time::timeout(self.idle_timeout, send_fut)
             .await
             .map_err(|_| AiError::Http("таймаут ответа модели (сервер не отвечает)".into()))?
-            .map_err(|e| AiError::Http(e.to_string()))?;
+            .map_err(AiError::from)?;
         if !resp.status().is_success() {
             return Err(AiError::Http(format!("статус {}", resp.status())));
         }
@@ -396,14 +405,14 @@ mod tests {
     /// обычный провайдер — без этого ключа (reasoning по умолчанию ON). Offline, без сервера.
     #[test]
     fn request_body_toggles_reasoning() {
-        let p = OpenAiChatProvider::new("http://x", "gemma", None).unwrap();
+        let guarded = GuardedClient::unchecked();
+        let p = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, "http://x", "gemma", None);
         let on = p.request_body(&[]);
         assert!(
             on.get("chat_template_kwargs").is_none(),
             "по умолчанию reasoning ON — без флага enable_thinking"
         );
-        let off = OpenAiChatProvider::new("http://x", "gemma", None)
-            .unwrap()
+        let off = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, "http://x", "gemma", None)
             .without_reasoning()
             .request_body(&[]);
         assert_eq!(
@@ -493,9 +502,14 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_secs(1)); // дольше idle-таймаута теста
             }
         });
-        let provider = OpenAiChatProvider::new(&format!("http://{addr}"), "gemma", Some(0.0))
-            .unwrap()
-            .with_idle_timeout(std::time::Duration::from_millis(250));
+        let provider = OpenAiChatProvider::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Chat,
+            &format!("http://{addr}"),
+            "gemma",
+            Some(0.0),
+        )
+        .with_idle_timeout(std::time::Duration::from_millis(250));
         let msgs = vec![ChatMessage::user("привет")];
         let mut sink = |_t: String| {};
         let cancel = Arc::new(AtomicBool::new(false));
@@ -507,6 +521,37 @@ mod tests {
             "оборвалось быстро по idle-таймауту, не повисло"
         );
         let _ = server.join();
+    }
+
+    /// AC-EGR-5/14 на уровне провайдера: отказ политики (выключенная фича) доходит до вызывающего
+    /// ТИПИЗИРОВАННЫМ `AiError::Denied` (не reqwest-строкой) и не открывает сокет.
+    #[tokio::test]
+    async fn stream_chat_surfaces_typed_egress_denial() {
+        use crate::net::{EgressAudit, EgressDenied, EgressPolicy};
+        use std::sync::atomic::AtomicBool;
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        policy.set_feature_enabled(EgressFeature::Chat, false);
+        let guarded = GuardedClient::new(policy, Arc::new(EgressAudit::default()), |b| b).unwrap();
+        let provider = OpenAiChatProvider::new(
+            &guarded,
+            EgressFeature::Chat,
+            "http://127.0.0.1:9",
+            "gemma",
+            None,
+        );
+        let msgs = vec![ChatMessage::user("привет")];
+        let cancel = Arc::new(AtomicBool::new(false));
+        let res = provider.stream_chat(&msgs, &mut |_| {}, &cancel).await;
+        assert!(
+            matches!(
+                res,
+                Err(AiError::Denied(EgressDenied::FeatureNotEnabled(
+                    EgressFeature::Chat
+                )))
+            ),
+            "ожидали типизированный отказ политики: {res:?}"
+        );
     }
 
     /// Inline-режимы парсятся из строк фронта; неизвестное → None; needs_selection корректен.
@@ -556,9 +601,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "нужен chat-сервер на 192.168.0.29:8080"]
     async fn live_chat_streams_tokens() {
-        let provider =
-            OpenAiChatProvider::new("http://192.168.0.29:8080", "gemma-4-26B-A4B-it", Some(0.0))
-                .unwrap();
+        let provider = OpenAiChatProvider::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Chat,
+            "http://192.168.0.29:8080",
+            "gemma-4-26B-A4B-it",
+            Some(0.0),
+        );
         let msgs = vec![ChatMessage::user("Ответь одним словом: столица Франции?")];
         let mut tokens = 0usize;
         let cancel = Arc::new(AtomicBool::new(false));

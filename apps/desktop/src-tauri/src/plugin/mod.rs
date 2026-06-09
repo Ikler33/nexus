@@ -8,7 +8,7 @@ mod permission;
 pub use broker::{
     AuditEntry, AuditLog, BrokerError, CapToken, HostDispatch, PluginBroker, PluginSession,
 };
-pub use permission::{is_private_host, ApiRequest, Denied, Permissions};
+pub use permission::{blocks_cloud_metadata, is_private_host, ApiRequest, Denied, Permissions};
 
 use std::fmt;
 use std::path::Path;

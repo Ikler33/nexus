@@ -120,7 +120,7 @@ pub async fn plugin_invoke(
             (
                 ctx.db.reader().clone(),
                 ctx.vectors.clone(),
-                ctx.embedder.clone(),
+                ctx.ai.embedder.clone(),
             )
         };
         let embedder = embedder.ok_or("эмбеддер не сконфигурирован")?;
@@ -155,6 +155,9 @@ pub async fn plugin_invoke(
 /// `net.fetch`: GET по уже авторизованному (allowlist) + SSRF-проверенному URL. Без следования
 /// редиректам (анти-redirect-SSRF) и с таймаутом. Возвращает `{status, body}`.
 async fn dispatch_net(url: &str) -> Result<serde_json::Value, String> {
+    // egress-lint: allow — PLUGIN-эгресс со СВОЕЙ политикой (broker net-allowlist + is_private_host
+    // в dispatch_plugin + таймаут 15с), НЕ core-путь; миграция на net::GuardedClient — отдельный
+    // срез вне фундамента (ADR-005-ext, исключение (б) AC-EGR-1).
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(15))

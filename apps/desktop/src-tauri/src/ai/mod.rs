@@ -1,9 +1,15 @@
 //! AI-слой (§4.3, **ADR-005**): раздельные Chat / Embedding провайдеры (разные хосты/модели).
 //! Ф1-3 — embedding-провайдер; Ф1-7 — chat-провайдер со стримингом.
+//!
+//! Весь исходящий HTTP провайдеров идёт через [`crate::net::GuardedClient`] (ADR-005-ext, AC-EGR-6):
+//! провайдеры ПРИНИМАЮТ guarded-клиент + feature-тег, своих `reqwest::Client` не строят
+//! (`core_client_builder` — приватная деталь `net/`, грep-линт AC-EGR-1).
 
 mod chat;
 mod config;
 mod embedder;
+
+use std::sync::Arc;
 
 pub use chat::{
     build_chat_messages, build_inline_messages, build_rag_messages, injection_marker, ChatMessage,
@@ -27,51 +33,43 @@ pub enum AiError {
     DimMismatch { expected: usize, got: usize },
     #[error("config: {0}")]
     Config(String),
+    /// Отказ политики эгресса (ADR-005-ext, AC-EGR-14): типизированная причина, НЕ reqwest-строка.
+    #[error(transparent)]
+    Denied(#[from] crate::net::EgressDenied),
+}
+
+impl From<crate::net::NetError> for AiError {
+    fn from(e: crate::net::NetError) -> Self {
+        match e {
+            crate::net::NetError::Denied(d) => AiError::Denied(d),
+            crate::net::NetError::BadUrl => AiError::Config("некорректный URL эгресса".into()),
+            crate::net::NetError::Http(e) => AiError::Http(e.to_string()),
+        }
+    }
 }
 
 pub type AiResult<T> = Result<T, AiError>;
 
-/// Общий конструктор HTTP-клиента ядра для LLM-серверов (chat/embedding): **не следует редиректам**
-/// (анти-SSRF, AC-SEC-4 / ревью C5). Скомпрометированный или подменённый эндпоинт не может 30x-редиректом
-/// увести запрос ядра на внутренний/metadata-адрес. Таймауты задаёт вызывающий.
+/// Тонкий фасад AI-подсистемы (§4.3, AC-EGR-13): ВСЕ провайдеры vault + политика эгресса одним
+/// полем `VaultContext` (вместо четырёх независимых `Arc`). БЕЗ `cloud_fallback`/`guard_first_token`
+/// — они приходят отдельным срезом вместе с `EgressFeature::CloudFallback` (план §4.3).
 ///
-/// `is_private_host` к ядру намеренно НЕ применяется: chat/embedding-серверы локальные/LAN by design
-/// (`127.0.0.1`, `192.168.*`) — блок приватных хостов сломал бы local-first. Различие с plugin
-/// `net.fetch` (allowlist + `is_private_host` для произвольного egress) — осознанное (ревью C5/H11).
-pub(crate) fn core_client_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-
-    /// AC-SEC-4 / ревью C5: core-HTTP-клиент НЕ следует редиректам. Локальный сервер отдаёт 302 на
-    /// metadata-адрес; клиент обязан вернуть сам 302, а не пойти по `Location` (иначе — SSRF).
-    #[tokio::test]
-    async fn core_client_does_not_follow_redirects() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            if let Ok((mut sock, _)) = listener.accept() {
-                let mut buf = [0u8; 1024];
-                let _ = sock.read(&mut buf);
-                let resp = "HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data\r\nContent-Length: 0\r\n\r\n";
-                let _ = sock.write_all(resp.as_bytes());
-            }
-        });
-        let client = core_client_builder().build().unwrap();
-        let resp = client
-            .get(format!("http://{addr}/"))
-            .send()
-            .await
-            .expect("запрос к локальному серверу");
-        assert_eq!(
-            resp.status().as_u16(),
-            302,
-            "core-клиент НЕ должен следовать редиректу (анти-SSRF, AC-SEC-4)"
-        );
-        server.join().unwrap();
-    }
+/// `policy` — тот же `Arc`, что в `AppState` (ОДИН экземпляр политики на приложение): через него
+/// hot-swap chat пересобирает уже-guarded клиент, а будущий UI читает состояние для индикации (E9).
+pub struct AIClient {
+    /// Chat-провайдер (ADR-005, reasoning ON) — стриминг ответов RAG-чата (Ф1-7).
+    /// `None`, если в `local.json` нет `ai.chat`. Независим от embedder.
+    pub chat: Option<Arc<dyn ChatProvider>>,
+    /// «Быстрый» chat без reasoning (R2) на ОСНОВНОЙ модели (gemma) — для дайджеста: большой
+    /// контекст без CoT-паузы. Строится вместе с `chat`.
+    pub chat_fast: Option<Arc<dyn ChatProvider>>,
+    /// «Утилитарная» мелкая модель (`ai.fast`, напр. Qwen3-4B) — короткие примитивы (inline/судья):
+    /// низкая латентность. Если `ai.fast` не задан — вызывающие делают fallback на `chat_fast`.
+    pub chat_util: Option<Arc<dyn ChatProvider>>,
+    /// Embedding-провайдер — эмбеддинг поисковых запросов (Ф1-6) и чат-RAG (Ф1-8).
+    /// `None` синхронно с `VaultContext::vectors` (оба есть или обоих нет). Cold: hot-swap нет —
+    /// на нём висит фоновый индексатор, смена требует переоткрытия vault (#11b).
+    pub embedder: Option<Arc<dyn EmbeddingProvider>>,
+    /// Политика эгресса ядра — единый экземпляр приложения (см. `AppState::egress_policy`).
+    pub policy: Arc<crate::net::EgressPolicy>,
 }

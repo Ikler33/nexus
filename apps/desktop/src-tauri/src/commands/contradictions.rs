@@ -30,7 +30,7 @@ pub async fn generate_contradictions(state: State<'_, AppState>) -> AppResult<()
         (
             ctx.db.writer().clone(),
             ctx.db.reader().clone(),
-            ctx.chat.is_some() && ctx.vectors.is_some(),
+            ctx.ai.chat.is_some() && ctx.vectors.is_some(),
         )
     };
     if !ready {
