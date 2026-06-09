@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Тест-инфра (#18): per-module coverage-ратчет (TESTING_STRATEGY §6 / AC-Q-2)
+
+- CI-джоба «Coverage (Rust)» теперь, помимо глобального floor, проверяет **per-path покрытие критичных
+  модулей** (`indexer`/`chunker`/`search`/`plugin/broker`/`plugin/permission`/`watcher`/`eval`): новый
+  скрипт `scripts/check-coverage.mjs` (zero-dep node) агрегирует строковое покрытие по путям из
+  JSON-отчёта `cargo-llvm-cov` и сверяет с floor'ами `coverage-baseline.json` (ратчет «не ниже»,
+  допуск `tolerance` п.п. под macOS↔Linux). Просело → красный CI с дельтой по модулям; печатает факт. %
+  всех модулей (no silent caps). Локально — `bash scripts/coverage.sh`.
+- Floor'ы зафиксированы по первому замеру (ратчет): chunker/permission ~98%, broker 93%, search 86%,
+  indexer 70% — на/выше цели 70%; **watcher 62% / eval 49% — ниже цели**, floor по факту (растить
+  тестами к 70%). Авто-bump baseline + PR-комментарий с дельтой — отложено (см. `docs/BACKLOG.md`).
+
 ### HOME-дашборд (бэкенд H5): Open questions + Context drift — закрывает HOME-бэкенд (H1–H5)
 
 - Два LLM-виджета на фреймворке H2 (`home::insights`) — первые «настоящие» генераторы поверх кэша
