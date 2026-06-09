@@ -3,11 +3,17 @@
 //! Поток: сперва `Sources` (найденные чанки), затем поток `Token`, в конце `Done` (или `Error`).
 //! Отмена — `chat_cancel` (взводит флаг активного стрима; см. [`AppState::begin_chat`]).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::ai::{build_chat_messages, build_rag_messages, injection_marker};
+use crate::ai::{
+    build_chat_messages, build_rag_messages, injection_marker, ChatMessage, ChatProvider,
+};
 use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
 use crate::state::AppState;
@@ -20,6 +26,10 @@ pub enum ChatStreamEvent {
     Sources { sources: Vec<SearchHit> },
     /// Очередная текстовая дельта ответа.
     Token { text: String },
+    /// Сырая дельта «размышления» reasoning-модели (R1) — для спойлера «развернуть».
+    Reasoning { text: String },
+    /// Короткая ЖИВАЯ сводка размышления (мелкая модель суммаризует CoT) — «💭 …», обновляется по ходу.
+    ReasoningSummary { text: String },
     /// Поток завершён штатно; `full` — полный текст ответа (для записи в историю).
     Done { full: String },
     /// Ошибка на любом этапе (retrieve/LLM); стрим завершается.
@@ -43,13 +53,14 @@ pub async fn chat_rag(
 ) -> AppResult<()> {
     let grounded = grounded.unwrap_or(true);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
-    let (reader, vectors, embedder, chat) = {
+    let (reader, vectors, embedder, chat, chat_util) = {
         let ctx = state.vault().await?;
         (
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
             ctx.embedder.clone(),
             ctx.chat.clone(),
+            ctx.chat_util.clone(),
         )
     };
     let Some(chat) = chat else {
@@ -103,16 +114,74 @@ pub async fn chat_rag(
         build_chat_messages(&question)
     };
 
-    // 3) Стриминг ответа в канал (с поддержкой отмены). Помечаем интерактивную LLM-операцию (S5):
-    // планировщик уступит фоновые LLM-джобы (дайджест), пока идёт чат.
+    // 3) Стриминг ответа (с отменой). Помечаем интерактивную LLM-операцию (S5): планировщик уступит
+    // фоновые LLM-джобы, пока идёт чат.
     let _llm_busy = state.enter_interactive_llm();
     let cancel = state.begin_chat();
+
+    // R1 — живой 💭-индикатор. gemma стримит размышление → копим в буфер + шлём сырые дельты (для
+    // спойлера «развернуть»); ПАРАЛЛЕЛЬНО мелкая модель (`chat_util`) каждые ~1.5с суммаризует буфер в
+    // короткую фразу (`ReasoningSummary`, обновляется живо). Отмена чата гасит и стрим, и суммаризатор.
+    // Без `chat_util` — только сырой стрим reasoning (фраз нет).
+    let reasoning = Arc::new(Mutex::new(String::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let summarizer = chat_util.clone().map(|util| {
+        let (reasoning, done, cancel, channel) = (
+            reasoning.clone(),
+            done.clone(),
+            cancel.clone(),
+            channel.clone(),
+        );
+        tokio::spawn(async move {
+            let mut last = 0usize;
+            loop {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                let stop = done.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed);
+                let text = reasoning.lock().map(|g| g.clone()).unwrap_or_default();
+                if text.len() > last.saturating_add(40) {
+                    last = text.len();
+                    if let Ok(sum) = summarize_reasoning(&util, &text, &cancel).await {
+                        if !sum.is_empty() {
+                            let _ = channel.send(ChatStreamEvent::ReasoningSummary { text: sum });
+                        }
+                    }
+                }
+                if stop {
+                    break;
+                }
+            }
+        })
+    });
+
     let result = {
         let mut on_token = |t: String| {
             let _ = channel.send(ChatStreamEvent::Token { text: t });
         };
-        chat.stream_chat(&messages, &mut on_token, &cancel).await
+        let mut on_reasoning = |t: String| {
+            if let Ok(mut g) = reasoning.lock() {
+                g.push_str(&t);
+            }
+            let _ = channel.send(ChatStreamEvent::Reasoning { text: t });
+        };
+        chat.stream_chat_reasoning(&messages, &mut on_token, &mut on_reasoning, &cancel)
+            .await
     };
+    done.store(true, Ordering::Relaxed);
+    if let Some(h) = &summarizer {
+        h.abort();
+    }
+    // Финальная сводка по ПОЛНОМУ размышлению (короткий CoT мог не успеть тикнуть в таске).
+    if let Some(util) = &chat_util {
+        let text = reasoning.lock().map(|g| g.clone()).unwrap_or_default();
+        if !text.trim().is_empty() {
+            if let Ok(sum) = summarize_reasoning(util, &text, &cancel).await {
+                if !sum.is_empty() {
+                    let _ = channel.send(ChatStreamEvent::ReasoningSummary { text: sum });
+                }
+            }
+        }
+    }
+
     match result {
         Ok(full) => {
             let _ = channel.send(ChatStreamEvent::Done { full });
@@ -124,6 +193,34 @@ pub async fn chat_rag(
         }
     }
     Ok(())
+}
+
+/// Суммаризует ход мысли в ОДНУ короткую фразу через мелкую модель (R1, `chat_util`). Берём хвост
+/// размышления (последние ~2000 симв — самое свежее), просим короткую фразу настоящего времени.
+/// Best-effort: ошибки гасятся вызывающим. Отмена чата прерывает и этот вызов (общий `cancel`).
+async fn summarize_reasoning(
+    util: &Arc<dyn ChatProvider>,
+    reasoning: &str,
+    cancel: &Arc<AtomicBool>,
+) -> crate::ai::AiResult<String> {
+    const TAIL: usize = 2000;
+    let n = reasoning.chars().count();
+    let tail: String = if n > TAIL {
+        reasoning.chars().skip(n - TAIL).collect()
+    } else {
+        reasoning.to_string()
+    };
+    let messages = [
+        ChatMessage::system(
+            "По размышлению ассистента напиши ОДНУ очень короткую фразу (3–6 слов, настоящее время, \
+             без точки и кавычек) — что он сейчас делает. Только фразу, по-русски.",
+        ),
+        ChatMessage::user(tail),
+    ];
+    let mut out = String::new();
+    util.stream_chat(&messages, &mut |t| out.push_str(&t), cancel)
+        .await?;
+    Ok(out.trim().trim_matches('"').trim().to_string())
 }
 
 /// Отменяет активный чат-стрим (если есть). Идемпотентно.
