@@ -80,10 +80,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Coverage-ратчет Rust (V1.2, TESTING_STRATEGY §6): cargo-llvm-cov, глобальный floor по строкам.
-  # Бежит параллельно rust-матрице (не добавляет wall-clock). Floor — мягкий старт ниже baseline
-  # (локально 71.8% строк); ужесточение + per-path пороги критичных модулей — после подтверждения
-  # CI-Linux baseline (см. BACKLOG «Coverage-доводка»). Frontend-покрытие — в job frontend (vitest).
+  # Coverage-ратчет Rust (TESTING_STRATEGY §6 / AC-Q-2): cargo-llvm-cov → per-module гейт
+  # scripts/check-coverage.mjs (глобальный floor + per-path пороги критичных модулей: indexer/chunker/
+  # search/broker/permission/watcher/eval). Floor'ы — в coverage-baseline.json (ратчет «не ниже», с
+  # запасом под macOS↔Linux). Бежит параллельно rust-матрице. Frontend-покрытие — в job frontend (vitest).
   coverage-rust:
     name: Coverage (Rust)
     runs-on: ubuntu-latest
@@ -108,7 +108,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri -> target
-      - run: cargo llvm-cov --locked --workspace --summary-only --fail-under-lines 65
+      - run: cargo llvm-cov --locked --workspace --json --output-path coverage.json
+      - name: Per-module coverage gate (ratchet)
+        run: node ../../../scripts/check-coverage.mjs coverage.json
 
   # Traceability-гейт (V1.3, TESTING_STRATEGY §4): у КАЖДОГО AC из ACCEPTANCE.md есть запись в
   # docs/acceptance/traceability.json (статус covered/partial/pending/manual/deferred + tests).
