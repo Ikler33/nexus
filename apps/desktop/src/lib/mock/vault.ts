@@ -250,13 +250,10 @@ export function streamChat(
       onEvent({ type: 'sources', sources: [] });
       answer = `(общий чат) Отвечаю напрямую: ${question}`;
     }
-    // R1 (мок): живая сводка + сырой CoT до ответа (как gemma+Qwen в реале).
+    // R1 (мок): живая сводка размышления стримится в индикатор «думает» до ответа (как gemma+Qwen
+    // в реале — обновляется по ходу). Сырой CoT не эмитим: фронт его всё равно не рендерит.
     onEvent({ type: 'reasoningSummary', text: 'Анализирую вопрос' });
-    for (const delta of ['Смотрю, что релевантно вопросу. ', 'Свожу факты воедино. ']) {
-      if (cancelled) return;
-      await new Promise((r) => setTimeout(r, 15));
-      onEvent({ type: 'reasoning', text: delta });
-    }
+    await new Promise((r) => setTimeout(r, 15));
     if (cancelled) return;
     onEvent({ type: 'reasoningSummary', text: 'Формулирую ответ' });
     for (const tok of answer.split(/(\s+)/)) {

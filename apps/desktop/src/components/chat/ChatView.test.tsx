@@ -75,24 +75,41 @@ describe('ChatView (Ф1-8)', () => {
     useChatStore.getState().stop();
   });
 
-  it('reasoning (R1): живая 💭-сводка при стриме + спойлер сырого CoT', () => {
+  it('reasoning (R1): живая сводка стримится в label «думает» (brand-mark, без плашки/спойлера)', () => {
     useChatStore.setState({
       messages: [
-        { id: 'u1', role: 'user', content: 'Где план?' },
+        { id: 'u1', role: 'user', content: 'Сколько будет 2+2*2?' },
         {
           id: 'a1',
           role: 'assistant',
           content: '',
           streaming: true,
-          reasoningSummary: 'Проверяю арифметику',
-          reasoning: 'Сначала смотрю исходные числа, затем складываю.',
+          reasoningSummary: 'Сначала умножаю, потом складываю',
         },
       ],
       streaming: true,
     });
-    render(<ChatView />);
-    expect(screen.getByText(/Проверяю арифметику/)).toBeInTheDocument(); // живая сводка
-    expect(screen.getByText('Ход рассуждений')).toBeInTheDocument(); // тоггл спойлера
-    expect(screen.getByText(/Сначала смотрю исходные числа/)).toBeInTheDocument(); // сырой CoT
+    const { container } = render(<ChatView />);
+    // Сводка показана как переливающийся label фазы «думает».
+    expect(screen.getByText('Сначала умножаю, потом складываю')).toBeInTheDocument();
+    // Анимированный brand-mark присутствует (SVG-созвездие).
+    expect(container.querySelector('svg')).toBeInTheDocument();
+    // Старой уродливой плашки/спойлера «Ход рассуждений» больше нет.
+    expect(screen.queryByText('Ход рассуждений')).not.toBeInTheDocument();
+    expect(container.querySelector('details')).not.toBeInTheDocument();
+  });
+
+  it('reasoning (R1): до первой сводки label «думает» = дефолтная фраза', () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Привет' },
+        { id: 'a1', role: 'assistant', content: '', streaming: true },
+      ],
+      streaming: true,
+    });
+    const { container } = render(<ChatView />);
+    // «Ищу по заметкам…» показывается и в label «думает», и в пульсе композера — оба штатны.
+    expect(screen.getAllByText(/Ищу по заметкам/).length).toBeGreaterThanOrEqual(1);
+    expect(container.querySelector('svg')).toBeInTheDocument(); // brand-mark на месте
   });
 });

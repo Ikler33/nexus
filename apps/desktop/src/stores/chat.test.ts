@@ -163,49 +163,33 @@ describe('chat store (Ф1-8)', () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ content: 'вопрос про A' });
   });
 
-  it('reasoning: сводка патчится сразу, сырой CoT троттлится через rAF (R1)', () => {
-    const rafCbs: FrameRequestCallback[] = [];
-    const rafSpy = vi.fn((cb: FrameRequestCallback) => {
-      rafCbs.push(cb);
-      return rafCbs.length;
-    });
-    vi.stubGlobal('requestAnimationFrame', rafSpy);
-    vi.stubGlobal('cancelAnimationFrame', vi.fn());
-
+  it('reasoning (R1): сводка патчится в сообщение; событие raw `reasoning` игнорируется', () => {
     vi.spyOn(tauriApi.chat, 'streamRag').mockImplementation((_q, onEvent) => {
       onEvent({ type: 'sources', sources: [] });
       onEvent({ type: 'reasoningSummary', text: 'Анализирую' });
-      onEvent({ type: 'reasoning', text: 'шаг 1. ' });
-      onEvent({ type: 'reasoning', text: 'шаг 2.' });
+      onEvent({ type: 'reasoning', text: 'сырой CoT, который не показываем' });
+      onEvent({ type: 'reasoningSummary', text: 'Формулирую ответ' });
       return () => {};
     });
 
     useChatStore.getState().send('вопрос');
 
-    const mid = useChatStore.getState().messages.find((m) => m.role === 'assistant');
-    expect(mid?.reasoningSummary).toBe('Анализирую'); // сводка — сразу, без кадра
-    expect(mid?.reasoning ?? '').toBe(''); // сырой CoT ещё в буфере
-    expect(rafSpy).toHaveBeenCalledTimes(1); // обе reasoning-дельты коалесятся в один кадр
-
-    rafCbs.forEach((cb) => cb(0));
-    const after = useChatStore.getState().messages.find((m) => m.role === 'assistant');
-    expect(after?.reasoning).toBe('шаг 1. шаг 2.');
+    const reply = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(reply?.reasoningSummary).toBe('Формулирую ответ'); // живёт последняя сводка
+    // Сырой CoT нигде не оседает — событие принято и проигнорировано.
+    expect(JSON.stringify(reply)).not.toContain('сырой CoT');
   });
 
-  it('reasoning: сырой CoT и сводка НЕ персистятся (эфемерны), ответ — да (R1)', async () => {
+  it('reasoning (R1): живая сводка НЕ персистится (эфемерна), ответ — да', async () => {
     useChatStore.getState().hydrate('/vault/R');
     useChatStore.getState().send('Roadmap');
     await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), { timeout: 2000 });
 
-    const live = useChatStore.getState().messages.find((m) => m.role === 'assistant');
-    expect((live?.reasoning ?? '').length).toBeGreaterThan(0); // в сессии CoT накоплен (мок шлёт reasoning)
-
-    // «Перезапуск» → hydrate: reasoning/сводка не восстанавливаются, ответ — да.
+    // «Перезапуск» → hydrate: сводка не восстанавливается, ответ — да.
     useChatStore.setState({ messages: [] });
     useChatStore.getState().hydrate('/vault/R');
     const restored = useChatStore.getState().messages.find((m) => m.role === 'assistant');
     expect(restored?.content.length).toBeGreaterThan(0);
-    expect(restored?.reasoning).toBeUndefined();
     expect(restored?.reasoningSummary).toBeUndefined();
   });
 

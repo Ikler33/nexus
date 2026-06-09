@@ -144,44 +144,43 @@
   outline-offset: 1px;
 }
 
-/* Сырой chain-of-thought reasoning-модели (R1) — сворачиваемый спойлер над ответом. */
-.reasoning {
-  font-size: var(--text-xs);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-}
-
-.reasoningToggle {
-  cursor: pointer;
-  padding: 5px 9px;
-  color: var(--color-text-muted);
-}
-
-.reasoningToggle:hover {
-  color: var(--color-text);
-}
-
-.reasoningBody {
-  padding: 8px 10px;
-  border-top: 1px solid var(--color-border);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--color-text-faint);
-  font-family: var(--font-mono);
-  line-height: 1.5;
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-/* Живая короткая сводка размышления («💭 …», R1) — пока идёт стрим. */
-.liveSummary {
+/* Фаза размышления (DESIGN motion.css §msg-thinking): анимированный brand-mark + переливающийся
+   label. В label стримится живая сводка CoT (reasoningSummary, R1). */
+.thinkingRow {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: var(--text-sm);
-  font-style: italic;
-  color: var(--color-ai);
+  gap: 11px;
+  padding: 2px 0 6px;
+}
+
+.thinkingLabel {
+  font-size: var(--text-md);
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--color-text-faint) 35%,
+    var(--color-text) 50%,
+    var(--color-text-faint) 65%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: mtShimmer 1.9s linear infinite;
+}
+
+@keyframes mtShimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinkingLabel {
+    animation: none;
+    background: none;
+    color: var(--color-text-muted);
+  }
 }
 
 .user {
@@ -213,12 +212,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--color-text);
-}
-
-.thinking {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-  font-style: italic;
 }
 
 .error {

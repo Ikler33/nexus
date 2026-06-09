@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import { type ChatMessage, useChatStore } from '../../stores/chat';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
+import { BrandThinking } from './BrandThinking';
 import styles from './ChatPanel.module.css';
 
 /**
@@ -196,23 +197,23 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
         <p className={styles.error}>{t('chat.error', { message: message.error })}</p>
       ) : (
         <>
-          {message.reasoning && (
-            <details className={styles.reasoning}>
-              <summary className={styles.reasoningToggle}>{t('chat.reasoningLabel')}</summary>
-              <div className={styles.reasoningBody}>{message.reasoning}</div>
-            </details>
-          )}
-          {message.streaming && message.reasoningSummary && (
-            <div className={styles.liveSummary}>💭 {message.reasoningSummary}</div>
-          )}
           {message.content ? (
             <div className={styles.answer}>
               {message.content}
               {message.streaming && <span className={styles.caret} aria-hidden />}
             </div>
           ) : (
-            message.streaming &&
-            !message.reasoningSummary && <div className={styles.thinking}>{t('chat.thinking')}</div>
+            message.streaming && (
+              // Фаза размышления (DESIGN §msg-thinking): анимированный brand-mark + переливающийся
+              // label. В label стримится живая сводка CoT (reasoningSummary); до первой сводки —
+              // дефолтная фраза.
+              <div className={styles.thinkingRow}>
+                <BrandThinking size={28} />
+                <span className={styles.thinkingLabel}>
+                  {message.reasoningSummary || t('chat.thinking')}
+                </span>
+              </div>
+            )
           )}
           {message.sources && message.sources.length > 0 && (
             <ul className={styles.sources} aria-label={t('chat.sources')}>

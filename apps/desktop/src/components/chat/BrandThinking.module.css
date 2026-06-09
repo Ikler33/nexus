@@ -1,0 +1,82 @@
+/* Анимированный brand-mark «думает» (DESIGN motion.css §brand-thinking). */
+.mark {
+  color: var(--color-accent);
+  overflow: visible;
+  transform-origin: center;
+  animation: btBreathe 2.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 5px color-mix(in oklch, var(--color-accent) 45%, transparent));
+}
+
+.edge {
+  opacity: 0.2;
+  transform-origin: center;
+  animation: btEdge 1.9s ease-in-out infinite;
+}
+.e1 {
+  animation-delay: 0.15s;
+}
+.e2 {
+  animation-delay: 0.3s;
+}
+.e3 {
+  animation-delay: 0.45s;
+}
+
+.node {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: btNode 1.6s ease-in-out infinite;
+}
+.n0 {
+  animation-delay: 0s;
+}
+.n1 {
+  animation-delay: 0.16s;
+}
+.n2 {
+  animation-delay: 0.32s;
+}
+.n3 {
+  animation-delay: 0.48s;
+}
+
+@keyframes btNode {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(0.7);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+@keyframes btEdge {
+  0%,
+  100% {
+    opacity: 0.14;
+  }
+  45% {
+    opacity: 0.62;
+  }
+}
+@keyframes btBreathe {
+  0%,
+  100% {
+    transform: scale(0.95) rotate(-6deg);
+  }
+  50% {
+    transform: scale(1.05) rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark,
+  .node,
+  .edge {
+    animation: none !important;
+  }
+  .node {
+    opacity: 0.9;
+  }
+}

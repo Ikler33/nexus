@@ -145,7 +145,6 @@
     "send": "Send",
     "stop": "Stop",
     "thinking": "Searching notes…",
-    "reasoningLabel": "Reasoning",
     "emptyTitle": "Ask your notes",
     "ask1": "How does RAG work in Nexus?",
     "ask2": "What are embeddings?",
