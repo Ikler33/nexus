@@ -10,6 +10,24 @@ use crate::ai::{build_inline_messages, injection_marker, InlineMode};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
+/// Макс. символов inline-контекста — под небольшой контекст утилитарной модели (Qwen3-4B, 4k токенов):
+/// ~6000 симв кириллицы ≈ ~2.5–3k токенов, остаётся место под систему/ответ. На gemma-fallback безвредно.
+const INLINE_MAX_CHARS: usize = 6000;
+
+/// Обрезает текст до [`INLINE_MAX_CHARS`]: `keep_start=true` — оставляем начало (выделение для
+/// rewrite/summarize), иначе — хвост (continue: важен текст у курсора).
+fn cap_chars(s: String, keep_start: bool) -> String {
+    let n = s.chars().count();
+    if n <= INLINE_MAX_CHARS {
+        return s;
+    }
+    if keep_start {
+        s.chars().take(INLINE_MAX_CHARS).collect()
+    } else {
+        s.chars().skip(n - INLINE_MAX_CHARS).collect()
+    }
+}
+
 /// Событие inline-стрима для фронта (дискриминированное по `type`, camelCase). Без `Sources`: inline
 /// не делает RAG-ретрив (D2 — контекст = текущая заметка).
 #[derive(Debug, Clone, Serialize)]
@@ -40,24 +58,26 @@ pub async fn inline_complete(
         .ok_or_else(|| AppError::Msg(format!("неизвестный режим inline: {mode}")))?;
 
     // Текст для обработки по режиму (D2): выделение для Rewrite/Summarize, текст до курсора для Continue.
+    // Капим под небольшой контекст утилитарной модели (4k): для continue важен хвост (у курсора),
+    // для выделения — начало.
     let payload = if mode.needs_selection() {
         let sel = selection.unwrap_or_default();
         if sel.trim().is_empty() {
             return Err("нет выделения для этого действия".into());
         }
-        sel
+        cap_chars(sel, true)
     } else {
         if context.trim().is_empty() {
             return Err("нет текста для продолжения".into());
         }
-        context
+        cap_chars(context, false)
     };
 
-    // Берём «быстрый» chat без reasoning (R2: inline — примитив, CoT тут только тормозит) и отпускаем
-    // лок ДО сетевого стрима. Fallback на обычный — на случай рассинхрона (строятся вместе, но мало ли).
+    // Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B :8084) — для inline низкая латентность.
+    // `chat_util` уже с fallback на gemma-fast (см. open_vault); тут ещё fallback на обычный chat.
     let chat = {
         let ctx = state.vault().await?;
-        ctx.chat_fast.clone().or_else(|| ctx.chat.clone())
+        ctx.chat_util.clone().or_else(|| ctx.chat.clone())
     };
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());

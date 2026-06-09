@@ -17,6 +17,10 @@ pub struct AiConfig {
     pub chat: Option<ChatConfig>,
     /// Embedding-провайдер (мультиязычный) — отдельный хост (ADR-005).
     pub embedding: Option<EmbeddingConfig>,
+    /// «Быстрая» утилитарная модель (мелкая, напр. Qwen3-4B на отдельном порту) для примитивов
+    /// (inline/судья): низкая латентность + разгрузка основной модели. Опционально — нет секции →
+    /// fallback на основной chat без reasoning. Non-reasoning-модель → шлём обычный запрос.
+    pub fast: Option<ChatConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,5 +77,22 @@ mod tests {
         let cfg = LocalConfig::parse(r#"{"ai":{"embedding":{"url":"http://x:8081"}}}"#).unwrap();
         assert!(cfg.ai.chat.is_none());
         assert_eq!(cfg.ai.embedding.unwrap().dim, None);
+    }
+
+    #[test]
+    fn parses_fast_utility_endpoint() {
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"fast":{"url":"http://192.168.0.29:8084","model":"qwen"}}}"#,
+        )
+        .unwrap();
+        let fast = cfg.ai.fast.unwrap();
+        assert_eq!(fast.url, "http://192.168.0.29:8084");
+        assert_eq!(fast.model.as_deref(), Some("qwen"));
+        // Нет секции fast → None (fallback на gemma-fast в open_vault).
+        assert!(LocalConfig::parse(r#"{"ai":{}}"#)
+            .unwrap()
+            .ai
+            .fast
+            .is_none());
     }
 }
