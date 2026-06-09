@@ -29,6 +29,8 @@ pub mod git;
 pub mod goals;
 /// Граф ссылок: беклинки из SQLite (ADR-004).
 pub mod graph;
+/// HOME-дашборд (бэкенд): агрегация виджетов (stats/recent/goals; LLM-виджеты — H2+).
+pub mod home;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
 pub mod indexer;
 /// Markdown-парсер (frontmatter, ссылки, теги).
@@ -96,6 +98,7 @@ pub fn run() {
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
             commands::goals::list_goals,
+            commands::home::get_home_data,
             commands::digest::get_latest_digest,
             commands::digest::generate_digest,
             commands::contradictions::get_contradictions,
