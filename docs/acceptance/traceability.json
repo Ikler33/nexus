@@ -8,7 +8,7 @@
     "AC-Q-3": { "status": "covered", "tests": ["CI: clippy -D warnings", "CI: eslint", "CI: tsc --noEmit"] },
     "AC-Q-4": { "status": "partial", "tests": ["eval::tests"], "note": "Eval-математика + офлайн-гейт логики ранжирования на синтетических векторах (V4.5) покрыты в cargo test; живой baseline-гейт на реальном качестве — manual (нужен сервер)." },
     "AC-Q-5": { "status": "partial", "tests": ["CI: security job (cargo-deny + gitleaks, V1.1)", "plugin::permission::tests", "plugin::broker::tests", "tests::csp_and_capabilities_are_hardened"], "note": "Supply-chain + ядро security-тестов есть; AC-SEC-6 (V4.2) и AC-SEC-7 (V4.3) закрыты." },
-    "AC-Q-6": { "status": "pending", "note": "Линт на висячие упоминания снятых решений (sqlite-vec/petgraph/WASM/currentFile) не автоматизирован — пока ручная сверка." },
+    "AC-Q-6": { "status": "covered", "tests": ["CI: traceability job → scripts/check-dangling.mjs (self-test фейк-нарушений; код вне комментариев — запрет, доки — замороженный per-file инвентарь)"], "note": "Термины: sqlite-vec/petgraph/wasmtime/currentFile. Исторические тексты (reviews/, бэкап, журналы) вне скоупа." },
 
     "AC-EGR-1": { "status": "covered", "tests": ["CI: traceability job → scripts/check-egress.mjs (встроенный self-test фейк-нарушений + запрет билдера вне net/)"], "note": "Линт также в scripts/test-all.sh. WHITELIST: net/-self + dispatch_net (маркер «egress-lint: allow» с обоснованием)." },
     "AC-EGR-2": { "status": "covered", "tests": ["net::tests::policy_allowlist_or_private", "net::tests::denied_request_never_touches_socket (мок-listener не принял коннект)", "net::tests::host_not_allowed_denied_before_dns"] },

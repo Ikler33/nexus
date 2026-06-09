@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Тест-инфра: линт висячих упоминаний снятых решений (AC-Q-6, хвост кросс-плана #5)
+
+- Новый zero-dep гейт `scripts/check-dangling.mjs` (CI-job traceability + `test-all.sh`):
+  ключевые слова снятых решений — `sqlite-vec` (ANN→usearch), `petgraph` (граф→SQLite, ADR-004),
+  `wasmtime` (рантайм отложен), `currentFile` (→группы/вкладки, Б12). В **коде** термин вне
+  комментария → красный CI; в **доках** — замороженный per-file инвентарь счётчиков (новое
+  упоминание = осознанное обновление инвентаря в том же PR; паттерн EXPECTED из `check-ignored`).
+  Исторические тексты (`docs/reviews/`, бэкап v1.0, журналы) — вне скоупа. Self-test
+  фейк-нарушениями на каждом прогоне. Traceability: **AC-Q-6 → covered** (последний pending
+  из AC-Q-блока).
+
 ### Egress-контроль ядра — фундамент `net::GuardedClient` (#16, ADR-005-ext, срез 1)
 
 - **Новый модуль `net/`** — единственный chokepoint исходящего HTTP ядра (E1/AC-EGR-1):
