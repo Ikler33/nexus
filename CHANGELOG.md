@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### LLM R2: быстрый режим без reasoning для примитивов (inline/дайджест/судья)
+
+- **gemma — reasoning-модель**, и для коротких/структурных задач chain-of-thought только вредит:
+  замер 2026-06-09 (rewrite, `max_tokens=250`) — с reasoning **6.9с и ПУСТОЙ ответ** (CoT съел бюджет),
+  без него **3.8с и нормальный ответ**; на судье противоречий — без reasoning судит так же верно (даже
+  точнее тип). На СЛОЖНОМ многошаговом выводе reasoning, наоборот, помогает (ON дал верную дату, OFF
+  ошибся) → для RAG-чата оставлен. Подробности — `docs/reviews/LLM_FUNCTIONAL_REVIEW.md`.
+- `OpenAiChatProvider::without_reasoning()` → в тело запроса добавляется `chat_template_kwargs.
+  enable_thinking=false` (единственный рабочий способ глушения CoT у этой модели). `VaultContext` теперь
+  держит пару: `chat` (с reasoning — RAG-чат) и `chat_fast` (без — примитивы). Дайджест, судья
+  противоречий и inline переведены на `chat_fast`; RAG-чат остаётся на `chat`.
+- Это убирает «долго генерирует»/пустой дайджест и ускоряет inline ~×2 без потери качества. Отдельная
+  «быстрая модель» не нужна — тот же сервер/модель, только без CoT. +1 offline-тест
+  (`request_body_toggles_reasoning`). clippy/`test-all.sh` зелёные.
+
 ### Тесты: интеграционный крейт git-sync (кросс-план #12, Wave B)
 
 - **git-sync покрыт end-to-end как внешний потребитель.** Новый `tests/git_sync.rs` (отдельная

@@ -53,8 +53,12 @@ pub async fn inline_complete(
         context
     };
 
-    // Берём chat-провайдер и отпускаем лок ДО сетевого стрима.
-    let chat = state.vault().await?.chat.clone();
+    // Берём «быстрый» chat без reasoning (R2: inline — примитив, CoT тут только тормозит) и отпускаем
+    // лок ДО сетевого стрима. Fallback на обычный — на случай рассинхрона (строятся вместе, но мало ли).
+    let chat = {
+        let ctx = state.vault().await?;
+        ctx.chat_fast.clone().or_else(|| ctx.chat.clone())
+    };
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
     };

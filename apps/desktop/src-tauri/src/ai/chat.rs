@@ -69,6 +69,10 @@ pub struct OpenAiChatProvider {
     temperature: f32,
     /// Idle-таймаут стрима (по умолчанию [`STREAM_IDLE_TIMEOUT`]); короче — в тестах.
     idle_timeout: std::time::Duration,
+    /// Включать ли «размышление» reasoning-модели (gemma). `true` для RAG-чата (точнее на сложных
+    /// выводах), `false` для примитивов (inline/дайджест/судья) — там CoT только жрёт латентность/бюджет
+    /// без выигрыша в качестве (замер 2026-06-09). При `false` шлём `chat_template_kwargs.enable_thinking`.
+    enable_thinking: bool,
 }
 
 impl OpenAiChatProvider {
@@ -85,7 +89,31 @@ impl OpenAiChatProvider {
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
             idle_timeout: STREAM_IDLE_TIMEOUT,
+            enable_thinking: true,
         })
+    }
+
+    /// «Быстрый» вариант провайдера БЕЗ reasoning (для примитивов: inline/дайджест/судья). Тот же
+    /// сервер/модель, но в запрос идёт `chat_template_kwargs.enable_thinking=false` → нет CoT-паузы.
+    pub fn without_reasoning(mut self) -> Self {
+        self.enable_thinking = false;
+        self
+    }
+
+    /// Тело запроса `/v1/chat/completions`. Вынесено отдельно для offline-теста переключателя reasoning:
+    /// при `enable_thinking=false` добавляется `chat_template_kwargs.enable_thinking=false` (gemma глушит
+    /// CoT — для примитивов; замер: rewrite ON=6.9с/пусто vs OFF=3.8с/ответ).
+    fn request_body(&self, messages: &[ChatMessage]) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": true,
+            "temperature": self.temperature,
+        });
+        if !self.enable_thinking {
+            body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+        }
+        body
     }
 
     /// Тест-хелпер: короткий idle-таймаут, чтобы проверять обрыв залипшего сервера быстро.
@@ -104,12 +132,7 @@ impl ChatProvider for OpenAiChatProvider {
         on_token: &mut (dyn FnMut(String) + Send),
         cancel: &Arc<AtomicBool>,
     ) -> AiResult<String> {
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": messages,
-            "stream": true,
-            "temperature": self.temperature,
-        });
+        let body = self.request_body(messages);
         let send_fut = self.client.post(&self.endpoint).json(&body).send();
         let mut resp = tokio::time::timeout(self.idle_timeout, send_fut)
             .await
@@ -324,6 +347,26 @@ mod tests {
         assert!(matches!(parse_sse_delta(": keep-alive"), SseEvent::Other));
         assert!(matches!(parse_sse_delta("data: not-json"), SseEvent::Other));
         assert!(matches!(parse_sse_delta(""), SseEvent::Other));
+    }
+
+    /// R2: `without_reasoning()` добавляет `chat_template_kwargs.enable_thinking=false` в тело запроса;
+    /// обычный провайдер — без этого ключа (reasoning по умолчанию ON). Offline, без сервера.
+    #[test]
+    fn request_body_toggles_reasoning() {
+        let p = OpenAiChatProvider::new("http://x", "gemma", None).unwrap();
+        let on = p.request_body(&[]);
+        assert!(
+            on.get("chat_template_kwargs").is_none(),
+            "по умолчанию reasoning ON — без флага enable_thinking"
+        );
+        let off = OpenAiChatProvider::new("http://x", "gemma", None)
+            .unwrap()
+            .without_reasoning()
+            .request_body(&[]);
+        assert_eq!(
+            off["chat_template_kwargs"]["enable_thinking"],
+            serde_json::json!(false)
+        );
     }
 
     #[test]
