@@ -167,6 +167,13 @@ export interface StaleNote {
   hint: string | null;
 }
 
+/** Открытый вопрос «Open questions» (H5, зона 4): текст вопроса + путь заметки-источника. Контент
+ *  виджета `open_questions` — JSON-массив таких объектов (зеркалит Rust `home::insights`). */
+export interface OpenQuestion {
+  question: string;
+  path: string;
+}
+
 /** Дайджест недавних изменений (зеркалит Rust `digest::Digest`, ADR-007 slice 4). Время — Unix-секунды. */
 export interface Digest {
   createdAt: number;
@@ -381,7 +388,8 @@ export const tauriApi = {
 
     /** Кэшированный LLM-виджет по ключу (или `null`, если ещё не генерировался). Мгновенно — НЕ ждёт
      *  LLM (генерация фоном; готовность — событие `home:widget-updated`). H2. Известные ключи:
-     *  `'daily_brief'` (H3 — сводка изменений vault за сутки, зона 2). Вне Tauri — `null`. */
+     *  `'daily_brief'` (H3, зона 2), `'open_questions'` (H5, зона 4, manual), `'context_drift'`
+     *  (H5, зона 5, scheduled). Для последних двух есть типизированные хелперы ниже. Вне Tauri — `null`. */
     widget: (key: string): Promise<Widget | null> =>
       isTauri() ? invoke<Widget | null>('get_widget', { key }) : Promise.resolve(null),
 
@@ -400,6 +408,29 @@ export const tauriApi = {
      *  (ключ `'stale_radar'`). Вне Tauri — no-op. */
     staleRefresh: (): Promise<void> =>
       isTauri() ? invoke<void>('refresh_stale_radar') : Promise.resolve(),
+
+    /** «Open questions» (H5, зона 4, manual): незакрытые вопросы из последних заметок — распарсенный
+     *  контент виджета `open_questions`. Сгенерировать/обновить — `home.refresh('open_questions')`;
+     *  готовность — событие `onWidgetUpdated`. Вне Tauri / пока не сгенерировано — `[]`. */
+    openQuestions: async (): Promise<OpenQuestion[]> => {
+      if (!isTauri()) return [];
+      const w = await invoke<Widget | null>('get_widget', { key: 'open_questions' });
+      if (!w?.content) return [];
+      try {
+        return JSON.parse(w.content) as OpenQuestion[];
+      } catch {
+        return [];
+      }
+    },
+
+    /** «Context drift» (H5, зона 5, scheduled): абзац расхождения «текущий фокус vs цели» — контент
+     *  виджета `context_drift` (или `null`, если ещё не сгенерировано/пусто). Обновляется раз в сутки
+     *  в фоне; принудительно — `home.refresh('context_drift')`. Вне Tauri — `null`. */
+    contextDrift: async (): Promise<string | null> => {
+      if (!isTauri()) return null;
+      const w = await invoke<Widget | null>('get_widget', { key: 'context_drift' });
+      return w?.content ? w.content : null;
+    },
   },
 
   digest: {

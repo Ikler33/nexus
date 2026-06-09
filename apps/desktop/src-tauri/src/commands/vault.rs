@@ -131,6 +131,45 @@ pub async fn open_vault(
             ));
         registry.insert(crate::home::stale::KIND_STALE.to_string(), handler);
     }
+    // HOME LLM-виджеты на фреймворке H2 (`WidgetHandler`: генерация → кэш `home_widgets` → событие).
+    // Open questions (H5, зона 4, manual): короткое извлечение незакрытых вопросов → утилитарная `chat_util`.
+    if let Some(util) = &chat_util {
+        let key = crate::home::insights::KEY_OPEN_QUESTIONS;
+        let kind = crate::home::widgets::widget_kind(key);
+        let generator: Arc<dyn crate::home::widgets::WidgetGenerator> = Arc::new(
+            crate::home::insights::OpenQuestionsGenerator::new(db.reader().clone(), util.clone()),
+        );
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::home::widgets::WidgetHandler::new(
+                key,
+                generator,
+                widget_sink.clone(),
+                db.reader().clone(),
+                db.writer().clone(),
+                true,
+            ));
+        registry.insert(kind.clone(), handler);
+        widget_registry.register(key, &kind);
+    }
+    // Context drift (H5, зона 5, scheduled): сравнение фокуса и целей — больше контекста → `chat_fast`/gemma.
+    if let Some(fast) = &chat_fast {
+        let key = crate::home::insights::KEY_CONTEXT_DRIFT;
+        let kind = crate::home::widgets::widget_kind(key);
+        let generator: Arc<dyn crate::home::widgets::WidgetGenerator> = Arc::new(
+            crate::home::insights::ContextDriftGenerator::new(db.reader().clone(), fast.clone()),
+        );
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::home::widgets::WidgetHandler::new(
+                key,
+                generator,
+                widget_sink.clone(),
+                db.reader().clone(),
+                db.writer().clone(),
+                true,
+            ));
+        registry.insert(kind.clone(), handler);
+        widget_registry.register(key, &kind);
+    }
     // Recurring (slice 6): LLM-фичи сами переназначаются после прогона — авто-обновление раз в сутки
     // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.
     const DAY_SECS: i64 = 24 * 3600;
@@ -141,8 +180,16 @@ pub async fn open_vault(
     if chat.is_some() && vectors.is_some() {
         recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
     }
-    // On-change (slice 7): те же LLM-kind перезапускаются после правок vault (с дебаунсом).
+    // On-change (slice 7): дайджест+противоречия перезапускаются после правок vault (с дебаунсом).
     let on_change: Vec<String> = recurring.keys().cloned().collect();
+    // Context drift (H5) — scheduled-only (раз/сутки; концепт: «чаще нет смысла»): в `recurring`, но НЕ в
+    // `on_change` — добавляем ПОСЛЕ снятия on_change, чтобы он не реагировал на каждую правку.
+    if chat.is_some() {
+        recurring.insert(
+            crate::home::widgets::widget_kind(crate::home::insights::KEY_CONTEXT_DRIFT),
+            DAY_SECS,
+        );
+    }
     crate::scheduler::spawn_worker(
         db.writer().clone(),
         app,
@@ -159,6 +206,27 @@ pub async fn open_vault(
             .unwrap_or(false)
     {
         let _ = crate::scheduler::enqueue(db.writer(), crate::digest::KIND_DIGEST, "", 0, 2).await;
+    }
+    // Context drift (H5) — run-if-overdue на открытии (как дайджест), через H2 `is_overdue` (нет кэша
+    // ИЛИ vault менялся с прошлой генерации). Open questions — manual-only, без сида.
+    if chat.is_some() {
+        let key = crate::home::insights::KEY_CONTEXT_DRIFT;
+        let mtime = crate::scheduler::max_file_mtime(db.reader())
+            .await
+            .unwrap_or(0);
+        if crate::home::widgets::is_overdue(db.reader(), key, mtime)
+            .await
+            .unwrap_or(false)
+        {
+            let _ = crate::scheduler::enqueue(
+                db.writer(),
+                &crate::home::widgets::widget_kind(key),
+                "",
+                0,
+                2,
+            )
+            .await;
+        }
     }
     // Поиск противоречий — run-if-overdue (нужны и chat, и векторы).
     if chat.is_some()
