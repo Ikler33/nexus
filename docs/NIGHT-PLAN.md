@@ -297,12 +297,12 @@
 - `#5` синк доки с кодом (§4.3 AIClient=«план», §5.1 rebuild=«не реализ.», §2 раскладка) + AC-Q-6 авто-линт висячих упоминаний
 - `#6` PRAGMA mmap/cache/temp_store + usearch F32→F16-опция
 - `#7` единый source версии (вместо `0.0.0`×4) + CI-проверка синка 4 файлов
-- `#8`(част.) слить двойной разбор `local.json` в `open_vault` · `#18` per-path coverage · `#23` render-smoke графа · `#33` конвенция `Redacted`
+- `#8`(част.) слить двойной разбор `local.json` в `open_vault` · ~~`#18` per-path coverage~~ **✅** (PR #103: `check-coverage.mjs` + floors `coverage-baseline.json`) · `#23` render-smoke графа · `#33` конвенция `Redacted`
 
 **🟡 Wave B — фундамент (M/L, автономно, СТРОГИЙ порядок):**
 - ~~`#13` примитив rebuild FTS5/usearch в раннере миграций~~ **✅** (`rebuild_fts`-флаг на `Migration`)
 - ~~`#9` AppState-аксессоры + типизированный `AppError`~~ **✅** (`error::AppError` + `AppState::vault()`; см. журнал) · ~~`#12` Rust integration-крейт git-sync~~ **✅** (`tests/git_sync.rs`: push/pull/FF/MergeRequired через локальный bare-remote; git-identity НЕ нужна) · ~~`#28` декомпозиция `indexer/mod.rs`~~ **✅** (1302→493; подмодули links/fs/events/rag/tests)
-- `#10` выборочный git-стейдж по одобренным типам (defense-in-depth; дизайн списка типов — `themes/**`=JS) · `#22` пагинация `list_notes` · `#25` discriminated Buffer (под граф-во-вкладку) · ~~`#17` персист истории чата~~ **✅** · ~~`#27` DNS-rebinding гард plugin-fetch~~ **✅**
+- ~~`#10` выборочный git-стейдж~~ **✅** (PR #104: `git_commit_paths`, secret-scan по коммитимым) · `#22` пагинация `list_notes` · `#25` discriminated Buffer (под граф-во-вкладку) · ~~`#17` персист истории чата~~ **✅** · ~~`#27` DNS-rebinding гард plugin-fetch~~ **✅**
 - **perf-эпик строго:** `#14` реальный токенайзер → `#15` cross-file batching (L, ломает инвариант одной задачи) → `#6` квантизация
 - ~~`#11` LLM-настройки UI (11a форма + 11b hot-apply)~~ **✅** (раздел «AI / Модели» + hot-apply chat)
 
@@ -310,7 +310,7 @@
 - ~~`#29` подпись/нотаризация~~ **⏸️ ОТЛОЖЕНО ВЛАДЕЛЬЦЕМ (2026-06-09)**: приложение сначала для личного
   использования (владелец сам тестирует до публичного релиза) → сертификаты Apple ($99/год)/Authenticode
   пока НЕ берём. Разблокирует `#30` updater → `#26` release.yml → `#31` E2E-смоук — всё ждёт решения о публикации.
-- `#16` ADR egress-хелпер ядра (ADR/док `#5` СНАЧАЛА, фасад conform-ит) · `#21` ADR-007 планировщик джобов · `#24` развязка граф-симуляции (live-drag vs worker — sign-off) · `#19` cold-bench (живой embedder) · `#20` markdown-preview/reading-mode · `#35` vision→AC (умные шаблоны/прогресс целей)
+- ~~`#16` ADR egress-хелпер ядра~~ **✅ срез 1 «Фундамент»** (ADR-005-ext E1–E10 + W1–W4 принят, док PR #105; код `net::GuardedClient` PR #106, AC-EGR-1..13 covered; срезы 2 UI/контроль · 3 cloud · 4 web — по `docs/dev/net.md`) · ~~`#21` ADR-007 планировщик джобов~~ **✅** (ADR-007 принят §0; `scheduler/` в main: очередь `jobs` + воркер + recurring/on-change/manual + backpressure S5) · `#24` развязка граф-симуляции (live-drag vs worker — sign-off) · `#19` cold-bench (живой embedder) · `#20` markdown-preview/reading-mode · `#35` vision→AC (умные шаблоны/прогресс целей)
 
 **Жёсткие правила:** `#13` до схемо-миграций · perf `#14→#15→#6→#19` · egress док`#5`→хелпер`#16` · подпись`#29`→updater`#30` · `#16`/`#24` код автономен, но развилку — sign-off владельца.
 
@@ -346,26 +346,31 @@
   медленно и иногда ПУСТОЙ ответ. Reasoning гасится `chat_template_kwargs:{enable_thinking:false}`
   (другие способы не работают). Отдельная быстрая модель НЕ обязательна.
 
-> ### ⚠️ НЕЗАКРЫТЫЕ ХВОСТЫ СЕССИИ 2026-06-09 (разобрать ПЕРВЫМ):
-> - **#91** (интеграционные тесты git-sync, #12) — PR ОТКРЫТ, не смержен: на windows-latest падал
->   НЕ git-тест, а `eval_fixture_meets_baseline` (CRLF, см. ниже). После мержа CRLF-фикса: `git fetch`,
->   пересоздать ветку от свежего origin/main (или rebase), дождаться ЗЕЛЁНОГО CI → `gh pr merge 91
->   --squash --delete-branch -R Ikler33/nexus`. git_sync на Windows проходит — пробка только в eval.
-> - **CRLF-фикс** (PR #93, `track/60-eval-crlf`) — чинит красный main на Windows. Смержить ПЕРВЫМ на
->   зелёном CI (особенно windows-latest). После — разблокирует #91.
->
-> ### 🔴 СЛЕДУЮЩАЯ ЗАДАЧА ДЛЯ КРОНА (приоритет, есть AC+offline-тест):
-> Реализовать R1+R2 из `docs/reviews/LLM_FUNCTIONAL_REVIEW.md`:
-> - **R1** (`ai/chat.rs`): `reasoning_content: Option<String>` в `struct Delta`; в `parse_sse_delta`
->   новый `SseEvent::Reasoning(String)`; в `chat_rag`/`inline_complete` — эвент канала
->   `Reasoning { text }` (+фронт: статус «💭 размышляет…»). _Тест:_ `parse_sse_delta` на чанке с
->   `reasoning_content` → `SseEvent::Reasoning` (offline, как существующий `parse_sse_delta_*`).
-> - **R2**: режим «без reasoning» у `OpenAiChatProvider` (тело `chat_template_kwargs:{enable_thinking:false}`)
->   для inline/digest/contradictions. _Тест offline:_ тело запроса содержит флаг (проверить сборку body).
-> - **R3** (важно): поднять `max_tokens` RAG-чата с запасом (reasoning ест бюджет).
-> Делать срезами R1 → R2 → R3, каждый со своим тестом + CHANGELOG, линейными PR от main.
-> **Мерж: только на ЗЕЛЁНОМ CI вручную** (`gh pr merge <N> --squash --delete-branch -R Ikler33/nexus`) —
-> у main НЕТ required-checks, `--auto` мержит мгновенно (см. ниже).
+> ### ✅ ХВОСТЫ СЕССИИ 2026-06-09 — ЗАКРЫТЫ (сверено 2026-06-10):
+> - **#93** (CRLF-фикс eval-гейта) и **#91** (интеграционные git-sync, #12) — ОБА смержены; main на
+>   Windows зелёный.
+> - **R1/R2 из LLM_FUNCTIONAL_REVIEW — сделаны:** R2 `without_reasoning()` (PR #94), ai.fast
+>   утилитарная модель = R4 (PR #95), R1 reasoning-стрим + живая 💭-сводка (PR #96; фронт-рендер —
+>   открытый PR #97, дизайн-чат). **R3 закрыт by-construction:** тело запроса `max_tokens` НЕ шлёт
+>   вовсе → llama.cpp стримит до EOS/контекста, обрезки бюджетом нет (проверено `request_body`).
+
+### Прогон 2026-06-09 (вечер) → 2026-06-10 (автономная ночь)
+- ✅ **LLM-серия R1/R2/R4**: PR #94 (R2 без reasoning для примитивов), #95 (ai.fast — утилитарная
+  модель, `chat_util` с fallback на gemma-fast), #96 (R1 — reasoning-стрим + живая 💭-сводка через
+  `chat_util`). Фронт-рендер reasoning — PR #97 ОТКРЫТ (дизайн-чат, не трогать автономно).
+- ✅ **HOME-бэкенд H1–H5 целиком**: PR #98 (get_home_data), #99 (кэш LLM-виджетов + refresh-режимы),
+  #100 (Daily brief), #101 (Stale radar), #102 (Open questions + Context drift).
+- ✅ **#18 per-path coverage** (PR #103: `check-coverage.mjs`, floors в `coverage-baseline.json` +
+  локальный `scripts/coverage.sh`) · **#10 выборочный git-стейдж** (PR #104).
+- ✅ **#16 egress — срез 1 «Фундамент» ПОЛНОСТЬЮ** (doc-first #105 → код #106): модуль
+  `net::GuardedClient` + `EgressPolicy` (metadata→kill-switch→opt-in→allowlist∨private) +
+  append-only `EgressAudit` (Redacted host); провайдеры + `test_ai_connection`/`probe_dim` через
+  guarded (Feature::Probe — «первый egress-вектор» закрыт); фасад `AIClient{chat,chat_fast,chat_util,
+  embedder,policy}` (решение владельца: все 4 провайдера); kill-switch в `AppState` взводит
+  существующий `chat_cancel`; авто-allowlist явных `ai.*`-хостов (E4, offline=false дефолт);
+  CI-grep-линт `check-egress.mjs` (self-test) + единственность `is_private_host`.
+  **AC-EGR-1..13 → covered**, AC-EGR-14 pending (i18n-фронт, срез 2). Срезы 2–4 — `docs/dev/net.md`.
+- 🧹 Хаускипинг: BACKLOG/NIGHT-PLAN сверены с кодом (этот PR); хвосты #91/#93 сняты как смерженные.
 
 ### 🏁 Сделано до кросс-плана (дневная сессия)
 граф v2d (#44), V2.2 rename (#45), V4.4 общий чат (#46), V4.3 анти-инъекция (#47), V4.5 eval-гейт (#48),
