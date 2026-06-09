@@ -82,15 +82,28 @@ pub async fn open_vault(
     // Планировщик фоновых задач (ADR-007): встроенный kind `gc` (самоочистка) + (если есть chat) `digest`
     // (LLM-дайджест недавних изменений, #35). Воркер живёт, пока открыт vault.
     let mut registry = crate::scheduler::default_registry(db.writer().clone());
+    // HOME-виджеты (H2-фундамент): реестр `key → kind планировщика, который его генерирует` — по нему
+    // `refresh_widget` ставит джобу и дедупит. Наполняется ниже (H3+); пуст, если LLM не сконфигурирован.
+    let mut widget_registry = crate::home::widgets::WidgetRegistry::new();
     // Дайджест/судья — это примитивы: берут «быстрый» chat без reasoning (R2).
     if let Some(fast) = &chat_fast {
-        let handler: Arc<dyn crate::scheduler::JobHandler> =
-            Arc::new(crate::digest::DigestHandler::new(
+        // H3: дайджест недавних изменений — это HOME-виджет «Daily brief» (зона 2, on-open). После
+        // генерации дайджест зеркалится в кэш `home_widgets` + событие `home:widget-updated`; виджет
+        // бэкает тот же kind `digest` (одна генерация на обе поверхности — панель дайджеста и HOME).
+        let sink: Arc<dyn crate::home::widgets::WidgetSink> =
+            Arc::new(crate::home::widgets::TauriWidgetSink(app.clone()));
+        let handler: Arc<dyn crate::scheduler::JobHandler> = Arc::new(
+            crate::digest::DigestHandler::new(
                 db.reader().clone(),
                 fast.clone(),
                 db.writer().clone(),
-            ));
+            )
+            .with_home_widget(sink),
+        );
         registry.insert(crate::digest::KIND_DIGEST.to_string(), handler);
+        widget_registry.register(crate::digest::KEY_DAILY_BRIEF, crate::digest::KIND_DIGEST);
+        // Бутстрап: показать последний дайджест в виджете сразу на открытии (до следующей генерации).
+        let _ = crate::digest::mirror_latest_to_widget(db.reader(), db.writer()).await;
     }
     // «Поиск противоречий» (#vision) — судья: короткие пары → утилитарная модель (chat_util). Нужны векторы.
     if let (Some(util), Some(vectors)) = (&chat_util, &vectors) {
@@ -113,13 +126,6 @@ pub async fn open_vault(
     if chat.is_some() && vectors.is_some() {
         recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
     }
-    // HOME-виджеты (H2, фундамент): кэш `home_widgets` + refresh-режимы поверх планировщика. Конкретные
-    // LLM-виджеты (Daily brief — H3, Stale radar — H4, Open questions/Context drift — H5) регистрируются
-    // здесь по мере реализации: создают `WidgetHandler` (генератор + `TauriWidgetSink(app.clone())`),
-    // вставляют его kind `widget_kind(key)` в `registry`, добавляют kind в `recurring`/`on_change`,
-    // сидят overdue-джобу (`home::widgets::is_overdue`) и регистрируют ключ в `widget_registry`. Пока
-    // виджетов нет — фундамент дремлет до H3.
-    let widget_registry = crate::home::widgets::WidgetRegistry::new();
     // On-change (slice 7): те же LLM-kind перезапускаются после правок vault (с дебаунсом).
     let on_change: Vec<String> = recurring.keys().cloned().collect();
     crate::scheduler::spawn_worker(

@@ -13,7 +13,7 @@
 //! Конкретные виджеты (Daily brief — H3, Stale radar — H4, Open questions/Context drift — H5)
 //! реализуют [`WidgetGenerator`] и регистрируются в `open_vault`; сам фундамент виджетов не содержит.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -246,12 +246,13 @@ impl WidgetSink for TauriWidgetSink {
     }
 }
 
-/// Реестр зарегистрированных HOME-виджетов (множество ключей). Команда `refresh_widget` проверяет по
-/// нему, что ключ известен, прежде чем ставить джобу — иначе понятная ошибка вместо тихого dead-letter.
-/// Наполняется в `open_vault` по мере регистрации виджетов (H3+); сейчас пуст (фундамент).
+/// Реестр зарегистрированных HOME-виджетов: `key → kind планировщика, который его генерирует`. Команда
+/// `refresh_widget` по нему проверяет, что ключ известен, и узнаёт, какую джобу ставить (для виджетов на
+/// своём kind — `widget_kind(key)`; для «Daily brief» (H3) — существующий kind `digest`). Наполняется в
+/// `open_vault`; пуст, если LLM не сконфигурирован (тогда виджетов нет).
 #[derive(Debug, Default)]
 pub struct WidgetRegistry {
-    keys: HashSet<String>,
+    kinds: HashMap<String, String>,
 }
 
 impl WidgetRegistry {
@@ -259,14 +260,19 @@ impl WidgetRegistry {
         Self::default()
     }
 
-    /// Зарегистрировать ключ виджета (идемпотентно).
-    pub fn register(&mut self, key: &str) {
-        self.keys.insert(key.to_string());
+    /// Зарегистрировать виджет: `key` → `kind` планировщика, генерирующий его (идемпотентно).
+    pub fn register(&mut self, key: &str, kind: &str) {
+        self.kinds.insert(key.to_string(), kind.to_string());
     }
 
     /// Зарегистрирован ли виджет с таким ключом.
     pub fn contains(&self, key: &str) -> bool {
-        self.keys.contains(key)
+        self.kinds.contains_key(key)
+    }
+
+    /// kind планировщика, генерирующий виджет `key` (для `refresh_widget`). `None` — не зарегистрирован.
+    pub fn kind_for(&self, key: &str) -> Option<&str> {
+        self.kinds.get(key).map(String::as_str)
     }
 }
 
@@ -501,12 +507,14 @@ mod tests {
     }
 
     #[test]
-    fn registry_tracks_known_keys() {
+    fn registry_tracks_known_keys_and_kinds() {
         let mut r = WidgetRegistry::new();
         assert!(!r.contains("daily_brief"));
-        r.register("daily_brief");
-        r.register("daily_brief"); // идемпотентно
+        assert!(r.kind_for("daily_brief").is_none());
+        r.register("daily_brief", "digest");
+        r.register("daily_brief", "digest"); // идемпотентно
         assert!(r.contains("daily_brief"));
+        assert_eq!(r.kind_for("daily_brief"), Some("digest"));
         assert!(!r.contains("unknown"));
     }
 }

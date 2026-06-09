@@ -47,7 +47,11 @@ E2E; `#16` egress-ADR/web-агент; vision→AC (умные шаблоны / N
   `home:widget-updated`; `WidgetRegistry` известных ключей в `VaultContext`). Конкретные виджеты
   регистрируются в `open_vault` поверх этого слоя — H3+.
 - **H3 — Daily brief** (LLM, on-open) — экспонировать существующий `digest` как home-виджет (или новый
-  kind на `chat_fast`/gemma — большой контекст).
+  kind на `chat_fast`/gemma — большой контекст). **✅ реализовано**: без дублирования генерации —
+  `DigestHandler` зеркалит результат в кэш `home_widgets[daily_brief]` + событие `home:widget-updated`;
+  `WidgetRegistry` хранит `key → kind`, `refresh_widget("daily_brief")` бэкается kind `digest` (refresh =
+  регенерация, общий дедуп с панелью); бутстрап `mirror_latest_to_widget` на открытии. on-open/recurring/
+  on-change наследуются от планировщика дайджеста.
 - **H4 — Stale radar** (dynamic скоринг + опц. LLM-слой top-10, кэш 24ч, инвалидация по mtime).
 - **H5 — Open questions** (LLM, manual) + **Context drift** (LLM, scheduled). На `chat_util`/`chat_fast`.
 

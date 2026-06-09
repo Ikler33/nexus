@@ -37,18 +37,17 @@ pub async fn get_widget(state: State<'_, AppState>, key: String) -> AppResult<Op
 /// уже готова к запуску/выполняется — повторный клик no-op. Результат — событием `home:widget-updated`.
 #[tauri::command]
 pub async fn refresh_widget(state: State<'_, AppState>, key: String) -> AppResult<()> {
-    let (writer, reader, known) = {
+    let (writer, reader, kind) = {
         let ctx = state.vault().await?;
         (
             ctx.db.writer().clone(),
             ctx.db.reader().clone(),
-            ctx.widgets.contains(&key),
+            ctx.widgets.kind_for(&key).map(str::to_string),
         )
     };
-    if !known {
+    let Some(kind) = kind else {
         return Err(format!("неизвестный HOME-виджет: {key}").into());
-    }
-    let kind = widgets::widget_kind(&key);
+    };
     if scheduler::has_ready_job(&reader, &kind, scheduler::now_secs()).await? {
         return Ok(()); // уже в очереди/выполняется — дедуп
     }
