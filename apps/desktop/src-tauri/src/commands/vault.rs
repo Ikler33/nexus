@@ -59,10 +59,14 @@ pub async fn open_vault(
         None => (None, None, crate::indexer::Indexer::new(&db, root.clone())),
     };
 
-    // Chat-провайдер (ADR-005: отдельный хост) — независимо от embedding RAG.
-    let chat = match &local_cfg {
-        Some(cfg) => build_chat(cfg).await,
-        None => None,
+    // Chat-провайдеры (ADR-005): пара — обычный с reasoning (RAG-чат, точность) + «быстрый» без
+    // reasoning (примитивы R2: inline/дайджест/судья). Строятся вместе (есть/нет синхронно).
+    let (chat, chat_fast) = match &local_cfg {
+        Some(cfg) => match build_chat(cfg).await {
+            Some((normal, fast)) => (Some(normal), Some(fast)),
+            None => (None, None),
+        },
+        None => (None, None),
     };
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
@@ -71,22 +75,23 @@ pub async fn open_vault(
     // Планировщик фоновых задач (ADR-007): встроенный kind `gc` (самоочистка) + (если есть chat) `digest`
     // (LLM-дайджест недавних изменений, #35). Воркер живёт, пока открыт vault.
     let mut registry = crate::scheduler::default_registry(db.writer().clone());
-    if let Some(chat) = &chat {
+    // Дайджест/судья — это примитивы: берут «быстрый» chat без reasoning (R2).
+    if let Some(fast) = &chat_fast {
         let handler: Arc<dyn crate::scheduler::JobHandler> =
             Arc::new(crate::digest::DigestHandler::new(
                 db.reader().clone(),
-                chat.clone(),
+                fast.clone(),
                 db.writer().clone(),
             ));
         registry.insert(crate::digest::KIND_DIGEST.to_string(), handler);
     }
     // «Поиск противоречий» (#vision) — нужен chat И векторы (пары-кандидаты по эмбеддингам → судья).
-    if let (Some(chat), Some(vectors)) = (&chat, &vectors) {
+    if let (Some(fast), Some(vectors)) = (&chat_fast, &vectors) {
         let handler: Arc<dyn crate::scheduler::JobHandler> =
             Arc::new(crate::contradictions::ContradictionHandler::new(
                 db.reader().clone(),
                 vectors.clone(),
-                chat.clone(),
+                fast.clone(),
                 db.writer().clone(),
             ));
         registry.insert(crate::contradictions::KIND_CONTRA.to_string(), handler);
@@ -138,6 +143,7 @@ pub async fn open_vault(
         vectors,
         embedder,
         chat,
+        chat_fast,
     });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
@@ -190,16 +196,21 @@ async fn build_rag(
     Some((Arc::new(embedder), Arc::new(vectors), force))
 }
 
-/// Строит chat-провайдер из распарсенного конфига (`ai.chat`). `None`, если секции нет или клиент
-/// не инициализировался. Доступность сервера здесь НЕ проверяем — это выяснится при первом стриме.
-async fn build_chat(cfg: &LocalConfig) -> Option<Arc<dyn ChatProvider>> {
+/// Строит пару chat-провайдеров из конфига (`ai.chat`): `(обычный с reasoning, быстрый без reasoning)`.
+/// `None`, если секции нет или клиент не инициализировался. Доступность сервера здесь НЕ проверяем —
+/// это выяснится при первом стриме. Оба — тот же сервер/модель; быстрый шлёт `enable_thinking=false` (R2).
+async fn build_chat(cfg: &LocalConfig) -> Option<(Arc<dyn ChatProvider>, Arc<dyn ChatProvider>)> {
     let chat = cfg.ai.chat.as_ref()?;
     let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
-    let provider = OpenAiChatProvider::new(&chat.url, &model, None)
-        .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
-        .ok()?;
-    tracing::info!(model = %model, "chat-провайдер включён");
-    Some(Arc::new(provider))
+    let build = || {
+        OpenAiChatProvider::new(&chat.url, &model, None)
+            .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
+            .ok()
+    };
+    let normal = build()?;
+    let fast = build()?.without_reasoning();
+    tracing::info!(model = %model, "chat-провайдеры включены (reasoning + fast)");
+    Some((Arc::new(normal), Arc::new(fast)))
 }
 
 /// Сверяет активную модель/размерность эмбеддера с `settings`. При расхождении на НЕпервом запуске

@@ -139,6 +139,10 @@ pub struct VaultContext {
     /// `None` синхронно с `vectors` (оба есть или обоих нет).
     pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Chat-провайдер (ADR-005, отдельный хост) — стриминг ответов RAG-чата (Ф1-7).
-    /// `None`, если в `local.json` нет `ai.chat`. Независим от embedder.
+    /// `None`, если в `local.json` нет `ai.chat`. Независим от embedder. С reasoning ON (точность
+    /// на сложных выводах).
     pub chat: Option<Arc<dyn ChatProvider>>,
+    /// «Быстрый» chat без reasoning (R2) — для примитивов (inline/дайджест/судья): тот же сервер/модель,
+    /// но `enable_thinking=false` → нет CoT-паузы. Строится вместе с `chat` (есть/нет синхронно).
+    pub chat_fast: Option<Arc<dyn ChatProvider>>,
 }
