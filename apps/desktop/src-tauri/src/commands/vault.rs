@@ -113,6 +113,13 @@ pub async fn open_vault(
     if chat.is_some() && vectors.is_some() {
         recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
     }
+    // HOME-виджеты (H2, фундамент): кэш `home_widgets` + refresh-режимы поверх планировщика. Конкретные
+    // LLM-виджеты (Daily brief — H3, Stale radar — H4, Open questions/Context drift — H5) регистрируются
+    // здесь по мере реализации: создают `WidgetHandler` (генератор + `TauriWidgetSink(app.clone())`),
+    // вставляют его kind `widget_kind(key)` в `registry`, добавляют kind в `recurring`/`on_change`,
+    // сидят overdue-джобу (`home::widgets::is_overdue`) и регистрируют ключ в `widget_registry`. Пока
+    // виджетов нет — фундамент дремлет до H3.
+    let widget_registry = crate::home::widgets::WidgetRegistry::new();
     // On-change (slice 7): те же LLM-kind перезапускаются после правок vault (с дебаунсом).
     let on_change: Vec<String> = recurring.keys().cloned().collect();
     crate::scheduler::spawn_worker(
@@ -152,6 +159,7 @@ pub async fn open_vault(
         chat,
         chat_fast,
         chat_util,
+        widgets: Arc::new(widget_registry),
     });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)

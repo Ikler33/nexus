@@ -148,4 +148,8 @@ pub struct VaultContext {
     /// «Утилитарная» мелкая модель (`ai.fast`, напр. Qwen3-4B на :8084) — для коротких примитивов
     /// (inline/судья): низкая латентность. Если `ai.fast` не задан — fallback на `chat_fast` (gemma).
     pub chat_util: Option<Arc<dyn ChatProvider>>,
+    /// Реестр зарегистрированных HOME-виджетов (H2): по нему `refresh_widget` проверяет, что ключ
+    /// известен, прежде чем ставить джобу. Наполняется в `open_vault` (H3+ регистрируют виджеты);
+    /// сейчас пуст. `Arc` — делится между командами без клонирования множества.
+    pub widgets: Arc<crate::home::widgets::WidgetRegistry>,
 }

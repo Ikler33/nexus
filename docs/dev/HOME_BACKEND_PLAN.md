@@ -42,7 +42,10 @@ E2E; `#16` egress-ADR/web-агент; vision→AC (умные шаблоны / N
 - **H2 — кэш LLM-виджетов + refresh-режимы (Фундамент).** Таблица `home_widgets` (key → content,
   generated_at, source_hash, status) + инвалидация по `max_file_mtime`; режимы on-open (run-if-overdue),
   scheduled (recurring раз/сутки), manual (команда) — поверх планировщика ADR-007. Команда
-  `get_widget(key)` (кэш) + `refresh_widget(key)` (manual).
+  `get_widget(key)` (кэш) + `refresh_widget(key)` (manual). **✅ реализовано** (`home::widgets`: трейты
+  `WidgetGenerator`/`WidgetSink` + обобщённый kind `WidgetHandler` «генерация→кэш→событие»; событие
+  `home:widget-updated`; `WidgetRegistry` известных ключей в `VaultContext`). Конкретные виджеты
+  регистрируются в `open_vault` поверх этого слоя — H3+.
 - **H3 — Daily brief** (LLM, on-open) — экспонировать существующий `digest` как home-виджет (или новый
   kind на `chat_fast`/gemma — большой контекст).
 - **H4 — Stale radar** (dynamic скоринг + опц. LLM-слой top-10, кэш 24ч, инвалидация по mtime).
