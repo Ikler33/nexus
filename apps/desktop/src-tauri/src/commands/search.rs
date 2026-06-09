@@ -32,7 +32,7 @@ pub async fn search_content(
         (
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
-            ctx.embedder.clone(),
+            ctx.ai.embedder.clone(),
         )
     };
     let filter = (folder.is_some() || tag.is_some()).then_some(SearchFilter { folder, tag });

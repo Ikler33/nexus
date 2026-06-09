@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::{RwLock, RwLockReadGuard};
 
-use crate::ai::{ChatProvider, EmbeddingProvider};
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::vector::VectorIndex;
@@ -31,6 +30,17 @@ pub struct AppState {
     /// LLM-джобы (дайджест), пока он > 0 — чтобы пользовательский чат/inline не делил локальную модель
     /// с фоном. Инкремент/декремент — RAII-гард [`AppState::enter_interactive_llm`].
     pub interactive_llm: AtomicUsize,
+    /// Kill-switch «офлайн» эгресса ядра (ADR-005-ext E2/E10, AC-EGR-3): `true` — публичные хосты
+    /// отрезаны, LAN/loopback живут. НОВЫЙ атомик, НЕ `chat_cancel` (тот — токен отмены стрима);
+    /// `Arc` — тот же флаг читает [`crate::net::EgressPolicy::check`] per-request. Взвод —
+    /// ТОЛЬКО через [`AppState::set_egress_offline`] (он же дорезает активный стрим, AC-EGR-11).
+    pub egress_offline: Arc<AtomicBool>,
+    /// Политика эгресса ядра — ОДИН экземпляр на приложение (AC-EGR-13): из неё строятся все
+    /// [`crate::net::GuardedClient`] (open-vault, hot-swap chat, probe настроек).
+    pub egress_policy: Arc<crate::net::EgressPolicy>,
+    /// Неотключаемый append-only журнал эгресса (E8, AC-EGR-4) — общий для всех guarded-клиентов,
+    /// включая probe без открытого vault.
+    pub egress_audit: Arc<crate::net::EgressAudit>,
 }
 
 /// RAII-гард активной интерактивной LLM-операции: на `Drop` уменьшает счётчик (S5 backpressure).
@@ -43,6 +53,9 @@ impl Drop for InteractiveLlmGuard<'_> {
 
 impl AppState {
     pub fn new() -> Self {
+        // Дефолт фундамента (E4-трактовка владельца, 2026-06-10): офлайн ВЫКЛЮЧЕН; «облако не из
+        // коробки» обеспечивает пустой allowlist политики (явные `ai.*`-хосты кладёт open-vault).
+        let egress_offline = Arc::new(AtomicBool::new(false));
         Self {
             vault: RwLock::new(None),
             chat_cancel: Mutex::new(None),
@@ -50,6 +63,9 @@ impl AppState {
             plugins: Mutex::new(crate::plugin::PluginBroker::new()),
             git_lock: tokio::sync::Mutex::new(()),
             interactive_llm: AtomicUsize::new(0),
+            egress_policy: Arc::new(crate::net::EgressPolicy::new(egress_offline.clone())),
+            egress_offline,
+            egress_audit: Arc::new(crate::net::EgressAudit::default()),
         }
     }
 
@@ -79,6 +95,16 @@ impl AppState {
     /// Идёт ли сейчас интерактивная LLM-операция (для backpressure планировщика, S5).
     pub fn is_interactive_busy(&self) -> bool {
         self.interactive_llm.load(Ordering::Relaxed) > 0
+    }
+
+    /// Переключает kill-switch «офлайн» эгресса ядра (E2). Включение ДОРЕЗАЕТ активный chat-стрим,
+    /// ВЗВОДЯ существующий `chat_cancel` (per-chunk-проверка `cancel.load()` уже есть в `chat.rs`) —
+    /// никакого нового механизма отмены (E10, AC-EGR-11).
+    pub fn set_egress_offline(&self, offline: bool) {
+        self.egress_offline.store(offline, Ordering::Relaxed);
+        if offline {
+            self.cancel_active_chat();
+        }
     }
 
     /// Взводит флаг отмены текущего чат-стрима (если есть).
@@ -135,21 +161,54 @@ pub struct VaultContext {
     /// Векторный ANN-индекс RAG. `None`, если embedding-провайдер не сконфигурирован
     /// (vault работает и без AI — local-first). Делится с индексатором (пишет) и поиском (читает).
     pub vectors: Option<Arc<VectorIndex>>,
-    /// Embedding-провайдер — для эмбеддинга поисковых запросов (Ф1-6) и чат-RAG (Ф1-8).
-    /// `None` синхронно с `vectors` (оба есть или обоих нет).
-    pub embedder: Option<Arc<dyn EmbeddingProvider>>,
-    /// Chat-провайдер (ADR-005, отдельный хост) — стриминг ответов RAG-чата (Ф1-7).
-    /// `None`, если в `local.json` нет `ai.chat`. Независим от embedder. С reasoning ON (точность
-    /// на сложных выводах).
-    pub chat: Option<Arc<dyn ChatProvider>>,
-    /// «Быстрый» chat без reasoning (R2) на ОСНОВНОЙ модели (gemma) — для дайджеста: ему нужен большой
-    /// контекст (агрегирует до 40 заметок), но не нужен reasoning. Строится вместе с `chat`.
-    pub chat_fast: Option<Arc<dyn ChatProvider>>,
-    /// «Утилитарная» мелкая модель (`ai.fast`, напр. Qwen3-4B на :8084) — для коротких примитивов
-    /// (inline/судья): низкая латентность. Если `ai.fast` не задан — fallback на `chat_fast` (gemma).
-    pub chat_util: Option<Arc<dyn ChatProvider>>,
+    /// Фасад AI-подсистемы (§4.3, AC-EGR-13): все провайдеры (chat/chat_fast/chat_util/embedder)
+    /// плюс политика эгресса одним полем — вместо четырёх независимых `Arc`. Провайдеры ходят в
+    /// сеть ТОЛЬКО через `net::GuardedClient` (ADR-005-ext).
+    pub ai: crate::ai::AIClient,
     /// Реестр зарегистрированных HOME-виджетов (H2): по нему `refresh_widget` проверяет, что ключ
     /// известен, прежде чем ставить джобу. Наполняется в `open_vault` (H3+ регистрируют виджеты);
     /// сейчас пуст. `Arc` — делится между командами без клонирования множества.
     pub widgets: Arc<crate::home::widgets::WidgetRegistry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{EgressDenied, EgressFeature};
+
+    /// AC-EGR-11 (E10): включение «офлайн» рвёт активный chat-стрим, ВЗВОДЯ существующий
+    /// `chat_cancel`-токен — никакого нового механизма отмены. Политика видит тот же атомик.
+    #[test]
+    fn egress_offline_arms_existing_chat_cancel() {
+        let state = AppState::new();
+        let token = state.begin_chat();
+        assert!(!token.load(Ordering::Relaxed), "новый стрим не отменён");
+
+        state.set_egress_offline(true);
+        assert!(
+            token.load(Ordering::Relaxed),
+            "«офлайн» взводит СУЩЕСТВУЮЩИЙ chat_cancel (AC-EGR-11)"
+        );
+        // Тот же флаг читает политика per-request: публичный хост → Offline, loopback живёт (E2).
+        assert_eq!(
+            state
+                .egress_policy
+                .check("203.0.113.7", EgressFeature::Chat),
+            Err(EgressDenied::Offline)
+        );
+        assert_eq!(
+            state.egress_policy.check("127.0.0.1", EgressFeature::Chat),
+            Ok(())
+        );
+
+        state.set_egress_offline(false);
+        assert!(
+            token.load(Ordering::Relaxed),
+            "выключение офлайна не «развзводит» уже отменённый стрим"
+        );
+        assert_eq!(
+            state.egress_policy.check("127.0.0.1", EgressFeature::Chat),
+            Ok(())
+        );
+    }
 }

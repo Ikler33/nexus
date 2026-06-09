@@ -1,7 +1,7 @@
 //! Команды раздела настроек «AI / Модели» (кросс-план #11): чтение/запись `.nexus/local.json` из UI
 //! (без ручного редактирования файла) + проверка связи + ГОРЯЧЕЕ применение chat-провайдера.
 //!
-//! Chat применяется немедленно (он stateless per-request — команда `chat_rag` читает `ctx.chat` из
+//! Chat применяется немедленно (он stateless per-request — команда `chat_rag` читает `ctx.ai.chat` из
 //! state на каждый запрос). Embedding НЕ применяется на лету: на нём висит фоновый индексатор
 //! (свой клон embedder + общий `vectors`), безопасный hot-swap требует остановки/респавна индексатора —
 //! отдельный срез (#11b-full). Поэтому при смене embedding возвращаем `embedding_changed=true` → UI
@@ -13,8 +13,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::ai::{ChatProvider, LocalConfig, OpenAiChatProvider};
+use crate::ai::{AiError, ChatProvider, LocalConfig, OpenAiChatProvider};
 use crate::error::{AppError, AppResult};
+use crate::net::{EgressFeature, GuardedClient, NetError};
 use crate::state::AppState;
 
 /// Эндпоинт (chat/embedding) в форме настроек.
@@ -124,18 +125,34 @@ pub async fn set_ai_config(
     // `apply_ai` отдаёт `String`-ошибку (serde) → поднимается как `AppError::Msg` через `From<String>`.
     let embedding_changed = apply_ai(&mut doc, chat.as_ref(), embedding.as_ref())?;
     let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
-    tokio::fs::write(&path, pretty).await?;
+    tokio::fs::write(&path, &pretty).await?;
 
-    // Горячее применение chat (stateless per-request → безопасно). Embedding — через перезапуск.
+    // Allowlist эгресса пересобирается из ИТОГОВОГО local.json (E4: явные `ai.*`-хосты; consent на
+    // pull-changed URL — срез 2 с персистом политики). Один policy на приложение (AC-EGR-13).
+    if let Ok(cfg) = LocalConfig::parse(&pretty) {
+        state.egress_policy.set_allowlist(cfg.egress_hosts());
+    }
+
+    // Горячее применение chat (stateless per-request → безопасно): пересобираем УЖЕ-guarded клиент
+    // от того же policy/audit (AC-EGR-13). Embedding — через перезапуск (cold, на нём индексатор).
     let chat_provider: Option<Arc<dyn ChatProvider>> = match &chat {
         Some(c) => {
             let model = c.model.clone().unwrap_or_else(|| "chat".to_string());
-            Some(Arc::new(OpenAiChatProvider::new(&c.url, &model, None)?))
+            let guarded =
+                GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
+                    .map_err(AiError::from)?;
+            Some(Arc::new(OpenAiChatProvider::new(
+                &guarded,
+                EgressFeature::Chat,
+                &c.url,
+                &model,
+                None,
+            )))
         }
         None => None,
     };
     if let Some(ctx) = state.vault.write().await.as_mut() {
-        ctx.chat = chat_provider;
+        ctx.ai.chat = chat_provider;
     }
     Ok(SetAiResult {
         chat_applied: true,
@@ -144,17 +161,29 @@ pub async fn set_ai_config(
 }
 
 /// Проверка связи с LLM-эндпоинтом: пробный GET `/v1/models` (OpenAI-совместимо). Любой ответ сервера →
-/// достижим; сетевая ошибка → нет. Через `core_client_builder` (redirect=none, как остальной эгресс ядра).
+/// достижим; сетевая ошибка → нет. Через [`GuardedClient`] с `Feature::Probe` (AC-EGR-6): url с фронта
+/// проверяется политикой ДО сети — «первый egress-вектор» (произвольный GET из доверенного ядра) закрыт.
 #[tauri::command]
-pub async fn test_ai_connection(url: String) -> AppResult<()> {
-    let client = crate::ai::core_client_builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|e| AppError::Msg(e.to_string()))?;
-    let probe = format!("{}/v1/models", url.trim_end_matches('/'));
-    match client.get(&probe).send().await {
+pub async fn test_ai_connection(state: State<'_, AppState>, url: String) -> AppResult<()> {
+    let probe = GuardedClient::for_probe(
+        state.egress_policy.clone(),
+        state.egress_audit.clone(),
+        Duration::from_secs(5),
+    )
+    .map_err(AiError::from)?;
+    probe_endpoint(&probe, &url).await
+}
+
+/// Тестируемое ядро probe (команда — тонкая обёртка над managed state). Отказ политики →
+/// типизированный [`AiError::Denied`] (НЕ reqwest-строка); сетевые ошибки — текстом, как раньше
+/// (i18n-канал — AC-EGR-14, фронт-срез).
+async fn probe_endpoint(probe: &GuardedClient, url: &str) -> AppResult<()> {
+    let target = format!("{}/v1/models", url.trim_end_matches('/'));
+    match probe.get(&target, EgressFeature::Probe).await {
         Ok(_) => Ok(()),
-        Err(e) => Err(AppError::Msg(e.to_string())),
+        Err(NetError::Denied(d)) => Err(AiError::Denied(d).into()),
+        Err(NetError::BadUrl) => Err(AppError::Msg("некорректный URL".into())),
+        Err(NetError::Http(e)) => Err(AppError::Msg(e.to_string())),
     }
 }
 
@@ -187,5 +216,62 @@ mod tests {
         let changed2 = apply_ai(&mut doc, None, Some(&emb)).unwrap();
         assert!(!changed2, "embedding тот же");
         assert!(doc.pointer("/ai/chat").is_none(), "chat=None удаляет ключ");
+    }
+
+    /// AC-EGR-6: probe «Проверить связь» идёт через guarded с `Feature::Probe` — url вне политики
+    /// отклоняется ТИПИЗИРОВАННО ДО сети (`.invalid`-домен дал бы DNS-ошибку, дойди запрос до
+    /// сокета), выключенный Probe-opt-in режет даже loopback, а живой loopback-сервер достижим.
+    #[tokio::test]
+    async fn probe_endpoint_is_guarded() {
+        use crate::ai::AiError;
+        use crate::net::{EgressAudit, EgressDenied, EgressPolicy};
+        use std::io::{Read, Write};
+        use std::sync::atomic::AtomicBool;
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        let probe = GuardedClient::for_probe(
+            policy.clone(),
+            Arc::new(EgressAudit::default()),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        // Публичный хост вне allowlist → Denied (НЕ DNS/reqwest-ошибка) — «первый egress-вектор».
+        let denied = probe_endpoint(&probe, "http://probe-egress.invalid").await;
+        assert!(
+            matches!(
+                denied,
+                Err(AppError::Ai(AiError::Denied(EgressDenied::HostNotAllowed(
+                    _
+                ))))
+            ),
+            "ожидали типизированный отказ политики: {denied:?}"
+        );
+
+        // Выключенный Probe-opt-in режет и loopback — тег фичи у probe именно `Probe` (AC-EGR-5/6).
+        policy.set_feature_enabled(EgressFeature::Probe, false);
+        let feature_off = probe_endpoint(&probe, "http://127.0.0.1:9").await;
+        assert!(matches!(
+            feature_off,
+            Err(AppError::Ai(AiError::Denied(
+                EgressDenied::FeatureNotEnabled(EgressFeature::Probe)
+            )))
+        ));
+        policy.set_feature_enabled(EgressFeature::Probe, true);
+
+        // Живой loopback-сервер: любой HTTP-ответ → связь есть (local-first без consent, E6).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf);
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+            }
+        });
+        probe_endpoint(&probe, &format!("http://{addr}"))
+            .await
+            .expect("loopback-probe проходит без consent");
+        server.join().unwrap();
     }
 }

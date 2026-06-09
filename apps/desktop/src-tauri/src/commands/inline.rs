@@ -77,7 +77,7 @@ pub async fn inline_complete(
     // `chat_util` уже с fallback на gemma-fast (см. open_vault); тут ещё fallback на обычный chat.
     let chat = {
         let ctx = state.vault().await?;
-        ctx.chat_util.clone().or_else(|| ctx.chat.clone())
+        ctx.ai.chat_util.clone().or_else(|| ctx.ai.chat.clone())
     };
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());

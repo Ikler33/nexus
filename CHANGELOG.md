@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### Egress-контроль ядра — фундамент `net::GuardedClient` (#16, ADR-005-ext, срез 1)
+
+- **Новый модуль `net/`** — единственный chokepoint исходящего HTTP ядра (E1/AC-EGR-1):
+  `GuardedClient` (оборачивает приватизированный `core_client_builder`, redirect=none сохранён —
+  AC-EGR-7) + `EgressPolicy` с порядком проверки per-request: **metadata-блок** (новый предикат
+  `blocks_cloud_metadata`, точный `169.254.169.254`, всегда — E7/AC-EGR-12) → **kill-switch «офлайн»**
+  (рубит публичные хосты, LAN/loopback живут — E2/AC-EGR-3) → **per-feature opt-in**
+  `Chat/Embed/Probe` (E6/AC-EGR-5) → **host ∈ allowlist ∨ `is_private_host`** (ре-экспорт, не копия —
+  AC-EGR-8/2). Отказ — типизированный `EgressDenied` ДО сокета/DNS (бэкенд-половина AC-EGR-14).
+- **Неотключаемый audit** `EgressAudit` (E8/AC-EGR-4): append-only (приватный `record()`), ось
+  `{feature, host(Redacted), bytes_out?, decision}`; `bytes_out` — best-effort длина тела запроса
+  (AC-EGR-10).
+- **Провайдеры через guarded** (AC-EGR-6): `OpenAiChatProvider`/`OpenAiEmbedder`/`probe_dim`/
+  `test_ai_connection` принимают `&GuardedClient` + feature-тег — «первый egress-вектор»
+  (произвольный url с фронта в `test_ai_connection`) закрыт.
+- **Composition-root** (AC-EGR-13): фасад `AIClient { chat, chat_fast, chat_util, embedder, policy }`
+  заменяет четыре `Arc` в `VaultContext` (решение владельца 2026-06-10: все 4 провайдера); один
+  `policy`/`audit` на приложение (`AppState`); hot-swap chat пересобирает уже-guarded клиент.
+  **Авто-allowlist** хостов явных `ai.chat/ai.embedding/ai.fast` из `local.json` (E4); kill-switch —
+  новый `Arc<AtomicBool>` в `AppState`, дефолт «не офлайн»; «офлайн» дорезает активный стрим через
+  существующий `chat_cancel` (E10/AC-EGR-11).
+- **CI-grep-линт `scripts/check-egress.mjs`** (AC-EGR-1): `reqwest::Client::builder`/
+  `core_client_builder` вне `net/` → красный CI (self-test фейк-нарушением; whitelist — `net/` +
+  `dispatch_net` с маркером-обоснованием) + контроль единственности `fn is_private_host` (AC-EGR-8);
+  врезан в CI-job traceability и `test-all.sh`. Traceability: **AC-EGR-1..13 → covered**, AC-EGR-14
+  pending (i18n-фронт, срез 2).
+
 ### ADR: egress-контроль ядра — web-аддендум + фундамент-спека (#16, doc-first)
 
 - **ARCHITECTURE.md §0** (ADR-005-ext): добавлен **web-эгресс-аддендум** (решения владельца W1–W4,

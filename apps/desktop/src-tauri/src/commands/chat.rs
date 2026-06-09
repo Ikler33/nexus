@@ -58,9 +58,9 @@ pub async fn chat_rag(
         (
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
-            ctx.embedder.clone(),
-            ctx.chat.clone(),
-            ctx.chat_util.clone(),
+            ctx.ai.embedder.clone(),
+            ctx.ai.chat.clone(),
+            ctx.ai.chat_util.clone(),
         )
     };
     let Some(chat) = chat else {

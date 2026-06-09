@@ -453,12 +453,13 @@ mod tests {
         let root = dir.path().to_path_buf();
 
         let real = OpenAiEmbedder::new(
+            &crate::net::GuardedClient::unchecked(),
+            crate::net::EgressFeature::Embed,
             &live_embed_url(cond),
             &cond.embedding_model,
             cond.embedding_dim,
             default_prefixes(&cond.embedding_model),
-        )
-        .unwrap();
+        );
         let rec = Arc::new(RecordingEmbedder {
             inner: real,
             docs: Mutex::new(BTreeMap::new()),
@@ -688,15 +689,14 @@ mod tests {
 
         // Эмбеддер и k — строго из условий baseline (AC-EVAL-4: прогон в зафиксированных условиях).
         // URL сервера — из env `NEXUS_EMBED_URL` (если задан), иначе из baseline (сервер мог переехать).
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            OpenAiEmbedder::new(
-                &live_embed_url(cond),
-                &cond.embedding_model,
-                cond.embedding_dim,
-                default_prefixes(&cond.embedding_model),
-            )
-            .unwrap(),
-        );
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
+            &crate::net::GuardedClient::unchecked(),
+            crate::net::EgressFeature::Embed,
+            &live_embed_url(cond),
+            &cond.embedding_model,
+            cond.embedding_dim,
+            default_prefixes(&cond.embedding_model),
+        ));
         let vectors = Arc::new(
             VectorIndex::open(root.join(".nexus/vectors.usearch"), cond.embedding_dim).unwrap(),
         );
@@ -780,15 +780,14 @@ mod tests {
         let root = std::path::PathBuf::from(vault);
 
         let tmp = TempDir::new().unwrap();
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            OpenAiEmbedder::new(
-                "http://192.168.0.29:8083",
-                "bge-m3",
-                1024,
-                default_prefixes("bge-m3"),
-            )
-            .unwrap(),
-        );
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
+            &crate::net::GuardedClient::unchecked(),
+            crate::net::EgressFeature::Embed,
+            "http://192.168.0.29:8083",
+            "bge-m3",
+            1024,
+            default_prefixes("bge-m3"),
+        ));
         let vectors =
             Arc::new(VectorIndex::open(tmp.path().join("vectors.usearch"), 1024).unwrap());
         let db = Database::open(tmp.path().join("nexus.db")).await.unwrap();
@@ -878,15 +877,14 @@ mod tests {
         let gen_ms = gen0.elapsed().as_millis();
 
         // 2) Полный пайплайн с живым эмбеддером bge-m3.
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            OpenAiEmbedder::new(
-                "http://192.168.0.29:8083",
-                "bge-m3",
-                1024,
-                default_prefixes("bge-m3"),
-            )
-            .unwrap(),
-        );
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
+            &crate::net::GuardedClient::unchecked(),
+            crate::net::EgressFeature::Embed,
+            "http://192.168.0.29:8083",
+            "bge-m3",
+            1024,
+            default_prefixes("bge-m3"),
+        ));
         let vectors =
             Arc::new(VectorIndex::open(root.join(".nexus/vectors.usearch"), 1024).unwrap());
         let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();

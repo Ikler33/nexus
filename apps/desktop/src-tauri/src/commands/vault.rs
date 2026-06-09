@@ -7,10 +7,12 @@ use rusqlite::OptionalExtension;
 use tauri::State;
 
 use crate::ai::{
-    self, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider, OpenAiEmbedder,
+    self, AIClient, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
+    OpenAiEmbedder,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
+use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
 use crate::state::{AppState, VaultContext};
 use crate::vault::{self, FileEntry, NoteRef, VaultInfo};
 use crate::vector::VectorIndex;
@@ -39,10 +41,19 @@ pub async fn open_vault(
     // Конфиг `.nexus/local.json` парсим ОДИН раз (раньше — дважды: build_rag + build_chat), кросс-план #8.
     let local_cfg = load_local_config(&root).await;
 
+    // Авто-allowlist эгресса (ADR-005-ext E4): хосты явных `ai.*.url` из local.json. Нет конфига →
+    // пусто (fail-closed для публичных хостов; LAN/loopback живут как `is_private_host`).
+    state.egress_policy.set_allowlist(
+        local_cfg
+            .as_ref()
+            .map(LocalConfig::egress_hosts)
+            .unwrap_or_default(),
+    );
+
     // RAG (Ф1-5): строим эмбеддер + векторный индекс. Если конфига нет / нет embedding-секции /
     // сервер недоступен — vault открывается без AI (local-first).
     let rag = match &local_cfg {
-        Some(cfg) => build_rag(&root, &db, cfg).await,
+        Some(cfg) => build_rag(&root, &db, cfg, &state.egress_policy, &state.egress_audit).await,
         None => None,
     };
     let (vectors, embedder, indexer) = match rag {
@@ -62,7 +73,7 @@ pub async fn open_vault(
     // Chat-провайдеры (ADR-005): пара — обычный с reasoning (RAG-чат, точность) + «быстрый» без
     // reasoning (примитивы R2: inline/дайджест/судья). Строятся вместе (есть/нет синхронно).
     let (chat, chat_fast) = match &local_cfg {
-        Some(cfg) => match build_chat(cfg).await {
+        Some(cfg) => match build_chat(cfg, &state.egress_policy, &state.egress_audit).await {
             Some((normal, fast)) => (Some(normal), Some(fast)),
             None => (None, None),
         },
@@ -71,7 +82,7 @@ pub async fn open_vault(
     // Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B :8084) для коротких примитивов (inline/судья).
     // Нет секции `ai.fast` → fallback на gemma-fast (chat_fast), чтобы ничего не сломалось.
     let chat_util = match &local_cfg {
-        Some(cfg) => build_util_chat(cfg),
+        Some(cfg) => build_util_chat(cfg, &state.egress_policy, &state.egress_audit),
         None => None,
     }
     .or_else(|| chat_fast.clone());
@@ -240,14 +251,19 @@ pub async fn open_vault(
                 .await;
     }
 
+    // Фасад §4.3 (AC-EGR-13): ВСЕ провайдеры + политика — одним полем; policy — тот же Arc, что
+    // в AppState (один экземпляр на приложение, через него hot-swap пересоберёт guarded-клиент).
     *state.vault.write().await = Some(VaultContext {
         root,
         db,
         vectors,
-        embedder,
-        chat,
-        chat_fast,
-        chat_util,
+        ai: AIClient {
+            chat,
+            chat_fast,
+            chat_util,
+            embedder,
+            policy: state.egress_policy.clone(),
+        },
         widgets: Arc::new(widget_registry),
     });
     tracing::info!(vault = %info.root, "opened vault");
@@ -266,27 +282,50 @@ async fn load_local_config(root: &Path) -> Option<LocalConfig> {
 }
 
 /// Строит RAG-подсистему из распарсенного конфига. `None` — нет embedding-секции / сервер недоступен
-/// (RAG отключается, vault работает без AI). Делает реконсиляцию модели (§6.5).
+/// (RAG отключается, vault работает без AI). Делает реконсиляцию модели (§6.5). Эгресс — через
+/// [`GuardedClient`] с единым policy/audit приложения (AC-EGR-6/13).
 async fn build_rag(
     root: &Path,
     db: &Database,
     cfg: &LocalConfig,
+    policy: &Arc<EgressPolicy>,
+    audit: &Arc<EgressAudit>,
 ) -> Option<(Arc<dyn EmbeddingProvider>, Arc<VectorIndex>, bool)> {
     let emb = cfg.ai.embedding.as_ref()?;
     let model = emb.model.clone().unwrap_or_else(|| "embedding".to_string());
 
     // Размерность: из конфига или пробным эмбеддингом у сервера (§6.5 — не хардкод).
+    // Проба — Feature::Probe, короткий таймаут (30 с, как до рефактора).
     let dim = match emb.dim {
         Some(d) => d,
-        None => OpenAiEmbedder::probe_dim(&emb.url, &model)
-            .await
-            .map_err(|e| tracing::warn!(error = %e, "проба размерности не удалась — RAG отключён"))
-            .ok()?,
+        None => {
+            let probe = GuardedClient::for_probe(
+                policy.clone(),
+                audit.clone(),
+                std::time::Duration::from_secs(30),
+            )
+            .map_err(|e| tracing::warn!(error = %e, "probe-клиент не построился — RAG отключён"))
+            .ok()?;
+            OpenAiEmbedder::probe_dim(&probe, &emb.url, &model)
+                .await
+                .map_err(
+                    |e| tracing::warn!(error = %e, "проба размерности не удалась — RAG отключён"),
+                )
+                .ok()?
+        }
     };
 
-    let embedder = OpenAiEmbedder::new(&emb.url, &model, dim, ai::default_prefixes(&model))
+    let guarded = GuardedClient::for_embedding(policy.clone(), audit.clone())
         .map_err(|e| tracing::warn!(error = %e, "эмбеддер не инициализирован — RAG отключён"))
         .ok()?;
+    let embedder = OpenAiEmbedder::new(
+        &guarded,
+        EgressFeature::Embed,
+        &emb.url,
+        &model,
+        dim,
+        ai::default_prefixes(&model),
+    );
 
     // §6.5: смена модели/размерности инвалидирует чанки и векторы → force-переиндексация.
     let force = reconcile_embedding_model(db, root, &model, dim)
@@ -302,33 +341,41 @@ async fn build_rag(
 }
 
 /// Строит пару chat-провайдеров из конфига (`ai.chat`): `(обычный с reasoning, быстрый без reasoning)`.
-/// `None`, если секции нет или клиент не инициализировался. Доступность сервера здесь НЕ проверяем —
+/// `None`, если секции нет или guarded-клиент не построился. Доступность сервера здесь НЕ проверяем —
 /// это выяснится при первом стриме. Оба — тот же сервер/модель; быстрый шлёт `enable_thinking=false` (R2).
-async fn build_chat(cfg: &LocalConfig) -> Option<(Arc<dyn ChatProvider>, Arc<dyn ChatProvider>)> {
+async fn build_chat(
+    cfg: &LocalConfig,
+    policy: &Arc<EgressPolicy>,
+    audit: &Arc<EgressAudit>,
+) -> Option<(Arc<dyn ChatProvider>, Arc<dyn ChatProvider>)> {
     let chat = cfg.ai.chat.as_ref()?;
     let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
-    let build = || {
-        OpenAiChatProvider::new(&chat.url, &model, None)
-            .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
-            .ok()
-    };
-    let normal = build()?;
-    let fast = build()?.without_reasoning();
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone())
+        .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
+        .ok()?;
+    let normal = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &chat.url, &model, None);
+    let fast = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &chat.url, &model, None)
+        .without_reasoning();
     tracing::info!(model = %model, "chat-провайдеры включены (reasoning + fast)");
     Some((Arc::new(normal), Arc::new(fast)))
 }
 
 /// Утилитарная chat-модель из `ai.fast` (мелкая non-reasoning, напр. Qwen3-4B :8084). `None` — секции
-/// нет / клиент не создался → вызывающий делает fallback на gemma-fast. Plain-провайдер (без
+/// нет / guarded-клиент не построился → вызывающий делает fallback на gemma-fast. Plain-провайдер (без
 /// `enable_thinking` — модель не reasoning, лишний kwarg ей не нужен).
-fn build_util_chat(cfg: &LocalConfig) -> Option<Arc<dyn ChatProvider>> {
+fn build_util_chat(
+    cfg: &LocalConfig,
+    policy: &Arc<EgressPolicy>,
+    audit: &Arc<EgressAudit>,
+) -> Option<Arc<dyn ChatProvider>> {
     let fast = cfg.ai.fast.as_ref()?;
     let model = fast.model.clone().unwrap_or_else(|| "fast".to_string());
-    let provider = OpenAiChatProvider::new(&fast.url, &model, None)
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone())
         .map_err(
             |e| tracing::warn!(error = %e, "ai.fast: провайдер не создан — fallback на gemma-fast"),
         )
         .ok()?;
+    let provider = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &fast.url, &model, None);
     tracing::info!(model = %model, url = %fast.url, "ai.fast (утилитарная модель) включена");
     Some(Arc::new(provider))
 }
@@ -464,6 +511,45 @@ mod tests {
 
     async fn open_db(root: &Path) -> Database {
         Database::open(root.join(".nexus/nexus.db")).await.unwrap()
+    }
+
+    /// AC-EGR-13 (composition-root): `build_chat`/`build_util_chat` строят провайдеров от ОДНОГО
+    /// policy через guarded-клиент — переключение политики мгновенно видно ВСЕМ провайдерам
+    /// (никаких собственных клиентов мимо chokepoint).
+    #[tokio::test]
+    async fn build_chat_providers_share_one_policy() {
+        use std::sync::atomic::AtomicBool;
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        let audit = Arc::new(EgressAudit::default());
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{
+                "chat": { "url": "http://127.0.0.1:9", "model": "m" },
+                "fast": { "url": "http://127.0.0.1:9", "model": "f" }
+            }}"#,
+        )
+        .unwrap();
+        let (chat, chat_fast) = build_chat(&cfg, &policy, &audit)
+            .await
+            .expect("chat построен");
+        let util = build_util_chat(&cfg, &policy, &audit).expect("util построен");
+
+        // Выключаем Chat-фичу на ЕДИНОМ policy → все три провайдера отрезаны типизированно.
+        policy.set_feature_enabled(EgressFeature::Chat, false);
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let msgs = vec![crate::ai::ChatMessage::user("x")];
+        for (name, p) in [
+            ("chat", &chat),
+            ("chat_fast", &chat_fast),
+            ("chat_util", &util),
+        ] {
+            let res = p.stream_chat(&msgs, &mut |_| {}, &cancel).await;
+            assert!(
+                matches!(res, Err(crate::ai::AiError::Denied(_))),
+                "{name}: провайдер обязан ходить через общий policy (AC-EGR-13): {res:?}"
+            );
+        }
+        assert_eq!(audit.len(), 3, "каждый отказ — в общем audit (AC-EGR-4)");
     }
 
     async fn count_chunks(db: &Database) -> i64 {
