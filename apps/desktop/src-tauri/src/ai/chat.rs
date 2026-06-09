@@ -52,6 +52,22 @@ pub trait ChatProvider: Send + Sync {
         cancel: &Arc<AtomicBool>,
     ) -> AiResult<String>;
 
+    /// Как [`stream_chat`], но ДОПОЛНИТЕЛЬНО отдаёт «размышление» reasoning-модели (gemma) в
+    /// `on_reasoning` — для живого 💭-индикатора чата (R1). Контент ответа идёт в `on_token`, возвращается
+    /// тоже только контент (reasoning в результат НЕ попадает). Дефолт игнорирует reasoning (делегирует
+    /// в `stream_chat`) → моки и не-чат вызыватели (inline/дайджест/судья) НЕ трогаются. Реальный
+    /// провайдер переопределяет.
+    async fn stream_chat_reasoning(
+        &self,
+        messages: &[ChatMessage],
+        on_token: &mut (dyn FnMut(String) + Send),
+        on_reasoning: &mut (dyn FnMut(String) + Send),
+        cancel: &Arc<AtomicBool>,
+    ) -> AiResult<String> {
+        let _ = on_reasoning;
+        self.stream_chat(messages, on_token, cancel).await
+    }
+
     /// Идентификатор модели (для истории/диагностики).
     fn model_id(&self) -> &str;
 }
@@ -132,6 +148,18 @@ impl ChatProvider for OpenAiChatProvider {
         on_token: &mut (dyn FnMut(String) + Send),
         cancel: &Arc<AtomicBool>,
     ) -> AiResult<String> {
+        // Контентный путь = reasoning-путь с no-op обработчиком размышления (единый цикл, без дублей).
+        self.stream_chat_reasoning(messages, on_token, &mut |_| {}, cancel)
+            .await
+    }
+
+    async fn stream_chat_reasoning(
+        &self,
+        messages: &[ChatMessage],
+        on_token: &mut (dyn FnMut(String) + Send),
+        on_reasoning: &mut (dyn FnMut(String) + Send),
+        cancel: &Arc<AtomicBool>,
+    ) -> AiResult<String> {
         let body = self.request_body(messages);
         let send_fut = self.client.post(&self.endpoint).json(&body).send();
         let mut resp = tokio::time::timeout(self.idle_timeout, send_fut)
@@ -163,6 +191,8 @@ impl ChatProvider for OpenAiChatProvider {
                         full.push_str(&s);
                         on_token(s);
                     }
+                    // Размышление reasoning-модели НЕ копим в `full` — только живой индикатор (R1).
+                    SseEvent::Reasoning(s) => on_reasoning(s),
                     SseEvent::Done => return Ok(full),
                     SseEvent::Other => {}
                 }
@@ -178,12 +208,16 @@ impl ChatProvider for OpenAiChatProvider {
 
 /// Событие одной SSE-строки потока чата.
 enum SseEvent {
+    /// Дельта контента ответа.
     Content(String),
+    /// Дельта «размышления» reasoning-модели (`delta.reasoning_content`) — для 💭-индикатора (R1).
+    Reasoning(String),
     Done,
     Other,
 }
 
-/// Парсит строку SSE (`data: …`) в дельту контента. Не-`data` строки и нераспознанный JSON → `Other`.
+/// Парсит строку SSE (`data: …`) в дельту. Контент приоритетнее reasoning (в одном чанке обычно одно из
+/// двух). Не-`data` строки и нераспознанный JSON → `Other`.
 fn parse_sse_delta(line: &str) -> SseEvent {
     let Some(data) = line.strip_prefix("data:") else {
         return SseEvent::Other;
@@ -203,16 +237,22 @@ fn parse_sse_delta(line: &str) -> SseEvent {
     #[derive(Deserialize)]
     struct Delta {
         content: Option<String>,
+        /// Поле reasoning-моделей (gemma/qwen-thinking): ход мысли отдельно от ответа.
+        reasoning_content: Option<String>,
     }
     match serde_json::from_str::<StreamChunk>(data) {
-        Ok(c) => c
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|ch| ch.delta.content)
-            .filter(|s| !s.is_empty())
-            .map(SseEvent::Content)
-            .unwrap_or(SseEvent::Other),
+        Ok(c) => {
+            let Some(delta) = c.choices.into_iter().next().map(|ch| ch.delta) else {
+                return SseEvent::Other;
+            };
+            if let Some(s) = delta.content.filter(|s| !s.is_empty()) {
+                return SseEvent::Content(s);
+            }
+            if let Some(s) = delta.reasoning_content.filter(|s| !s.is_empty()) {
+                return SseEvent::Reasoning(s);
+            }
+            SseEvent::Other
+        }
         Err(_) => SseEvent::Other,
     }
 }
@@ -340,6 +380,9 @@ mod tests {
     fn parse_sse_delta_extracts_content_and_done() {
         let line = r#"data: {"choices":[{"delta":{"content":"Привет"}}]}"#;
         assert!(matches!(parse_sse_delta(line), SseEvent::Content(s) if s == "Привет"));
+        // R1: дельта reasoning-модели → SseEvent::Reasoning (отдельно от контента).
+        let think = r#"data: {"choices":[{"delta":{"reasoning_content":"прикидываю"}}]}"#;
+        assert!(matches!(parse_sse_delta(think), SseEvent::Reasoning(s) if s == "прикидываю"));
         assert!(matches!(parse_sse_delta("data: [DONE]"), SseEvent::Done));
         // первый кусок обычно несёт роль без content → Other
         let role = r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#;
