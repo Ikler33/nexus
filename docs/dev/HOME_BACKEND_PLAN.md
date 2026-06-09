@@ -53,6 +53,11 @@ E2E; `#16` egress-ADR/web-агент; vision→AC (умные шаблоны / N
   регенерация, общий дедуп с панелью); бутстрап `mirror_latest_to_widget` на открытии. on-open/recurring/
   on-change наследуются от планировщика дайджеста.
 - **H4 — Stale radar** (dynamic скоринг + опц. LLM-слой top-10, кэш 24ч, инвалидация по mtime).
+  **✅ реализовано** (`home::stale`): слой 1 — скоринг устаревания из метаданных (возраст/`draft`/`wip`/
+  просроченный `due`/нет беклинков; `evergreen` режет; `Templates`/`Archives` исключены), команда
+  `get_stale_radar`, мгновенно on-open; слой 2 — kind `stale_radar` (manual) LLM-обогащение топ-10
+  (причина/действие/подсказка), кэш `stale_cache` (миграция 009) 24ч + инвалидация по `source_mtime`,
+  команда `refresh_stale_radar`, событие `home:widget-updated`.
 - **H5 — Open questions** (LLM, manual) + **Context drift** (LLM, scheduled). На `chat_util`/`chat_fast`.
 
 Каждый срез — отдельный линейный PR со своим тестом + CHANGELOG. Мерж только на зелёном CI вручную.

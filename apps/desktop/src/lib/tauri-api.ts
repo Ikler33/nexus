@@ -148,6 +148,25 @@ export interface Widget {
   stale: boolean;
 }
 
+/** Устаревшая заметка «Stale radar» (зеркалит Rust `home::stale::StaleNote`, H4). Слой 1 — `score`/
+ *  `severity` (`red`|`orange`)/`ageDays` + флаги-сигналы; слой 2 (`reason`/`action`/`hint`) — из кэша
+ *  LLM (`null`, пока не обогащено). `action` — `update`|`archive`|`split`|`delete`. */
+export interface StaleNote {
+  path: string;
+  title: string | null;
+  score: number;
+  severity: string;
+  ageDays: number;
+  isDraft: boolean;
+  isWip: boolean;
+  isOverdue: boolean;
+  isOrphan: boolean;
+  isEvergreen: boolean;
+  reason: string | null;
+  action: string | null;
+  hint: string | null;
+}
+
 /** Дайджест недавних изменений (зеркалит Rust `digest::Digest`, ADR-007 slice 4). Время — Unix-секунды. */
 export interface Digest {
   createdAt: number;
@@ -370,6 +389,17 @@ export const tauriApi = {
      *  виджет; дедуп активной джобы). Завершение — событие `home:widget-updated`. H2. Вне Tauri — no-op. */
     refresh: (key: string): Promise<void> =>
       isTauri() ? invoke<void>('refresh_widget', { key }) : Promise.resolve(),
+
+    /** «Stale radar» (H4, зона 4): ранжированный список устаревших заметок. Слой 1 (скоринг) мгновенно
+     *  on-open; слой 2 (LLM-причина/действие/подсказка) — из кэша, если обогащали. Вне Tauri — пусто. */
+    staleRadar: (): Promise<StaleNote[]> =>
+      isTauri() ? invoke<StaleNote[]>('get_stale_radar') : Promise.resolve([]),
+
+    /** Ручной запуск LLM-обогащения «Stale radar» (слой 2, manual): топ-N → причина/действие/подсказка,
+     *  кэш 24ч. Требует chat; дедуп активной джобы. Завершение — событие `home:widget-updated`
+     *  (ключ `'stale_radar'`). Вне Tauri — no-op. */
+    staleRefresh: (): Promise<void> =>
+      isTauri() ? invoke<void>('refresh_stale_radar') : Promise.resolve(),
   },
 
   digest: {
