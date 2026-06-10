@@ -207,7 +207,11 @@
   "palette": {
     "placeholder": "Command…",
     "label": "Command palette",
-    "empty": "No commands"
+    "empty": "No commands",
+    "files": "Files",
+    "commands": "Commands",
+    "navigate": "navigate",
+    "open": "open"
   },
   "graph": {
     "title": "Graph",
