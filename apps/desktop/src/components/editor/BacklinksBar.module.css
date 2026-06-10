@@ -68,3 +68,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── DP-3: шапка-твист (кнопка) ── */
+.header {
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.twist {
+  transition: transform var(--motion-fast) var(--ease-standard);
+  flex-shrink: 0;
+}
+.twist[data-open] {
+  transform: rotate(90deg);
+}

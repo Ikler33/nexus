@@ -189,7 +189,12 @@
     "close": "Close {{name}}",
     "unsaved": "unsaved",
     "source": "Source",
-    "preview": "Preview"
+    "preview": "Preview",
+    "newTab": "New note in tab",
+    "metaWords_one": "{{count}} word",
+    "metaWords_other": "{{count}} words",
+    "metaReading_one": "{{count}} min read",
+    "metaReading_other": "{{count}} min read"
   },
   "backlinks": {
     "title": "Backlinks",
@@ -426,6 +431,7 @@
     "view.home": "Home",
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
-    "view.settings": "Settings"
+    "view.settings": "Settings",
+    "editor.toggleMode": "Editor: edit / preview"
   }
 }

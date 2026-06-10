@@ -194,7 +194,14 @@
     "close": "Закрыть {{name}}",
     "unsaved": "несохранено",
     "source": "Исходник",
-    "preview": "Просмотр"
+    "preview": "Просмотр",
+    "newTab": "Новая заметка во вкладке",
+    "metaWords_one": "{{count}} слово",
+    "metaWords_few": "{{count}} слова",
+    "metaWords_many": "{{count}} слов",
+    "metaReading_one": "{{count}} мин чтения",
+    "metaReading_few": "{{count}} мин чтения",
+    "metaReading_many": "{{count}} мин чтения"
   },
   "backlinks": {
     "title": "Беклинки",
@@ -431,6 +438,7 @@
     "view.contradictions": "Поиск противоречий",
     "view.news": "Новости",
     "view.home": "Home",
+    "editor.toggleMode": "Редактор: правка / просмотр",
     "theme.toggle": "Тема: светлая / тёмная",
     "view.reading": "Режим чтения",
     "view.settings": "Настройки"
