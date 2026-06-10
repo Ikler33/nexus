@@ -106,3 +106,45 @@
   line-height: 1.6;
   color: var(--color-text);
 }
+
+/* ── DP-9: серифный дайджест + AI-бейдж + thinking (макет insights.jsx) ── */
+.content {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+}
+.content strong {
+  color: var(--color-text);
+  font-weight: 600;
+}
+.aiBadge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--color-ai);
+  border: 1px solid color-mix(in oklch, var(--color-ai) 40%, transparent);
+  background: var(--color-ai-soft);
+  border-radius: 99px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  vertical-align: 1px;
+}
+.thinking {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-7) var(--space-4);
+}
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-5) var(--space-4);
+}
+.emptyIco {
+  color: var(--color-text-faint);
+}

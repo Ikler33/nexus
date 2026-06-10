@@ -315,7 +315,8 @@
     "generate": "Generate",
     "generating": "Generating…",
     "refresh": "Refresh",
-    "close": "Close"
+    "close": "Close",
+    "thinking": "Analyzing the vault…"
   },
   "contradictions": {
     "title": "Contradiction finder",
@@ -330,7 +331,8 @@
       "hard": "factual",
       "soft": "soft",
       "temporal": "outdated"
-    }
+    },
+    "thinking": "Cross-checking claims…"
   },
   "news": {
     "title": "News feed",

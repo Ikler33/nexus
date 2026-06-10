@@ -156,3 +156,22 @@
   line-height: 1.5;
   color: var(--color-text-muted);
 }
+
+/* ── DP-9: thinking-знак и пустое состояние с глифом (макет insights.jsx) ── */
+.thinking {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-7) var(--space-4);
+}
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-5) var(--space-4);
+}
+.emptyIco {
+  color: var(--color-text-faint);
+}

@@ -2,8 +2,10 @@ import { useEffect } from 'react';
 import { Newspaper, RefreshCw, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { renderBold } from '../../lib/render';
 import { useDigestStore } from '../../stores/digest';
 import { useUIStore } from '../../stores/ui';
+import { BrandThinking } from '../chrome/BrandThinking';
 import styles from './DigestPanel.module.css';
 
 /** Unix-секунды → локальная дата-время (короткий формат). */
@@ -78,19 +80,27 @@ export function DigestPanel() {
 
         {error ? <p className={styles.error}>{error}</p> : null}
 
-        {loading && !latest ? (
+        {generating && !latest ? (
+          // Генерация идёт: «думающий» бренд-знак с шиммером (макет insights.jsx).
+          <div className={styles.thinking}>
+            <BrandThinking size={30} />
+            <span className="mt-label">{t('digest.thinking')}</span>
+          </div>
+        ) : loading && !latest ? (
           <p className={styles.empty}>{t('digest.loading')}</p>
         ) : latest ? (
           <div className={styles.body}>
             <p className={styles.meta}>
               {t('digest.meta', { when: fmt(latest.createdAt, i18n.language), count: latest.noteCount })}
+              <span className={styles.aiBadge}>AI</span>
             </p>
-            <div className={styles.content}>{latest.content}</div>
+            <div className={styles.content}>{renderBold(latest.content)}</div>
           </div>
         ) : (
-          <p className={styles.empty}>
-            {generating ? t('digest.queued') : t('digest.empty')}
-          </p>
+          <div className={styles.emptyState}>
+            <Newspaper size={22} className={styles.emptyIco} aria-hidden />
+            <p className={styles.empty}>{t('digest.empty')}</p>
+          </div>
         )}
       </div>
     </div>

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { renderBold } from '../../lib/render';
 import { tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
 import { useHomeStore } from '../../stores/home';
 import { usePrefsStore } from '../../stores/prefs';
@@ -42,13 +43,6 @@ function relTime(ts: number, locale: string): string {
   if (diff < 86_400) return rtf.format(-Math.floor(diff / 3600), 'hour');
   if (diff < 30 * 86_400) return rtf.format(-Math.floor(diff / 86_400), 'day');
   return new Date(ts * 1000).toLocaleDateString(locale, { day: 'numeric', month: 'short' });
-}
-
-/** `**жирные**` фрагменты LLM-текста → <strong> (как в макете, без markdown-движка). */
-function renderBold(text: string): ReactNode[] {
-  return text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
-    i % 2 === 1 ? <strong key={`${i}-${part.slice(0, 12)}`}>{part}</strong> : part,
-  );
 }
 
 /** Ключ приветствия по локальному часу. */

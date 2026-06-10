@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useContradictionsStore } from '../../stores/contradictions';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { BrandThinking } from '../chrome/BrandThinking';
 import styles from './ContradictionsPanel.module.css';
 
 /** Имя файла из пути (последний сегмент без .md). */
@@ -81,12 +82,19 @@ export function ContradictionsPanel() {
 
         {error ? <p className={styles.error}>{error}</p> : null}
 
-        {loading && items.length === 0 ? (
+        {generating && items.length === 0 ? (
+          // Поиск идёт: «думающий» бренд-знак с шиммером «Сверяю утверждения…» (макет).
+          <div className={styles.thinking}>
+            <BrandThinking size={30} />
+            <span className="mt-label">{t('contradictions.thinking')}</span>
+          </div>
+        ) : loading && items.length === 0 ? (
           <p className={styles.empty}>{t('contradictions.loading')}</p>
         ) : items.length === 0 ? (
-          <p className={styles.empty}>
-            {generating ? t('contradictions.queued') : t('contradictions.empty')}
-          </p>
+          <div className={styles.emptyState}>
+            <Scale size={22} className={styles.emptyIco} aria-hidden />
+            <p className={styles.empty}>{t('contradictions.empty')}</p>
+          </div>
         ) : (
           <ul className={styles.list}>
             {items.map((c, i) => (
