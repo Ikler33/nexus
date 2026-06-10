@@ -27,14 +27,14 @@
 
     "AC-NF-1": { "status": "covered", "tests": ["news::parse::tests::parses_all_fixture_kinds_to_normalized_entries (6 фикстур реальных фидов, заморожены 2026-06-10)", "news::parse::tests::malformed_input_is_typed_error", "news::parse::tests::hn_text_post_falls_back_to_discussion_url", "news::parse::tests::date_parsers_cover_feed_formats"], "note": "NF-1. «Пропуск источника с видимой ошибкой» на уровне прогона — добавится в NF-3 (сводка прогона)." },
     "AC-NF-2": { "status": "covered", "tests": ["news::tests::keyword_filter_per_spec", "news::tests::sources_registry_matches_spec"], "note": "NF-1." },
-    "AC-NF-3": { "status": "pending", "note": "Срез NF-2 (LLM-этап на мок-провайдере)." },
+    "AC-NF-3": { "status": "covered", "tests": ["news::llm::tests::parses_strict_json_counts_irrelevant_and_missing", "news::llm::tests::invalid_json_and_empty_fields_are_failed", "news::llm::tests::untrusted_feed_content_is_fenced_with_markers", "news::llm::tests::batches_by_ten_and_isolates_batch_failures"], "note": "NF-2. Контент фида между injection-маркерами; строгий JSON; failed-счётчики (no silent caps)." },
     "AC-NF-4": { "status": "pending", "note": "Срез NF-3 (миграция news_items, дедуп)." },
     "AC-NF-5": { "status": "pending", "note": "Срез NF-3 (ретенция GC)." },
     "AC-NF-6": { "status": "pending", "note": "Срез NF-3 (scheduled-kind newsfeed)." },
     "AC-NF-7": { "status": "pending", "note": "Срез NF-4 (EgressFeature::NewsFeed, лимиты W3)." },
     "AC-NF-8": { "status": "pending", "note": "Срез NF-4 (DNS-rebinding-гард, мок-резолвер)." },
     "AC-NF-9": { "status": "pending", "note": "Срез NF-3 (команды)." },
-    "AC-NF-10": { "status": "pending", "note": "Срез NF-2 (сводка дня на моках)." },
+    "AC-NF-10": { "status": "partial", "tests": ["news::llm::tests::daily_digest_uses_topics_and_trims", "news::llm::tests::ru_sources_keep_original_titles_in_instruction"], "note": "NF-2: генерация сводки покрыта на моках; состояния «нет новостей»/«фича выключена» — UI-срез NF-5. Качество RU-текста — human-eval." },
     "AC-NF-11": { "status": "pending", "note": "Срез NF-3 («в заметку»)." },
     "AC-NF-12": { "status": "pending", "note": "Срез NF-5 (страница UI + i18n; качество RU-резюме — human-eval)." },
 
