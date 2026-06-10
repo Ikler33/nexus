@@ -192,6 +192,16 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleHome(),
     }),
     commands.register({
+      id: 'vault.rescan',
+      title: 'Reindex vault',
+      titleKey: 'commands.vault.rescan',
+      source: 'core',
+      run: () => {
+        if (!useVaultStore.getState().info) return; // нет vault — нечего индексировать
+        return tauriApi.vault.rescan();
+      },
+    }),
+    commands.register({
       id: 'theme.toggle',
       title: 'Toggle theme (light/dark)',
       titleKey: 'commands.theme.toggle',

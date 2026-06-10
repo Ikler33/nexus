@@ -23,7 +23,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { renderBold } from '../../lib/render';
-import { tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
+import { isTauri, tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
 import { useHomeStore } from '../../stores/home';
 import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
@@ -147,6 +147,29 @@ export function HomeView() {
       await tauriApi.vault.writeFile('Inbox.md', '# Inbox\n\n');
     }
     openNote('Inbox.md');
+  };
+
+  // Quick action «Переиндексировать» (#37, макет home.jsx): фоновый rescan; спиннер гаснет по
+  // `vault:changed` (петля шлёт его по завершении скана). Вне Tauri события нет — короткий фолбэк;
+  // в Tauri фолбэк-таймаут страхует от подвисшего спиннера, если событие потерялось.
+  const [reindexing, setReindexing] = useState(false);
+  const reindex = async () => {
+    if (reindexing) return;
+    setReindexing(true);
+    let unlisten = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+    const done = () => {
+      setReindexing(false);
+      unlisten();
+      clearTimeout(timer);
+    };
+    timer = setTimeout(done, isTauri() ? 120_000 : 900);
+    unlisten = await tauriApi.events.onVaultChanged(done);
+    try {
+      await tauriApi.vault.rescan();
+    } catch {
+      done();
+    }
   };
 
   const heatCells = useMemo(() => {
@@ -323,6 +346,16 @@ export function HomeView() {
           <button type="button" className={styles.qa} onClick={() => openGraph()}>
             <Share2 size={15} aria-hidden />
             {t('home.qaGraph')}
+          </button>
+          <button
+            type="button"
+            className={styles.qa}
+            onClick={() => void reindex()}
+            disabled={reindexing}
+            aria-busy={reindexing}
+          >
+            <RefreshCw size={15} aria-hidden className={reindexing ? styles.qaSpin : undefined} />
+            {t(reindexing ? 'home.qaReindexing' : 'home.qaReindex')}
           </button>
         </div>
 

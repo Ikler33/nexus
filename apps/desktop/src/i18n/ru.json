@@ -185,6 +185,8 @@
     "qaDaily": "Daily note",
     "qaThought": "Быстрая мысль",
     "qaGraph": "Граф",
+    "qaReindex": "Переиндексировать",
+    "qaReindexing": "Индексация…",
     "secSummary": "сводка",
     "secActivity": "активность",
     "secProjects": "проекты",
@@ -539,6 +541,7 @@
   "commands": {
     "palette.open": "Палитра команд",
     "vault.open": "Открыть vault…",
+    "vault.rescan": "Переиндексировать vault",
     "file.new": "Новая заметка",
     "file.save": "Сохранить файл",
     "file.print": "Печать / Экспорт PDF",

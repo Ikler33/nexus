@@ -265,6 +265,20 @@
 .qa svg {
   color: var(--color-accent);
 }
+.qa:disabled {
+  opacity: 0.65;
+  cursor: default;
+  transform: none;
+}
+/* Спиннер «Переиндексировать» (#37): крутится, пока ждём `vault:changed` от скана. */
+.qaSpin {
+  animation: qa-spin 0.9s linear infinite;
+}
+@keyframes qa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* ── секции и сетки ── */
 .secLabel {

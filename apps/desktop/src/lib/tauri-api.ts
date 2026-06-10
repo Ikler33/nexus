@@ -436,6 +436,10 @@ export const tauriApi = {
     listTags: (): Promise<TagCount[]> =>
       isTauri() ? invoke<TagCount[]>('list_tags') : mockTags.listTags(),
 
+    /** Ручной реиндекс vault (quick action «Переиндексировать», макет home.jsx): фоновый
+     * полный обход; по завершении бэкенд шлёт `vault:changed`. В браузере — no-op. */
+    rescan: (): Promise<void> => (isTauri() ? invoke<void>('rescan_vault') : Promise.resolve()),
+
     /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
     pickDirectory: async (): Promise<string | null> => {
       if (!isTauri()) return null;

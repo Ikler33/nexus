@@ -89,7 +89,11 @@ pub async fn open_vault(
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     // Watcher живёт в VaultContext::lifecycle: его дроп (повторный open_vault) гасит петлю.
-    let watcher = crate::indexer::spawn(indexer, app.clone());
+    // Sender — управляющий вход той же петли для `rescan_vault` (VaultEvent::Rescan).
+    let (watcher, index_tx) = match crate::indexer::spawn(indexer, app.clone()) {
+        Some((w, tx)) => (Some(w), Some(tx)),
+        None => (None, None),
+    };
 
     // Планировщик фоновых задач (ADR-007): встроенный kind `gc` (самоочистка) + (если есть chat) `digest`
     // (LLM-дайджест недавних изменений, #35). Воркер живёт, пока открыт vault.
@@ -324,6 +328,7 @@ pub async fn open_vault(
             policy: state.egress_policy.clone(),
         },
         widgets: Arc::new(widget_registry),
+        index_tx,
         lifecycle: crate::state::VaultLifecycle {
             watcher,
             scheduler_shutdown,
@@ -508,6 +513,20 @@ async fn set_setting(db: &Database, key: &str, value: &str) -> Result<(), String
         })
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Ручной реиндекс vault (quick action «Переиндексировать» из макета home.jsx + палитра):
+/// шлёт [`crate::watcher::VaultEvent::Rescan`] в watcher-петлю — полный обход `scan_vault`
+/// сериализуется с fs-событиями (без второго конкурентного сканера). Возвращается сразу
+/// (скан фоновый); по завершении петля шлёт `vault:changed` — фронт перечитывает вьюхи.
+#[tauri::command]
+pub async fn rescan_vault(state: State<'_, AppState>) -> AppResult<()> {
+    let ctx = state.vault().await?;
+    let tx = ctx.index_tx.as_ref().ok_or_else(|| {
+        AppError::Msg("индексация vault не запущена (watcher не стартовал)".into())
+    })?;
+    tx.send(crate::watcher::VaultEvent::Rescan)
+        .map_err(|_| AppError::Msg("петля индексации недоступна".into()))
 }
 
 /// Ленивый листинг каталога vault (`dir_path` относительный; пустая строка = корень).

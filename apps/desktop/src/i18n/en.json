@@ -181,6 +181,8 @@
     "qaDaily": "Daily note",
     "qaThought": "Quick thought",
     "qaGraph": "Graph",
+    "qaReindex": "Reindex",
+    "qaReindexing": "Indexing…",
     "secSummary": "summary",
     "secActivity": "activity",
     "secProjects": "projects",
@@ -529,6 +531,7 @@
   "commands": {
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
+    "vault.rescan": "Reindex vault",
     "file.new": "New note",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
