@@ -6,6 +6,7 @@ import { useChatStore } from './stores/chat';
 import { useContradictionsStore } from './stores/contradictions';
 import { useDigestStore } from './stores/digest';
 import { useGoalsStore } from './stores/goals';
+import { usePrefsStore } from './stores/prefs';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { ActivityBar } from './components/chrome/ActivityBar';
@@ -59,6 +60,8 @@ export function App() {
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const reading = useUIStore((s) => s.reading);
+  const closeChat = useUIStore((s) => s.closeChat);
+  const aiLayout = usePrefsStore((s) => s.aiLayout);
 
   useKeymap();
 
@@ -126,6 +129,13 @@ export function App() {
   // держит экран и после открытия vault (шаги AI-проверки и индексации).
   if (!info || onboardingActive) return <Onboarding />;
 
+  // DP-12 (макет): расположение AI-панели — side / bottom / overlay; панель живёт только
+  // в workspace-вью (Home/News — без неё, как `view === "workspace"` макета).
+  const aiVisible = chatOpen && !reading && !homeOpen && !newsOpen;
+  const aiSide = aiVisible && aiLayout === 'side';
+  const aiBottom = aiVisible && aiLayout === 'bottom';
+  const aiOverlay = aiVisible && aiLayout === 'overlay';
+
   return (
     <div className={styles.app}>
       <Titlebar />
@@ -134,7 +144,7 @@ export function App() {
         {!reading && <ActivityBar />}
         <div
           className={`${styles.appBody} ${
-            reading ? styles.reading : chatOpen ? styles.withChat : ''
+            reading ? styles.reading : aiSide ? styles.withChat : aiBottom ? styles.withChatBottom : ''
           } ${!reading && !sidebarOpen ? styles.sidebarCollapsed : ''}`}
         >
           {!reading && sidebarOpen && (
@@ -145,7 +155,22 @@ export function App() {
           <main className={styles.main}>
             {homeOpen ? <HomeView /> : newsOpen ? <NewsView /> : <EditorArea />}
           </main>
-          {chatOpen && !reading && <AiPanel />}
+          {aiSide && <AiPanel />}
+          {aiBottom && (
+            <div className={styles.aiBottom}>
+              <AiPanel variant="bottom" />
+            </div>
+          )}
+          {aiOverlay && (
+            <div
+              className={styles.aiScrim}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) closeChat();
+              }}
+            >
+              <AiPanel variant="overlay" />
+            </div>
+          )}
         </div>
       </div>
       <InlineAria />

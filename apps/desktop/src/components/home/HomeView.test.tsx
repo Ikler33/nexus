@@ -32,7 +32,7 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
     expect(
       await screen.findByText(/архитектурой агентов/),
     ).toBeInTheDocument(); // сводка дня (bold-фрагмент внутри strong)
-    expect(screen.getByText(/добрый|доброе|good/i)).toBeInTheDocument();
+    expect(screen.getByText(/добр|good/i)).toBeInTheDocument(); // и «Доброй ночи» (тест в 23–06 ч)
     // «RAG Pipeline» встречается в continue-карте и в недавних.
     expect(screen.getAllByText('RAG Pipeline').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText(/сводка дня|daily brief/i).length).toBeGreaterThan(0);

@@ -32,8 +32,24 @@ pub enum ChatStreamEvent {
     ReasoningSummary { text: String },
     /// Поток завершён штатно; `full` — полный текст ответа (для записи в историю).
     Done { full: String },
-    /// Ошибка на любом этапе (retrieve/LLM); стрим завершается.
-    Error { message: String },
+    /// Ошибка на любом этапе (retrieve/LLM); стрим завершается. `denied_kind` — типизированный
+    /// отказ политики эгресса (AC-EGR-14: offline | feature | host) для i18n-рендера на фронте.
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        denied_kind: Option<&'static str>,
+    },
+}
+
+/// Код отказа эгресса для фронта (AC-EGR-14); не-egress ошибки → `None` (генерик-рендер).
+fn denied_code(e: &crate::ai::AiError) -> Option<&'static str> {
+    use crate::net::EgressDenied;
+    match e {
+        crate::ai::AiError::Denied(EgressDenied::Offline) => Some("offline"),
+        crate::ai::AiError::Denied(EgressDenied::FeatureNotEnabled(_)) => Some("feature"),
+        crate::ai::AiError::Denied(EgressDenied::HostNotAllowed(_)) => Some("host"),
+        _ => None,
+    }
 }
 
 /// Кол-во RAG-чанков в контексте по умолчанию (калибруется eval-харнессом, Ф1-10).
@@ -89,6 +105,7 @@ pub async fn chat_rag(
             Err(e) => {
                 let _ = channel.send(ChatStreamEvent::Error {
                     message: e.to_string(),
+                    denied_kind: None,
                 });
                 return Ok(());
             }
@@ -188,6 +205,7 @@ pub async fn chat_rag(
         }
         Err(e) => {
             let _ = channel.send(ChatStreamEvent::Error {
+                denied_kind: denied_code(&e),
                 message: e.to_string(),
             });
         }

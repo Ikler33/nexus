@@ -56,6 +56,34 @@ function readPalette(): PaletteStyle {
   return 'top';
 }
 
+/** Расположение AI-панели (DP-12, макет tweaks): side / bottom / overlay. */
+export type AiLayout = 'side' | 'bottom' | 'overlay';
+const AI_LAYOUT_KEY = 'nexus.ai.layout';
+
+function readAiLayout(): AiLayout {
+  try {
+    const v = localStorage.getItem(AI_LAYOUT_KEY);
+    if (v === 'side' || v === 'bottom' || v === 'overlay') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'side';
+}
+
+/** Стиль RAG-источников в чате (DP-12, макет tweaks): cards / chips / footnotes. */
+export type RagSources = 'cards' | 'chips' | 'footnotes';
+const RAG_SOURCES_KEY = 'nexus.ai.ragSources';
+
+function readRagSources(): RagSources {
+  try {
+    const v = localStorage.getItem(RAG_SOURCES_KEY);
+    if (v === 'cards' || v === 'chips' || v === 'footnotes') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'cards';
+}
+
 function readString(key: string): string {
   try {
     return localStorage.getItem(key) ?? '';
@@ -70,15 +98,23 @@ interface PrefsState {
   userName: string;
   /** Позиция командной палитры (DP-11). */
   paletteStyle: PaletteStyle;
+  /** Расположение AI-панели (DP-12). */
+  aiLayout: AiLayout;
+  /** Стиль RAG-источников в чате (DP-12). */
+  ragSources: RagSources;
   setReadableLineWidth: (on: boolean) => void;
   setUserName: (name: string) => void;
   setPaletteStyle: (style: PaletteStyle) => void;
+  setAiLayout: (layout: AiLayout) => void;
+  setRagSources: (style: RagSources) => void;
 }
 
 export const usePrefsStore = create<PrefsState>((set) => ({
   readableLineWidth: START_READABLE,
   userName: readString(USER_NAME_KEY),
   paletteStyle: readPalette(),
+  aiLayout: readAiLayout(),
+  ragSources: readRagSources(),
   setReadableLineWidth: (on) =>
     set(() => {
       persistBool(READABLE_KEY, on);
@@ -102,5 +138,23 @@ export const usePrefsStore = create<PrefsState>((set) => ({
         /* ignore */
       }
       return { paletteStyle: style };
+    }),
+  setAiLayout: (layout) =>
+    set(() => {
+      try {
+        localStorage.setItem(AI_LAYOUT_KEY, layout);
+      } catch {
+        /* ignore */
+      }
+      return { aiLayout: layout };
+    }),
+  setRagSources: (style) =>
+    set(() => {
+      try {
+        localStorage.setItem(RAG_SOURCES_KEY, style);
+      } catch {
+        /* ignore */
+      }
+      return { ragSources: style };
     }),
 }));

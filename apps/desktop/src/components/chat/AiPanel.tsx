@@ -1,6 +1,8 @@
-import { RefreshCw, Trash2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { HardDrive, RefreshCw, Sparkles, Trash2, WifiOff, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { tauriApi } from '../../lib/tauri-api';
 import { useChatStore } from '../../stores/chat';
 import { useRelatedStore } from '../../stores/related';
 import { useSuggestStore } from '../../stores/suggest';
@@ -12,14 +14,53 @@ import { SuggestView } from './SuggestView';
 import styles from './AiPanel.module.css';
 
 /**
- * Правая AI-панель (DESIGN §ai-panel): вкладки «Чат» (RAG, Ф1-8) и «Связи» (предложения, Ф1-9).
- * Оболочка владеет табами, бейджем «локально», контекстным действием (очистить/пересчитать) и закрытием.
+ * Бейдж провайдера (E9, макет `.provider`): «Локально» (все модели — свои хосты) или «Офлайн»
+ * (kill-switch egress). «Облако» появится со срезом 3 (cloud-fallback) — вариант зарезервирован.
+ * Состояние читается при маунте панели (меняется редко — в настройках).
  */
-export function AiPanel() {
+function ProviderBadge() {
+  const { t } = useTranslation();
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    tauriApi.egress
+      .getState()
+      .then((s) => {
+        if (!cancelled) setOffline(s.offline);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return (
+    <span
+      className={`${styles.provider} ${offline ? styles.providerOffline : ''}`}
+      title={t('chat.localHint')}
+    >
+      {offline ? <WifiOff size={12} aria-hidden /> : <HardDrive size={12} aria-hidden />}
+      {offline ? t('chat.providerOffline') : t('chat.providerLocal')}
+    </span>
+  );
+}
+
+/**
+ * AI-панель по макету `ai-panel.jsx` (DP-12): шапка ai-head (глиф + «AI-ассистент» + бейдж
+ * провайдера + действия), табы отдельной строкой с подчёркиванием активного. Вкладки: «Чат»
+ * (RAG, Ф1-8), «Связи» (предложения, Ф1-9), «Похожие» (#35); Summary-таб макета не переносим —
+ * суммаризация живёт в inline-LLM редактора (honest-адаптация, BACKLOG).
+ */
+export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'overlay' }) {
   const { t } = useTranslation();
   const tab = useUIStore((s) => s.aiTab);
   const setTab = useUIStore((s) => s.setAiTab);
   const closeChat = useUIStore((s) => s.closeChat);
+  const panelClass =
+    variant === 'overlay'
+      ? styles.panelOverlay
+      : variant === 'bottom'
+        ? `${styles.panel} ${styles.panelBottom}`
+        : styles.panel;
 
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
@@ -30,39 +71,14 @@ export function AiPanel() {
   const path = useWorkspaceStore(activePath);
 
   return (
-    <aside className={styles.panel} aria-label={t('chat.title')}>
-      <header className={styles.tabbar}>
-        <div className={styles.tabs} role="tablist">
-          <button
-            role="tab"
-            aria-selected={tab === 'chat'}
-            className={`${styles.tab} ${tab === 'chat' ? styles.active : ''}`}
-            onClick={() => setTab('chat')}
-          >
-            {t('chat.tabChat')}
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'suggest'}
-            className={`${styles.tab} ${tab === 'suggest' ? styles.active : ''}`}
-            onClick={() => setTab('suggest')}
-          >
-            {t('chat.tabSuggest')}
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'related'}
-            className={`${styles.tab} ${tab === 'related' ? styles.active : ''}`}
-            onClick={() => setTab('related')}
-          >
-            {t('chat.tabRelated')}
-          </button>
-        </div>
-
-        <span className={styles.badge} title={t('chat.localHint')}>
-          {t('chat.local')}
+    <aside className={panelClass} aria-label={t('chat.title2')}>
+      <header className={styles.head}>
+        <span className={styles.headTitle}>
+          <Sparkles size={16} aria-hidden />
+          {t('chat.title2')}
         </span>
-
+        <span className={styles.headSpacer} />
+        <ProviderBadge />
         {tab === 'chat' ? (
           <button
             className={styles.iconBtn}
@@ -83,7 +99,6 @@ export function AiPanel() {
             <RefreshCw size={15} aria-hidden />
           </button>
         )}
-
         <button
           className={styles.iconBtn}
           onClick={() => closeChat()}
@@ -93,6 +108,33 @@ export function AiPanel() {
           <X size={15} aria-hidden />
         </button>
       </header>
+
+      <div className={styles.tabs} role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === 'chat'}
+          className={`${styles.tab} ${tab === 'chat' ? styles.active : ''}`}
+          onClick={() => setTab('chat')}
+        >
+          {t('chat.tabChat')}
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'suggest'}
+          className={`${styles.tab} ${tab === 'suggest' ? styles.active : ''}`}
+          onClick={() => setTab('suggest')}
+        >
+          {t('chat.tabSuggest')}
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'related'}
+          className={`${styles.tab} ${tab === 'related' ? styles.active : ''}`}
+          onClick={() => setTab('related')}
+        >
+          {t('chat.tabRelated')}
+        </button>
+      </div>
 
       <div className={styles.body}>
         {tab === 'chat' ? <ChatView /> : tab === 'related' ? <RelatedView /> : <SuggestView />}

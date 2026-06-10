@@ -73,6 +73,18 @@
       "dark": "Dark",
       "midnight": "Midnight",
       "platinum": "Platinum"
+    },
+    "aiLayout": "AI panel",
+    "aiLayoutOpts": {
+      "side": "Side",
+      "bottom": "Bottom",
+      "overlay": "Overlay"
+    },
+    "ragSources": "Chat sources",
+    "ragSourcesOpts": {
+      "cards": "Cards",
+      "chips": "Chips",
+      "footnotes": "Footnotes"
     }
   },
   "settings": {
@@ -305,10 +317,26 @@
     "send": "Send",
     "stop": "Stop",
     "thinking": "Searching notes…",
+    "emptyTitle": "Ask your notes",
+    "ask1": "How does RAG work in Nexus?",
+    "ask2": "What are embeddings?",
+    "ask3": "Explain local-first",
+    "hintSend": "to send",
     "sources": "Sources",
     "clear": "Clear chat",
     "close": "Close panel",
-    "error": "Error: {{message}}"
+    "error": "Error: {{message}}",
+    "denied": {
+      "offline": "Offline mode is on",
+      "offlineSub": "Requests to public hosts are blocked by the network policy. Turn it off in Settings → AI / Models → Network (egress).",
+      "feature": "Chat network is disabled",
+      "featureSub": "The “chat” network feature is not enabled. Enable it in Settings → AI / Models → Network (egress).",
+      "host": "Host not allowed",
+      "hostSub": "The model endpoint is outside the core egress policy. Check the URL in Settings → AI / Models."
+    },
+    "providerLocal": "Local",
+    "providerOffline": "Offline",
+    "title2": "AI assistant"
   },
   "suggest": {
     "title": "Suggested links",

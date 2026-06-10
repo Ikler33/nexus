@@ -163,6 +163,36 @@ describe('chat store (Ф1-8)', () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ content: 'вопрос про A' });
   });
 
+  it('reasoning (R1): сводка патчится в сообщение; событие raw `reasoning` игнорируется', () => {
+    vi.spyOn(tauriApi.chat, 'streamRag').mockImplementation((_q, onEvent) => {
+      onEvent({ type: 'sources', sources: [] });
+      onEvent({ type: 'reasoningSummary', text: 'Анализирую' });
+      onEvent({ type: 'reasoning', text: 'сырой CoT, который не показываем' });
+      onEvent({ type: 'reasoningSummary', text: 'Формулирую ответ' });
+      return () => {};
+    });
+
+    useChatStore.getState().send('вопрос');
+
+    const reply = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(reply?.reasoningSummary).toBe('Формулирую ответ'); // живёт последняя сводка
+    // Сырой CoT нигде не оседает — событие принято и проигнорировано.
+    expect(JSON.stringify(reply)).not.toContain('сырой CoT');
+  });
+
+  it('reasoning (R1): живая сводка НЕ персистится (эфемерна), ответ — да', async () => {
+    useChatStore.getState().hydrate('/vault/R');
+    useChatStore.getState().send('Roadmap');
+    await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), { timeout: 2000 });
+
+    // «Перезапуск» → hydrate: сводка не восстанавливается, ответ — да.
+    useChatStore.setState({ messages: [] });
+    useChatStore.getState().hydrate('/vault/R');
+    const restored = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(restored?.content.length).toBeGreaterThan(0);
+    expect(restored?.reasoningSummary).toBeUndefined();
+  });
+
   it('персист: clear сохраняет пустую историю (#17)', async () => {
     useChatStore.getState().hydrate('/vault/A');
     useChatStore.getState().send('Roadmap');

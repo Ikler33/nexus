@@ -154,8 +154,11 @@
       "note": "Фасад AIClient{chat,chat_fast,chat_util,embedder,policy} (решение владельца 2026-06-10: все 4 провайдера, не 2); один policy из AppState; hot-swap chat пересобирает guarded в set_ai_config."
     },
     "AC-EGR-14": {
-      "status": "pending",
-      "note": "Бэкенд-половина готова: типизированный EgressDenied → AiError::Denied → AppError (отказы политики без reqwest-строк). i18n-рендер RU/EN на фронте — срез 2 (UI/контроль)."
+      "status": "covered",
+      "tests": [
+        "front: ChatView.test «AC-EGR-14: типизированный отказ эгресса → i18n-баннер, не сырая строка»"
+      ],
+      "note": "DP-12: ChatStreamEvent::Error несёт denied_kind (offline|feature|host) из AiError::Denied; фронт рендерит i18n-баннер RU/EN (chat.denied.*), сырой текст ошибки не показывается."
     },
     "AC-NF-1": {
       "status": "covered",
