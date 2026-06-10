@@ -88,7 +88,8 @@ pub async fn open_vault(
     .or_else(|| chat_fast.clone());
 
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
-    crate::indexer::spawn(indexer, app.clone());
+    // Watcher живёт в VaultContext::lifecycle: его дроп (повторный open_vault) гасит петлю.
+    let watcher = crate::indexer::spawn(indexer, app.clone());
 
     // Планировщик фоновых задач (ADR-007): встроенный kind `gc` (самоочистка) + (если есть chat) `digest`
     // (LLM-дайджест недавних изменений, #35). Воркер живёт, пока открыт vault.
@@ -201,6 +202,9 @@ pub async fn open_vault(
             DAY_SECS,
         );
     }
+    // Shutdown-канал воркера: sender живёт в VaultContext::lifecycle — его дроп (повторный
+    // open_vault / закрытие) гасит worker_loop. Фикс «вечных воркеров» (аудит 2026-06-10).
+    let (scheduler_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
     crate::scheduler::spawn_worker(
         db.writer().clone(),
         app,
@@ -208,6 +212,7 @@ pub async fn open_vault(
         recurring,
         db.reader().clone(),
         on_change,
+        shutdown_rx,
     );
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
@@ -265,6 +270,10 @@ pub async fn open_vault(
             policy: state.egress_policy.clone(),
         },
         widgets: Arc::new(widget_registry),
+        lifecycle: crate::state::VaultLifecycle {
+            watcher,
+            scheduler_shutdown,
+        },
     });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)

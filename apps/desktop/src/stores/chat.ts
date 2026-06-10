@@ -187,6 +187,10 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     hydrate(root) {
+      // Смена vault при активном стриме (аудит 2026-06-10): дорезаем осиротевший стрим ДО смены
+      // ключа — хвост финализируется в историю СТАРОГО vault (не утечёт в новый), отмена уходит
+      // на бэкенд (LLM не молотит по закрытому vault).
+      if (get().streaming) get().stop();
       vaultKey = root ? CHAT_KEY_PREFIX + root : null;
       if (!vaultKey) {
         set({ messages: [] });

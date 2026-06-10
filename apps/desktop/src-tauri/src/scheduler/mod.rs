@@ -343,7 +343,17 @@ pub async fn run_due(
             continue; // run_at в будущем → этот же job в этом тике повторно не заклеймится
         }
         let result = match handler {
-            Some(h) => h.handle(&job).await,
+            Some(h) => {
+                // Паника хендлера НЕ должна валить воркер и оставлять job в `running` (иначе
+                // вечный requeue без backoff на каждом открытии vault): изолируем вызов в
+                // собственной задаче — JoinError(panic) → Err → штатный fail() (attempts++/dead).
+                let h = h.clone();
+                let handler_job = job.clone();
+                match tokio::spawn(async move { h.handle(&handler_job).await }).await {
+                    Ok(res) => res,
+                    Err(join_err) => Err(format!("паника хендлера: {join_err}")),
+                }
+            }
             None => Err(format!("неизвестный kind: {}", job.kind)),
         };
         match result {
@@ -434,41 +444,84 @@ pub fn spawn_worker(
     recurring: HashMap<String, i64>,
     reader: ReadPool,
     on_change: Vec<String>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     use tauri::Manager;
-    tokio::spawn(async move {
-        if let Err(e) = requeue_running(&writer).await {
-            tracing::warn!(error = %e, "scheduler crash-recovery failed");
-        }
-        let mut interval = tokio::time::interval(Duration::from_secs(TICK_SECS));
-        let mut oc = OnChangeState::default();
-        loop {
-            interval.tick().await;
-            let now = now_secs();
-            let busy = app.state::<crate::state::AppState>().is_interactive_busy();
+    let app2 = app.clone();
+    let hooks = WorkerHooks {
+        interactive_busy: Box::new(move || {
+            app.state::<crate::state::AppState>().is_interactive_busy()
+        }),
+        jobs_changed: Box::new(move || emit_jobs_changed(&app2)),
+    };
+    tokio::spawn(worker_loop(
+        writer, registry, recurring, reader, on_change, hooks, shutdown,
+    ));
+}
 
-            // On-change (S4): правки vault → после тишины перезапустить on-change-kind.
-            if !on_change.is_empty() {
-                if let Ok(mtime) = max_file_mtime(&reader).await {
-                    let (next, fire) = onchange_step(oc, mtime, now);
-                    oc = next;
-                    if fire {
-                        for kind in &on_change {
-                            if !has_ready_job(&reader, kind, now).await.unwrap_or(true) {
-                                let _ = enqueue(&writer, kind, "", now, 2).await;
-                            }
+/// Хуки воркера к Tauri-окружению — вынесены, чтобы [`worker_loop`] тестировался без `AppHandle`
+/// (у tauri нет mock-фичи в зависимостях): backpressure-проба (S5) и нотификация StatusBar.
+pub struct WorkerHooks {
+    /// Идёт ли интерактивная LLM-операция (чат/inline) — фон уступает (S5).
+    pub interactive_busy: Box<dyn Fn() -> bool + Send>,
+    /// «Состояние очереди изменилось» — событие для UI (best-effort).
+    pub jobs_changed: Box<dyn Fn() + Send>,
+}
+
+/// Цикл воркера. Живёт, пока жив `shutdown`-sender (он — в `VaultContext::lifecycle`): замена
+/// контекста (повторный `open_vault`) дропает sender → `changed()` даёт `Err` → воркер гаснет.
+/// Фикс «вечных воркеров» (аудит 2026-06-10): раньше цикл был бесконечным, и каждый `open_vault`
+/// плодил ЕЩЁ один воркер — старый продолжал гонять LLM-джобы закрытого vault.
+async fn worker_loop(
+    writer: WriteActor,
+    registry: Arc<Registry>,
+    recurring: HashMap<String, i64>,
+    reader: ReadPool,
+    on_change: Vec<String>,
+    hooks: WorkerHooks,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    if let Err(e) = requeue_running(&writer).await {
+        tracing::warn!(error = %e, "scheduler crash-recovery failed");
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(TICK_SECS));
+    let mut oc = OnChangeState::default();
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            res = shutdown.changed() => {
+                // Err — sender дропнут (vault закрыт/заменён); true — явный сигнал.
+                if res.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+        }
+        let now = now_secs();
+        let busy = (hooks.interactive_busy)();
+
+        // On-change (S4): правки vault → после тишины перезапустить on-change-kind.
+        if !on_change.is_empty() {
+            if let Ok(mtime) = max_file_mtime(&reader).await {
+                let (next, fire) = onchange_step(oc, mtime, now);
+                oc = next;
+                if fire {
+                    for kind in &on_change {
+                        if !has_ready_job(&reader, kind, now).await.unwrap_or(true) {
+                            let _ = enqueue(&writer, kind, "", now, 2).await;
                         }
                     }
                 }
             }
-
-            match run_due(&writer, &registry, now, busy, &recurring).await {
-                Ok(n) if n > 0 => emit_jobs_changed(&app),
-                Ok(_) => {}
-                Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
-            }
         }
-    });
+
+        match run_due(&writer, &registry, now, busy, &recurring).await {
+            Ok(n) if n > 0 => (hooks.jobs_changed)(),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
+        }
+    }
+    tracing::debug!("scheduler worker stopped (vault закрыт/заменён)");
 }
 
 /// Tauri-событие «состояние очереди изменилось» (для StatusBar N/M — срез UI). Best-effort.
@@ -603,6 +656,68 @@ mod tests {
         assert_eq!(j.id, a);
         complete(w, a).await.unwrap();
         assert_eq!(gc_done(w, i64::MAX).await.unwrap(), 1, "done удалён GC");
+    }
+
+    /// Паникующий хендлер НЕ валит воркер и НЕ оставляет job в `running`: паника изолируется
+    /// (JoinError → Err) → штатный fail() с attempts++/backoff (аудит 2026-06-10, БАГ 5).
+    #[tokio::test]
+    async fn panicking_handler_fails_job_not_stuck_running() {
+        struct Panicking;
+        #[async_trait]
+        impl JobHandler for Panicking {
+            async fn handle(&self, _job: &Job) -> Result<(), String> {
+                panic!("boom из хендлера");
+            }
+        }
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let mut reg: Registry = HashMap::new();
+        reg.insert("explosive".into(), Arc::new(Panicking));
+        let id = enqueue(w, "explosive", "", 0, 2).await.unwrap();
+
+        let n = run_due(w, &reg, 100, false, &HashMap::new())
+            .await
+            .expect("воркер пережил панику хендлера");
+        assert_eq!(n, 1, "джоба учтена, цикл не сломан");
+        // НЕ застряла в running: после backoff снова claimable с attempts=1 (а не вечный requeue).
+        assert!(
+            claim_next(w, 100).await.unwrap().is_none(),
+            "сразу не готова (backoff, не running-зависание)"
+        );
+        let j = claim_next(w, 100_000)
+            .await
+            .unwrap()
+            .expect("после backoff снова pending");
+        assert_eq!(j.id, id);
+        assert_eq!(j.attempts, 1, "паника засчитана как штатный fail");
+    }
+
+    /// Воркер гаснет, когда дропнут shutdown-sender (он живёт в VaultContext): повторный
+    /// open_vault больше не плодит вечные воркеры (аудит 2026-06-10, БАГ 4).
+    #[tokio::test]
+    async fn worker_loop_stops_when_shutdown_sender_dropped() {
+        let (_d, db) = open().await;
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let hooks = WorkerHooks {
+            interactive_busy: Box::new(|| false),
+            jobs_changed: Box::new(|| {}),
+        };
+        let handle = tokio::spawn(worker_loop(
+            db.writer().clone(),
+            Arc::new(HashMap::new()),
+            HashMap::new(),
+            db.reader().clone(),
+            Vec::new(),
+            hooks,
+            rx,
+        ));
+        // Дать воркеру войти в цикл, затем «закрыть vault» (дроп sender) → цикл обязан выйти.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("воркер обязан остановиться после дропа sender (не вечный)")
+            .expect("воркер завершился без паники");
     }
 
     /// run_due диспатчит готовые: успешный kind→done, падающий→backoff; неизвестный kind → fail.

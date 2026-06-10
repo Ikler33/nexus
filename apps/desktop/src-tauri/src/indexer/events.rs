@@ -7,56 +7,72 @@ use super::fs::rel_of;
 use super::Indexer;
 
 /// Запускает watcher + фоновый цикл индексации для готового `Indexer` (вызывается из `open_vault`,
-/// который решает, с RAG или без). Watcher живёт внутри спавненной задачи; на завершении — стоп.
-pub fn spawn(indexer: Indexer, app: tauri::AppHandle) {
+/// который решает, с RAG или без).
+///
+/// **Владение watcher'ом — у ВЫЗЫВАЮЩЕГО** (фикс «вечных воркеров», аудит 2026-06-10): возвращаемый
+/// `VaultWatcher` живёт в `VaultContext::lifecycle`; замена контекста (повторный `open_vault`)
+/// дропает watcher → sender канала закрывается → [`event_loop`] выходит сам. Раньше watcher жил
+/// ВНУТРИ задачи → петля была вечной, и каждый `open_vault` плодил ещё одну (два watcher'а на
+/// каталог, двойная индексация). `None` — watcher не инициализировался (vault без живой
+/// индексации, как и раньше).
+#[must_use = "watcher обязан жить в VaultContext::lifecycle — иначе петля индексации умрёт сразу"]
+pub fn spawn(indexer: Indexer, app: tauri::AppHandle) -> Option<VaultWatcher> {
     let root = indexer.root.clone();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VaultEvent>();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<VaultEvent>();
     let watcher = match VaultWatcher::new(&root, tx) {
         Ok(w) => w,
         Err(e) => {
             tracing::error!(error = %e, "vault watcher init failed");
-            return;
+            return None;
         }
     };
-    tokio::spawn(async move {
-        let _watcher = watcher; // держим watcher живым на время задачи
-        if let Err(e) = indexer.scan_vault().await {
-            tracing::error!(error = %e, "initial vault scan failed");
-        }
-        emit_vault_changed(&app); // индекс готов после начального скана
-        while let Some(event) = rx.recv().await {
-            let result = match event {
-                VaultEvent::Upsert(abs) => match rel_of(&indexer.root, &abs) {
-                    Some(rel) => indexer.index_file(&rel).await,
-                    None => Ok(()),
-                },
-                VaultEvent::Deleted(abs) => match rel_of(&indexer.root, &abs) {
-                    Some(rel) => indexer.remove_file(&rel).await,
-                    None => Ok(()),
-                },
-                VaultEvent::Renamed { from, to } => {
-                    match (rel_of(&indexer.root, &from), rel_of(&indexer.root, &to)) {
-                        (Some(from_rel), Some(to_rel)) => {
-                            indexer.rename_file(&from_rel, &to_rel).await
-                        }
-                        // Перемещение из/в пределы vault → как удаление/создание соответственно.
-                        (None, Some(to_rel)) => indexer.index_file(&to_rel).await,
-                        (Some(from_rel), None) => indexer.remove_file(&from_rel).await,
-                        (None, None) => Ok(()),
-                    }
+    tokio::spawn(event_loop(indexer, rx, move || emit_vault_changed(&app)));
+    Some(watcher)
+}
+
+/// Петля индексации: начальный скан → инкрементальные события до закрытия канала (= дропа
+/// watcher'а из `VaultContext`). `notify` — хук «индекс обновлён» (в проде Tauri-эвент; вынесен,
+/// чтобы петля тестировалась без `AppHandle`).
+pub(super) async fn event_loop(
+    indexer: Indexer,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<VaultEvent>,
+    notify: impl Fn() + Send + 'static,
+) {
+    if let Err(e) = indexer.scan_vault().await {
+        tracing::error!(error = %e, "initial vault scan failed");
+    }
+    notify(); // индекс готов после начального скана
+    while let Some(event) = rx.recv().await {
+        let result = match event {
+            VaultEvent::Upsert(abs) => match rel_of(&indexer.root, &abs) {
+                Some(rel) => indexer.index_file(&rel).await,
+                None => Ok(()),
+            },
+            VaultEvent::Deleted(abs) => match rel_of(&indexer.root, &abs) {
+                Some(rel) => indexer.remove_file(&rel).await,
+                None => Ok(()),
+            },
+            VaultEvent::Renamed { from, to } => {
+                match (rel_of(&indexer.root, &from), rel_of(&indexer.root, &to)) {
+                    (Some(from_rel), Some(to_rel)) => indexer.rename_file(&from_rel, &to_rel).await,
+                    // Перемещение из/в пределы vault → как удаление/создание соответственно.
+                    (None, Some(to_rel)) => indexer.index_file(&to_rel).await,
+                    (Some(from_rel), None) => indexer.remove_file(&from_rel).await,
+                    (None, None) => Ok(()),
                 }
-            };
-            match result {
-                // Персистим usearch после каждого инкрементального события (события дебаунсятся
-                // watcher'ом, не на каждое нажатие). Дебаунс самого save — позже при росте индекса.
-                Ok(()) => {
-                    indexer.persist_vectors();
-                    emit_vault_changed(&app); // живой пересчёт зависимых вьюх (ADR-007 S8, #35 «Цели»)
-                }
-                Err(e) => tracing::warn!(error = %e, "index event failed"),
             }
+        };
+        match result {
+            // Персистим usearch после каждого инкрементального события (события дебаунсятся
+            // watcher'ом, не на каждое нажатие). Дебаунс самого save — позже при росте индекса.
+            Ok(()) => {
+                indexer.persist_vectors();
+                notify(); // живой пересчёт зависимых вьюх (ADR-007 S8, #35 «Цели»)
+            }
+            Err(e) => tracing::warn!(error = %e, "index event failed"),
         }
-    });
+    }
+    tracing::debug!("indexer event loop stopped (vault закрыт/заменён)");
 }
 
 /// Tauri-событие «индекс vault обновлён» (backend→фронт, ADR-007 S8 — event-канал планировщика). Фронт

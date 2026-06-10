@@ -49,7 +49,7 @@
     "AC-Б9-2": { "status": "covered", "tests": ["watcher::tests"], "note": "is_ignored для .nexus/*." },
     "AC-Б9-3": { "status": "covered", "tests": ["watcher::tests"], "note": "Дебаунс схлопывает шторм; remove+create=upsert." },
     "AC-Б10-1": { "status": "partial", "tests": ["ai::chat::tests", "src/stores/chat.test.ts"], "note": "Channel-буферы per-session." },
-    "AC-Б10-2": { "status": "pending", "tests": ["src/stores/chat.test.ts"], "note": "Персист истории сессий не реализован (ревью C9, BACKLOG)." },
+    "AC-Б10-2": { "status": "covered", "tests": ["src/stores/chat.test.ts (персист: сохранение/восстановление через hydrate, раздельные vault, clear, смена vault при стриме)"], "note": "Сделано в #17: финализация на done + видна после перезагрузки. Медиум — localStorage per-vault (хвост ≤100), НЕ задуманный SQLite chat_* (миграция — при росте/спросе, BACKLOG). ChatSession-модель «много бесед» — отдельная продуктовая фича." },
     "AC-Б10-3": { "status": "partial", "tests": ["ai::chat::tests"], "note": "cancel — backend есть; UI→idle проверяется частично." },
     "AC-Б10-4": { "status": "covered", "tests": ["src/stores/chat.test.ts"], "note": "rAF-коалесинг рендера токенов (V2.4): N токенов → 1 кадр-апдейт; тест считает rAF-вызовы (200 токенов → 1)." },
     "AC-Б11-1": { "status": "covered", "tests": ["vault::tests::resolve_blocks_traversal_and_absolute", "vault::tests::write_resolve_allows_new_file_blocks_escape", "commands::plugin::tests::dispatch_blocks_path_escape"] },

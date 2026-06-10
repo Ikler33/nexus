@@ -169,6 +169,21 @@ pub struct VaultContext {
     /// известен, прежде чем ставить джобу. Наполняется в `open_vault` (H3+ регистрируют виджеты);
     /// сейчас пуст. `Arc` — делится между командами без клонирования множества.
     pub widgets: Arc<crate::home::widgets::WidgetRegistry>,
+    /// Якорь фоновых воркеров vault (фикс «вечных воркеров», аудит 2026-06-10): пока жив контекст —
+    /// живут watcher-петля индексатора и воркер планировщика; замена/сброс контекста дропает якорь
+    /// → петли гаснут сами. Раньше каждый `open_vault` плодил ЕЩЁ один вечный воркер (двойная
+    /// индексация, LLM-джобы закрытого vault продолжали жечь модель).
+    pub lifecycle: VaultLifecycle,
+}
+
+/// Хендлы жизненного цикла фоновых задач vault (см. [`VaultContext::lifecycle`]). Поля нигде не
+/// читаются — их работа выполняется на `Drop`: watcher закрывает mpsc-канал петли индексатора,
+/// watch-sender завершает `scheduler::worker_loop` (`changed()` → `Err` → break).
+pub struct VaultLifecycle {
+    /// FS-watcher vault: дроп → sender событий закрыт → петля индексации выходит.
+    pub watcher: Option<crate::watcher::VaultWatcher>,
+    /// Shutdown-канал воркера планировщика: дроп sender'а гасит цикл.
+    pub scheduler_shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 #[cfg(test)]
