@@ -307,6 +307,15 @@ export function streamInline(
   };
 }
 
+/** Инлайн-теги файла (без `#`, отсортированы) — зеркало `file_tags` для графа. */
+function tagsOf(path: string): string[] {
+  const found = new Set<string>();
+  const re = /(^|\s)#([\p{L}\p{N}_/-]+)/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(CONTENT[path] ?? '')) !== null) found.add(m[2]);
+  return [...found].sort();
+}
+
 /** Неориентированная смежность по `[[wikilink]]` во всём CONTENT (общая для local/full). */
 function buildAdjacency(): Map<string, Set<string>> {
   const paths = Object.keys(CONTENT);
@@ -376,7 +385,7 @@ export async function getLocalGraph(center: string, hops: number): Promise<Graph
     frontier = next;
   }
 
-  const nodes = [...inSet].map((p) => ({ id: idOf(p), path: p, title: null }));
+  const nodes = [...inSet].map((p) => ({ id: idOf(p), path: p, title: null, tags: tagsOf(p) }));
   return { nodes, edges: edgesAmong(inSet, adj, idOf) };
 }
 
@@ -390,7 +399,7 @@ export async function getFullGraph(limit: number): Promise<FullGraph> {
   );
   const chosen = byDegree.slice(0, Math.max(1, limit));
   const inSet = new Set(chosen);
-  const nodes = chosen.map((p) => ({ id: idOf(p), path: p, title: null }));
+  const nodes = chosen.map((p) => ({ id: idOf(p), path: p, title: null, tags: tagsOf(p) }));
   return {
     nodes,
     edges: edgesAmong(inSet, adj, idOf),

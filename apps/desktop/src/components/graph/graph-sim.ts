@@ -12,6 +12,38 @@ export interface GraphNodeDatum extends SimulationNodeDatum {
   title: string;
   path: string;
   deg: number;
+  /** Теги заметки (без `#`) — цвет узла и фильтр-чипы. */
+  tags: string[];
+}
+
+/** Стабильный оттенок тега: FNV-1a-хеш имени → hue 0..359 (один тег — один цвет везде). */
+export function tagHue(tag: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < tag.length; i++) {
+    h ^= tag.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 360;
+}
+
+/**
+ * Цвет узла по первому тегу — как `nodeColor` макета `graph.jsx`, но вместо хардкод-словаря
+ * под демо-теги — хеш-палитра oklch (любой vault). Светлота/хрома — CSS-переменные
+ * `--g-tag-l/--g-tag-c` (пер-тема, graph.css); без тегов — `null` (фолбэк из CSS).
+ */
+export function nodeColor(tags: string[]): string | null {
+  if (tags.length === 0) return null;
+  return `oklch(var(--g-tag-l, 0.55) var(--g-tag-c, 0.12) ${tagHue(tags[0])})`;
+}
+
+/** Топ-N тегов узлов графа по частоте (ничья — по алфавиту) — фильтр-чипы бара. */
+export function topTags(nodes: readonly { tags: string[] }[], limit: number): string[] {
+  const counts = new Map<string, number>();
+  for (const n of nodes) for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, Math.max(0, limit))
+    .map(([t]) => t);
 }
 
 /** Ребро d3-force: до init `source/target` — id-строки, после — объекты узлов. */

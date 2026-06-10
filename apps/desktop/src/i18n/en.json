@@ -270,6 +270,7 @@
     "truncated": "showing {{shown}} of {{total}} nodes",
     "nodeCount": "{{count}} nodes",
     "depth": "Depth",
+    "tags": "Tag filter",
     "loading": "Laying out…",
     "stat": "{{nodes}} nodes · {{edges}} links",
     "close": "Close graph",

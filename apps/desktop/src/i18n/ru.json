@@ -278,6 +278,7 @@
     "truncated": "показано {{shown}} из {{total}} узлов",
     "nodeCount": "узлов: {{count}}",
     "depth": "Глубина",
+    "tags": "Фильтр по тегам",
     "loading": "Раскладка…",
     "stat": "узлов: {{nodes}} · связей: {{edges}}",
     "close": "Закрыть граф",

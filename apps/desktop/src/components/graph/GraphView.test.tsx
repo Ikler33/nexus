@@ -44,8 +44,8 @@ describe('GraphView render-smoke (кросс-план #23)', () => {
   it('монтируется и рисует узлы full-графа без краха', async () => {
     vi.spyOn(tauriApi.graph, 'getFullGraph').mockResolvedValue({
       nodes: [
-        { id: 1, path: 'A.md', title: 'A' },
-        { id: 2, path: 'B.md', title: 'B' },
+        { id: 1, path: 'A.md', title: 'A', tags: ['demo'] },
+        { id: 2, path: 'B.md', title: 'B', tags: [] },
       ],
       edges: [{ source: 1, target: 2 }],
       totalFiles: 2,
@@ -60,6 +60,17 @@ describe('GraphView render-smoke (кросс-план #23)', () => {
     await waitFor(() => {
       expect(document.querySelector('.graph-svg')).toBeTruthy();
       expect(document.querySelectorAll('.g-dot').length).toBe(2);
+    });
+
+    // Срез «Граф: теги»: чип топ-тега в баре; клик гасит узлы без тега, повторный — сбрасывает.
+    const chip = screen.getByRole('button', { name: '#demo' });
+    fireEvent.click(chip);
+    await waitFor(() => {
+      expect(document.querySelectorAll('.g-node.faded').length).toBe(1);
+    });
+    fireEvent.click(chip);
+    await waitFor(() => {
+      expect(document.querySelectorAll('.g-node.faded').length).toBe(0);
     });
   });
 });

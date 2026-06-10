@@ -79,6 +79,35 @@ pub struct GraphNode {
     pub id: i64,
     pub path: String,
     pub title: Option<String>,
+    /// Теги заметки (file_tags) — цвет узла и фильтр-чипы (BACKLOG «Граф: теги», макет graph.jsx).
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Дочитывает теги для набора узлов одним JOIN'ом (IN-чанки ≤ лимита переменных, ревью A9).
+fn attach_tags(c: &rusqlite::Connection, nodes: &mut [GraphNode]) -> rusqlite::Result<()> {
+    let ids: Vec<i64> = nodes.iter().map(|n| n.id).collect();
+    let pairs = collect_in_chunks(
+        c,
+        &ids,
+        |ph| {
+            format!(
+                "SELECT ft.file_id, t.name FROM file_tags ft \
+                 JOIN tags t ON t.id = ft.tag_id WHERE ft.file_id IN ({ph}) ORDER BY t.name"
+            )
+        },
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+    )?;
+    let mut by_id: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    for (id, tag) in pairs {
+        by_id.entry(id).or_default().push(tag);
+    }
+    for n in nodes.iter_mut() {
+        if let Some(tags) = by_id.remove(&n.id) {
+            n.tags = tags;
+        }
+    }
+    Ok(())
 }
 
 /// Ребро (по идентификаторам файлов).
@@ -153,7 +182,7 @@ pub async fn get_local_graph(reader: &ReadPool, center: String, hops: u32) -> Db
             }
 
             let id_vec: Vec<i64> = ids.iter().copied().collect();
-            let nodes = collect_in_chunks(
+            let mut nodes = collect_in_chunks(
                 c,
                 &id_vec,
                 |ph| format!("SELECT id, path, title FROM files WHERE id IN ({ph})"),
@@ -162,9 +191,11 @@ pub async fn get_local_graph(reader: &ReadPool, center: String, hops: u32) -> Db
                         id: r.get(0)?,
                         path: r.get(1)?,
                         title: r.get(2)?,
+                        tags: Vec::new(),
                     })
                 },
             )?;
+            attach_tags(c, &mut nodes)?;
 
             // Рёбра: одиночный `source_id IN (chunk)` + фильтр `target ∈ ids` в Rust — избегаем
             // двойного IN (source AND target), вдвое сокращая bind-переменные на запрос. Результат
@@ -229,15 +260,17 @@ pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGra
                  ORDER BY COALESCE(d.deg, 0) DESC, f.id \
                  LIMIT ?1",
             )?;
-            let nodes = nstmt
+            let mut nodes = nstmt
                 .query_map([limit], |r| {
                     Ok(GraphNode {
                         id: r.get(0)?,
                         path: r.get(1)?,
                         title: r.get(2)?,
+                        tags: Vec::new(),
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            attach_tags(c, &mut nodes)?;
 
             let ids: BTreeSet<i64> = nodes.iter().map(|n| n.id).collect();
             let id_vec: Vec<i64> = ids.iter().copied().collect();
@@ -379,6 +412,34 @@ mod tests {
         assert!(top.truncated);
         let tp: BTreeSet<_> = top.nodes.iter().map(|n| n.path.as_str()).collect();
         assert_eq!(tp, BTreeSet::from(["A.md", "B.md"]), "топ-2 по степени");
+    }
+
+    /// Срез «Граф: теги»: узлы обоих графов несут теги из `file_tags`
+    /// (отсортированы по имени; без тегов — пустой вектор).
+    #[tokio::test]
+    async fn graph_nodes_carry_tags() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(root.join("A.md"), "#demo #docs см. [[B]]\n").unwrap();
+        fs::write(root.join("B.md"), "# B\n").unwrap();
+
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let idx = Indexer::new(&db, root.clone());
+        for f in ["A.md", "B.md"] {
+            idx.index_file(f).await.unwrap();
+        }
+
+        let local = get_local_graph(db.reader(), "A.md".into(), 1)
+            .await
+            .unwrap();
+        let a = local.nodes.iter().find(|n| n.path == "A.md").unwrap();
+        assert_eq!(a.tags, vec!["demo".to_string(), "docs".to_string()]);
+        let b = local.nodes.iter().find(|n| n.path == "B.md").unwrap();
+        assert!(b.tags.is_empty());
+
+        let full = get_full_graph(db.reader(), 10).await.unwrap();
+        let a = full.nodes.iter().find(|n| n.path == "A.md").unwrap();
+        assert_eq!(a.tags, vec!["demo".to_string(), "docs".to_string()]);
     }
 
     /// Ревью A9: граф на супер-хабе (узел с тысячами связей) не падает на `too many SQL variables`
