@@ -18,7 +18,8 @@ type SyncResult = GitPullOutcome | { status: 'error'; message: string };
 /**
  * Панель синхронизации (Ф3, git-sync): изменения рабочего дерева + коммит (secret-scan на бэке),
  * настройка remote (URL + токен в системный keychain) и sync (pull-ff → push). Конфликт
- * (`merge-required`) пока только сигналим — ручное разрешение в BACKLOG (завязано на marketplace).
+ * (`merge-required`) разрешается в `ConflictResolver` (DP-10) — кнопкой отсюда или из
+ * конфликт-пилюли статусбара (DP-14).
  */
 export function SyncPanel() {
   const { t } = useTranslation();

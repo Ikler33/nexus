@@ -208,6 +208,9 @@ export default function GraphView() {
   const [, tick] = useState(0); // ре-рендер на каждый tick d3 (позиции живут в узлах, d3 их мутирует)
 
   const simRef = useRef<Simulation<GraphNodeDatum, GraphLink> | null>(null);
+  // Для рендер-троттла «дыхания»: тик-клоужер читает drag через ref (state туда не попадает).
+  const dragRef = useRef<string | null>(null);
+  dragRef.current = dragId;
   const svgRef = useRef<SVGSVGElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   // ссылки на силы — чтобы менять их вживую из слайдеров без пересоздания сим (позиции сохраняются)
@@ -348,6 +351,11 @@ export default function GraphView() {
       }
     };
     const coreMax = Math.min(stage.w, stage.h) * 0.27;
+    // Рендер-троттл «дыхания»: первые ~1.6с (укладка) и во время drag рендерим каждый тик,
+    // дальше сим жив на alphaTarget, но React-рендер — каждый 3-й тик (~20fps вместо 60:
+    // на 600 узлах экономит CPU втрое, микро-движение глазом неотличимо).
+    const startedAt = performance.now();
+    let tickN = 0;
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
       .force('charge', charge)
       .force('link', link)
@@ -382,6 +390,9 @@ export default function GraphView() {
           n.x = Math.max(20, Math.min(stage.w - 20, n.x ?? cx));
           n.y = Math.max(20, Math.min(stage.h - 20, n.y ?? cy));
         }
+        tickN += 1;
+        const breathing = performance.now() - startedAt > 1600 && dragRef.current == null;
+        if (breathing && tickN % 3 !== 0) return;
         tick((v) => v + 1);
       });
     chargeRef.current = charge;
