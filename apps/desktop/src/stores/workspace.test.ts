@@ -4,8 +4,8 @@ import { activeBuffer, activePath, useWorkspaceStore } from './workspace';
 
 beforeEach(async () => {
   useWorkspaceStore.getState().reset();
-  // notes нужны для openLink
-  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  // openLink резолвится через tauriApi.vault.resolveNote (#22) — вне Tauri отвечает мок.
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   await useVaultStore.getState().openVault('');
 });
 

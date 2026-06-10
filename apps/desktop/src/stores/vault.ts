@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { tauriApi, type FileEntry, type NoteRef, type VaultInfo } from '../lib/tauri-api';
+import { tauriApi, type FileEntry, type VaultInfo } from '../lib/tauri-api';
 import { compareEntries } from '../i18n/format';
 
 /** Узел плоского (развёрнутого) представления дерева для виртуализации. */
@@ -16,8 +16,6 @@ interface VaultState {
   childrenByPath: Record<string, FileEntry[]>;
   expanded: Record<string, true>;
   loading: Record<string, true>;
-  /** Все заметки vault (для автокомплита `[[wikilink]]` и резолва ссылок). */
-  notes: NoteRef[];
 
   openVault: (path: string) => Promise<void>;
   toggleDir: (path: string) => Promise<void>;
@@ -34,20 +32,18 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   childrenByPath: {},
   expanded: {},
   loading: {},
-  notes: [],
 
+  // Полный список заметок НЕ грузится (#22): автокомплит `[[…` спрашивает топ-N по подстроке
+  // (`listNotes(query, limit)`), клик по ссылке резолвит бэкенд (`resolveNote`) — payload открытия
+  // vault не растёт с числом файлов.
   async openVault(path) {
     const info = await tauriApi.vault.openVault(path);
-    const [root, notes] = await Promise.all([
-      tauriApi.vault.listDir(''),
-      tauriApi.vault.listNotes().catch(() => []),
-    ]);
+    const root = await tauriApi.vault.listDir('');
     set({
       info,
       childrenByPath: { '': [...root].sort(compareEntries) },
       expanded: {},
       loading: {},
-      notes,
     });
   },
 
@@ -93,13 +89,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     while (existing.has(name)) name = `${base} ${i++}.md`;
     const path = dir ? `${dir}/${name}` : name;
     await tauriApi.vault.writeFile(path, opts.content ?? '');
-    // Обновляем детей каталога + список заметок (автокомплит ссылок); раскрываем каталог.
+    // Обновляем детей каталога; раскрываем каталог. Автокомплит/резолв ссылок спрашивают бэкенд
+    // на лету (#22) — отдельный список заметок поддерживать не нужно.
     const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
-    const notes = await tauriApi.vault.listNotes().catch(() => get().notes);
     set((s) => ({
       childrenByPath: { ...s.childrenByPath, [dir]: children },
       expanded: dir ? { ...s.expanded, [dir]: true } : s.expanded,
-      notes,
     }));
     return path;
   },
@@ -109,17 +104,6 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 export function noteName(path: string): string {
   const base = path.slice(path.lastIndexOf('/') + 1);
   return base.endsWith('.md') ? base.slice(0, -3) : base;
-}
-
-/** Резолвит цель `[[wikilink]]` в путь файла среди известных заметок. */
-export function resolveLink(target: string, notes: NoteRef[]): string | null {
-  const want = target.endsWith('.md') ? target.slice(0, -3) : target;
-  return (
-    notes.find((n) => n.path === target)?.path ?? // точный путь
-    notes.find((n) => n.path.replace(/\.md$/, '') === want)?.path ?? // путь без .md
-    notes.find((n) => noteName(n.path) === noteName(want))?.path ?? // по имени файла
-    null
-  );
 }
 
 /** Плоский список ВИДИМЫХ узлов (только раскрытые ветви) для виртуализации. */

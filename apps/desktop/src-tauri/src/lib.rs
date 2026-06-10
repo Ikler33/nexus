@@ -88,6 +88,7 @@ pub fn run() {
             commands::vault::read_file,
             commands::vault::write_file,
             commands::vault::list_notes,
+            commands::vault::resolve_note,
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::graph::get_full_graph,

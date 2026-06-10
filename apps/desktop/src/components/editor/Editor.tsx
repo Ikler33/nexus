@@ -20,7 +20,8 @@ export interface EditorProps {
   onChange?: (doc: string) => void;
   onSave?: (doc: string) => void;
   onOpenLink?: (target: string) => void;
-  getNotes?: () => NoteRef[];
+  /** Заметки по подстроке для автокомплита `[[…` (бэкенд-фильтр + лимит, #22). */
+  fetchNotes?: (query: string) => Promise<NoteRef[]>;
 }
 
 /**
@@ -35,12 +36,12 @@ export function Editor({
   onChange,
   onSave,
   onOpenLink,
-  getNotes,
+  fetchNotes,
 }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const cb = useRef({ onChange, onSave, onOpenLink, getNotes });
-  cb.current = { onChange, onSave, onOpenLink, getNotes };
+  const cb = useRef({ onChange, onSave, onOpenLink, fetchNotes });
+  cb.current = { onChange, onSave, onOpenLink, fetchNotes };
   const loadedPath = useRef(path);
   const loadedDoc = useRef(initialDoc);
   loadedDoc.current = initialDoc;
@@ -95,7 +96,7 @@ export function Editor({
           inlineToolbar,
           focusTracker,
           ...nexusExtensions({
-            getNotes: () => cb.current.getNotes?.() ?? [],
+            fetchNotes: (q) => cb.current.fetchNotes?.(q) ?? Promise.resolve([]),
             getOpenLink: () => cb.current.onOpenLink,
           }),
           EditorView.updateListener.of((u) => {

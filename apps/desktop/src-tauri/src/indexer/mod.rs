@@ -33,9 +33,12 @@ mod rag;
 mod tests;
 
 pub use events::spawn;
+/// Ре-экспорт для команды `resolve_note` (кросс-план #22): клик по `[[ссылке]]` резолвится той же
+/// функцией, что и индексация links — одна семантика (путь/±.md/basename, затем алиас).
+pub(crate) use links::resolve_target;
 
 use fs::{collect_md, mtime_secs, now_secs};
-use links::{path_forms, resolve_all_dangling, resolve_target};
+use links::{path_forms, resolve_all_dangling};
 
 /// Максимум входов в одном запросе к embedding-серверу (страхует от слишком больших батчей).
 const EMBED_BATCH: usize = 64;

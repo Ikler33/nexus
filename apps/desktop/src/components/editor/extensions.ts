@@ -106,22 +106,25 @@ function wikilinkClick(onOpenLink: () => ((target: string) => void) | undefined)
   });
 }
 
-/** Автокомплит имён заметок внутри `[[…`. */
-function wikilinkAutocomplete(getNotes: () => NoteRef[]): Extension {
+/** Автокомплит имён заметок внутри `[[…` — асинхронный запрос топ-N к бэкенду (кросс-план #22):
+ * вместо полного списка vault в памяти каждый ввод спрашивает отфильтрованный срез (бэкенд ранжирует
+ * префикс-совпадения выше). `filter: false` — CM6 не пере-фильтрует уже отобранное. */
+function wikilinkAutocomplete(fetchNotes: (q: string) => Promise<NoteRef[]>): Extension {
   return autocompletion({
     override: [
-      (ctx: CompletionContext): CompletionResult | null => {
+      async (ctx: CompletionContext): Promise<CompletionResult | null> => {
         const line = ctx.state.doc.lineAt(ctx.pos);
         const before = ctx.state.sliceDoc(line.from, ctx.pos);
         const m = /\[\[([^\]\n]*)$/.exec(before);
         if (!m) return null;
         const from = ctx.pos - m[1].length;
-        const options = getNotes().map((n) => ({
+        const notes = await fetchNotes(m[1]);
+        const options = notes.map((n) => ({
           label: noteName(n.path),
           detail: n.title ?? n.path,
           type: 'class',
         }));
-        return { from, options, validFor: /[^\]\n]*/ };
+        return { from, options, filter: false };
       },
     ],
   });
@@ -198,7 +201,8 @@ const editorTheme = EditorView.theme({
 
 /** Колбэки редактора (через ref-геттеры — всегда актуальны без пересоздания view). */
 export interface EditorCallbacks {
-  getNotes: () => NoteRef[];
+  /** Заметки по подстроке для автокомплита `[[…` (бэкенд-фильтр + лимит, #22). */
+  fetchNotes: (query: string) => Promise<NoteRef[]>;
   getOpenLink: () => ((target: string) => void) | undefined;
 }
 
@@ -209,7 +213,7 @@ export function nexusExtensions(cb: EditorCallbacks): Extension[] {
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     decorationPlugin,
     wikilinkClick(cb.getOpenLink),
-    wikilinkAutocomplete(cb.getNotes),
+    wikilinkAutocomplete(cb.fetchNotes),
     editorTheme,
     EditorView.lineWrapping,
   ];

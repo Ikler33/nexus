@@ -298,9 +298,19 @@ export const tauriApi = {
         ? invoke<void>('write_file', { path, content })
         : mockVault.writeFile(path, content),
 
-    /** Все заметки vault (path + title) — для автокомплита `[[wikilink]]`. */
-    listNotes: () =>
-      isTauri() ? invoke<NoteRef[]>('list_notes') : mockVault.listNotes(),
+    /** Заметки vault (path + title) для автокомплита `[[wikilink]]`. #22: опциональный
+     * подстрочный `query`-фильтр + `limit` — топ-N вместо всего vault (префиксы ранжируются выше). */
+    listNotes: (query?: string, limit?: number) =>
+      isTauri()
+        ? invoke<NoteRef[]>('list_notes', { query, limit })
+        : mockVault.listNotes(query, limit),
+
+    /** Резолвит цель `[[wikilink]]` в путь файла — бэкенд-семантика индексатора (путь / +`.md` /
+     * basename, затем алиас V4.1); #22: клик по ссылке без полного списка заметок на фронте. */
+    resolveNote: (target: string) =>
+      isTauri()
+        ? invoke<string | null>('resolve_note', { target })
+        : mockVault.resolveNote(target),
 
     /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
     pickDirectory: async (): Promise<string | null> => {
