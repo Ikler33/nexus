@@ -51,6 +51,8 @@ pub mod search;
 pub mod state;
 /// Предложения связей (режим 1 max-sim) — §6.
 pub mod suggest;
+/// Теги vault: список с количеством для панели «Теги» сайдбара (DP-2).
+pub mod tags;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
 /// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.
@@ -109,6 +111,7 @@ pub fn run() {
             commands::vault::write_file,
             commands::vault::list_notes,
             commands::vault::resolve_note,
+            commands::vault::list_tags,
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::graph::get_full_graph,

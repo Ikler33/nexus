@@ -619,6 +619,13 @@ pub async fn resolve_note(state: State<'_, AppState>, target: String) -> AppResu
         .await?)
 }
 
+/// Теги vault с количеством заметок — панель «Теги» сайдбара (DP-2, макет `sidebar.jsx`).
+#[tauri::command]
+pub async fn list_tags(state: State<'_, AppState>) -> AppResult<Vec<crate::tags::TagCount>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(crate::tags::list_tags(&reader).await?)
+}
+
 /// Корень текущего открытого vault (или [`AppError::NoVault`], если не открыт).
 async fn current_root(state: &State<'_, AppState>) -> AppResult<PathBuf> {
     Ok(state.vault().await?.root.clone())
