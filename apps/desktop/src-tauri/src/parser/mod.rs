@@ -63,8 +63,12 @@ pub fn parse(content: &str) -> ParsedDocument {
     let (frontmatter, body, fm_lines) = split_frontmatter(content);
 
     let analysis = analyze_with_pulldown(body, fm_lines);
-    let (mut links, tags) = scan_wiki_and_tags(body, fm_lines, &analysis.code_ranges);
+    let (mut links, mut tags) = scan_wiki_and_tags(body, fm_lines, &analysis.code_ranges);
     links.extend(analysis.md_links);
+    // #35 хвост: frontmatter `tags:` — в общий набор (file_tags индексируется из parsed.tags).
+    if let Some(fm) = frontmatter {
+        tags.extend(frontmatter_tags(fm));
+    }
 
     let title = frontmatter
         .and_then(frontmatter_title)
@@ -277,6 +281,58 @@ fn push_alias(out: &mut Vec<String>, raw: &str) {
     }
 }
 
+/// Извлекает теги из frontmatter (`tags:`/`tag:`) тем же line-парсером, что и алиасы (#35 хвост:
+/// раньше `tags: [goal]` НЕ давал file_tag — `scan_wiki_and_tags` сканирует только тело). Формы:
+/// `tags: [a, b]` (инлайн), `tag: a` (скаляр), блочный список `- a`. Нормализация — как у
+/// инлайн-тегов тела: срез ведущего `#` (форма `"#tag"` в кавычках), ASCII-lowercase, символы
+/// [`is_tag_char`], хотя бы одна буква (отсекает `123`); иное значение пропускается.
+fn frontmatter_tags(fm: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut lines = fm.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix("tags:")
+            .or_else(|| trimmed.strip_prefix("tag:"))
+        else {
+            continue;
+        };
+        let rest = rest.trim();
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            for item in inner.split(',') {
+                push_tag(&mut out, item);
+            }
+        } else if rest.is_empty() {
+            // Блочный список: подряд идущие `- value`.
+            while let Some(next) = lines.peek() {
+                match next.trim_start().strip_prefix('-') {
+                    Some(item) => {
+                        push_tag(&mut out, item);
+                        lines.next();
+                    }
+                    None => break,
+                }
+            }
+        } else {
+            push_tag(&mut out, rest);
+        }
+        break; // только первый ключ tags
+    }
+    out
+}
+
+/// Нормализует значение тега frontmatter (см. [`frontmatter_tags`]) и добавляет, если валиден.
+fn push_tag(out: &mut Vec<String>, raw: &str) {
+    let v = raw.trim().trim_matches(['"', '\'']).trim();
+    let v = v.strip_prefix('#').unwrap_or(v);
+    if !v.is_empty() && v.bytes().all(is_tag_char) && v.bytes().any(|c| c.is_ascii_alphabetic()) {
+        let v = v.to_ascii_lowercase();
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
+}
+
 /// Извлекает ПЛОСКИЕ скалярные поля frontmatter верхнего уровня (typed-frontmatter) минимальным
 /// line-парсером — без YAML-либы (serde_yaml архивирован → security-гейт; выбор владельца). Берёт
 /// строки вида `ключ: значение` БЕЗ ведущих отступов (вложенное/блок-список — пропускаются), значение —
@@ -429,6 +485,28 @@ mod tests {
         // нет алиасов / нет frontmatter
         assert!(parse("---\ntitle: X\n---\nb\n").aliases.is_empty());
         assert!(parse("no frontmatter [[X]]\n").aliases.is_empty());
+    }
+
+    /// #35 хвост: frontmatter `tags:` попадают в `parsed.tags` (→ file_tags при индексации),
+    /// с нормализацией инлайн-тегов тела (lowercase, ASCII-набор, срез `#`).
+    #[test]
+    fn frontmatter_tags_inline_block_scalar_merge_with_body() {
+        // Инлайн-список: кавычки/`#`/регистр нормализуются; мусор (`123`, юникод вне набора) — мимо.
+        assert_eq!(
+            parse("---\ntags: [Goal, \"#project\", 123, 'тег']\n---\nbody\n").tags,
+            vec!["goal".to_string(), "project".to_string()]
+        );
+        // Блочный список + слияние с тегами тела (дедуп, сортировка BTreeSet).
+        assert_eq!(
+            parse("---\ntags:\n  - beta\n  - alpha\n---\nbody #alpha #zeta\n").tags,
+            vec!["alpha".to_string(), "beta".to_string(), "zeta".to_string()]
+        );
+        // Скаляр `tag:`; без frontmatter — только теги тела.
+        assert_eq!(
+            parse("---\ntag: solo\n---\nb\n").tags,
+            vec!["solo".to_string()]
+        );
+        assert_eq!(parse("b #only\n").tags, vec!["only".to_string()]);
     }
 
     #[test]

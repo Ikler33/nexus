@@ -246,6 +246,32 @@ async fn indexes_and_replaces_tags() {
     assert_eq!(read_tags(&db).await, vec!["area".to_string()]);
 }
 
+/// #35 хвост: frontmatter `tags:` индексируются в file_tags наравне с инлайн-тегами тела
+/// (раньше `tags: [goal]` не давал file_tag — маркер цели работал только инлайном).
+#[tokio::test]
+async fn indexes_frontmatter_tags_into_file_tags() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::write(
+        root.join("G.md"),
+        "---\ntags: [goal, Project]\n---\nтело с #inline\n",
+    )
+    .unwrap();
+
+    let db = open(&root).await;
+    let idx = Indexer::new(&db, root.clone());
+    idx.index_file("G.md").await.unwrap();
+
+    assert_eq!(
+        read_tags(&db).await,
+        vec![
+            "goal".to_string(),
+            "inline".to_string(),
+            "project".to_string()
+        ]
+    );
+}
+
 /// typed-frontmatter: плоские поля индексируются в `frontmatter_fields` и заменяются при реиндексе.
 #[tokio::test]
 async fn indexes_and_replaces_frontmatter_fields() {
