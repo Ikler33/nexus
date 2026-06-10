@@ -3,6 +3,7 @@ import { RefreshCw, Target, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useGoalsStore } from '../../stores/goals';
+import { BrandThinking } from '../chrome/BrandThinking';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import styles from './GoalsPanel.module.css';
@@ -61,9 +62,16 @@ export function GoalsPanel() {
         </header>
 
         {loading ? (
-          <p className={styles.empty}>{t('goals.loading')}</p>
+          // Загрузка целей — «думающий» бренд-знак (макет insights.jsx).
+          <div className={styles.thinking}>
+            <BrandThinking size={26} />
+            <span className="mt-label">{t('goals.loading')}</span>
+          </div>
         ) : items.length === 0 ? (
-          <p className={styles.empty}>{t('goals.empty')}</p>
+          <div className={styles.emptyState}>
+            <Target size={22} className={styles.emptyIco} aria-hidden />
+            <p className={styles.empty}>{t('goals.empty')}</p>
+          </div>
         ) : (
           <ul className={styles.list}>
             {items.map((g) => (
