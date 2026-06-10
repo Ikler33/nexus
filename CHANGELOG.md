@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Дизайн-паритет DP-0: фундамент (решение владельца — приложение = макет целиком)
+
+- **`docs/design/handoff/` обновлён** бандлом 2026-06-10 (макет, ранее приведённый к реальности
+  приложения): новые экраны settings/sync/insights/news в прототипе, **две премиум-темы Midnight
+  Ink / Platinum Slate** в tokens, обновлённые graph/home/plugins/editor.
+- **`src/motion.css`** — глобальный motion-слой дизайн-системы: `--ease-spring/out/inout`,
+  шкала `--dur-1..4`, классы «думающего» бренд-знака (`brand-thinking`, `mt-label` с шиммером)
+  + reduced-motion гварды. Компонентные entrance-анимации остаются в модулях.
+- **Темы `midnight`/`platinum`** в `styles.css` (полные токен-блоки; инертны до подключения в
+  theme store — DP-4/11).
+- **`docs/dev/DESIGN_PARITY_PLAN.md`** — нарезка эпика DP-0..DP-12 с протоколом визуальной сверки
+  и границами (AI-панель — после дизайн-PR #97; news уже в main).
+
 ### News Feed NF-6: reader — полный RU-перевод статьи + «Сократить»
 
 - **Reader in-app** (финальная итерация макета): клик по заголовку открывает статью вместо ухода

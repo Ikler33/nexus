@@ -115,6 +115,52 @@
   }
 
   // auto-growing raw markdown source editor — outer container scrolls (like preview)
+  // inline-LLM bar: ⌘/ (or "/ai " on a fresh line) → prompt → streamed insertion
+  function InlineAI({ t, lang, onInsert, onClose }) {
+    const [q, setQ] = useState("");
+    const [phase, setPhase] = useState("ask"); // ask | thinking | streaming | done
+    const [out, setOut] = useState("");
+    const ref = useRef(null);
+    const timer = useRef(null);
+    useEffect(() => { if (ref.current) ref.current.focus(); return () => clearInterval(timer.current); }, []);
+
+    function run() {
+      const query = q.trim(); if (!query) return;
+      setPhase("thinking");
+      setTimeout(() => {
+        const ans = (window.mockAnswer ? window.mockAnswer(query, lang).text
+          : (lang === "ru" ? "Краткий ответ на основе ваших заметок." : "A short answer grounded in your notes."));
+        setPhase("streaming"); setOut("");
+        let i = 0; const words = ans.split(" ");
+        timer.current = setInterval(() => {
+          i += 1; setOut(words.slice(0, i).join(" "));
+          if (i >= words.length) { clearInterval(timer.current); setPhase("done"); }
+        }, 38);
+      }, 1100);
+    }
+    return React.createElement("div", { className: "inline-ai", onMouseDown: (e) => e.stopPropagation() },
+      React.createElement("div", { className: "ia-bar" },
+        React.createElement(window.BrandThinking ? window.BrandThinking : "span", { size: 16 }),
+        phase === "ask"
+          ? React.createElement("input", {
+              ref, className: "ia-input", value: q, placeholder: lang === "ru" ? "Спросите AI или опишите, что вставить…" : "Ask AI or describe what to insert…",
+              onChange: (e) => setQ(e.target.value),
+              onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } if (e.key === "Escape") onClose(); },
+            })
+          : React.createElement("span", { className: "ia-q" }, q),
+        React.createElement("button", { className: "tb-btn", onClick: onClose, title: "Esc" }, React.createElement(Icon, { name: "x", size: 14 }))),
+      phase === "thinking" ? React.createElement("div", { className: "ia-status" },
+        React.createElement("span", { className: "mt-label" }, lang === "ru" ? "Думаю…" : "Thinking…")) : null,
+      (phase === "streaming" || phase === "done") ? React.createElement("div", { className: "ia-out" },
+        out, phase === "streaming" ? React.createElement("span", { className: "ia-caret" }) : null) : null,
+      phase === "done" ? React.createElement("div", { className: "ia-actions" },
+        React.createElement("button", { className: "ia-act primary", onClick: () => onInsert(out) },
+          React.createElement(Icon, { name: "check", size: 13 }), lang === "ru" ? "Вставить" : "Insert"),
+        React.createElement("button", { className: "ia-act", onClick: () => { setPhase("ask"); setOut(""); } },
+          React.createElement(Icon, { name: "rotate-ccw", size: 13 }), lang === "ru" ? "Заново" : "Retry"),
+        React.createElement("button", { className: "ia-act", onClick: onClose }, lang === "ru" ? "Отмена" : "Cancel")) : null);
+  }
+
   function SourceEditor({ value, onChange, noteKey }) {
     const ref = useRef(null);
     const resize = () => { const el = ref.current; if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } };
@@ -127,20 +173,37 @@
   }
 
   function EditorArea(props) {
-    const { t, tabs, activeTab, dirtyMap, onActivate, onClose, onAdd, onOpen, onTag, extraBody, editedBody, onAppend, onSplit, secondary, onClosePane, pane, mode, onToggleMode, onEditBody } = props;
+    const { t, lang, tabs, activeTab, dirtyMap, onActivate, onClose, onAdd, onOpen, onTag, extraBody, editedBody, onAppend, onSplit, secondary, onClosePane, pane, mode, onToggleMode, onEditBody } = props;
     const scrollRef = useRef(null);
+    const [aiOpen, setAiOpen] = useState(false);
     useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [activeTab, mode]);
+    useEffect(() => { setAiOpen(false); }, [activeTab]);
+    useEffect(() => {
+      const h = () => { if (props.pane === "a" || !props.secondary) setAiOpen(true); };
+      window.addEventListener("nexus-inline-ai", h);
+      return () => window.removeEventListener("nexus-inline-ai", h);
+    }, [props.pane, props.secondary]);
     const note = activeTab ? window.NEXUS_NOTES[activeTab] : null;
     const raw = note ? (editedBody != null ? editedBody : (note.body + (extraBody || ""))) : "";
     const handlers = { onLink: onOpen, onTag };
+    function insertAI(text) {
+      const block = "\n\n" + text + "\n";
+      onEditBody(activeTab, raw + block);
+      setAiOpen(false);
+    }
     return React.createElement("main", { className: "editor-area" },
       React.createElement(TabStrip, { t, tabs, activeTab, onActivate, onClose, onAdd, dirtyMap, onSplit, secondary, onClosePane, pane }),
-      note ? React.createElement("button", {
-        className: "mode-float", onClick: onToggleMode,
-        title: (mode === "edit" ? (t.preview_mode || "Просмотр") : (t.edit_mode || "Редактирование")) + "  ⌘E",
-        "aria-label": mode === "edit" ? (t.preview_mode || "Просмотр") : (t.edit_mode || "Редактирование"),
-      },
-        React.createElement(Icon, { name: mode === "edit" ? "book-open" : "pencil", size: 15, key: mode, className: "mode-ico" })) : null,
+      note ? React.createElement("div", { className: "editor-float" },
+        React.createElement("button", {
+          className: "mode-float ai-trigger" + (aiOpen ? " on" : ""), onClick: () => setAiOpen((v) => !v),
+          title: (lang === "ru" ? "AI в тексте" : "Inline AI") + "  ⌘/", "aria-label": "Inline AI",
+        }, React.createElement(Icon, { name: "sparkles", size: 15 })),
+        React.createElement("button", {
+          className: "mode-float", onClick: onToggleMode,
+          title: (mode === "edit" ? (t.preview_mode || "Просмотр") : (t.edit_mode || "Редактирование")) + "  ⌘E",
+          "aria-label": mode === "edit" ? (t.preview_mode || "Просмотр") : (t.edit_mode || "Редактирование"),
+        }, React.createElement(Icon, { name: mode === "edit" ? "book-open" : "pencil", size: 15, key: mode, className: "mode-ico" }))) : null,
+      aiOpen && note ? React.createElement(InlineAI, { t, lang, onInsert: insertAI, onClose: () => setAiOpen(false) }) : null,
       !note
         ? React.createElement("div", { className: "empty-state", style: { margin: "auto" } },
             React.createElement(Icon, { name: secondary ? "panel-right" : "file-text", size: 32, style: { opacity: 0.35 } }),

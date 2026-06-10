@@ -85,11 +85,19 @@
 
     <!-- Home dashboard -->
     <main class="home">
-      <div class="home-inner">
+      <div class="home-inner booting">
 
         <!-- header -->
         <div class="home-header">
-          <div>
+          <svg class="header-constellation" viewBox="0 0 168 132" fill="none" aria-hidden="true">
+            <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <line x1="40" y1="38" x2="92" y2="22"/><line x1="92" y1="22" x2="128" y2="58"/><line x1="40" y1="38" x2="66" y2="86"/><line x1="66" y1="86" x2="128" y2="58"/><line x1="128" y1="58" x2="150" y2="100"/>
+            </g>
+            <g fill="currentColor">
+              <circle cx="40" cy="38" r="4"/><circle cx="92" cy="22" r="3"/><circle cx="128" cy="58" r="5"/><circle cx="66" cy="86" r="3"/><circle cx="150" cy="100" r="2.5"/>
+            </g>
+          </svg>
+          <div class="home-greeting-wrap">
             <div class="home-greeting">Добрый день, <em>Артём</em></div>
             <div class="home-sub">среда, 3 июня · 847 заметок · 12 изменений сегодня</div>
             <div class="home-meta">
@@ -105,6 +113,17 @@
           <svg class="ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <span class="hs-text">Поиск по базе или вопрос к ассистенту…</span>
           <span class="kbd">/</span><span class="kbd">?</span>
+        </div>
+
+        <!-- (1) continue / jump back in -->
+        <div class="continue">
+          <div>
+            <div class="c-eyebrow"><svg class="ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>Продолжить</div>
+            <div class="c-title">KV-cache и офлоад слоёв</div>
+            <div class="c-snippet">При большом контексте кэш ключей-значений быстро упирается в память — рассматриваю офлоад «холодных» слоёв на CPU и квантизацию KV до int8, чтобы держать 35B-модель в пределах 24 ГБ…</div>
+            <div class="c-meta"><span>LLM-агенты</span><span>·</span><span>редактировалась 12 мин назад</span><span>·</span><span>1 240 слов</span></div>
+          </div>
+          <button class="c-go">Открыть <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
         </div>
 
         <!-- quick actions -->
@@ -143,6 +162,55 @@
           </div>
         </div>
 
+        <!-- активность -->
+        <div class="sec-label">активность</div>
+        <div class="grid-2">
+          <div class="h-card">
+            <div class="card-head">
+              <div class="card-title"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/></svg>Активность</div>
+              <span class="heat-streak" id="streak"></span>
+            </div>
+            <div class="act-metrics">
+              <div class="act-metric">
+                <div class="am-top"><span class="am-val">18</span><span class="am-trend up"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>12%</span></div>
+                <div class="am-label">заметок за неделю</div>
+              </div>
+              <div class="act-metric">
+                <div class="am-top"><span class="am-val">4.2k</span><span class="am-trend up"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>23%</span></div>
+                <div class="am-label">слов написано</div>
+              </div>
+              <div class="act-metric">
+                <div class="am-top"><span class="am-val">47</span><span class="am-trend up"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>8%</span></div>
+                <div class="am-label">новых связей</div>
+              </div>
+            </div>
+            <div class="heat-wrap">
+              <div class="heat-grid" id="heat"></div>
+              <div class="heat-legend">
+                <span>меньше</span>
+                <span class="scale"><i style="background:var(--color-surface)"></i><i class="l1" style="background:color-mix(in oklch, var(--color-accent) 28%, var(--color-surface))"></i><i class="l2" style="background:color-mix(in oklch, var(--color-accent) 52%, var(--color-surface))"></i><i class="l3" style="background:color-mix(in oklch, var(--color-accent) 76%, var(--color-surface))"></i><i style="background:var(--color-accent)"></i></span>
+                <span>больше · последние 17 недель</span>
+              </div>
+            </div>
+            <div class="act-goal">
+              <span class="ag-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1 3 3 4.5 3 7a3 3 0 0 1-6 0c0-1 .4-1.8 1-2.5C9 9 7 10.5 7 14a5 5 0 0 0 10 0c0-4.5-3-8-5-12Z"/></svg></span>
+              <span class="ag-text">Лучшая серия — <b>31 день</b>. До личного рекорда осталось <b>8 дней</b>.</span>
+              <span class="ag-bar"><i></i></span>
+            </div>
+          </div>
+
+          <div class="h-card graph-card">
+            <div class="card-head">
+              <div class="card-title"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="18" cy="18" r="2"/><path d="m7 7 3 3"/><path d="m17 8-3.5 3"/><path d="m13.5 13.5 3 3.5"/></svg>Граф связей</div>
+              <button class="card-act">открыть →</button>
+            </div>
+            <div class="graph-mini" id="gmini">
+              <svg id="gmini-svg" viewBox="0 0 400 360" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+              <span class="gm-cta">847 заметок · 1.9k связей →</span>
+            </div>
+          </div>
+        </div>
+
         <!-- проекты -->
         <div class="sec-label">проекты</div>
         <div class="grid-2">
@@ -152,9 +220,9 @@
               <button class="card-act">все цели →</button>
             </div>
             <div class="prog-list">
-              <div><div class="prog-row"><span class="prog-name">Агент анализа кода</span><span class="prog-pct">65%</span></div><div class="prog-track"><div class="prog-fill c-accent" style="width:65%"></div></div></div>
-              <div><div class="prog-row"><span class="prog-name">YouTube-система</span><span class="prog-pct">30%</span></div><div class="prog-track"><div class="prog-fill c-ai" style="width:30%"></div></div></div>
-              <div><div class="prog-row"><span class="prog-name">GPU inference сетап</span><span class="prog-pct">80%</span></div><div class="prog-track"><div class="prog-fill c-success" style="width:80%"></div></div></div>
+              <div><div class="prog-row"><span class="prog-name">Агент анализа кода</span><span class="prog-pct">65%</span></div><div class="prog-track"><div class="prog-fill c-accent" style="--target:65%"></div></div></div>
+              <div><div class="prog-row"><span class="prog-name">YouTube-система</span><span class="prog-pct">30%</span></div><div class="prog-track"><div class="prog-fill c-ai" style="--target:30%"></div></div></div>
+              <div><div class="prog-row"><span class="prog-name">GPU inference сетап</span><span class="prog-pct">80%</span></div><div class="prog-track"><div class="prog-fill c-success" style="--target:80%"></div></div></div>
             </div>
           </div>
 
@@ -229,13 +297,192 @@
 </div>
 
 <script>
-  // theme toggle (demo)
+  // ── theme toggle (demo) ──
   document.getElementById("themeBtn").addEventListener("click", () => {
     const el = document.documentElement;
     el.classList.add("theme-anim");
     el.setAttribute("data-theme", el.getAttribute("data-theme") === "dark" ? "light" : "dark");
     setTimeout(() => el.classList.remove("theme-anim"), 380);
   });
+
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // ── number count-up ──
+  function countUp(el, dur = 900) {
+    const raw = el.getAttribute("data-val") || el.textContent.trim();
+    el.setAttribute("data-val", raw);
+    const m = raw.match(/^([\d.]+)(.*)$/);
+    if (!m) return;
+    const target = parseFloat(m[1]), suffix = m[2], decimals = (m[1].split(".")[1] || "").length;
+    if (reduce) { el.textContent = raw; return; }
+    const t0 = performance.now();
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      el.textContent = (target * e).toFixed(decimals) + suffix;
+      if (p < 1) requestAnimationFrame(tick); else el.textContent = raw;
+    };
+    requestAnimationFrame(tick);
+  }
+
+  // ── thinking mark (vanilla constellation) ──
+  function thinkingMark() {
+    return '<svg class="bt-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">'
+      + '<g><line class="bt-edge" x1="16" y1="16" x2="8" y2="8"/><line class="bt-edge" x1="16" y1="16" x2="25" y2="11"/><line class="bt-edge" x1="16" y1="16" x2="12" y2="25"/><line class="bt-edge" x1="25" y1="11" x2="12" y2="25"/></g>'
+      + '<g><circle class="bt-node" cx="16" cy="16" r="3.4"/><circle class="bt-node n2" cx="8" cy="8" r="2.5"/><circle class="bt-node n3" cx="25" cy="11" r="2.5"/><circle class="bt-node n4" cx="12" cy="25" r="2.5"/></g></svg>';
+  }
+  // wrap an AI card's content + show a thinking overlay; resolve reveals content
+  function prepAICard(card, label) {
+    const head = card.querySelector(".card-head");
+    const content = document.createElement("div");
+    content.className = "ai-content pending";
+    [...card.children].forEach((c) => { if (c !== head) content.appendChild(c); });
+    card.appendChild(content);
+    const think = document.createElement("div");
+    think.className = "ai-think";
+    think.innerHTML = thinkingMark() + '<span class="bt-label">' + label + '</span>';
+    card.appendChild(think);
+    return () => { think.classList.add("gone"); content.classList.remove("pending"); setTimeout(() => think.remove(), 500); };
+  }
+
+  // ── (2) heatmap (built in seed state) ──
+  function buildHeat() {
+    const heat = document.getElementById("heat");
+    const WEEKS = 17, DAYS = 7, total = WEEKS * DAYS, els = [];
+    for (let i = 0; i < total; i++) {
+      const recency = i / total, r = Math.random(), fromEnd = total - 1 - i;
+      let level;
+      if (fromEnd < 23) level = r < 0.32 ? 2 : (r < 0.72 ? 3 : 4);
+      else { const w = r * (0.45 + recency * 0.75); level = w < 0.34 ? 0 : w < 0.55 ? 1 : w < 0.78 ? 2 : w < 0.93 ? 3 : 4; }
+      const d = document.createElement("div");
+      d.className = "heat-cell seed" + (level ? " l" + level : "");
+      heat.appendChild(d); els.push(d);
+    }
+    return els;
+  }
+  function revealHeat(els) {
+    const s = document.getElementById("streak");
+    if (s && !s.innerHTML) s.innerHTML = '<span id="streak-num">23</span> <small>дня подряд</small>';
+    if (reduce) { els.forEach((d) => d.classList.replace("seed", "pop")); return; }
+    els.forEach((d, i) => { const col = Math.floor(i / 7); setTimeout(() => d.classList.replace("seed", "pop"), col * 42 + (i % 7) * 6); });
+  }
+
+  // ── (3) graph (built in seed state) ──
+  function buildGraph() {
+    const svg = document.getElementById("gmini-svg"); if (!svg) return { edges: [], nodes: [] };
+    const NS = "http://www.w3.org/2000/svg", W = 400, H = 360;
+    let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const hubs = [[200,175,"hub",7,8.5],[120,95,"link",5,6],[300,110,"ai",5,6.5],[110,260,"tag",4,5.5],[305,255,"",5,6]];
+    const nodes = [], edges = [];
+    hubs.forEach((h) => {
+      const [hx,hy,cls,sats,r] = h, idx = nodes.length;
+      nodes.push({ x: hx, y: hy, r, cls });
+      for (let s = 0; s < sats; s++) {
+        const ang = (s/sats)*Math.PI*2 + rnd()*1.1, dist = 34 + rnd()*30;
+        let x = Math.max(16, Math.min(W-16, hx+Math.cos(ang)*dist)), y = Math.max(16, Math.min(H-16, hy+Math.sin(ang)*dist));
+        const si = nodes.length;
+        nodes.push({ x, y, r: 2.4 + rnd()*2.2, cls: rnd() > 0.82 ? cls : "" });
+        edges.push({ a: idx, b: si });
+        if (s > 0 && rnd() > 0.7) edges.push({ a: si, b: si-1 });
+      }
+    });
+    const hubNodeIdx = []; let cursor = 0;
+    hubs.forEach((h) => { hubNodeIdx.push(cursor); cursor += 1 + h[3]; });
+    for (let i = 1; i < hubNodeIdx.length; i++) edges.push({ a: hubNodeIdx[0], b: hubNodeIdx[i], hot: true });
+    edges.push({ a: hubNodeIdx[1], b: hubNodeIdx[3] }); edges.push({ a: hubNodeIdx[2], b: hubNodeIdx[4] });
+    const floatG = document.createElementNS(NS, "g"); floatG.setAttribute("class", "gm-float");
+    const gE = document.createElementNS(NS, "g"); const edgeEls = [];
+    edges.forEach((e) => {
+      const A = nodes[e.a], B = nodes[e.b]; if (!A || !B) return;
+      const ln = document.createElementNS(NS, "line");
+      ln.setAttribute("x1", A.x); ln.setAttribute("y1", A.y); ln.setAttribute("x2", B.x); ln.setAttribute("y2", B.y);
+      const len = Math.hypot(B.x-A.x, B.y-A.y);
+      ln.setAttribute("class", "gm-edge" + (e.hot ? " hot" : "")); ln.style.setProperty("--len", len.toFixed(1));
+      gE.appendChild(ln); edgeEls.push(ln);
+    });
+    const gN = document.createElementNS(NS, "g"); const nodeEls = [];
+    nodes.forEach((n) => {
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("cx", n.x); c.setAttribute("cy", n.y); c.setAttribute("r", n.r);
+      c.setAttribute("class", "gm-node seed" + (n.cls ? " " + n.cls : ""));
+      gN.appendChild(c); nodeEls.push(c);
+    });
+    floatG.appendChild(gE); floatG.appendChild(gN); svg.appendChild(floatG);
+    return { edgeEls, nodeEls };
+  }
+  function revealGraph(g) {
+    const mini = document.getElementById("gmini");
+    if (reduce) { g.edgeEls.forEach((l) => l.classList.add("draw")); g.nodeEls.forEach((n) => n.classList.replace("seed", "pop")); mini.classList.add("float"); return; }
+    g.edgeEls.forEach((l, i) => setTimeout(() => l.classList.add("draw"), 120 + i * 22));
+    g.nodeEls.forEach((n, i) => setTimeout(() => n.classList.replace("seed", "pop"), 220 + i * 26));
+    setTimeout(() => mini.classList.add("float"), 220 + g.nodeEls.length * 26 + 600);
+  }
+
+  // ── boot orchestration ──
+  (async function boot() {
+    const heatEls = buildHeat();
+    const graph = buildGraph();
+    const inner = document.querySelector(".home-inner");
+    const blocks = [...inner.children];
+    blocks.forEach((b) => b.classList.add("reveal"));
+
+    // map helpers
+    const $ = (s) => document.querySelector(s);
+    const reveal = (el) => el && el.classList.add("in");
+
+    if (reduce) {
+      blocks.forEach(reveal);
+      document.querySelectorAll(".am-val,.stat-val").forEach((e) => countUp(e));
+      revealHeat(heatEls); revealGraph(graph);
+      const sn = document.getElementById("streak-num"); if (sn) sn.textContent = "23";
+      document.querySelectorAll(".prog-fill").forEach((f) => f.classList.add("grow"));
+      $(".act-goal .ag-bar > i").classList.add("grow");
+      document.querySelectorAll(".h-card.ai").forEach((c) => { const done = prepAICard(c, ""); done(); });
+      inner.classList.remove("booting");
+      return;
+    }
+
+    // prep AI cards (thinking overlays) before reveal
+    const aiCards = [...document.querySelectorAll(".h-card.ai")];
+    const aiDone = aiCards.map((c) => prepAICard(c, "Анализирую заметки…"));
+
+    await wait(120);
+    reveal(blocks[0]); await wait(110);            // header
+    reveal(blocks[1]); await wait(120);            // search
+    reveal(blocks[2]); await wait(130);            // continue hero
+    reveal(blocks[3]); await wait(160);            // quick actions
+
+    // section: сводка (label + grid)
+    reveal(blocks[4]); await wait(80); reveal(blocks[5]); await wait(120);
+    setTimeout(() => aiDone[0] && aiDone[0](), 950); // daily brief finishes thinking
+
+    // section: активность
+    reveal(blocks[6]); await wait(80); reveal(blocks[7]);
+    document.querySelectorAll(".act-metric .am-val").forEach((e, i) => setTimeout(() => countUp(e), 250 + i * 110));
+    revealHeat(heatEls);
+    setTimeout(() => { const n = document.getElementById("streak-num"); if (n) countUp(n, 1100); }, 60);
+    setTimeout(() => { const b = document.querySelector(".act-goal .ag-bar > i"); b && b.classList.add("grow"); }, 500);
+    revealGraph(graph);
+    await wait(260);
+
+    // section: проекты
+    reveal(blocks[8]); await wait(80); reveal(blocks[9]);
+    document.querySelectorAll(".prog-fill").forEach((f, i) => setTimeout(() => f.classList.add("grow"), 200 + i * 130));
+    document.querySelectorAll(".stat-val").forEach((e, i) => setTimeout(() => countUp(e), 200 + i * 90));
+    await wait(240);
+
+    // section: требует внимания
+    reveal(blocks[10]); await wait(80); reveal(blocks[11]);
+    setTimeout(() => aiDone[1] && aiDone[1](), 800);
+    await wait(220);
+
+    // section: анализ
+    reveal(blocks[12]); await wait(80); reveal(blocks[13]);
+    setTimeout(() => aiDone[2] && aiDone[2](), 850);
+
+    inner.classList.remove("booting");
+  })();
 </script>
 </body>
 </html>

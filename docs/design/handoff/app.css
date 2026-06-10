@@ -12,6 +12,32 @@
   background: var(--color-bg);
   color: var(--color-text);
 }
+.app-shell { display: flex; min-height: 0; }
+.app-shell .app-body { flex: 1; min-width: 0; }
+/* left vertical activity bar (app navigation + tools) */
+.activity-bar { flex: 0 0 48px; display: flex; flex-direction: column; align-items: center;
+  padding: 8px 0; background: var(--color-chrome); border-right: 1px solid var(--color-border); gap: 4px; }
+.activity-bar .act-group { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; }
+.activity-bar .act-spacer { flex: 1; }
+.activity-bar .act-sep { width: 22px; height: 1px; background: var(--color-border); margin: 4px 0; }
+.act-btn { position: relative; width: 38px; height: 38px; border: none; background: transparent; color: var(--color-text-faint);
+  border-radius: var(--radius-md); display: grid; place-items: center; cursor: pointer; transition: all var(--motion-fast); }
+.act-btn:hover { background: var(--color-surface-hover); color: var(--color-text); }
+.act-btn:active { transform: scale(0.92); }
+.act-btn.active { color: var(--color-accent); background: var(--color-selected); }
+.act-btn.active::before { content: ""; position: absolute; left: -8px; top: 9px; bottom: 9px; width: 3px; background: var(--color-accent); border-radius: 0 3px 3px 0; }
+.act-badge { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--color-danger); border: 1.5px solid var(--color-chrome); }
+/* AI insights dropdown menu */
+.ai-menu-wrap { position: relative; }
+.tb-btn.ai-menu-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 1px; padding: 0 7px; width: auto; min-width: 0; }
+.ai-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 80; min-width: 220px;
+  background: var(--color-bg-elevated); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md);
+  box-shadow: var(--elevation-2); padding: 5px; animation: m-pop var(--dur-2, 220ms) var(--ease-spring, ease); }
+.ai-menu-head { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-faint); font-weight: 600; padding: 6px 10px 4px; }
+.ai-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; background: transparent;
+  color: var(--color-text); font-size: var(--text-md); border-radius: var(--radius-sm); cursor: pointer; text-align: left; transition: background var(--motion-fast); }
+.ai-menu-item:hover { background: var(--color-surface-hover); }
+.ai-menu-item .ico { color: var(--color-ai); }
 .app-body {
   display: grid;
   grid-template-columns: var(--sidebar-w, 260px) 1fr;
@@ -52,12 +78,12 @@
 .brand-mark {
   display: grid; place-items: center; flex-shrink: 0;
   background:
-    radial-gradient(120% 120% at 30% 20%, oklch(0.72 0.14 55) 0%, var(--color-accent) 45%, var(--color-accent-hover) 100%);
+    radial-gradient(120% 120% at 30% 20%, var(--color-accent-hover) 0%, var(--color-accent) 50%, var(--color-accent) 100%);
   box-shadow:
-    0 1px 2px rgba(120,60,20,0.30),
-    0 3px 8px -2px rgba(120,60,20,0.28),
-    inset 0 1px 0 rgba(255,255,255,0.35),
-    inset 0 -2px 4px rgba(90,40,10,0.25);
+    0 1px 2px rgba(0,0,0,0.22),
+    0 3px 8px -2px rgba(0,0,0,0.20),
+    inset 0 1px 0 rgba(255,255,255,0.30),
+    inset 0 -2px 4px rgba(0,0,0,0.18);
 }
 .tb-spacer { flex: 1; }
 .global-search {
@@ -80,6 +106,7 @@
 }
 .tb-btn:hover { background: var(--color-surface-hover); color: var(--color-text); }
 .tb-btn.active { color: var(--color-accent); background: var(--color-selected); }
+.tb-badge { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--color-warning); box-shadow: 0 0 0 1.5px var(--color-chrome); }
 .tb-lang { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600; padding: 0 10px; }
 .tb-lang span { color: var(--color-text-faint); transition: color var(--motion-fast); }
 .tb-lang span.on { color: var(--color-accent); }
@@ -114,6 +141,14 @@
 .rail-btn:hover { background: var(--color-surface-hover); color: var(--color-text); }
 .rail-btn.active { color: var(--color-accent); background: var(--color-selected); }
 .side-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: var(--space-2) var(--space-1); }
+/* sidebar nav (Home / New note) */
+.side-nav { margin-bottom: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--color-border); }
+.nav-item { display: flex; align-items: center; gap: 9px; height: var(--row-h); padding: 0 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--color-text-muted); font-size: var(--text-base); position: relative; }
+.nav-item:hover { background: var(--color-surface-hover); color: var(--color-text); }
+.nav-item.active { background: var(--color-selected); color: var(--color-text); font-weight: 500; }
+.nav-item.active::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px; background: var(--color-accent); border-radius: 0 3px 3px 0; }
+.nav-item.active .ico { color: var(--color-accent); }
+.nav-item .ico { color: var(--color-text-faint); }
 .side-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--space-2) var(--space-3) var(--space-1); 
@@ -215,10 +250,29 @@
 .tab-add:hover { color: var(--color-text); background: var(--color-surface-hover); }
 .tab-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; padding: 0 4px 4px; position: sticky; right: 0; background: var(--color-chrome); }
 /* edit / preview toggle — single floating button, icon shows the ACTION (Obsidian-style) */
-.mode-float { position: absolute; top: 50px; right: 16px; z-index: 8; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: var(--color-text-muted); cursor: pointer; background: color-mix(in oklch, var(--color-bg-elevated) 86%, transparent); backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3); border: 1px solid var(--color-border); border-radius: 99px; box-shadow: var(--elevation-1); opacity: 0.5; transition: opacity var(--motion-fast), color var(--motion-fast), background var(--motion-fast), transform var(--motion-fast); }
+.editor-float { position: absolute; top: 50px; right: 16px; z-index: 8; display: flex; gap: 6px; }
+.mode-float { position: static; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: var(--color-text-muted); cursor: pointer; background: color-mix(in oklch, var(--color-bg-elevated) 86%, transparent); backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3); border: 1px solid var(--color-border); border-radius: 99px; box-shadow: var(--elevation-1); opacity: 0.5; transition: opacity var(--motion-fast), color var(--motion-fast), background var(--motion-fast), transform var(--motion-fast); }
 .editor-area:hover .mode-float, .mode-float:hover, .mode-float:focus-visible { opacity: 1; }
 .mode-float:hover { color: var(--color-accent); background: var(--color-bg-elevated); }
+.mode-float.ai-trigger:hover { color: var(--color-ai); }
+.mode-float.ai-trigger.on { opacity: 1; color: var(--color-ai); background: var(--color-ai-soft); border-color: color-mix(in oklch, var(--color-ai) 40%, transparent); }
 .mode-float:active { transform: scale(0.92); }
+
+/* inline-LLM bar */
+.inline-ai { position: absolute; top: 92px; left: 50%; transform: translateX(-50%); z-index: 12; width: min(620px, calc(100% - 48px));
+  background: var(--color-bg-elevated); border: 1px solid color-mix(in oklch, var(--color-ai) 38%, var(--color-border-strong)); border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2); padding: 12px 13px; animation: m-pop var(--dur-2, 220ms) var(--ease-spring, ease); }
+.ia-bar { display: flex; align-items: center; gap: 10px; }
+.ia-input { flex: 1; min-width: 0; border: none; background: transparent; outline: none; color: var(--color-text); font-family: var(--font-ui); font-size: var(--text-md); }
+.ia-q { flex: 1; min-width: 0; color: var(--color-text); font-size: var(--text-md); font-weight: 500; }
+.ia-status { display: flex; align-items: center; gap: 8px; padding: 10px 2px 2px; color: var(--color-ai); font-size: var(--text-sm); }
+.ia-out { margin-top: 10px; padding: 11px 12px; border-radius: var(--radius-md); background: var(--color-surface); border: 1px solid var(--color-border); font-family: var(--font-serif); font-size: 15px; line-height: 1.6; color: var(--color-text); }
+.ia-caret { display: inline-block; width: 7px; height: 1.05em; background: var(--color-ai); vertical-align: text-bottom; margin-left: 2px; border-radius: 1px; animation: blink 1s steps(2) infinite; }
+.ia-actions { display: flex; gap: 7px; margin-top: 11px; }
+.ia-act { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: transparent; color: var(--color-text-muted); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--motion-fast); }
+.ia-act:hover { background: var(--color-surface-hover); color: var(--color-text); }
+.ia-act.primary { background: var(--color-ai); border-color: transparent; color: #fff; }
+.ia-act.primary:hover { filter: brightness(1.06); background: var(--color-ai); color: #fff; }
 .mode-ico { animation: mode-swap var(--motion-base) var(--ease-spring, ease); }
 @keyframes mode-swap { from { opacity: 0; transform: rotate(-25deg) scale(0.7); } to { opacity: 1; transform: none; } }
 /* raw markdown source editor */
@@ -244,6 +298,7 @@
 /* ---------------- Reading mode (adaptive density: chrome recedes, text breathes) --- */
 .editor-doc { transition: max-width var(--dur-3, 320ms) var(--ease-out, ease), font-size var(--dur-3, 320ms) var(--ease-out, ease), line-height var(--dur-3, 320ms) var(--ease-out, ease); }
 .app.reading .app-body { grid-template-columns: 1fr !important; }
+.app.reading .activity-bar { display: none !important; }
 .app.reading .sidebar, .app.reading .ai-panel, .app.reading .ai-overlay-scrim, .app.reading .resizer { display: none !important; }
 .app.reading .tab-strip { background: var(--color-bg); border-bottom-color: transparent; padding-top: 10px; }
 .app.reading .tab { border-color: transparent !important; box-shadow: none !important; background: transparent !important; }

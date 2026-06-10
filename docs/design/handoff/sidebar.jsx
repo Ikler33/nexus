@@ -97,7 +97,7 @@
     );
   }
 
-  function Sidebar({ t, activeId, onOpen, onTag }) {
+  function Sidebar({ t, activeId, onOpen, onTag, view, onHome, onNewNote }) {
     const [tab, setTab] = useState("files");
     return React.createElement("aside", { className: "sidebar" },
       React.createElement("div", { className: "side-rail" },
@@ -109,6 +109,13 @@
         )
       ),
       React.createElement("div", { className: "side-scroll" },
+        React.createElement("div", { className: "side-nav" },
+          React.createElement("div", { className: "nav-item" + (view === "home" ? " active" : ""), onClick: onHome },
+            React.createElement(Icon, { name: "home", size: 15, className: "ico" }),
+            React.createElement("span", null, "Home")),
+          React.createElement("div", { className: "nav-item", onClick: onNewNote },
+            React.createElement(Icon, { name: "plus", size: 15, className: "ico" }),
+            React.createElement("span", null, t === window.NEXUS_I18N.ru ? "Новая заметка" : "New note"))),
         tab === "files" && React.createElement("div", null,
           React.createElement("div", { className: "side-head" }, t.explorer,
             React.createElement(Icon, { name: "plus", size: 14, style: { cursor: "pointer" } })),
