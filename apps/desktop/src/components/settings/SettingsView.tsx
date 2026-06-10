@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
+import type { EgressState } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, useThemeStore } from '../../stores/theme';
 import type { Accent } from '../../stores/theme';
@@ -359,7 +360,98 @@ function AiSection() {
         {saved && !restart && <span className={styles.okText}>{t('settings.aiSec.saved')}</span>}
         {saved && restart && <span className={styles.warnText}>{t('settings.aiSec.restart')}</span>}
       </div>
+
+      <EgressBlock />
     </>
+  );
+}
+
+/**
+ * Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).
+ * Применяется мгновенно (без Save) и переживает рестарт (E5, OS config-dir — вне vault/git).
+ * Чат-бейдж local/offline (E9) и i18n-рендер отказов (AC-EGR-14) — следующим фронт-срезом.
+ */
+function EgressBlock() {
+  const { t } = useTranslation();
+  const [st, setSt] = useState<EgressState | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    void tauriApi.egress
+      .getState()
+      .then((s) => {
+        if (alive) setSt(s);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!st) return null;
+  const apply = (p: Promise<EgressState>) => {
+    setErr('');
+    void p.then(setSt).catch((e: unknown) => setErr(String(e)));
+  };
+
+  return (
+    <>
+      <h2 className={styles.h2}>{t('settings.egress.title')}</h2>
+      <p className={styles.hint}>{t('settings.egress.intro')}</p>
+      <EgressRow
+        label={t('settings.egress.offline')}
+        desc={t('settings.egress.offlineDesc')}
+        value={st.offline}
+        onChange={(v) => apply(tauriApi.egress.setOffline(v))}
+      />
+      {(['chat', 'embed', 'probe'] as const).map((f) => (
+        <EgressRow
+          key={f}
+          label={t(`settings.egress.${f}`)}
+          desc={t(`settings.egress.${f}Desc`)}
+          value={st[f]}
+          onChange={(v) => apply(tauriApi.egress.setFeature(f, v))}
+        />
+      ))}
+      {err && <p className={styles.warnText}>{t('settings.egress.saveError', { msg: err })}</p>}
+    </>
+  );
+}
+
+/** Строка политики: подпись + описание + сегмент Вкл/Выкл (паттерн `.seg`, как в «Редакторе»). */
+function EgressRow(props: {
+  label: string;
+  desc: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className={styles.group}>
+      <div className={styles.rowText}>
+        <span className={styles.label}>{props.label}</span>
+        <span className={styles.rowDesc}>{props.desc}</span>
+      </div>
+      <div className={styles.seg}>
+        <button
+          type="button"
+          className={`${styles.segBtn} ${!props.value ? styles.on : ''}`}
+          onClick={() => props.onChange(false)}
+          aria-pressed={!props.value}
+        >
+          {t('settings.off')}
+        </button>
+        <button
+          type="button"
+          className={`${styles.segBtn} ${props.value ? styles.on : ''}`}
+          onClick={() => props.onChange(true)}
+          aria-pressed={props.value}
+        >
+          {t('settings.on')}
+        </button>
+      </div>
+    </section>
   );
 }
 

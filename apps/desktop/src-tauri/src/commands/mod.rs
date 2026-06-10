@@ -4,6 +4,7 @@
 pub mod chat;
 pub mod contradictions;
 pub mod digest;
+pub mod egress;
 pub mod git;
 pub mod goals;
 pub mod graph;

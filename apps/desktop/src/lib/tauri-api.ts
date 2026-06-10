@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import * as mockEgress from './mock/egress';
 import * as mockGit from './mock/git';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
@@ -260,6 +261,16 @@ export interface AiConfigDto {
   chat: AiEndpoint | null;
   embedding: AiEndpoint | null;
 }
+/** Снимок политики эгресса ядра (зеркалит Rust `net::EgressState`; срез 2 net.md). */
+export interface EgressState {
+  /** Kill-switch «офлайн» (E2): публичные хосты отрезаны, LAN/loopback живут. */
+  offline: boolean;
+  chat: boolean;
+  embed: boolean;
+  probe: boolean;
+}
+/** Сетевая фича ядра (E6); Web/NewsFeed/CloudFallback придут со срезами 3–4. */
+export type EgressFeatureId = 'chat' | 'embed' | 'probe';
 /** Результат записи AI-конфига (зеркалит Rust `settings::SetAiResult`). */
 export interface SetAiResult {
   /** Chat применён немедленно (без перезапуска). */
@@ -636,6 +647,22 @@ export const tauriApi = {
       isTauri()
         ? invoke<string>('git_resolve_conflicts', { theirs, resolutions })
         : mockGit.resolveConflicts(theirs, resolutions),
+  },
+
+  /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).
+   * Изменения применяются мгновенно и переживают рестарт (E5, OS config-dir). */
+  egress: {
+    getState: (): Promise<EgressState> =>
+      isTauri() ? invoke<EgressState>('get_egress_state') : mockEgress.getState(),
+
+    /** Включение дорезает активный chat-стрим (E10); LAN/loopback-модели продолжают работать. */
+    setOffline: (offline: boolean): Promise<EgressState> =>
+      isTauri() ? invoke<EgressState>('set_egress_offline', { offline }) : mockEgress.setOffline(offline),
+
+    setFeature: (feature: EgressFeatureId, enabled: boolean): Promise<EgressState> =>
+      isTauri()
+        ? invoke<EgressState>('set_egress_feature', { feature, enabled })
+        : mockEgress.setFeature(feature, enabled),
   },
 
   settings: {
