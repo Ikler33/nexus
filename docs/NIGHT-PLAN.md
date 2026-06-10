@@ -292,7 +292,7 @@
 **🟢 Wave A — quick-wins (S, автономно):**
 - `#2` зачистка 15 пустых теневых `' 2'`-каталогов + `.gitignore` (`* 2/`, `.nexus/`) + preflight-грэп ← делать ПЕРВЫМ (чистая карта)
 - `#1` команда «Новая заметка» + `welcome.md` (сейчас пустой vault = dead-end)
-- `#3` de-risk `tauri build --debug` (CI его не гоняет → бандлится ли — неизвестно)
+- ~~`#3` de-risk `tauri build --debug`~~ **✅ 2026-06-10**: CI-джоба `bundle-debug` (push в main, ubuntu, `--bundles deb` + проверка артефакта); локально macOS `.app` собирается, dmg-шаг падает в headless-шелле (BACKLOG 🔬, проверить на живом сеансе)
 - `#4` гейты от ложной зелени (`--allowOnly=false`, ignore-whitelist nextest, греп имён в check-traceability)
 - `#5` синк доки с кодом (§4.3 AIClient=«план», §5.1 rebuild=«не реализ.», §2 раскладка) + AC-Q-6 авто-линт висячих упоминаний
 - `#6` PRAGMA mmap/cache/temp_store + usearch F32→F16-опция
