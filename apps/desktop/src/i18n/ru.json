@@ -4,8 +4,10 @@
     "openVault": "Открыть vault…"
   },
   "chrome": {
-    "search": "Поиск или вопрос…",
-    "aiMenu": "AI-инсайты"
+    "search": "Поиск файлов и команд…",
+    "aiMenu": "AI-инсайты",
+    "nav": "Навигация",
+    "aiPanel": "AI-панель"
   },
   "viewer": {
     "appOnly": "Просмотр доступен в десктоп-приложении"
@@ -542,6 +544,7 @@
     "palette.open": "Палитра команд",
     "vault.open": "Открыть vault…",
     "vault.rescan": "Переиндексировать vault",
+    "view.toggleSidebar": "Свернуть боковую панель",
     "file.new": "Новая заметка",
     "file.save": "Сохранить файл",
     "file.print": "Печать / Экспорт PDF",

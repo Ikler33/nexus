@@ -7,15 +7,31 @@
   color: var(--color-text);
 }
 
+/* DP-13 (макет app-shell): ряд «activity-bar | тело». */
+.appShell {
+  display: flex;
+  min-height: 0;
+}
+
 .appBody {
+  flex: 1;
   display: grid;
   grid-template-columns: 280px 1fr;
+  min-width: 0;
   min-height: 0;
 }
 
 /* Открытый RAG-чат добавляет правую колонку (sidebar | editor | chat). */
 .withChat {
   grid-template-columns: 280px 1fr 360px;
+}
+
+/* Свёрнутый сайдбар (DP-13: кнопка «Файлы» activity-bar). */
+.sidebarCollapsed {
+  grid-template-columns: 1fr;
+}
+.sidebarCollapsed.withChat {
+  grid-template-columns: 1fr 360px;
 }
 
 /* Режим чтения (⌘R): прячем сайдбар/AI — только редактор на всю ширину (distraction-free). */

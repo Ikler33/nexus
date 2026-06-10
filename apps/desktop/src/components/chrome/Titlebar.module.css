@@ -11,10 +11,15 @@
   user-select: none;
 }
 
+/* Бренд — кнопка «на главную» (DP-13, макет: клик по лого/имени ведёт на Home). */
 .brand {
   display: flex;
   align-items: center;
   gap: 9px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
 
 .appName {

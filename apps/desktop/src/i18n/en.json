@@ -4,8 +4,10 @@
     "openVault": "Open vault…"
   },
   "chrome": {
-    "search": "Search or ask…",
-    "aiMenu": "AI insights"
+    "search": "Search files and commands…",
+    "aiMenu": "AI insights",
+    "nav": "Navigation",
+    "aiPanel": "AI panel"
   },
   "viewer": {
     "appOnly": "Preview is available in the desktop app"
@@ -532,6 +534,7 @@
     "palette.open": "Command palette",
     "vault.open": "Open vault…",
     "vault.rescan": "Reindex vault",
+    "view.toggleSidebar": "Toggle sidebar",
     "file.new": "New note",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
