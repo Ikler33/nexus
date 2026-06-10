@@ -14,6 +14,8 @@ export interface GraphNodeDatum extends SimulationNodeDatum {
   deg: number;
   /** Теги заметки (без `#`) — цвет узла и фильтр-чипы. */
   tags: string[];
+  /** Радиус кольца-гало для сироты в глобальном графе (макет: ring-притяжение + кламп). */
+  ring?: number;
 }
 
 /** Стабильный оттенок тега: FNV-1a-хеш имени → hue 0..359 (один тег — один цвет везде). */
@@ -81,9 +83,10 @@ export function kinSet(edges: EdgeIds[], activeId: string | null): Set<string> {
   return s;
 }
 
-/** Радиус узла по степени связности: sqrt-шкала (чёткая градация хабов), клампы 5..28. */
+/** Радиус узла по степени (формула макета graph.jsx): сирота — точка 3.5, дальше 5.5..15. */
 export function nodeRadius(deg: number): number {
-  return Math.max(5, Math.min(28, 5 + Math.sqrt(deg) * 4.2));
+  if (deg === 0) return 3.5;
+  return Math.max(5.5, Math.min(15, 5 + deg * 1.6));
 }
 
 /** id концов ребра (после d3-init `source/target` — объекты, до — строки). */

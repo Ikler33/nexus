@@ -171,17 +171,22 @@ export function App() {
               <AiPanel variant="overlay" />
             </div>
           )}
+          {/* Граф — absolute-слой ПОВЕРХ тела (между титлбаром и статусбаром, рейл живой).
+              Раньше рендерился 4-м ребёнком грида .app → implicit-строка ПОСЛЕ статусбара,
+              на реальном vault хром торчал поверх графа (отчёт владельца). */}
+          {graphOpen && (
+            <Suspense fallback={null}>
+              <div className={styles.graphLayer}>
+                <GraphView />
+              </div>
+            </Suspense>
+          )}
         </div>
       </div>
       <InlineAria />
       <StatusBar />
 
       <CommandPalette />
-      {graphOpen && (
-        <Suspense fallback={null}>
-          <GraphView />
-        </Suspense>
-      )}
       {pluginsOpen && (
         <Suspense fallback={null}>
           <PluginsPanel />

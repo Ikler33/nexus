@@ -298,7 +298,14 @@
     "reset": "Reset",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
-    "fit": "Fit graph"
+    "fit": "Fit graph",
+    "orphanTitle": "Isolated note",
+    "orphanSub": "No backlinks — not connected to the rest of the graph.",
+    "orphanSuggest": "Suggest a link",
+    "orphanThinking": "Finding links…",
+    "orphanResult": "Possible link:",
+    "orphanNone": "No suitable links found.",
+    "groupTags": "Group by tags"
   },
   "chat": {
     "title": "AI panel",
