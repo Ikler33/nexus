@@ -32,6 +32,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 usearch = { workspace = true }
 getrandom = { workspace = true }
+quick-xml = { workspace = true }
 # git-sync (Ф3): локальные + сетевые (pull/push по https). vendored libgit2 + vendored openssl →
 # кросс-платформенно без системных зависимостей (как usearch; +время сборки CI). ssh не включаем.
 git2 = { version = "0.20", default-features = false, features = [

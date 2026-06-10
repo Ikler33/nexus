@@ -111,7 +111,9 @@ fn score_note(
 
 /// Дни от эпохи (1970-01-01) для гражданской даты (алгоритм Hinnant'а) — без date-крейта (serde_yaml/
 /// chrono под security-гейтом). Чистая функция.
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+/// Дни с эпохи по календарной дате (алгоритм Хиннанта, без chrono). `pub(crate)`: реюз в
+/// `news::parse` (даты RSS/Atom) — одна реализация на проект.
+pub(crate) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400; // [0, 399]

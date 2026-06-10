@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" >
+
+  <channel>
+    <title><![CDATA[Все статьи подряд / Искусственный интеллект / Хабр]]></title>
+    <link>https://habr.com/ru/hubs/artificial_intelligence/articles/</link>
+    <description><![CDATA[Искусственный интеллект – aI, ANN и иные формы искусственного разума]]></description>
+    <language>ru</language>
+    <managingEditor>editor@habr.com</managingEditor>
+    <generator>habr.com</generator>
+    <pubDate>Wed, 10 Jun 2026 07:50:30 GMT</pubDate>
+    
+    
+      <image>
+        <link>https://habr.com/ru/</link>
+        <url>https://habrastorage.org/webt/ym/el/wk/ymelwk3zy1gawz4nkejl_-ammtc.png</url>
+        <title>Хабр</title>
+      </image>
+    
+
+    
+      
+        
+    
+    <item>
+      <title><![CDATA[Почему корпоративные ИИ-ассистенты проваливаются после пилота и как этого избежать]]></title>
+      <guid isPermaLink="true">https://habr.com/ru/companies/teamly/articles/1045058/</guid>
+      <link>https://habr.com/ru/companies/teamly/articles/1045058/?utm_campaign=1045058&amp;utm_source=habrahabr&amp;utm_medium=rss</link>
+      <description><![CDATA[<img src="https://habrastorage.org/getpro/habr/upload_files/8be/737/13b/8be73713b869ab28d4b33234ba34df70.png" /><p>Успешный пилот, восторженные отзывы, планы по масштабированию – а через пару месяцев инструмент почти не используют. Знакомая история? Разберём, почему корпоративные ИИ‑ассистенты терпят неудачу после выхода за рамки тестового режима.</p> <a href="https://habr.com/ru/articles/1045058/?utm_campaign=1045058&amp;utm_source=habrahabr&amp;utm_medium=rss#habracut">Читать далее</a>]]></description>
+      
+      <pubDate>Wed, 10 Jun 2026 07:05:28 GMT</pubDate>
+      <dc:creator><![CDATA[Vitaliy_Chesnokov (TEAMLY)]]></dc:creator>
+      
+      <category><![CDATA[искусственный интеллект]]></category><category><![CDATA[ии-ассистент]]></category><category><![CDATA[база знаний]]></category><category><![CDATA[teamly]]></category><category><![CDATA[teamly ai]]></category>
+    </item>
+  
+
+  
+
+  
+
+	
+  
+
+  
+
+  
+
+    
+    <item>
+      <title><![CDATA[Shakey: Поразительно умный робот из 60-х]]></title>
+      <guid isPermaLink="true">https://habr.com/ru/companies/studyai/articles/1044820/</guid>
+      <link>https://habr.com/ru/companies/studyai/articles/1044820/?utm_campaign=1044820&amp;utm_source=habrahabr&amp;utm_medium=rss</link>
+      <description><![CDATA[<img src="https://habrastorage.org/getpro/habr/upload_files/007/7b5/0c8/0077b50c800b5dbbc58327bdd72f5bcf.png" /><p>Собранный в лабиринтах стэнфордских лабораторий, Shakey был настоящим чудом света для своего времени. Ведь это была первая попытка человечества создать автономного и мобильного робота, который был бы умен как самый мощный компьютер и маневренен как болид Формулы-1. Ну почти. </p> <a href="https://habr.com/ru/articles/1044820/?utm_campaign=1044820&amp;utm_source=habrahabr&amp;utm_medium=rss#habracut">Читать далее</a>]]></description>
+      
+      <pubDate>Wed, 10 Jun 2026 07:00:22 GMT</pubDate>
+      <dc:creator><![CDATA[DimaIam (StudyAI)]]></dc:creator>
+      
+      <category><![CDATA[роботы]]></category><category><![CDATA[роботы-убийцы]]></category><category><![CDATA[Shakey]]></category><category><![CDATA[старые роботы]]></category><category><![CDATA[искусственный интеллект]]></category><category><![CDATA[ии]]></category><category><![CDATA[ai]]></category><category><![CDATA[старое железо]]></category><category><![CDATA[история]]></category><category><![CDATA[древние цивилизации]]></category>
+    </item>
+  
+
+  
+
+  
+
+	
+  
+
+  
+
+  
+
+    
+    <item>
+      <title><![CDATA[ICLR 2026 в Рио-де-Жанейро: главные ML-тренды, математика и инсайты]]></title>
+      <guid isPermaLink="true">https://habr.com/ru/companies/yandex/articles/1045394/</guid>
+      <link>https://habr.com/ru/companies/yandex/articles/1045394/?utm_campaign=1045394&amp;utm_source=habrahabr&amp;utm_medium=rss</link>
+      <description><![CDATA[<img src="https://habrastorage.org/getpro/habr/upload_files/d98/5e8/5a7/d985e85a77fd8f7a19769b37d8f7e365.png" /><p>В&nbsp;конце апреля в&nbsp;Рио‑де‑Жанейро прошла ICLR-2026&nbsp;(International Conference on Learning Representations)&nbsp;— одна из&nbsp;главных конференций по&nbsp;искусственному интеллекту и машинному обучению.</p><p>Конкурс и сито рецензирования (peer review) оказались жёсткими:&nbsp;было подано ~<strong> </strong>19 000&nbsp;заявок, принято более 5000&nbsp;статей, уровень одобрения (Acceptance Rate) составил ~26%.</p><p>Команда Яндекса прошла этот отбор, представив на&nbsp;конференции свои результаты: шесть статей вошли в&nbsp;основную программу (Main Track), одна работа&nbsp;была презентована на&nbsp;воркшопе ICBINB (I Can't Believe It's Not Better)&nbsp;— известной площадке для&nbsp;разбора подходов, которые по&nbsp;всем законам логики должны&nbsp;были «взлететь», но&nbsp;столкнулись с&nbsp;неочевидными фундаментальными ограничениями.</p><p>Меня зовут Мария Никифорова, я старший разработчик службы качества претрейна. Вместе с&nbsp;Дарьей Шатько, руководителем ML в&nbsp;Yandex Crowd, и другими коллегами мы побывали на&nbsp;конференции и в&nbsp;статье расскажем, как&nbsp;конференция начиналась уже в&nbsp;аэропорту, какие главные инсайты&nbsp;были в&nbsp;статьях и какие постеры оказались самыми запоминающимися.</p> <a href="https://habr.com/ru/articles/1045394/?utm_campaign=1045394&amp;utm_source=habrahabr&amp;utm_medium=rss#habracut">Читать далее</a>]]></description>
+      
+      <pubDate>Wed, 10 Jun 2026 07:00:09 GMT</pubDate>
+      <dc:creator><![CDATA[benzom (Яндекс)]]></dc:creator>
+      
+      <category><![CDATA[яндекс]]></category><category><![CDATA[iclr]]></category><category><![CDATA[iclr 2026]]></category><category><![CDATA[ml]]></category><category><![CDATA[ai]]></category><category><![CDATA[ии-агенты]]></category><category><![CDATA[конференции]]></category>
+    </item>
+  
+
+  
+
+  
+
+	
+  
+
+  
+
+  
+
+    
+    <item>
+      <title><![CDATA[PLC AI Studio, часть 2: многопроектный режим и маршрутные окна — как провести ИИ через целый объект]]></title>
+      <guid isPermaLink="true">https://habr.com/ru/articles/1045772/</guid>
+      <link>https://habr.com/ru/articles/1045772/?utm_campaign=1045772&amp;utm_source=habrahabr&amp;utm_medium=rss</link>
+      <description><![CDATA[<img src="https://habrastorage.org/getpro/habr/upload_files/445/738/99d/44573899d17fd1fc28adb3417fd8363b.jpg" /><p>В первой части я показал, как ИИ из «уверенного галлюцинатора» превращается в управляемого исполнителя: разбор задания перед генерацией, три специализированных агента (R2-PLCGen, Agents4PLC, truST Platform), проверка кода в программном симуляторе (Tier S) и в настоящем компиляторе matiec (Tier H), детерминированный ремонт типовых ошибок и финальное слово всегда за инженером.</p><p>Всё это работало для&nbsp;<strong>одной установки</strong>. Но я закончил статью честным признанием: реальный крупный объект — это не одна установка. И обещал многосистемный режим. Он теперь есть. Расскажу, как он устроен — и почему по дороге пришлось переделать саму навигацию по программе.</p> <a href="https://habr.com/ru/articles/1045772/?utm_campaign=1045772&amp;utm_source=habrahabr&amp;utm_medium=rss#habracut">Читать далее</a>]]></description>
+      
+      <pubDate>Wed, 10 Jun 2026 06:43:22 GMT</pubDate>
+      <dc:creator><![CDATA[ura-ch]]></dc:creator>
+      
+      <category><![CDATA[асу тп]]></category><category><![CDATA[плк]]></category><category><![CDATA[iec 61131-3]]></category><category><![CDATA[structured text]]></category><category><![CDATA[codesys]]></category><category><![CDATA[llm]]></category><category><![CDATA[генерация кода]]></category><category><![CDATA[автоматизация]]></category>
+    </item></channel></rss>
