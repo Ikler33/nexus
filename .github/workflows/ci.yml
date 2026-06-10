@@ -63,6 +63,10 @@ jobs:
 
   # Security-gate (ревью B6 / AC-Q-5): supply-chain + secret-scan отдельным required-job,
   # чтобы проверки безопасности не тонули в общем cargo test. Дёшево, без матрицы ОС.
+  # cargo-deny — бинарником с GitHub Releases (taiki-e/install-action, как cargo-llvm-cov в
+  # coverage-job), НЕ docker-экшеном: cargo-deny-action@v2 собирал образ с Docker Hub и дважды
+  # падал на его i/o-таймаутах (инцидент 2026-06-10) — убрана целая категория флака. Сама
+  # проверка идентична: `cargo deny check` с тем же deny.toml.
   security:
     name: Security (supply-chain · secrets)
     runs-on: ubuntu-latest
@@ -70,11 +74,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # gitleaks нужна полная история для diff-диапазона <sha>^..<sha> (shallow → unknown revision)
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
       - name: cargo-deny (advisories · licenses · bans · sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          manifest-path: Cargo.toml
+        run: cargo deny check
       - name: gitleaks (secret scan)
         uses: gitleaks/gitleaks-action@v2
         env:
