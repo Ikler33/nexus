@@ -8,6 +8,7 @@ import {
   type GitStatusEntry,
   tauriApi,
 } from '../../lib/tauri-api';
+import { useSyncStore } from '../../stores/sync';
 import { useUIStore } from '../../stores/ui';
 import { ConflictResolver } from './ConflictResolver';
 import styles from './SyncPanel.module.css';
@@ -89,7 +90,10 @@ export function SyncPanel() {
     setSyncBusy(true);
     setSyncResult(null);
     try {
-      setSyncResult(await tauriApi.git.sync());
+      const result = await tauriApi.git.sync();
+      setSyncResult(result);
+      // DP-14: конфликт-пилюля статусбара живёт, пока merge не разрешён (и после закрытия панели).
+      useSyncStore.getState().setMergeRequired(result.status === 'merge-required');
       await tauriApi.git
         .status()
         .then(setChanges)

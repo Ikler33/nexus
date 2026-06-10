@@ -3,6 +3,7 @@ import { Check, GitMerge } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi } from '../../lib/tauri-api';
 import type { GitConflictFile, GitMergePreview } from '../../lib/tauri-api';
+import { useSyncStore } from '../../stores/sync';
 import styles from './ConflictResolver.module.css';
 
 type Phase =
@@ -51,11 +52,15 @@ export function ConflictResolver({ onClose }: { onClose: () => void }) {
         if (cancelled) return;
         if (p.status === 'up-to-date') {
           setPhase({ kind: 'none' });
+          useSyncStore.getState().setMergeRequired(false);
         } else if (p.status === 'clean') {
           setPhase({ kind: 'clean', theirs: p.theirs });
+          useSyncStore.getState().setConflictFiles(0);
         } else {
           setPhase({ kind: 'conflicts', theirs: p.theirs, files: p.files });
           setSides(Object.fromEntries(p.files.map((f) => [f.path, null])));
+          // DP-14: число для конфликт-пилюли статусбара.
+          useSyncStore.getState().setConflictFiles(p.files.length);
         }
       } catch (e) {
         if (!cancelled) setPhase({ kind: 'error', message: String(e) });
@@ -91,6 +96,8 @@ export function ConflictResolver({ onClose }: { onClose: () => void }) {
       const res = files.map((f) => [f.path, resolutionFor(f)] as [string, string]);
       const oid = await tauriApi.git.resolveConflicts(theirs, res);
       setPhase({ kind: 'done', oid });
+      // Merge закрыт — конфликт-пилюля статусбара гаснет (DP-14).
+      useSyncStore.getState().setMergeRequired(false);
     } catch (e) {
       setPhase({ kind: 'error', message: String(e) });
     } finally {

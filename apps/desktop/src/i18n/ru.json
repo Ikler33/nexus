@@ -441,7 +441,16 @@
     "working_one": "{{count}} задача",
     "working_few": "{{count}} задачи",
     "working_many": "{{count}} задач",
-    "local": "Локально"
+    "local": "Локально",
+    "synced": "Синхронизировано",
+    "changes_one": "Изменения · {{count}}",
+    "changes_few": "Изменения · {{count}}",
+    "changes_many": "Изменения · {{count}}",
+    "indexed": "Проиндексировано",
+    "conflict": "Конфликт",
+    "conflicts_one": "{{count}} конфликт",
+    "conflicts_few": "{{count}} конфликта",
+    "conflicts_many": "{{count}} конфликтов"
   },
   "plugins": {
     "title": "Плагины",

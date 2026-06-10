@@ -61,6 +61,10 @@ interface UIState {
   togglePlugins: () => void;
   closeSync: () => void;
   toggleSync: () => void;
+  /** Конфликт-резолвер из пилюли статусбара (DP-14: открывается напрямую, как onConflict макета). */
+  conflictOpen: boolean;
+  openConflict: () => void;
+  closeConflict: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
   closeDigest: () => void;
@@ -94,6 +98,7 @@ export const useUIStore = create<UIState>((set) => ({
   chatOpen: false,
   pluginsOpen: false,
   syncOpen: false,
+  conflictOpen: false,
   goalsOpen: false,
   digestOpen: false,
   contradictionsOpen: false,
@@ -121,6 +126,8 @@ export const useUIStore = create<UIState>((set) => ({
   togglePlugins: () => set((s) => ({ pluginsOpen: !s.pluginsOpen })),
   closeSync: () => set({ syncOpen: false }),
   toggleSync: () => set((s) => ({ syncOpen: !s.syncOpen })),
+  openConflict: () => set({ conflictOpen: true }),
+  closeConflict: () => set({ conflictOpen: false }),
   closeGoals: () => set({ goalsOpen: false }),
   toggleGoals: () => set((s) => ({ goalsOpen: !s.goalsOpen })),
   closeDigest: () => set({ digestOpen: false }),

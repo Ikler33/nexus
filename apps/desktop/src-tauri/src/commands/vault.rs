@@ -645,6 +645,19 @@ pub async fn list_tags(state: State<'_, AppState>) -> AppResult<Vec<crate::tags:
     Ok(crate::tags::list_tags(&reader).await?)
 }
 
+/// Число живых заметок индекса — статусбар «Проиндексировано · N» (DP-14, макет app.jsx).
+#[tauri::command]
+pub async fn notes_count(state: State<'_, AppState>) -> AppResult<i64> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(reader
+        .query(|c| {
+            c.query_row("SELECT COUNT(*) FROM files WHERE is_deleted = 0", [], |r| {
+                r.get(0)
+            })
+        })
+        .await?)
+}
+
 /// Корень текущего открытого vault (или [`AppError::NoVault`], если не открыт).
 async fn current_root(state: &State<'_, AppState>) -> AppResult<PathBuf> {
     Ok(state.vault().await?.root.clone())
