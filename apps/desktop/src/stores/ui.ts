@@ -41,6 +41,8 @@ interface UIState {
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
   settingsSection: SettingsSection;
+  /** Видимость сайдбара (DP-13: кнопка «Файлы» activity-bar сворачивает панель, как в макете). */
+  sidebarOpen: boolean;
   /** Режим чтения (⌘R): прячет сайдбар/AI-панель, центрирует документ (distraction-free). */
   reading: boolean;
   /** Активная вкладка AI-панели (чат / связи). */
@@ -67,6 +69,9 @@ interface UIState {
   toggleContradictions: () => void;
   closeNews: () => void;
   toggleNews: () => void;
+  /** Открыть «Новости» (activity-bar: клик = переход на вью, не тоггл — как setView макета). */
+  openNews: () => void;
+  toggleSidebar: () => void;
   closeHome: () => void;
   toggleHome: () => void;
   openHome: () => void;
@@ -99,6 +104,7 @@ export const useUIStore = create<UIState>((set) => ({
   onboardingActive: false,
   tweaksOpen: false,
   settingsSection: 'general',
+  sidebarOpen: true,
   reading: false,
   aiTab: 'chat',
   openPalette: () => set({ paletteOpen: true }),
@@ -124,6 +130,8 @@ export const useUIStore = create<UIState>((set) => ({
   // Полные вьюхи main-области взаимоисключающие: news ↔ home (редактор — когда обе закрыты).
   closeNews: () => set({ newsOpen: false }),
   toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false })),
+  openNews: () => set({ newsOpen: true, homeOpen: false }),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () => set((s) => ({ homeOpen: !s.homeOpen, newsOpen: false })),
   openHome: () => set({ homeOpen: true, newsOpen: false }),

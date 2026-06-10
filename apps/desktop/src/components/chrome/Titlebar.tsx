@@ -2,28 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   ChevronDown,
-  FolderOpen,
-  GitBranch,
   HardDrive,
-  MessageSquare,
   Moon,
   Newspaper,
-  Rss,
+  PanelRight,
   Scale,
-  Puzzle,
   Search,
-  Share2,
-  SlidersHorizontal,
   Sparkles,
   Sun,
   Target,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
-import { openVaultFlow } from '../../lib/commands-core';
 import { useThemeStore, type Theme } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
-import { useVaultStore } from '../../stores/vault';
 import { BrandMark } from './BrandMark';
 import styles from './Titlebar.module.css';
 
@@ -42,31 +34,22 @@ function themeIcon(theme: Theme) {
 }
 
 /**
- * Верхний titlebar дизайн-системы (Liquid-Glass): бренд-марк + имя vault, центральная
- * поисковая пилюля (⌘K) и правая группа инструментов. DP-4: AI-инсайты (Дайджест / Цели /
- * Противоречия) консолидированы в sparkles-меню (как в макете), добавлен тоггл режима
- * чтения, тема циклится по 4 темам.
+ * Верхний titlebar по макету `app.jsx` (DP-13): бренд «лого + Nexus» (клик → Home),
+ * центральная поисковая пилюля (⌘K), справа ТОЛЬКО AI-инсайты (sparkles▾) | divider |
+ * режим чтения | RU/EN | тема | panel-right (AI-панель). Граф/новости/sync/настройки
+ * переехали в вертикальный ActivityBar; плагины и «Открыть vault» — команды палитры.
  */
 export function Titlebar() {
   const { t, i18n } = useTranslation();
-  const info = useVaultStore((s) => s.info);
   const openPalette = useUIStore((s) => s.openPalette);
+  const openHome = useUIStore((s) => s.openHome);
   const chatOpen = useUIStore((s) => s.chatOpen);
   const toggleChat = useUIStore((s) => s.toggleChat);
-  const toggleGraph = useUIStore((s) => s.toggleGraph);
-  const pluginsOpen = useUIStore((s) => s.pluginsOpen);
-  const togglePlugins = useUIStore((s) => s.togglePlugins);
-  const syncOpen = useUIStore((s) => s.syncOpen);
-  const toggleSync = useUIStore((s) => s.toggleSync);
   const toggleGoals = useUIStore((s) => s.toggleGoals);
   const toggleDigest = useUIStore((s) => s.toggleDigest);
   const toggleContradictions = useUIStore((s) => s.toggleContradictions);
-  const newsOpen = useUIStore((s) => s.newsOpen);
-  const toggleNews = useUIStore((s) => s.toggleNews);
   const reading = useUIStore((s) => s.reading);
   const toggleReading = useUIStore((s) => s.toggleReading);
-  const tweaksOpen = useUIStore((s) => s.tweaksOpen);
-  const toggleTweaks = useUIStore((s) => s.toggleTweaks);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggle);
   const lang = i18n.language === 'ru' ? 'ru' : 'en';
@@ -99,10 +82,16 @@ export function Titlebar() {
 
   return (
     <div className={styles.titlebar}>
-      <div className={styles.brand}>
+      <button
+        type="button"
+        className={styles.brand}
+        onClick={() => openHome()}
+        title={t('commands.view.home')}
+        aria-label={t('commands.view.home')}
+      >
         <BrandMark size={24} />
-        <span className={styles.appName}>{info?.name ?? t('app.name')}</span>
-      </div>
+        <span className={styles.appName}>{t('app.name')}</span>
+      </button>
 
       <span className={styles.spacer} />
       <button type="button" className={styles.search} onClick={() => openPalette()}>
@@ -113,17 +102,6 @@ export function Titlebar() {
       <span className={styles.spacer} />
 
       <div className={styles.group}>
-        <button
-          type="button"
-          className={`${styles.tbBtn} ${chatOpen ? styles.active : ''}`}
-          onClick={() => toggleChat()}
-          title={t('commands.view.chat')}
-          aria-label={t('commands.view.chat')}
-          aria-pressed={chatOpen}
-        >
-          <MessageSquare size={16} aria-hidden />
-        </button>
-
         {/* AI-инсайты: Дайджест / Цели / Противоречия — в выпадающем меню (DP-4, макет). */}
         <div className={styles.aiWrap} ref={aiRef}>
           <button
@@ -156,46 +134,6 @@ export function Titlebar() {
           )}
         </div>
 
-        <button
-          type="button"
-          className={styles.tbBtn}
-          onClick={() => toggleGraph()}
-          title={t('commands.view.graph')}
-          aria-label={t('commands.view.graph')}
-        >
-          <Share2 size={16} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`${styles.tbBtn} ${newsOpen ? styles.active : ''}`}
-          onClick={() => toggleNews()}
-          title={t('commands.view.news')}
-          aria-label={t('commands.view.news')}
-          aria-pressed={newsOpen}
-        >
-          <Rss size={16} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`${styles.tbBtn} ${pluginsOpen ? styles.active : ''}`}
-          onClick={() => togglePlugins()}
-          title={t('commands.view.plugins')}
-          aria-label={t('commands.view.plugins')}
-          aria-pressed={pluginsOpen}
-        >
-          <Puzzle size={16} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`${styles.tbBtn} ${syncOpen ? styles.active : ''}`}
-          onClick={() => toggleSync()}
-          title={t('commands.view.sync')}
-          aria-label={t('commands.view.sync')}
-          aria-pressed={syncOpen}
-        >
-          <GitBranch size={16} aria-hidden />
-        </button>
-
         <span className={styles.divider} />
 
         <button
@@ -207,27 +145,6 @@ export function Titlebar() {
           aria-pressed={reading}
         >
           <BookOpen size={16} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={styles.tbBtn}
-          onClick={() => toggleTheme()}
-          title={t('commands.theme.toggle')}
-          aria-label={t('commands.theme.toggle')}
-        >
-          <span key={theme} className={styles.themeIco}>
-            {themeIcon(theme)}
-          </span>
-        </button>
-        <button
-          type="button"
-          className={`${styles.tbBtn} ${tweaksOpen ? styles.active : ''}`}
-          onClick={() => toggleTweaks()}
-          title={t('commands.view.settings')}
-          aria-label={t('commands.view.settings')}
-          aria-pressed={tweaksOpen}
-        >
-          <SlidersHorizontal size={16} aria-hidden />
         </button>
         <button
           type="button"
@@ -243,11 +160,23 @@ export function Titlebar() {
         <button
           type="button"
           className={styles.tbBtn}
-          onClick={() => void openVaultFlow()}
-          title={t('app.openVault')}
-          aria-label={t('app.openVault')}
+          onClick={() => toggleTheme()}
+          title={t('commands.theme.toggle')}
+          aria-label={t('commands.theme.toggle')}
         >
-          <FolderOpen size={16} aria-hidden />
+          <span key={theme} className={styles.themeIco}>
+            {themeIcon(theme)}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`${styles.tbBtn} ${chatOpen ? styles.active : ''}`}
+          onClick={() => toggleChat()}
+          title={t('chrome.aiPanel')}
+          aria-label={t('chrome.aiPanel')}
+          aria-pressed={chatOpen}
+        >
+          <PanelRight size={16} aria-hidden />
         </button>
       </div>
     </div>

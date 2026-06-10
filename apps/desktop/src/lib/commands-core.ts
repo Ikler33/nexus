@@ -209,6 +209,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useThemeStore.getState().toggle(),
     }),
     commands.register({
+      id: 'view.toggleSidebar',
+      title: 'Toggle sidebar',
+      titleKey: 'commands.view.toggleSidebar',
+      source: 'core',
+      run: () => useUIStore.getState().toggleSidebar(),
+    }),
+    commands.register({
       id: 'view.reading',
       title: 'Reading mode',
       titleKey: 'commands.view.reading',

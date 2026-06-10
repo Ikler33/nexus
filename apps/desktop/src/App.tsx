@@ -8,6 +8,7 @@ import { useDigestStore } from './stores/digest';
 import { useGoalsStore } from './stores/goals';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
+import { ActivityBar } from './components/chrome/ActivityBar';
 import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
 import { Sidebar } from './components/sidebar/Sidebar';
@@ -51,6 +52,7 @@ export function App() {
   const homeOpen = useUIStore((s) => s.homeOpen);
   const onboardingActive = useUIStore((s) => s.onboardingActive);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const reading = useUIStore((s) => s.reading);
 
   useKeymap();
@@ -122,20 +124,24 @@ export function App() {
   return (
     <div className={styles.app}>
       <Titlebar />
-      <div
-        className={`${styles.appBody} ${
-          reading ? styles.reading : chatOpen ? styles.withChat : ''
-        }`}
-      >
-        {!reading && (
-          <aside className={styles.sidebar}>
-            <Sidebar />
-          </aside>
-        )}
-        <main className={styles.main}>
-          {homeOpen ? <HomeView /> : newsOpen ? <NewsView /> : <EditorArea />}
-        </main>
-        {chatOpen && !reading && <AiPanel />}
+      {/* DP-13 (макет app-shell): вертикальный activity-bar + тело. */}
+      <div className={styles.appShell}>
+        {!reading && <ActivityBar />}
+        <div
+          className={`${styles.appBody} ${
+            reading ? styles.reading : chatOpen ? styles.withChat : ''
+          } ${!reading && !sidebarOpen ? styles.sidebarCollapsed : ''}`}
+        >
+          {!reading && sidebarOpen && (
+            <aside className={styles.sidebar}>
+              <Sidebar />
+            </aside>
+          )}
+          <main className={styles.main}>
+            {homeOpen ? <HomeView /> : newsOpen ? <NewsView /> : <EditorArea />}
+          </main>
+          {chatOpen && !reading && <AiPanel />}
+        </div>
       </div>
       <InlineAria />
       <StatusBar />
