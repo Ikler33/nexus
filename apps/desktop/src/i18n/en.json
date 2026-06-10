@@ -74,6 +74,19 @@
       "saving": "Saving…",
       "saved": "Saved. Chat applied.",
       "restart": "Saved. Restart the app — embedding changed (re-indexing needed)."
+    },
+    "egress": {
+      "title": "Network (egress)",
+      "intro": "Outbound connection policy for the core. Applies instantly and survives restarts (stored outside the vault and git).",
+      "offline": "Offline mode",
+      "offlineDesc": "Requests to public hosts are blocked before the socket; local and LAN models keep working. An active chat reply is cut off.",
+      "chat": "Chat network",
+      "chatDesc": "Chat model requests (RAG chat, digest, inline).",
+      "embed": "Embeddings network",
+      "embedDesc": "Vectorization of notes and queries (semantic search, RAG).",
+      "probe": "Connection test",
+      "probeDesc": "Probe requests from “Test connection” to model endpoints.",
+      "saveError": "Applied, but not saved: {{msg}}"
     }
   },
   "sidebar": {

@@ -10,12 +10,16 @@
 //! `local.json ai.*` авто-в-allowlist). Каждый вызов — успех И отказ — пишется в неотключаемый
 //! append-only [`EgressAudit`] (E8, AC-EGR-4); host — через [`Redacted`] (значение не утекает в Debug).
 
+mod persist;
+
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use thiserror::Error;
+
+pub use persist::{load as load_egress_state, save as save_egress_state, EgressState};
 
 use crate::plugin::{blocks_cloud_metadata, is_private_host};
 use crate::redact::Redacted;
@@ -57,6 +61,19 @@ impl std::fmt::Display for EgressFeature {
             EgressFeature::Embed => "embed",
             EgressFeature::Probe => "probe",
         })
+    }
+}
+
+impl std::str::FromStr for EgressFeature {
+    type Err = ();
+    /// Обратное к `Display` — для команды `set_egress_feature` (строка с фронта).
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s {
+            "chat" => Ok(EgressFeature::Chat),
+            "embed" => Ok(EgressFeature::Embed),
+            "probe" => Ok(EgressFeature::Probe),
+            _ => Err(()),
+        }
     }
 }
 
@@ -153,6 +170,11 @@ impl EgressPolicy {
     /// Включает/выключает сетевую фичу (E6). В фундаменте дергается тестами; UI — срез 2.
     pub fn set_feature_enabled(&self, feature: EgressFeature, enabled: bool) {
         self.features[feature.idx()].store(enabled, Ordering::Relaxed);
+    }
+
+    /// Текущее состояние фичи — для UI настроек/персиста (срез 2).
+    pub fn is_feature_enabled(&self, feature: EgressFeature) -> bool {
+        self.features[feature.idx()].load(Ordering::Relaxed)
     }
 
     /// Заменяет allowlist целиком (E4: пересобирается из `local.json ai.*` на open-vault и при

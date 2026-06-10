@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { SettingsView } from './SettingsView';
 import { commands } from '../../lib/commands';
@@ -47,6 +47,31 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     // Сохранить → подтверждение (embedding не менялся → без требования перезапуска).
     fireEvent.click(screen.getByRole('button', { name: /^сохранить$|^save$/i }));
     expect(await screen.findByText(/сохранено|saved/i)).toBeInTheDocument();
+  });
+
+  // Срез 2 net.md: тоггл «офлайн» (E2) + per-feature opt-in (E6) применяются мгновенно через
+  // tauriApi.egress (вне Tauri — стейтфул-мок) и отражаются в aria-pressed сегмента Вкл/Выкл.
+  it('AI-секция: блок «Сеть (egress)» — офлайн-тоггл зовёт API и обновляет состояние', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const spy = vi.spyOn(tauriApi.egress, 'setOffline');
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    // Блок загрузился (getState) → строка «Офлайн-режим» с сегментом Вкл/Выкл.
+    const offlineLabel = await screen.findByText(/офлайн-режим|offline mode/i);
+    const row = offlineLabel.closest('section') as HTMLElement;
+    const onBtn = within(row).getByRole('button', { name: /^вкл|^on$/i });
+    expect(onBtn).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(onBtn);
+    expect(spy).toHaveBeenCalledWith(true);
+    // Мок вернул свежий снимок → сегмент перещёлкнулся.
+    await vi.waitFor(() => expect(onBtn).toHaveAttribute('aria-pressed', 'true'));
+
+    // Вернуть обратно (мок-состояние общее на сессию теста).
+    fireEvent.click(within(row).getByRole('button', { name: /^выкл|^off$/i }));
+    await vi.waitFor(() => expect(onBtn).toHaveAttribute('aria-pressed', 'false'));
+    spy.mockRestore();
   });
 
   it('AI-секция: пустой URL → «Недоступен»; смена эмбеддинга → требование перезапуска', async () => {

@@ -81,8 +81,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::new())
+        // E5 (срез 2 net.md): политика эгресса переживает рестарт — app-local `egress.json`
+        // в OS config-dir (вне vault/git и вне keychain). Нет файла/битый → local-first-дефолты.
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(dir) = app.path().app_config_dir() {
+                let saved = net::load_egress_state(&dir.join("egress.json"));
+                app.state::<state::AppState>().apply_egress_state(&saved);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            commands::egress::get_egress_state,
+            commands::egress::set_egress_offline,
+            commands::egress::set_egress_feature,
             commands::vault::open_vault,
             commands::vault::list_dir,
             commands::vault::read_file,

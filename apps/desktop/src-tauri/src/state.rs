@@ -107,6 +107,31 @@ impl AppState {
         }
     }
 
+    /// Снимок политики эгресса для UI настроек и персиста (E5, срез 2).
+    pub fn egress_state(&self) -> crate::net::EgressState {
+        use crate::net::EgressFeature;
+        crate::net::EgressState {
+            offline: self.egress_offline.load(Ordering::Relaxed),
+            chat: self.egress_policy.is_feature_enabled(EgressFeature::Chat),
+            embed: self.egress_policy.is_feature_enabled(EgressFeature::Embed),
+            probe: self.egress_policy.is_feature_enabled(EgressFeature::Probe),
+        }
+    }
+
+    /// Применяет сохранённое состояние политики (загрузка на старте, E5). Идёт через
+    /// [`Self::set_egress_offline`] — включённый офлайн дорежет активный стрим и здесь
+    /// (на старте его нет, но инвариант един).
+    pub fn apply_egress_state(&self, s: &crate::net::EgressState) {
+        use crate::net::EgressFeature;
+        self.set_egress_offline(s.offline);
+        self.egress_policy
+            .set_feature_enabled(EgressFeature::Chat, s.chat);
+        self.egress_policy
+            .set_feature_enabled(EgressFeature::Embed, s.embed);
+        self.egress_policy
+            .set_feature_enabled(EgressFeature::Probe, s.probe);
+    }
+
     /// Взводит флаг отмены текущего чат-стрима (если есть).
     pub fn cancel_active_chat(&self) {
         if let Ok(guard) = self.chat_cancel.lock() {
