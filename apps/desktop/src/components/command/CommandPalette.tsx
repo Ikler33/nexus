@@ -3,6 +3,7 @@ import { Command as CommandIcon, CornerDownLeft, FileText, Search } from 'lucide
 import { useTranslation } from 'react-i18next';
 import { commands, type Command, formatCombo } from '../../lib/commands';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
+import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import styles from './CommandPalette.module.css';
@@ -26,6 +27,7 @@ function noteTitle(n: NoteRef): string {
 export function CommandPalette() {
   const open = useUIStore((s) => s.paletteOpen);
   const close = useUIStore((s) => s.closePalette);
+  const paletteStyle = usePrefsStore((s) => s.paletteStyle);
   const { t } = useTranslation();
 
   const [query, setQuery] = useState('');
@@ -146,7 +148,7 @@ export function CommandPalette() {
   const cmdOffset = fileRows.length;
 
   return (
-    <div className={styles.overlay} onClick={close}>
+    <div className={`${styles.overlay} ${styles[paletteStyle] ?? ''}`} onClick={close}>
       <div
         className={styles.palette}
         role="dialog"

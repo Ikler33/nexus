@@ -176,3 +176,21 @@
   align-items: center;
   gap: 5px;
 }
+
+/* ── DP-11: позиции палитры (макет tweaks): top (дефолт) / center / spotlight ── */
+.center {
+  padding-top: 0;
+  align-items: center;
+}
+.spotlight {
+  padding-top: 0;
+  align-items: center;
+}
+.spotlight .palette {
+  width: min(680px, 94vw);
+}
+.spotlight .input {
+  font-size: var(--text-xl);
+  padding-top: 14px;
+  padding-bottom: 14px;
+}

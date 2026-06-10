@@ -19,7 +19,7 @@ import { commands, eventToCombo, formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import type { EgressState } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
-import { ACCENTS, useThemeStore } from '../../stores/theme';
+import { ACCENTS, THEMES, useThemeStore } from '../../stores/theme';
 import type { Accent } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import type { SettingsSection } from '../../stores/ui';
@@ -99,6 +99,10 @@ export function SettingsView() {
 function GeneralSection() {
   const { t, i18n } = useTranslation();
   const lang = i18n.language === 'ru' ? 'ru' : 'en';
+  const userName = usePrefsStore((s) => s.userName);
+  const setUserName = usePrefsStore((s) => s.setUserName);
+  const paletteStyle = usePrefsStore((s) => s.paletteStyle);
+  const setPaletteStyle = usePrefsStore((s) => s.setPaletteStyle);
   return (
     <>
       <h2 className={styles.h2}>{t('settings.general')}</h2>
@@ -121,6 +125,32 @@ function GeneralSection() {
           >
             English
           </button>
+        </div>
+      </section>
+      <section className={styles.group}>
+        <label className={styles.field}>
+          <span>{t('settings.gen.userName')}</span>
+          <input
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            placeholder={t('settings.gen.userNamePlaceholder')}
+          />
+        </label>
+        <p className={styles.hint}>{t('settings.gen.userNameHint')}</p>
+      </section>
+      <section className={styles.group}>
+        <span className={styles.label}>{t('tweaks.paletteStyle')}</span>
+        <div className={styles.seg}>
+          {(['top', 'center', 'spotlight'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={`${styles.segBtn} ${paletteStyle === p ? styles.on : ''}`}
+              onClick={() => setPaletteStyle(p)}
+            >
+              {t(`tweaks.palette.${p}`)}
+            </button>
+          ))}
         </div>
       </section>
     </>
@@ -170,6 +200,10 @@ function AppearanceSection() {
   const setAccent = useThemeStore((s) => s.setAccent);
   const density = useThemeStore((s) => s.density);
   const setDensity = useThemeStore((s) => s.setDensity);
+  const chrome = useThemeStore((s) => s.chrome);
+  const setChrome = useThemeStore((s) => s.setChrome);
+  const editorFont = useThemeStore((s) => s.editorFont);
+  const setEditorFont = useThemeStore((s) => s.setEditorFont);
 
   return (
     <>
@@ -177,20 +211,16 @@ function AppearanceSection() {
       <section className={styles.group}>
         <span className={styles.label}>{t('tweaks.theme')}</span>
         <div className={styles.seg}>
-          <button
-            type="button"
-            className={`${styles.segBtn} ${theme === 'light' ? styles.on : ''}`}
-            onClick={() => setTheme('light')}
-          >
-            {t('tweaks.light')}
-          </button>
-          <button
-            type="button"
-            className={`${styles.segBtn} ${theme === 'dark' ? styles.on : ''}`}
-            onClick={() => setTheme('dark')}
-          >
-            {t('tweaks.dark')}
-          </button>
+          {THEMES.map((th) => (
+            <button
+              key={th}
+              type="button"
+              className={`${styles.segBtn} ${theme === th ? styles.on : ''}`}
+              onClick={() => setTheme(th)}
+            >
+              {t(`tweaks.themes.${th}`)}
+            </button>
+          ))}
         </div>
       </section>
       <section className={styles.group}>
@@ -226,6 +256,47 @@ function AppearanceSection() {
           >
             {t('tweaks.compact')}
           </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${density === 'auto' ? styles.on : ''}`}
+            onClick={() => setDensity('auto')}
+          >
+            {t('tweaks.auto')}
+          </button>
+        </div>
+      </section>
+      <section className={styles.group}>
+        <span className={styles.label}>{t('tweaks.chrome')}</span>
+        <div className={styles.seg}>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${chrome === 'standard' ? styles.on : ''}`}
+            onClick={() => setChrome('standard')}
+          >
+            {t('tweaks.chromeStandard')}
+          </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${chrome === 'minimal' ? styles.on : ''}`}
+            onClick={() => setChrome('minimal')}
+          >
+            {t('tweaks.chromeMinimal')}
+          </button>
+        </div>
+      </section>
+      <section className={styles.group}>
+        <span className={styles.label}>{t('tweaks.editorFont')}</span>
+        <div className={styles.seg}>
+          {(['sans', 'serif', 'mono'] as const).map((f) => (
+            <button
+              key={f}
+              type="button"
+              className={`${styles.segBtn} ${editorFont === f ? styles.on : ''}`}
+              onClick={() => setEditorFont(f)}
+            >
+              {t(`tweaks.font.${f}`)}
+            </button>
+          ))}
         </div>
       </section>
     </>

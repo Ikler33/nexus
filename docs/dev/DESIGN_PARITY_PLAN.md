@@ -40,7 +40,7 @@
 | **DP-8** | плагины: карточки (glyph/имя/версия/автор/perm-чипы safe/caution/sensitive), тогглы, **consent-sheet** (risk-бейджи, Allow/Cancel, revocable-note), вкладка журнала доступа (брокер-аудит); permissions в `PluginInfo` | DP-0 | ✅ (этот PR; маркетплейс — нет данных, BACKLOG) |
 | **DP-9** | инсайт-модалки по `insights.jsx`: serif-дайджест с **bold**, мета+AI-бейдж, thinking-знаки, цели-треки, contra-карточки A↔B с бейджами | DP-0 | ✅ (этот PR) |
 | **DP-10** | sync (цветные статусы, commit-message, secrets-баннер, remote) + conflict 3-way (hunk-бары, chosen/dimmed, правый рейл, bulk) | DP-0 | ⏳ |
-| **DP-11** | настройки/tweaks: 4 темы в Appearance, density compact/comfortable/**auto** (брейкпоинт 1180), chrome standard/minimal (`--chrome`), editorFont sans/serif/mono, paletteStyle | DP-4/5 | ⏳ |
+| **DP-11** | настройки/tweaks: 4 темы в Appearance, density compact/comfortable/**auto** (брейкпоинт 1180), chrome standard/minimal (`--chrome`), editorFont sans/serif/mono, paletteStyle top/center/spotlight, имя для приветствия Home | DP-4/5 | ✅ (этот PR) |
 | **DP-12** | AI-панель: layouts side/bottom/overlay, RAG-стили cards/chips/footnotes, чат-бейдж local/cloud/offline (E9) + i18n `EgressDenied` (**AC-EGR-14**); унификация BrandThinking | **мерж #97** | ⛔ blocked |
 
 ## Бэкенд-добавки по ходу эпика
