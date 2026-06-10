@@ -372,6 +372,39 @@
   **AC-EGR-1..13 → covered**, AC-EGR-14 pending (i18n-фронт, срез 2). Срезы 2–4 — `docs/dev/net.md`.
 - 🧹 Хаускипинг: BACKLOG/NIGHT-PLAN сверены с кодом (этот PR); хвосты #91/#93 сняты как смерженные.
 
+### Прогон 2026-06-10 (день, с владельцем): egress срез 2 ч.1 + News Feed бэкенд ЦЕЛИКОМ
+- ✅ **Egress срез 2 ч.1** (PR #113): персист политики E5 (`egress.json` в OS config-dir, fail-safe
+  дефолты), команды `get_egress_state`/`set_egress_offline`/`set_egress_feature`, блок
+  «Сеть (egress)» в настройках «AI / Модели» (мгновенное применение, i18n, стейтфул-мок).
+  Превью-проверка против ПРАВИЛЬНОГО воркстри (поймана ловушка `nexus-web`→старый чекаут:
+  launch.json сессии, добавлена запись `nexus-be-web`:1431 + сверка cwd процесса).
+  **Остаток среза 2** (чат-бейдж E9 + i18n-рендер `EgressDenied` = AC-EGR-14) — после мержа
+  дизайн-PR #97 (держит чат-файлы). Попутно: cargo-deny без Docker Hub (PR #112 — security-джоба
+  дважды падала на i/o-таймаутах docker-образа; бинарник с GH Releases, semantика та же).
+- ✅ **News Feed: vision→AC сессия #2 + ВЕСЬ бэкенд за день** (D1–D7 решены владельцем в диалоге):
+  - спека `docs/specs/news-feed.md` (12 AC-NF, 16 verified-источников — каждый фид прозвонен
+    вживую; Anthropic без RSS → HN-ключи+Willison) + дизайн-handoff `NEWS_FEED_BRIEF.md` (PR #114);
+  - **NF-1** (PR #115): `news/` — парсеры RSS 2.0/Atom/HF-JSON/HN-JSON → `NewsEntry`
+    (quick-xml — новая workspace-зависимость, deny зелёный; выжимка/даты — мини-парсеры без
+    chrono), реестр 19 источников, keyword-фильтр только для high-volume (fail-closed);
+  - **NF-2** (PR #116): LLM-этап — батчи по 10, фид-контент строго между injection-маркерами,
+    строгий JSON `{relevant,title_ru,summary_ru,topic}` (невалидное → видимый failed-счётчик),
+    «перевод» = RU-резюме самой моделью (D1), RU-сводка дня;
+  - **NF-3** (PR #117): миграция 010 (`news_items` url-UNIQUE + `news_runs` со статами/ошибками),
+    дедуп с сохранением прочитанности, ретенция 30 дней, `filter_new_urls` (не жечь LLM на
+    виденном), пайплайн за трейтом `FeedFetcher`, `NewsFeedHandler` (no-op без consent, S5),
+    команды `get_news`/`mark_read`/`to_note`/`refresh`/`config`, «в заметку» с анти-traversal;
+  - **NF-4** (PR #118): `EgressFeature::NewsFeed` — первый web-класс (дефолт ВЫКЛ, consent =
+    `news.json`, `allow_private=false`), скоуповый allowlist "ai"/"news", `GuardedNewsFetcher`
+    с **DNS-rebinding-гардом с пином проверенного IP** (resolve-then-connect-check без TOCTOU),
+    лимиты W3 (20 с/2 МБ видимыми ошибками), регистрация в open_vault + recurring раз/сутки +
+    сид «при первом открытии за день» (D3).
+  **Итог: AC-NF 10 covered + 1 partial из 12; остался только UI-срез NF-5** (страница по брифу —
+  ждёт макет дизайнера). Бэкенд можно пробовать: `enabled:true` в `news.json` → прогон на
+  открытии vault (LLM-half оживёт с возвращением сервера владельца).
+- ⏳ Отложено решениями владельца: перф-эпик #14→#15→#6 — до пересборки LLM-сервера (вместе с
+  калибровкой токенайзера и перезаморозкой eval-фикстуры); web-агент/SearXNG — инфра.
+
 ### Прогон 2026-06-10 (автономная ночь, продолжение): бэклог-чистка + аудит багов
 - ✅ Хаускипинг доков (PR #107) · **AC-Q-6 линт `check-dangling.mjs`** (PR #108, последний pending
   AC-Q-блока) · **#22 `list_notes(query,limit)` + `resolve_note`** (PR #109; бонус: алиасные ссылки
