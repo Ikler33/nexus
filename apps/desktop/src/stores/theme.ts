@@ -1,15 +1,16 @@
 import { create } from 'zustand';
 
 /**
- * Оформление (дизайн-система Hermes): тема (light «old paper» / dark «warm clay»), акцент
- * (data-accent) и плотность (--row-h). Применяется к `<html>` (токены в styles.css per-theme/accent),
- * стартовые значения — из localStorage (без вспышки, side-effect на импорте), смена — с 320ms
- * кросс-фейдом и персистом.
+ * Оформление (дизайн-система Hermes): тема (light «old paper» / dark «warm clay» + премиум
+ * Midnight Ink / Platinum Slate, handoff 2026-06-10), акцент (data-accent) и плотность (--row-h).
+ * Применяется к `<html>` (токены в styles.css per-theme/accent), стартовые значения — из
+ * localStorage (без вспышки, side-effect на импорте), смена — с 320ms кросс-фейдом и персистом.
  */
-export type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark' | 'midnight' | 'platinum';
 export type Accent = 'amber' | 'teal' | 'sage' | 'clay';
 export type Density = 'comfortable' | 'compact';
 
+export const THEMES: readonly Theme[] = ['light', 'dark', 'midnight', 'platinum'];
 export const ACCENTS: readonly Accent[] = ['amber', 'teal', 'sage', 'clay'];
 
 const THEME_KEY = 'nexus-theme';
@@ -27,7 +28,7 @@ function readEnum<T extends string>(key: string, allowed: readonly T[], fallback
 }
 
 function initialTheme(): Theme {
-  const saved = readEnum<Theme>(THEME_KEY, ['light', 'dark'], '' as Theme);
+  const saved = readEnum<Theme>(THEME_KEY, THEMES, '' as Theme);
   if (saved) return saved;
   return typeof window !== 'undefined' &&
     window.matchMedia?.('(prefers-color-scheme: dark)').matches
@@ -86,9 +87,10 @@ export const useThemeStore = create<ThemeState>((set) => ({
   theme: START_THEME,
   accent: START_ACCENT,
   density: START_DENSITY,
+  // Цикл по всем 4 темам (DP-4, как в макете: sun → moon → sparkles → drive).
   toggle: () =>
     set((s) => {
-      const next: Theme = s.theme === 'dark' ? 'light' : 'dark';
+      const next = THEMES[(THEMES.indexOf(s.theme) + 1) % THEMES.length];
       persist(THEME_KEY, next);
       withCrossfade(() => applyTheme(next));
       return { theme: next };

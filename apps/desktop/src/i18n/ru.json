@@ -4,7 +4,8 @@
     "openVault": "Открыть vault…"
   },
   "chrome": {
-    "search": "Поиск или вопрос…"
+    "search": "Поиск или вопрос…",
+    "aiMenu": "AI-инсайты"
   },
   "viewer": {
     "appOnly": "Просмотр доступен в десктоп-приложении"
@@ -373,7 +374,11 @@
     "errNoSelection": "Выделите текст для этого действия"
   },
   "status": {
-    "jobsTitle": "Фоновые задачи: {{running}} выполняется · {{pending}} в очереди · {{dead}} с ошибкой"
+    "jobsTitle": "Фоновые задачи: {{running}} выполняется · {{pending}} в очереди · {{dead}} с ошибкой",
+    "working_one": "{{count}} задача",
+    "working_few": "{{count}} задачи",
+    "working_many": "{{count}} задач",
+    "local": "Локально"
   },
   "plugins": {
     "title": "Плагины",

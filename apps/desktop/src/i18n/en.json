@@ -4,7 +4,8 @@
     "openVault": "Open vault…"
   },
   "chrome": {
-    "search": "Search or ask…"
+    "search": "Search or ask…",
+    "aiMenu": "AI insights"
   },
   "viewer": {
     "appOnly": "Preview is available in the desktop app"
@@ -364,7 +365,10 @@
     "errNoSelection": "Select text for this action"
   },
   "status": {
-    "jobsTitle": "Background tasks: {{running}} running · {{pending}} queued · {{dead}} failed"
+    "jobsTitle": "Background tasks: {{running}} running · {{pending}} queued · {{dead}} failed",
+    "working_one": "{{count}} task",
+    "working_other": "{{count}} tasks",
+    "local": "Local"
   },
   "plugins": {
     "title": "Plugins",
