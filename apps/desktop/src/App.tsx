@@ -12,6 +12,7 @@ import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
+import { HomeView } from './components/home/HomeView';
 import { NewsView } from './components/news/NewsView';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
@@ -47,6 +48,7 @@ export function App() {
   const digestOpen = useUIStore((s) => s.digestOpen);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
   const newsOpen = useUIStore((s) => s.newsOpen);
+  const homeOpen = useUIStore((s) => s.homeOpen);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
@@ -128,7 +130,9 @@ export function App() {
             <Sidebar />
           </aside>
         )}
-        <main className={styles.main}>{newsOpen ? <NewsView /> : <EditorArea />}</main>
+        <main className={styles.main}>
+          {homeOpen ? <HomeView /> : newsOpen ? <NewsView /> : <EditorArea />}
+        </main>
         {chatOpen && !reading && <AiPanel />}
       </div>
       <InlineAria />

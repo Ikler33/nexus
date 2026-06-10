@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockEgress from './mock/egress';
 import * as mockGit from './mock/git';
+import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
@@ -124,18 +125,51 @@ export interface GoalEntry {
   progress: number | null;
 }
 
-/** HOME-дашборд: статические/динамические виджеты (зеркалит Rust `home::HomeData`, H1). LLM-виджеты —
- *  отдельным API (H2+, см. `docs/dev/HOME_BACKEND_PLAN.md`). Визуал строит дизайн-чат поверх этого. */
+/** HOME-дашборд: статические/динамические виджеты (зеркалит Rust `home::HomeData`, H1/DP-1). LLM-виджеты —
+ *  отдельным API (H2+, см. `docs/dev/HOME_BACKEND_PLAN.md`). */
 export interface HomeStats {
   notes: number;
   tags: number;
   links: number;
   words: number;
 }
+/** Недавняя заметка с метой (DP-1: карточке «Недавние» нужны время и объём). */
+export interface RecentNote {
+  path: string;
+  title: string | null;
+  updatedAt: number;
+  words: number;
+}
 export interface HomeData {
   stats: HomeStats;
-  recent: NoteRef[];
+  recent: RecentNote[];
   goals: GoalEntry[];
+}
+
+/** День heatmap активности (зеркалит Rust `home::activity::HeatDay`): 0 = сегодня. */
+export interface HeatDay {
+  daysAgo: number;
+  count: number;
+}
+/** «Продолжить»: последняя правленая заметка со сниппетом (DP-1). */
+export interface ContinueNote {
+  path: string;
+  title: string | null;
+  updatedAt: number;
+  words: number;
+  snippet: string;
+}
+/** Зона «Активность» HOME (зеркалит Rust `home::activity::ActivityData`, H6).
+ *  Всё выведено из ТЕКУЩИХ mtime файлов (истории правок нет — честные приближения). */
+export interface HomeActivity {
+  heatmap: HeatDay[];
+  changesToday: number;
+  week: number;
+  prevWeek: number;
+  streakDays: number;
+  bestStreak: number;
+  orphans: number;
+  continue: ContinueNote | null;
 }
 
 /** Кэшированный LLM-виджет HOME (зеркалит Rust `home::widgets::Widget`, H2). `content` непрозрачен
@@ -452,34 +486,37 @@ export const tauriApi = {
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
   },
 
-  /** HOME-дашборд (бэкенд H1/H2). Визуал собирает дизайн-чат поверх этого API. */
+  /** HOME-дашборд (бэкенд H1/H2/H6; страница — DP-1). Вне Tauri — стейтфул-мок с контентом макета. */
   home: {
-    /** Статические/динамические данные HOME (stats/recent/goals) одним запросом, без LLM. Вне Tauri — пусто. */
+    /** Статические/динамические данные HOME (stats/recent/goals) одним запросом, без LLM. */
     data: (): Promise<HomeData> =>
+      isTauri() ? invoke<HomeData>('get_home_data') : mockHome.data(),
+
+    /** Зона «Активность» (H6): heatmap правок, серия дней, сироты, «Продолжить» со сниппетом.
+     *  `tzOffsetMin` = `new Date().getTimezoneOffset()` — дни считаются в локали пользователя. */
+    activity: (): Promise<HomeActivity> =>
       isTauri()
-        ? invoke<HomeData>('get_home_data')
-        : Promise.resolve({
-            stats: { notes: 0, tags: 0, links: 0, words: 0 },
-            recent: [],
-            goals: [],
-          }),
+        ? invoke<HomeActivity>('get_home_activity', {
+            tzOffsetMin: new Date().getTimezoneOffset(),
+          })
+        : mockHome.activity(),
 
     /** Кэшированный LLM-виджет по ключу (или `null`, если ещё не генерировался). Мгновенно — НЕ ждёт
      *  LLM (генерация фоном; готовность — событие `home:widget-updated`). H2. Известные ключи:
      *  `'daily_brief'` (H3, зона 2), `'open_questions'` (H5, зона 4, manual), `'context_drift'`
-     *  (H5, зона 5, scheduled). Для последних двух есть типизированные хелперы ниже. Вне Tauri — `null`. */
+     *  (H5, зона 5, scheduled). Для последних двух есть типизированные хелперы ниже. */
     widget: (key: string): Promise<Widget | null> =>
-      isTauri() ? invoke<Widget | null>('get_widget', { key }) : Promise.resolve(null),
+      isTauri() ? invoke<Widget | null>('get_widget', { key }) : mockHome.widget(key),
 
     /** Ручной refresh виджета (manual): ставит фоновую генерацию в очередь (требует зарегистрированный
-     *  виджет; дедуп активной джобы). Завершение — событие `home:widget-updated`. H2. Вне Tauri — no-op. */
+     *  виджет; дедуп активной джобы). Завершение — событие `home:widget-updated`. H2. */
     refresh: (key: string): Promise<void> =>
-      isTauri() ? invoke<void>('refresh_widget', { key }) : Promise.resolve(),
+      isTauri() ? invoke<void>('refresh_widget', { key }) : mockHome.refresh(key),
 
     /** «Stale radar» (H4, зона 4): ранжированный список устаревших заметок. Слой 1 (скоринг) мгновенно
-     *  on-open; слой 2 (LLM-причина/действие/подсказка) — из кэша, если обогащали. Вне Tauri — пусто. */
+     *  on-open; слой 2 (LLM-причина/действие/подсказка) — из кэша, если обогащали. */
     staleRadar: (): Promise<StaleNote[]> =>
-      isTauri() ? invoke<StaleNote[]>('get_stale_radar') : Promise.resolve([]),
+      isTauri() ? invoke<StaleNote[]>('get_stale_radar') : mockHome.staleRadar(),
 
     /** Ручной запуск LLM-обогащения «Stale radar» (слой 2, manual): топ-N → причина/действие/подсказка,
      *  кэш 24ч. Требует chat; дедуп активной джобы. Завершение — событие `home:widget-updated`
@@ -489,10 +526,9 @@ export const tauriApi = {
 
     /** «Open questions» (H5, зона 4, manual): незакрытые вопросы из последних заметок — распарсенный
      *  контент виджета `open_questions`. Сгенерировать/обновить — `home.refresh('open_questions')`;
-     *  готовность — событие `onWidgetUpdated`. Вне Tauri / пока не сгенерировано — `[]`. */
+     *  готовность — событие `onWidgetUpdated`. Пока не сгенерировано — `[]`. */
     openQuestions: async (): Promise<OpenQuestion[]> => {
-      if (!isTauri()) return [];
-      const w = await invoke<Widget | null>('get_widget', { key: 'open_questions' });
+      const w = await tauriApi.home.widget('open_questions');
       if (!w?.content) return [];
       try {
         return JSON.parse(w.content) as OpenQuestion[];
@@ -503,10 +539,9 @@ export const tauriApi = {
 
     /** «Context drift» (H5, зона 5, scheduled): абзац расхождения «текущий фокус vs цели» — контент
      *  виджета `context_drift` (или `null`, если ещё не сгенерировано/пусто). Обновляется раз в сутки
-     *  в фоне; принудительно — `home.refresh('context_drift')`. Вне Tauri — `null`. */
+     *  в фоне; принудительно — `home.refresh('context_drift')`. */
     contextDrift: async (): Promise<string | null> => {
-      if (!isTauri()) return null;
-      const w = await invoke<Widget | null>('get_widget', { key: 'context_drift' });
+      const w = await tauriApi.home.widget('context_drift');
       return w?.content ? w.content : null;
     },
   },

@@ -5,17 +5,47 @@
 use tauri::State;
 
 use crate::error::AppResult;
+use crate::home::activity::{self, ActivityData};
 use crate::home::stale::{self, StaleNote};
 use crate::home::widgets::{self, Widget};
 use crate::home::{self, HomeData};
 use crate::scheduler;
 use crate::state::AppState;
 
+/// Длина сниппета «Продолжить» (символы).
+const CONTINUE_SNIPPET_CHARS: usize = 180;
+
 /// Данные HOME для статических/динамических зон (без LLM). Без открытого vault — ошибка.
 #[tauri::command]
 pub async fn get_home_data(state: State<'_, AppState>) -> AppResult<HomeData> {
     let reader = state.vault().await?.db.reader().clone();
     Ok(home::home_data(&reader).await?)
+}
+
+/// H6 (DP-1): зона «Активность» — heatmap правок, серия дней, сироты, «Продолжить» со сниппетом.
+/// `tz_offset_min` — как `Date.getTimezoneOffset()` (минуты западнее UTC): локальные дни юзера.
+#[tauri::command]
+pub async fn get_home_activity(
+    state: State<'_, AppState>,
+    tz_offset_min: i32,
+) -> AppResult<ActivityData> {
+    let (root, reader) = {
+        let ctx = state.vault().await?;
+        (ctx.root.clone(), ctx.db.reader().clone())
+    };
+    let mut data = activity::activity_data(
+        &reader,
+        crate::scheduler::now_secs(),
+        i64::from(tz_offset_min),
+    )
+    .await?;
+    // Сниппет «Продолжить» — чтение головы файла с диска (путь из БД, внутри vault).
+    if let Some(cont) = data.continue_note.as_mut() {
+        if let Ok(body) = std::fs::read_to_string(root.join(&cont.path)) {
+            cont.snippet = activity::continue_snippet(&body, CONTINUE_SNIPPET_CHARS);
+        }
+    }
+    Ok(data)
 }
 
 /// Кэшированный LLM-виджет по ключу (или `null`, если ещё не генерировался). Мгновенно — НЕ ждёт LLM

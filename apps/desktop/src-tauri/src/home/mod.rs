@@ -4,6 +4,7 @@
 //! + refresh-режимы поверх планировщика ADR-007. Конкретные LLM-виджеты (daily brief / stale radar / …)
 //! — отдельными срезами H3+ (см. `docs/dev/HOME_BACKEND_PLAN.md`).
 
+pub mod activity;
 pub mod insights;
 pub mod stale;
 pub mod widgets;
@@ -12,10 +13,19 @@ use serde::Serialize;
 
 use crate::db::{DbResult, ReadPool};
 use crate::goals::{self, Goal};
-use crate::vault::NoteRef;
 
 /// Сколько недавних заметок отдаём в виджет «Недавние файлы» (зона 2).
 const RECENT_LIMIT: i64 = 8;
+
+/// Недавняя заметка с метой для карточки «Недавние» (DP-1: макету нужны время и объём).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentNote {
+    pub path: String,
+    pub title: Option<String>,
+    pub updated_at: i64,
+    pub words: i64,
+}
 
 /// Счётчики базы — статический виджет «Статистика базы» (зона 3).
 #[derive(Debug, Clone, Serialize)]
@@ -32,7 +42,7 @@ pub struct HomeStats {
 #[serde(rename_all = "camelCase")]
 pub struct HomeData {
     pub stats: HomeStats,
-    pub recent: Vec<NoteRef>,
+    pub recent: Vec<RecentNote>,
     pub goals: Vec<Goal>,
 }
 
@@ -63,13 +73,16 @@ pub async fn home_data(reader: &ReadPool) -> DbResult<HomeData> {
     let recent = reader
         .query(|c| {
             let mut stmt = c.prepare(
-                "SELECT path, title FROM files WHERE is_deleted=0 ORDER BY updated_at DESC LIMIT ?1",
+                "SELECT path, title, updated_at, word_count FROM files \
+                 WHERE is_deleted=0 ORDER BY updated_at DESC LIMIT ?1",
             )?;
             let rows = stmt
                 .query_map([RECENT_LIMIT], |r| {
-                    Ok(NoteRef {
+                    Ok(RecentNote {
                         path: r.get(0)?,
                         title: r.get(1)?,
+                        updated_at: r.get(2)?,
+                        words: r.get(3)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
