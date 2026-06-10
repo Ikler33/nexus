@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { HardDrive } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi } from '../../lib/tauri-api';
 import { useJobsStore } from '../../stores/jobs';
@@ -7,8 +8,10 @@ import { useVaultStore } from '../../stores/vault';
 import styles from './StatusBar.module.css';
 
 /**
- * Нижний status bar дизайн-системы: путь vault (слева) + индикатор фоновых задач планировщика и темы
- * (справа). Счётчики джоб обновляются по событию `jobs:changed` (ADR-007 срез 5) — без поллинга.
+ * Нижний status bar (DP-4, макет app.jsx): слева статус-дот + путь vault, в центре —
+ * индикатор фоновых задач (анимированный прогресс при работе планировщика, счётчики),
+ * справа — Local · UTF-8 · Markdown. Счётчики джоб — по событию `jobs:changed` (ADR-007),
+ * без поллинга. Git-конфликт-пилюля — после DP-10 (нужен дешёвый статус-канал, BACKLOG).
  */
 export function StatusBar() {
   const { t } = useTranslation();
@@ -28,25 +31,38 @@ export function StatusBar() {
   }, []);
 
   const { running, pending, dead } = counts;
-  const showJobs = running > 0 || pending > 0 || dead > 0;
+  const busy = running > 0 || pending > 0;
   const jobsTitle = t('status.jobsTitle', { running, pending, dead });
 
   return (
     <div className={styles.statusBar}>
       <span className={styles.item} title={info?.root}>
+        <i className={`${styles.dot} ${dead > 0 ? styles.dotBad : styles.dotOk}`} aria-hidden />
         {info?.root ?? t('app.name')}
       </span>
-      <div className={styles.right}>
-        {showJobs && (
-          <span className={`${styles.item} ${styles.jobs}`} title={jobsTitle}>
-            {running > 0 && (
-              <span className={styles.jobsActive}>⚙ {running}</span>
-            )}
-            {pending > 0 && <span>⏳ {pending}</span>}
-            {dead > 0 && <span className={styles.jobsDead}>⚠ {dead}</span>}
+
+      {busy && (
+        <span className={`${styles.item} ${styles.jobs}`} title={jobsTitle}>
+          <span className={styles.progress} aria-hidden>
+            <i />
           </span>
-        )}
-        <span className={styles.item}>{theme === 'dark' ? 'dark' : 'light'}</span>
+          {t('status.working', { count: running + pending })}
+        </span>
+      )}
+      {dead > 0 && (
+        <span className={`${styles.item} ${styles.jobsDead}`} title={jobsTitle}>
+          ⚠ {dead}
+        </span>
+      )}
+
+      <div className={styles.right}>
+        <span className={styles.item}>
+          <HardDrive size={11} aria-hidden />
+          {t('status.local')}
+        </span>
+        <span className={styles.item}>UTF-8</span>
+        <span className={styles.item}>Markdown</span>
+        <span className={styles.item}>{theme}</span>
       </div>
     </div>
   );
