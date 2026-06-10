@@ -1,0 +1,132 @@
+/* ============================================================
+   Nexus — Motion-слой (порт `docs/design/handoff/motion.css`):
+   пружинные easing'и, шкала длительностей, общие keyframes и
+   «думающий» бренд-знак. Подключается ПОСЛЕ styles.css.
+   Компонентные entrance-анимации живут в их *.module.css
+   (keyframes в модулях локальны) — здесь только глобальное.
+   ============================================================ */
+
+:root {
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.5, 1); /* мягкий овершут — входы */
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1); /* замедление — большинство */
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1); /* симметричный — кросс-фейд темы */
+  --dur-1: 130ms;
+  --dur-2: 220ms;
+  --dur-3: 320ms;
+  --dur-4: 440ms;
+}
+
+/* ── «Думающий» бренд-знак: пульсирующее созвездие (AI-операции) ── */
+.brand-thinking {
+  color: var(--color-accent);
+  overflow: visible;
+  transform-origin: center;
+  animation: bt-breathe 2.6s var(--ease-inout) infinite;
+  filter: drop-shadow(0 0 5px color-mix(in oklch, var(--color-accent) 45%, transparent));
+}
+.brand-thinking .bt-edge {
+  opacity: 0.2;
+  transform-origin: center;
+  animation: bt-edge 1.9s var(--ease-inout) infinite;
+}
+.brand-thinking .bt-edge.e1 {
+  animation-delay: 0.15s;
+}
+.brand-thinking .bt-edge.e2 {
+  animation-delay: 0.3s;
+}
+.brand-thinking .bt-edge.e3 {
+  animation-delay: 0.45s;
+}
+.brand-thinking .bt-node {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: bt-node 1.6s var(--ease-inout) infinite;
+}
+.brand-thinking .bt-node.n0 {
+  animation-delay: 0s;
+}
+.brand-thinking .bt-node.n1 {
+  animation-delay: 0.16s;
+}
+.brand-thinking .bt-node.n2 {
+  animation-delay: 0.32s;
+}
+.brand-thinking .bt-node.n3 {
+  animation-delay: 0.48s;
+}
+@keyframes bt-node {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(0.7);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+@keyframes bt-edge {
+  0%,
+  100% {
+    opacity: 0.14;
+  }
+  45% {
+    opacity: 0.62;
+  }
+}
+@keyframes bt-breathe {
+  0%,
+  100% {
+    transform: scale(0.95) rotate(-6deg);
+  }
+  50% {
+    transform: scale(1.05) rotate(6deg);
+  }
+}
+
+/* Строка «думаю…» с переливающимся лейблом (рядом со знаком). */
+.msg-thinking {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 2px 0 6px;
+}
+.mt-label {
+  font-size: var(--text-md);
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--color-text-faint) 35%,
+    var(--color-text) 50%,
+    var(--color-text-faint) 65%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: mt-shimmer 1.9s linear infinite;
+}
+@keyframes mt-shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-thinking,
+  .brand-thinking .bt-node,
+  .brand-thinking .bt-edge {
+    animation: none !important;
+  }
+  .brand-thinking .bt-node {
+    opacity: 0.9;
+  }
+  .brand-thinking .bt-edge {
+    opacity: 0.3;
+  }
+  .mt-label {
+    animation: none !important;
+    color: var(--color-text-muted);
+  }
+}

@@ -28,7 +28,30 @@
     "cloud": false
   }/*EDITMODE-END*/;
 
-  function Titlebar({ t, theme, setTheme, lang, setLang, platform, onOpenPalette, sidebarOpen, setSidebarOpen, aiOpen, setAiOpen, graphOpen, setGraphOpen, reading, setReading }) {
+  function AIMenu({ lang, onDigest, onGoals, onContra }) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      if (!open) return;
+      const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+      window.addEventListener("mousedown", h); return () => window.removeEventListener("mousedown", h);
+    }, [open]);
+    const items = [
+      { ic: "newspaper", label: lang === "ru" ? "Дайджест изменений" : "Change digest", run: onDigest },
+      { ic: "target", label: lang === "ru" ? "Цели" : "Goals", run: onGoals },
+      { ic: "scale", label: lang === "ru" ? "Поиск противоречий" : "Contradictions", run: onContra },
+    ];
+    return React.createElement("div", { className: "ai-menu-wrap", ref },
+      React.createElement("button", { className: "tb-btn ai-menu-trigger" + (open ? " active" : ""), onClick: () => setOpen((v) => !v), title: lang === "ru" ? "AI-инсайты" : "AI insights" },
+        React.createElement(Icon, { name: "sparkles", size: 16 }),
+        React.createElement(Icon, { name: "chevron-down", size: 11, style: { opacity: 0.55 } })),
+      open ? React.createElement("div", { className: "ai-menu" },
+        React.createElement("div", { className: "ai-menu-head" }, lang === "ru" ? "AI-инсайты по vault" : "AI insights"),
+        items.map((it) => React.createElement("button", { key: it.ic, className: "ai-menu-item", onClick: () => { setOpen(false); it.run(); } },
+          React.createElement(Icon, { name: it.ic, size: 15, className: "ico" }), it.label))) : null);
+  }
+
+  function Titlebar({ t, theme, setTheme, lang, setLang, platform, onOpenPalette, aiOpen, setAiOpen, onHome, onDigest, onGoals, onContra, reading, setReading }) {
     const traffic = platform === "win"
       ? React.createElement("div", { className: "traffic win" },
           React.createElement("button", { className: "light flat", tabIndex: -1 }, React.createElement(Icon, { name: "minus", size: 14 })),
@@ -39,9 +62,7 @@
 
     return React.createElement("header", { className: "titlebar" },
       platform === "win" ? null : traffic,
-      React.createElement("button", { className: "tb-btn" + (sidebarOpen ? " active" : ""), onClick: () => setSidebarOpen((v) => !v), title: t.explorer },
-        React.createElement(Icon, { name: "panel-left", size: 16 })),
-      React.createElement("div", { className: "brand" },
+      React.createElement("button", { className: "brand", onClick: onHome, title: lang === "ru" ? "На главную" : "Home", style: { background: "none", border: "none", cursor: "pointer", padding: 0 } },
         React.createElement(window.BrandMark, { size: 26 }),
         React.createElement("span", { className: "app-name" }, "Nexus")),
       React.createElement("div", { className: "tb-spacer" }),
@@ -51,21 +72,38 @@
         React.createElement("span", { className: "kbd" }, "⌘K")),
       React.createElement("div", { className: "tb-spacer" }),
       React.createElement("div", { className: "tb-group" },
+        React.createElement(AIMenu, { lang, onDigest, onGoals, onContra }),
+        React.createElement("div", { className: "tb-divider" }),
         React.createElement("button", { className: "tb-btn" + (reading ? " active" : ""), onClick: () => setReading((v) => !v), title: t.reading_mode + "  ⌘R" },
           React.createElement(Icon, { name: "book-open", size: 16 })),
-        React.createElement("button", { className: "tb-btn" + (graphOpen ? " active" : ""), onClick: () => setGraphOpen((v) => !v), title: t.graph_view + "  ⌘⇧G" },
-          React.createElement(Icon, { name: "graph", size: 16 })),
         React.createElement("button", { className: "tb-btn tb-lang", onClick: () => setLang(lang === "ru" ? "en" : "ru"), title: t.toggle_lang },
           React.createElement("span", { className: lang === "ru" ? "on" : "" }, "RU"),
           React.createElement("span", { className: "sep" }, "/"),
           React.createElement("span", { className: lang === "en" ? "on" : "" }, "EN")),
-        React.createElement("button", { className: "tb-btn", onClick: () => setTheme(theme === "dark" ? "light" : "dark"), title: t.toggle_theme },
-          React.createElement(Icon, { name: theme === "dark" ? "moon" : "sun", size: 16 })),
+        React.createElement("button", { className: "tb-btn", onClick: () => setTheme(theme === "light" ? "dark" : theme === "dark" ? "midnight" : theme === "midnight" ? "platinum" : "light"), title: t.toggle_theme },
+          React.createElement(Icon, { name: theme === "light" ? "sun" : theme === "dark" ? "moon" : theme === "midnight" ? "sparkles" : "drive", size: 16 })),
         React.createElement("button", { className: "tb-btn" + (aiOpen ? " active" : ""), onClick: () => setAiOpen((v) => !v), title: t.ai_assistant },
-          React.createElement(Icon, { name: "sparkles", size: 16 }))),
+          React.createElement(Icon, { name: "panel-right", size: 16 }))),
       platform === "win" ? React.createElement("div", { className: "tb-divider" }) : null,
       platform === "win" ? traffic : null,
     );
+  }
+
+  // Left vertical activity bar — app navigation + tools (Obsidian/VS Code style)
+  function ActivityBar({ t, lang, view, onHome, onNews, sidebarOpen, setSidebarOpen, graphOpen, setGraphOpen, reading, setReading, onSync, syncConflict, onSettings }) {
+    const Btn = (p) => React.createElement("button", {
+      className: "act-btn" + (p.active ? " active" : ""), onClick: p.onClick, title: p.title, "aria-label": p.title,
+    }, React.createElement(Icon, { name: p.icon, size: 19 }), p.badge ? React.createElement("span", { className: "act-badge" }) : null);
+    return React.createElement("nav", { className: "activity-bar", "aria-label": lang === "ru" ? "Навигация" : "Navigation" },
+      React.createElement("div", { className: "act-group" },
+        React.createElement(Btn, { icon: "home", title: "Home", active: view === "home", onClick: onHome }),
+        React.createElement(Btn, { icon: "newspaper", title: lang === "ru" ? "Новости" : "News", active: view === "news", onClick: onNews }),
+        React.createElement(Btn, { icon: "file-text", title: t.explorer, active: view === "workspace" && sidebarOpen, onClick: () => setSidebarOpen((v) => !v) }),
+        React.createElement(Btn, { icon: "graph", title: t.graph_view + "  ⌘⇧G", active: graphOpen, onClick: () => setGraphOpen((v) => !v) })),
+      React.createElement("div", { className: "act-spacer" }),
+      React.createElement("div", { className: "act-group" },
+        React.createElement(Btn, { icon: "git-branch", title: (lang === "ru" ? "Синхронизация" : "Sync") + "  (git)", badge: syncConflict, onClick: onSync }),
+        React.createElement(Btn, { icon: "settings", title: (lang === "ru" ? "Настройки" : "Settings") + "  ⌘,", onClick: onSettings })));
   }
 
   function StatusBar({ t, indexing, conflict, onConflict, lang }) {
@@ -107,9 +145,13 @@
     const [splitTab, setSplitTab] = useState(null);
     const [splitW, setSplitW] = useState(480);
     const [activePane, setActivePane] = useState("a");
+    const [view, setView] = useState("home"); // 'home' | 'workspace'
     const [conflictOpen, setConflictOpen] = useState(false);
     const [conflictResolved, setConflictResolved] = useState(false);
     const [pluginsOpen, setPluginsOpen] = useState(false);
+    const [syncOpen, setSyncOpen] = useState(false);
+    const [modal, setModal] = useState(null); // null | 'digest' | 'goals' | 'contra'
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const [toasts, setToasts] = useState([]);
     const [indexing, setIndexing] = useState({ active: true, done: 320, total: 1200 });
     const [sidebarW, setSidebarW] = useState(260);
@@ -171,6 +213,7 @@
     }, []);
 
     const openNote = useCallback((id) => {
+      setView("workspace");
       // new/opened notes land in the ACTIVE pane only
       if (activePaneRef.current === "b" && secondPaneRef.current === "editor") {
         setTabsB((tb) => tb.includes(id) ? tb : [...tb, id]);
@@ -181,6 +224,7 @@
       }
     }, []);
     const toggleGraph = useCallback(() => {
+      setView("workspace");
       setSecondPane((p) => { if (p === "graph") return null; setActivePane("a"); return "graph"; });
     }, []);
     const openSplit = useCallback(() => {
@@ -222,6 +266,7 @@
     }, []);
     // create a fresh note in the given (or active) pane only
     const newNote = useCallback((pane) => {
+      setView("workspace");
       const p = pane || activePaneRef.current;
       const id = "untitled-" + Date.now();
       const title = lang === "ru" ? "Без названия" : "Untitled";
@@ -240,6 +285,8 @@
     // keyboard: Cmd/Ctrl+K
     useEffect(() => {
       const h = (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); setSettingsOpen((v) => !v); }
+        if ((e.metaKey || e.ctrlKey) && e.key === "/") { e.preventDefault(); window.dispatchEvent(new CustomEvent("nexus-inline-ai")); }
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); }
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "g") { e.preventDefault(); toggleGraph(); }
         if ((e.metaKey || e.ctrlKey) && e.key === "\\") { e.preventDefault(); secondPaneRef.current === "editor" ? closeSecond() : openSplit(); }
@@ -255,6 +302,8 @@
     }, [activeTab, lang, toast]);
 
     const commands = [
+      { label: lang === "ru" ? "На главную (Home)" : "Go to Home", icon: "home", run: () => setView("home") },
+      { label: lang === "ru" ? "Новости" : "News", icon: "newspaper", run: () => setView("news") },
       { label: lang === "ru" ? "Переключить тему" : "Toggle theme", icon: "sun", hint: "⌘⇧T", run: () => setTheme((x) => x === "dark" ? "light" : "dark") },
       { label: lang === "ru" ? "Переключить язык (RU/EN)" : "Toggle language", icon: "languages", run: () => setLang((x) => x === "ru" ? "en" : "ru") },
       { label: lang === "ru" ? "AI-ассистент" : "Toggle AI panel", icon: "sparkles", run: () => setAiOpen((v) => !v) },
@@ -266,8 +315,12 @@
         else setModeA((m) => m === "edit" ? "preview" : "edit");
       } },
       { label: lang === "ru" ? "Свернуть боковую панель" : "Toggle sidebar", icon: "panel-left", run: () => setSidebarOpen((v) => !v) },
-      { label: t.open_settings, icon: "settings", run: () => toast(t.open_settings + " (demo)") },
+      { label: t.open_settings, icon: "settings", run: () => setSettingsOpen(true) },
       { label: lang === "ru" ? "Менеджер плагинов" : "Plugin manager", icon: "puzzle", run: () => setPluginsOpen(true) },
+      { label: lang === "ru" ? "Синхронизация (git)" : "Sync (git)", icon: "git-branch", run: () => setSyncOpen(true) },
+      { label: lang === "ru" ? "Дайджест изменений" : "Change digest", icon: "newspaper", run: () => setModal("digest") },
+      { label: lang === "ru" ? "Цели" : "Goals", icon: "target", run: () => setModal("goals") },
+      { label: lang === "ru" ? "Поиск противоречий" : "Find contradictions", icon: "scale", run: () => setModal("contra") },
       { label: lang === "ru" ? "Запустить онбординг заново" : "Re-run onboarding", icon: "sparkles", run: () => { window.location.href = "Onboarding.html"; } },
       ...(conflictResolved ? [] : [{ label: lang === "ru" ? "Разрешить конфликт синхронизации" : "Resolve sync conflict", icon: "git-merge", run: () => setConflictOpen(true) }]),
     ];
@@ -291,9 +344,9 @@
       window.addEventListener("mousemove", move); window.addEventListener("mouseup", up); document.body.style.cursor = "col-resize";
     };
 
-    const aiSide = aiOpen && tw.aiLayout === "side";
-    const aiBottom = aiOpen && tw.aiLayout === "bottom";
-    const aiOverlay = aiOpen && tw.aiLayout === "overlay";
+    const aiSide = aiOpen && tw.aiLayout === "side" && view === "workspace";
+    const aiBottom = aiOpen && tw.aiLayout === "bottom" && view === "workspace";
+    const aiOverlay = aiOpen && tw.aiLayout === "overlay" && view === "workspace";
 
     const aiProps = { t, lang, srcStyle: tw.ragSources, offline: tw.offline, cloudMode: tw.cloud, onOpen: openNote, activeNoteId: activeTab };
 
@@ -304,31 +357,37 @@
       + (!sidebarOpen ? " sidebar-collapsed" : "");
 
     return React.createElement("div", { className: "app" + (reading ? " reading" : "") },
-      React.createElement(Titlebar, { t, theme, setTheme, lang, setLang, platform: tw.platform, onOpenPalette: () => setPaletteOpen(true), sidebarOpen, setSidebarOpen, aiOpen, setAiOpen, graphOpen: secondPane === "graph", setGraphOpen: toggleGraph, reading, setReading }),
+      React.createElement(Titlebar, { t, theme, setTheme, lang, setLang, platform: tw.platform, onOpenPalette: () => setPaletteOpen(true), aiOpen, setAiOpen, onHome: () => setView("home"), onDigest: () => setModal("digest"), onGoals: () => setModal("goals"), onContra: () => setModal("contra"), reading, setReading }),
+      React.createElement("div", { className: "app-shell" },
+        React.createElement(ActivityBar, { t, lang, view, onHome: () => setView("home"), onNews: () => setView("news"), sidebarOpen, setSidebarOpen, graphOpen: secondPane === "graph", setGraphOpen: toggleGraph, reading, setReading, onSync: () => setSyncOpen(true), syncConflict: !conflictResolved, onSettings: () => setSettingsOpen(true) }),
       React.createElement("div", { className: bodyCls },
-        React.createElement(window.Sidebar, { t, activeId: activeTab, onOpen: openNote, onTag }),
-        React.createElement("div", { className: "editor-split" + (secondPane && !reading ? " split" : "") },
+        React.createElement(window.Sidebar, { t, activeId: activeTab, onOpen: openNote, onTag, view, onHome: () => setView("home"), onNewNote: () => newNote("a") }),
+        view === "home"
+          ? React.createElement(window.Home, { t, lang, onOpenNote: openNote, onNewNote: () => newNote("a"), onGraph: toggleGraph, onSearch: () => setPaletteOpen(true), toast })
+          : view === "news"
+          ? React.createElement(window.News, { t, lang, toast, offline: tw.offline })
+          : React.createElement("div", { className: "editor-split" + (secondPane && !reading ? " split" : "") },
           React.createElement("div", {
             className: "pane" + (secondPane && !reading && activePane === "a" ? " focused" : "") + (dropPane === "a" ? " drop-target" : ""),
             onMouseDownCapture: () => setActivePane("a"),
             ...paneDropProps("a"),
           },
             React.createElement(window.EditorArea, {
-              t, tabs: tabsA, activeTab, dirtyMap, onActivate: setActiveTab, onClose: (id) => closeTabIn("a", id),
+              t, lang, tabs: tabsA, activeTab, dirtyMap, onActivate: setActiveTab, onClose: (id) => closeTabIn("a", id),
               onAdd: () => newNote("a"), onOpen: openNote, onTag,
               extraBody: extraBodies[activeTab], editedBody: editedBodies[activeTab], onAppend: (l) => appendLineToTab(activeTab, l),
               onSplit: openSplit, pane: "a", mode: modeA, onToggleMode: () => setModeA((m) => m === "edit" ? "preview" : "edit"), onEditBody: editBody,
             })),
           (secondPane && !reading) ? React.createElement("div", { className: "split-resizer", onMouseDown: splitDrag }) : null,
           (secondPane === "graph" && !reading) ? React.createElement("div", { className: "pane graph-pane", style: { width: splitW, flex: "0 0 " + splitW + "px" } },
-            React.createElement(window.GraphView, { t, activeId: activeTab, onOpen: (id) => { setActivePane("a"); openNote(id); }, onClose: closeSecond })) : null,
+            React.createElement(window.GraphView, { t, lang, activeId: activeTab, onOpen: (id) => { setActivePane("a"); openNote(id); }, onClose: closeSecond })) : null,
           (secondPane === "editor" && !reading) ? React.createElement("div", {
             className: "pane" + (activePane === "b" ? " focused" : "") + (dropPane === "b" ? " drop-target" : ""), style: { width: splitW, flex: "0 0 " + splitW + "px" },
             onMouseDownCapture: () => setActivePane("b"),
             ...paneDropProps("b"),
           },
             React.createElement(window.EditorArea, {
-              t, tabs: tabsB, activeTab: splitTab, dirtyMap, onActivate: setSplitTab, onClose: (id) => closeTabIn("b", id),
+              t, lang, tabs: tabsB, activeTab: splitTab, dirtyMap, onActivate: setSplitTab, onClose: (id) => closeTabIn("b", id),
               onAdd: () => newNote("b"), onOpen: openNote, onTag,
               extraBody: extraBodies[splitTab], editedBody: editedBodies[splitTab], onAppend: (l) => appendLineToTab(splitTab, l),
               secondary: true, onClosePane: closeSecond, pane: "b", mode: modeB, onToggleMode: () => setModeB((m) => m === "edit" ? "preview" : "edit"), onEditBody: editBody,
@@ -339,7 +398,7 @@
         aiSide ? React.createElement("div", { className: "resizer right", onMouseDown: drag("right") }) : null,
         aiOverlay ? React.createElement("div", { className: "ai-overlay-scrim", onMouseDown: (e) => { if (e.target === e.currentTarget) setAiOpen(false); } },
           React.createElement(window.AIPanel, { ...aiProps, overlay: true, onClose: () => setAiOpen(false) })) : null,
-      ),
+      )),
       React.createElement(StatusBar, { t, indexing, conflict: !conflictResolved, onConflict: () => setConflictOpen(true), lang }),
       paletteOpen ? React.createElement(window.CommandPalette, { t, style: tw.paletteStyle, onClose: () => setPaletteOpen(false), onOpenNote: openNote, commands }) : null,
       conflictOpen ? React.createElement(window.ConflictResolver, {
@@ -347,6 +406,16 @@
         onResolved: () => { setConflictOpen(false); setConflictResolved(true); toast(lang === "ru" ? "Конфликт разрешён · сохранено" : "Conflict resolved · saved"); },
       }) : null,
       pluginsOpen ? React.createElement(window.PluginManager, { lang, onClose: () => setPluginsOpen(false), toast }) : null,
+      syncOpen ? React.createElement(window.SyncPanel, { lang, onClose: () => setSyncOpen(false), hasConflict: !conflictResolved, onResolveConflict: () => setConflictOpen(true), toast }) : null,
+      modal === "digest" ? React.createElement(window.DigestPanel, { lang, onClose: () => setModal(null) }) : null,
+      modal === "goals" ? React.createElement(window.GoalsPanel, { lang, onClose: () => setModal(null), onOpenNote: (id) => { setModal(null); openNote(id); } }) : null,
+      settingsOpen ? React.createElement(window.Settings, {
+        lang, setLang, theme, setTheme,
+        accent: tw.accent, setAccent: (v) => setTweak("accent", v),
+        density: tw.density, setDensity: (v) => setTweak("density", v),
+        editorFont: tw.editorFont, setEditorFont: (v) => setTweak("editorFont", v),
+        toast, onClose: () => setSettingsOpen(false),
+      }) : null,
       React.createElement("div", { className: "toast-wrap" },
         toasts.map((ts) => React.createElement("div", { key: ts.id, className: "toast" },
           React.createElement(Icon, { name: ts.kind === "bad" ? "alert" : "check", size: 15, className: "ico " + ts.kind }), ts.text))),

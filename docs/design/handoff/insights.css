@@ -1,0 +1,65 @@
+/* ============================================================
+   Nexus — AI insight modals: Digest, Goals, Contradictions
+   ============================================================ */
+.ins-scrim { position: fixed; inset: 0; z-index: 220; display: grid; place-items: center;
+  background: oklch(0 0 0 / 0.4); backdrop-filter: blur(2px); animation: m-fade var(--dur-2) var(--ease-out); }
+.ins-panel { position: relative; display: flex; flex-direction: column;
+  background: var(--color-bg-elevated); border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg); box-shadow: var(--elevation-2); overflow: hidden;
+  animation: onb-in var(--dur-3) var(--ease-spring); }
+.ins-panel.digest { width: min(560px, 94vw); height: min(680px, 86vh); }
+.ins-panel.goals { width: min(520px, 94vw); max-height: min(620px, 84vh); }
+.ins-panel.contra { width: min(580px, 94vw); height: min(700px, 86vh); }
+
+.ins-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border); background: var(--color-chrome); }
+.ins-head .ih-ic { width: 34px; height: 34px; border-radius: var(--radius-md); display: grid; place-items: center; background: var(--color-accent-soft); color: var(--color-accent); flex-shrink: 0; }
+.ins-head .ih-title { flex: 1; font-size: var(--text-sm); font-weight: 700; color: var(--color-text); }
+.ins-gen { height: 30px; padding: 0 13px; border-radius: 99px; border: none; background: var(--color-accent); color: var(--color-on-accent);
+  font-size: var(--text-sm); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background var(--motion-fast); white-space: nowrap; }
+.ins-gen:hover:not(:disabled) { background: var(--color-accent-hover); }
+.ins-gen:disabled { opacity: 0.6; cursor: default; }
+
+.ins-body { flex: 1; overflow-y: auto; padding: var(--space-4); }
+
+/* states */
+.ins-loading { height: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--color-ai); }
+.ins-loading .mt-label { color: var(--color-ai); position: relative; overflow: hidden; }
+.ins-empty { height: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--color-text-faint); padding: var(--space-6); }
+.ins-empty .ie-ic { width: 46px; height: 46px; border-radius: var(--radius-lg); display: grid; place-items: center; background: var(--color-surface); color: var(--color-text-faint); }
+.ins-empty .ie-title { font-size: var(--text-md); color: var(--color-text-muted); font-weight: 500; }
+.ins-empty .ie-sub { font-size: var(--text-sm); max-width: 280px; line-height: var(--leading-normal); }
+.ins-error { display: flex; gap: 9px; padding: 11px 13px; border-radius: var(--radius-md); background: var(--color-danger-soft); border: 1px solid var(--color-danger); color: var(--color-text); font-size: var(--text-sm); line-height: 1.5; }
+.ins-error .ico { color: var(--color-danger); flex-shrink: 0; margin-top: 1px; }
+
+/* digest content */
+.dg-meta { font-size: var(--text-xs); color: var(--color-text-faint); font-family: var(--font-mono); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.dg-meta .ai-badge { font-size: 9.5px; font-weight: 700; letter-spacing: 0.05em; color: var(--color-ai); border: 1px solid color-mix(in oklch, var(--color-ai) 40%, transparent); background: var(--color-ai-soft); border-radius: 99px; padding: 1px 7px; font-family: var(--font-ui); }
+.dg-text { font-family: var(--font-serif); font-size: 15px; line-height: 1.7; color: var(--color-text); white-space: pre-wrap; }
+.dg-text strong { font-weight: 600; }
+.dg-text h3 { font-family: var(--font-ui); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-faint); margin: 18px 0 6px; }
+
+/* goals list */
+.goal-row { display: flex; align-items: center; gap: 14px; padding: 12px 4px; border-bottom: 1px solid var(--color-border); }
+.goal-row:last-child { border-bottom: none; }
+.goal-name { flex: 1 1 auto; min-width: 0; font-size: var(--text-md); color: var(--color-link); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.goal-name:hover { text-decoration: underline; }
+.goal-prog { flex: 0 0 150px; display: flex; align-items: center; gap: 9px; }
+.goal-track { flex: 1; height: 8px; border-radius: 99px; background: var(--color-surface); overflow: hidden; }
+.goal-fill { height: 100%; border-radius: 99px; background: var(--color-accent); }
+.goal-pct { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 34px; text-align: right; }
+.goal-none { flex: 0 0 auto; font-size: var(--text-xs); font-style: italic; color: var(--color-text-faint); }
+
+/* contradiction cards */
+.contra-list { display: flex; flex-direction: column; gap: 10px; }
+.contra-card { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 13px; background: var(--color-bg); }
+.contra-top { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+.contra-pair { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; font-size: var(--text-sm); }
+.contra-pair .cn { color: var(--color-link); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42%; cursor: pointer; }
+.contra-pair .cn:hover { text-decoration: underline; }
+.contra-pair .arrow { color: var(--color-text-faint); flex-shrink: 0; }
+.contra-badge { flex-shrink: 0; font-size: var(--text-xs); font-weight: 600; padding: 2px 9px; border-radius: 99px; white-space: nowrap; }
+.contra-badge.hard { background: var(--color-danger-soft); color: var(--color-danger); }
+.contra-badge.temporal { background: var(--color-accent-soft); color: var(--color-accent); }
+.contra-badge.soft { background: var(--color-surface); color: var(--color-text-muted); border: 1px solid var(--color-border); }
+.contra-why { font-size: var(--text-sm); color: var(--color-text-muted); line-height: 1.5; }
