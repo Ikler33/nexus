@@ -158,3 +158,307 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── DP-8: вкладки, карточки с perm-чипами, consent-sheet ── */
+.header > svg {
+  color: var(--color-text-muted);
+}
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: var(--space-3);
+}
+.tabBtn {
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 99px;
+  cursor: pointer;
+  transition:
+    background var(--dur-1, 130ms) var(--ease-out, ease),
+    color var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.tabBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.tabOn {
+  background: var(--color-selected);
+  color: var(--color-text);
+}
+.cards {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.privacyNote {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  line-height: 1.5;
+  margin: 0 0 2px;
+}
+.card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 13px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+}
+.glyph {
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.cardBody {
+  flex: 1;
+  min-width: 0;
+}
+.nameLine {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: var(--text-base);
+  color: var(--color-text);
+}
+.ver {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+}
+.incompat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+}
+.cardErr {
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  margin-top: 2px;
+}
+.perms {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.permChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+.permChip.caution {
+  color: var(--color-warning);
+  border-color: color-mix(in oklch, var(--color-warning) 40%, transparent);
+  background: color-mix(in oklch, var(--color-warning) 10%, transparent);
+}
+.permChip.sensitive {
+  color: var(--color-danger);
+  border-color: color-mix(in oklch, var(--color-danger) 40%, transparent);
+  background: var(--color-danger-soft);
+}
+.consentLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--color-success);
+}
+.revoke {
+  border: none;
+  background: none;
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+.revoke:hover {
+  color: var(--color-danger);
+}
+.launch {
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.launch:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.launch:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* consent-sheet */
+.consentScrim {
+  position: absolute;
+  inset: 0;
+  background: oklch(0 0 0 / 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  z-index: 10;
+}
+.consent {
+  width: min(460px, 92%);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  padding: 20px;
+  animation: consent-pop var(--dur-2, 220ms) var(--ease-spring, ease);
+}
+@keyframes consent-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.consentTop {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.consentName {
+  font-weight: 700;
+  font-size: var(--text-md);
+  color: var(--color-text);
+}
+.consentSub {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.permRows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.permRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.permRow.caution {
+  border-color: color-mix(in oklch, var(--color-warning) 35%, var(--color-border));
+}
+.permRow.sensitive {
+  border-color: color-mix(in oklch, var(--color-danger) 40%, var(--color-border));
+}
+.prBadge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.permRow.caution .prBadge {
+  background: color-mix(in oklch, var(--color-warning) 18%, transparent);
+  color: var(--color-warning);
+}
+.permRow.sensitive .prBadge {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.prText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.prTitle {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.prDesc {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.consentFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.cancel {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  height: 34px;
+  padding: 0 15px;
+  border-radius: 99px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.cancel:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.allow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 99px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.allow:hover {
+  background: var(--color-accent-hover);
+}
+.consentNote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}

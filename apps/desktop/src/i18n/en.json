@@ -406,7 +406,46 @@
     "sandbox": "sandbox",
     "close": "Close",
     "auditTitle": "Broker calls",
-    "auditEmpty": "No host calls yet — interact with the plugin."
+    "auditEmpty": "No host calls yet — interact with the plugin.",
+    "installed": "Installed",
+    "sandboxTab": "Sandbox",
+    "privacyNote": "Each plugin is isolated in a sandbox iframe; vault access goes only through the capability broker per manifest permissions. Every call is logged.",
+    "empty": "No plugins — drop them into .nexus/plugins/.",
+    "incompatible": "incompatible",
+    "launch": "Launch",
+    "consentGiven": "consent given",
+    "revoke": "revoke",
+    "consentTitle": "{{name}} permissions",
+    "consentSub": "The plugin requests permissions:",
+    "cancel": "Cancel",
+    "allow": "Allow",
+    "revocableNote": "Consent is revocable anytime from the plugin card.",
+    "perm": {
+      "vault_read": {
+        "title": "Read notes",
+        "desc": "Reads vault files within the listed scopes."
+      },
+      "vault_write": {
+        "title": "Write notes",
+        "desc": "Modifies vault files within the listed scopes."
+      },
+      "ai_embed": {
+        "title": "Embeddings",
+        "desc": "Local text vectorization."
+      },
+      "ai_complete": {
+        "title": "Text generation",
+        "desc": "Model requests on behalf of the plugin."
+      },
+      "net": {
+        "title": "Network access",
+        "desc": "Outbound requests to the listed hosts only."
+      },
+      "ui": {
+        "title": "UI extension",
+        "desc": "UI extension points (commands, panels)."
+      }
+    }
   },
   "git": {
     "title": "Sync",

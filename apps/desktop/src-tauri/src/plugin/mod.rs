@@ -122,6 +122,71 @@ pub fn load_manifest(json: &str, core: ApiVersion) -> Result<PluginManifest, Plu
     Ok(manifest)
 }
 
+/// Право плагина для UI (DP-8, макет `plugins.jsx`): чип с уровнем риска.
+/// `level`: `safe` (чтение/UI) · `caution` (запись/генерация) · `sensitive` (сеть).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionChip {
+    pub kind: String,
+    /// Скоупы/хосты человеком: "Notes/**, !Private/**" / "api.example.com".
+    pub detail: String,
+    pub level: String,
+}
+
+/// Сводка прав манифеста → чипы UI (deny-all = пусто; уровни — консервативно).
+fn permission_chips(p: &Permissions) -> Vec<PermissionChip> {
+    let mut out = Vec::new();
+    if !p.vault_read.is_empty() {
+        out.push(PermissionChip {
+            kind: "vault:read".into(),
+            detail: p.vault_read.join(", "),
+            level: "safe".into(),
+        });
+    }
+    if !p.vault_write.is_empty() {
+        out.push(PermissionChip {
+            kind: "vault:write".into(),
+            detail: p.vault_write.join(", "),
+            level: "caution".into(),
+        });
+    }
+    if p.ai_embed {
+        out.push(PermissionChip {
+            kind: "ai:embed".into(),
+            detail: String::new(),
+            level: "safe".into(),
+        });
+    }
+    if let Some(ac) = &p.ai_complete {
+        let local = ac.local_only();
+        out.push(PermissionChip {
+            kind: "ai:complete".into(),
+            detail: if local {
+                "local_only".into()
+            } else {
+                String::new()
+            },
+            // Генерация без local_only потенциально уходит в облако → sensitive.
+            level: if local { "caution" } else { "sensitive" }.into(),
+        });
+    }
+    if !p.net.is_empty() {
+        out.push(PermissionChip {
+            kind: "net".into(),
+            detail: p.net.join(", "),
+            level: "sensitive".into(),
+        });
+    }
+    if !p.ui.is_empty() {
+        out.push(PermissionChip {
+            kind: "ui".into(),
+            detail: p.ui.join(", "),
+            level: "safe".into(),
+        });
+    }
+    out
+}
+
 /// Статус установленного плагина для UI (Plugin Manager появится в Ф2).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +197,9 @@ pub struct PluginInfo {
     pub version: Option<String>,
     pub compatible: bool,
     pub error: Option<String>,
+    /// Чипы прав манифеста (DP-8): UI показывает уровни и строит consent-sheet.
+    #[serde(default)]
+    pub permissions: Vec<PermissionChip>,
 }
 
 /// Сканирует `plugins_dir` (`.nexus/plugins/*/manifest.json`) и возвращает статус каждого.
@@ -159,6 +227,7 @@ pub fn scan_plugins(plugins_dir: &Path) -> Vec<PluginInfo> {
                 version: None,
                 compatible: false,
                 error: Some(format!("нет manifest.json: {e}")),
+                permissions: Vec::new(),
             },
             Ok(json) => match parse_manifest(&json) {
                 Err(e) => PluginInfo {
@@ -168,6 +237,7 @@ pub fn scan_plugins(plugins_dir: &Path) -> Vec<PluginInfo> {
                     version: None,
                     compatible: false,
                     error: Some(e.to_string()),
+                    permissions: Vec::new(),
                 },
                 Ok(m) => {
                     let compat = check_compatibility(&m, CORE_API_VERSION);
@@ -178,6 +248,7 @@ pub fn scan_plugins(plugins_dir: &Path) -> Vec<PluginInfo> {
                         version: Some(m.version),
                         compatible: compat.is_ok(),
                         error: compat.err().map(|e| e.to_string()),
+                        permissions: permission_chips(&m.permissions),
                     }
                 }
             },

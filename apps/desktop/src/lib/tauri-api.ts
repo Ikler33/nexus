@@ -48,6 +48,13 @@ export interface TagCount {
   count: number;
 }
 
+/** Чип права плагина (зеркалит Rust `plugin::PermissionChip`, DP-8): уровень риска для UI. */
+export interface PermissionChip {
+  kind: string;
+  detail: string;
+  level: 'safe' | 'caution' | 'sensitive';
+}
+
 /** Статус установленного плагина (зеркалит Rust `plugin::PluginInfo`). */
 export interface PluginInfo {
   dir: string;
@@ -56,6 +63,8 @@ export interface PluginInfo {
   version: string | null;
   compatible: boolean;
   error: string | null;
+  /** Сводка прав манифеста — чипы и consent-sheet (DP-8). */
+  permissions: PermissionChip[];
 }
 
 /** git-sync: статус файла (зеркалит Rust `git::StatusEntry`/`ChangeKind`). */
