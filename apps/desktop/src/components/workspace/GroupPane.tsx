@@ -1,6 +1,7 @@
-import { lazy, Suspense, useState } from 'react';
-import { BookOpen, Columns2, FileText, PenLine, Plus, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { BookOpen, Clock, Columns2, FileText, PenLine, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { relTime } from '../../lib/time';
 import { tauriApi } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
@@ -19,8 +20,9 @@ const MarkdownPreview = lazy(() =>
 /** MIME-тип DnD вкладок между панами — контракт макета `editor.jsx` (DP-3). */
 const TAB_MIME = 'text/nexus-tab';
 
+/** Имя вкладки: basename без `.md` (DP-15, макет: табы носят title заметки, не имя файла). */
 function basename(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
+  return path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
 }
 
 /** Markdown-файл → доступен переключатель source/preview (#20). */
@@ -39,7 +41,7 @@ function wordCount(doc: string): number {
  * вкладок упрощается (App `.reading`).
  */
 export function GroupPane({ groupId }: { groupId: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const group = useWorkspaceStore((s) => s.groups.find((g) => g.id === groupId));
   const buffers = useWorkspaceStore((s) => s.buffers);
   const isActive = useWorkspaceStore((s) => s.activeGroupId === groupId);
@@ -57,6 +59,29 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const createNote = useVaultStore((s) => s.createNote);
   const reading = useUIStore((s) => s.reading);
   const [dropTarget, setDropTarget] = useState(false);
+
+  // DP-15 (макет editor.jsx): clock-чип doc-meta — mtime активного файла; перечитываем при смене
+  // вкладки и переключении в превью (после правок mtime обновился сохранением).
+  const activePath = group?.activeTab ?? null;
+  const [mtime, setMtime] = useState<number | null>(null);
+  useEffect(() => {
+    if (!activePath) {
+      setMtime(null);
+      return;
+    }
+    let cancelled = false;
+    tauriApi.vault
+      .fileMtime(activePath)
+      .then((v) => {
+        if (!cancelled) setMtime(v);
+      })
+      .catch(() => {
+        if (!cancelled) setMtime(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePath, mode]);
 
   if (!group) return null;
   const active = group.activeTab ? buffers[group.activeTab] : null;
@@ -179,6 +204,14 @@ export function GroupPane({ groupId }: { groupId: string }) {
             ) : mdActive && (mode === 'preview' || reading) ? (
               <Suspense fallback={null}>
                 <div className={styles.docMeta}>
+                  {mtime != null && (
+                    <>
+                      <span>
+                        <Clock size={13} aria-hidden /> {relTime(mtime, i18n.language)}
+                      </span>
+                      <span>·</span>
+                    </>
+                  )}
                   <span>{t('editor.metaWords', { count: wordCount(active.doc) })}</span>
                   <span>·</span>
                   <span>

@@ -13,7 +13,7 @@ describe('FileTree (Ф0-3/Ф0-9)', () => {
   it('рендерит корневые узлы открытого vault', async () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);
-    expect(await screen.findByText('README.md')).toBeInTheDocument();
+    expect(await screen.findByText('README')).toBeInTheDocument(); // DP-15: без .md
     expect(screen.getByText('Projects')).toBeInTheDocument();
     expect(screen.getByRole('tree')).toBeInTheDocument();
   });
@@ -22,13 +22,13 @@ describe('FileTree (Ф0-3/Ф0-9)', () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);
     fireEvent.click(await screen.findByText('Projects'));
-    expect(await screen.findByText('Roadmap.md')).toBeInTheDocument();
+    expect(await screen.findByText('Roadmap')).toBeInTheDocument(); // DP-15: без .md
   });
 
   it('клик по файлу открывает его в активной группе (workspace)', async () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);
-    fireEvent.click(await screen.findByText('README.md'));
+    fireEvent.click(await screen.findByText('README'));
     await waitFor(() => expect(activePath(useWorkspaceStore.getState())).toBe('README.md'));
   });
 });

@@ -159,7 +159,8 @@ export function FileTree() {
                 <span className={styles.caretSpacer} aria-hidden />
               )}
               {entry.isDir ? <Folder size={15} aria-hidden /> : <FileIcon size={15} aria-hidden />}
-              <span className={styles.name}>{entry.name}</span>
+              {/* DP-15 (макет sidebar.jsx): расширение .md в дереве не показываем. */}
+              <span className={styles.name}>{entry.name.replace(/\.md$/, '')}</span>
               {!entry.isDir && (
                 <button
                   type="button"
