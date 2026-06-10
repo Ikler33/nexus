@@ -174,3 +174,101 @@
 .navOn svg {
   color: var(--color-accent);
 }
+
+/* ── icon-rail (DP-2): files / search / tags / starred ── */
+.rail {
+  display: flex;
+  gap: 2px;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+.railBtn {
+  flex: 1;
+  height: 30px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition:
+    background var(--dur-1, 130ms) var(--ease-out, ease),
+    color var(--dur-1, 130ms) var(--ease-out, ease),
+    transform var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.railBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.railBtn:active {
+  transform: scale(0.94);
+}
+.railOn {
+  color: var(--color-accent);
+  background: var(--color-selected);
+}
+
+/* ── панели тегов/избранного ── */
+.panelScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-1);
+}
+.panelHead {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+.panelHint {
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-faint);
+  line-height: 1.6;
+}
+.tagRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--row-h);
+  padding: 0 var(--space-3);
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--dur-1, 130ms) var(--ease-out, ease),
+    color var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.tagRow:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.tagRow:active {
+  transform: scale(0.99);
+}
+.tagIcon {
+  color: var(--color-tag);
+  flex-shrink: 0;
+}
+.tagName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tagCount {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+.starOn {
+  color: var(--color-warning);
+  flex-shrink: 0;
+}

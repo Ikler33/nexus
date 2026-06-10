@@ -96,7 +96,17 @@
     "noResults": "Nothing found",
     "newNote": "New note",
     "navLabel": "Navigation",
-    "home": "Home"
+    "home": "Home",
+    "railLabel": "Sidebar sections",
+    "files": "Files",
+    "search": "Search",
+    "tags": "Tags",
+    "starred": "Starred",
+    "star": "Star",
+    "resultsLabel": "Search results",
+    "searchHint": "Searches titles, paths and tags. FTS is instant · semantic search lives in the palette (⌘K).",
+    "tagsEmpty": "No tags yet — add a #tag to a note.",
+    "starredEmpty": "Nothing starred yet — hover a file in the tree and hit the star."
   },
   "home": {
     "title": "Home",

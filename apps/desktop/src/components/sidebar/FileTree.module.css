@@ -118,3 +118,30 @@
   background: var(--color-accent);
   color: var(--color-bg);
 }
+
+/* ── звезда «избранного» (DP-2): видна на hover или когда включена ── */
+.star {
+  border: none;
+  background: none;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--color-text-faint);
+  opacity: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.row:hover .star,
+.star[data-on] {
+  opacity: 1;
+}
+.star[data-on] {
+  color: var(--color-warning);
+}
+.star[data-on] svg {
+  fill: currentColor;
+}

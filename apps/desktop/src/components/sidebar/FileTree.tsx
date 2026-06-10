@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronRight, File as FileIcon, Folder } from 'lucide-react';
+import { ChevronRight, File as FileIcon, Folder, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useStarredStore } from '../../stores/starred';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import styles from './FileTree.module.css';
@@ -22,6 +23,8 @@ export function FileTree() {
   const toggleDir = useVaultStore((s) => s.toggleDir);
   const createNote = useVaultStore((s) => s.createNote);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  const starredPaths = useStarredStore((s) => s.paths);
+  const toggleStar = useStarredStore((s) => s.toggle);
   const { t } = useTranslation();
 
   const nodes = useMemo(
@@ -157,6 +160,21 @@ export function FileTree() {
               )}
               {entry.isDir ? <Folder size={15} aria-hidden /> : <FileIcon size={15} aria-hidden />}
               <span className={styles.name}>{entry.name}</span>
+              {!entry.isDir && (
+                <button
+                  type="button"
+                  className={styles.star}
+                  data-on={starredPaths.includes(entry.path) || undefined}
+                  title={t('sidebar.star')}
+                  aria-label={t('sidebar.star')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleStar(entry.path);
+                  }}
+                >
+                  <Star size={13} aria-hidden />
+                </button>
+              )}
             </div>
           );
         })}

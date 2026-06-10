@@ -7,6 +7,7 @@ import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
+import * as mockTags from './mock/tags';
 import * as mockVault from './mock/vault';
 
 /**
@@ -39,6 +40,12 @@ export interface VaultInfo {
 export interface NoteRef {
   path: string;
   title: string | null;
+}
+
+/** Тег с количеством заметок (зеркалит Rust `tags::TagCount`, DP-2 — панель «Теги»). */
+export interface TagCount {
+  name: string;
+  count: number;
 }
 
 /** Статус установленного плагина (зеркалит Rust `plugin::PluginInfo`). */
@@ -413,6 +420,10 @@ export const tauriApi = {
       isTauri()
         ? invoke<string | null>('resolve_note', { target })
         : mockVault.resolveNote(target),
+
+    /** Теги vault с количеством заметок — панель «Теги» сайдбара (DP-2). */
+    listTags: (): Promise<TagCount[]> =>
+      isTauri() ? invoke<TagCount[]>('list_tags') : mockTags.listTags(),
 
     /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
     pickDirectory: async (): Promise<string | null> => {
