@@ -89,7 +89,12 @@ pub fn run() {
             use tauri::Manager;
             if let Ok(dir) = app.path().app_config_dir() {
                 let saved = net::load_egress_state(&dir.join("egress.json"));
-                app.state::<state::AppState>().apply_egress_state(&saved);
+                let st = app.state::<state::AppState>();
+                st.apply_egress_state(&saved);
+                // NF-4 (AC-NF-7): NewsFeed-фича и "news"-allowlist — производные от news.json
+                // (единственная истина consent); восстанавливаем на старте.
+                let news_cfg = news::load_news_config(&dir.join("news.json"));
+                news::sync_egress_policy(&st.egress_policy, &news_cfg);
             }
             Ok(())
         })

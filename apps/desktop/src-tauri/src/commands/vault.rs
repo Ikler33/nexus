@@ -182,6 +182,36 @@ pub async fn open_vault(
         registry.insert(kind.clone(), handler);
         widget_registry.register(key, &kind);
     }
+    // Лента новостей (NF-4, AC-NF-6/7): хендлер прогона — guarded-фетчер (NewsFeed-фича,
+    // DNS-гард) + утилитарная модель (примитив без reasoning). Регистрируем при наличии LLM;
+    // конфиг news.json хендлер перечитывает на каждый прогон (выключено → no-op, consent).
+    let news_config_path = {
+        use tauri::Manager;
+        app.path()
+            .app_config_dir()
+            .ok()
+            .map(|d| d.join("news.json"))
+    };
+    let news_chat = chat_util.clone().or_else(|| chat_fast.clone());
+    let news_active = if let (Some(config_path), Some(news_chat)) = (&news_config_path, news_chat) {
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::news::NewsFeedHandler {
+                fetcher: Arc::new(crate::news::GuardedNewsFetcher::new(
+                    state.egress_policy.clone(),
+                    state.egress_audit.clone(),
+                    Arc::new(crate::news::SystemResolver),
+                )),
+                chat: news_chat,
+                writer: db.writer().clone(),
+                reader: db.reader().clone(),
+                config_path: config_path.clone(),
+            });
+        registry.insert(crate::news::KIND_NEWSFEED.to_string(), handler);
+        true
+    } else {
+        false
+    };
+
     // Recurring (slice 6): LLM-фичи сами переназначаются после прогона — авто-обновление раз в сутки
     // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.
     const DAY_SECS: i64 = 24 * 3600;
@@ -201,6 +231,11 @@ pub async fn open_vault(
             crate::home::widgets::widget_kind(crate::home::insights::KEY_CONTEXT_DRIFT),
             DAY_SECS,
         );
+    }
+    // Лента (D3): раз/сутки, НЕ on-change (сетевая, от правок vault не зависит); при выключенной
+    // фиче прогон — дешёвый no-op хендлера.
+    if news_active {
+        recurring.insert(crate::news::KIND_NEWSFEED.to_string(), DAY_SECS);
     }
     // Shutdown-канал воркера: sender живёт в VaultContext::lifecycle — его дроп (повторный
     // open_vault / закрытие) гасит worker_loop. Фикс «вечных воркеров» (аудит 2026-06-10).
@@ -242,6 +277,25 @@ pub async fn open_vault(
                 2,
             )
             .await;
+        }
+    }
+    // Лента (D3 «при первом открытии за день»): сид run-if-overdue — фича включена и последний
+    // прогон старше суток (или прогонов не было).
+    if news_active
+        && news_config_path
+            .as_deref()
+            .map(crate::news::load_news_config)
+            .is_some_and(|c| c.enabled)
+    {
+        let now = crate::scheduler::now_secs();
+        // НЕ `is_none_or` — стабилен с 1.82, MSRV проекта 1.77 (clippy::incompatible_msrv).
+        let overdue = !matches!(
+            crate::news::latest_run(db.reader()).await.ok().flatten(),
+            Some(r) if r.run_at >= now - DAY_SECS
+        );
+        if overdue {
+            let _ =
+                crate::scheduler::enqueue(db.writer(), crate::news::KIND_NEWSFEED, "", 0, 2).await;
         }
     }
     // Поиск противоречий — run-if-overdue (нужны и chat, и векторы).

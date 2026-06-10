@@ -41,6 +41,10 @@ pub enum EgressFeature {
     Chat,
     Embed,
     Probe,
+    /// Лента новостей (NF-4, W1): первый web-класс. По умолчанию ВЫКЛЮЧЕНА (consent при
+    /// включении, W2/AC-NF-7); `allow_private=false` — приватные/LAN-хосты ей запрещены
+    /// (W-аддендум: web-хосты только публичные, LAN-исключение E2/E6 не распространяется).
+    NewsFeed,
 }
 
 impl EgressFeature {
@@ -50,7 +54,13 @@ impl EgressFeature {
             EgressFeature::Chat => 0,
             EgressFeature::Embed => 1,
             EgressFeature::Probe => 2,
+            EgressFeature::NewsFeed => 3,
         }
+    }
+
+    /// Web-класс (W-аддендум): приватные хосты запрещены даже из allowlist; DNS-гард обязателен.
+    fn denies_private(self) -> bool {
+        matches!(self, EgressFeature::NewsFeed)
     }
 }
 
@@ -60,6 +70,7 @@ impl std::fmt::Display for EgressFeature {
             EgressFeature::Chat => "chat",
             EgressFeature::Embed => "embed",
             EgressFeature::Probe => "probe",
+            EgressFeature::NewsFeed => "news_feed",
         })
     }
 }
@@ -67,6 +78,8 @@ impl std::fmt::Display for EgressFeature {
 impl std::str::FromStr for EgressFeature {
     type Err = ();
     /// Обратное к `Display` — для команды `set_egress_feature` (строка с фронта).
+    /// `news_feed` НАМЕРЕННО не парсится: её тоггл — `news.json` (единственная истина consent,
+    /// синхронизируется в политику через `set_news_config`/setup-хук), не egress-настройки.
     fn from_str(s: &str) -> Result<Self, ()> {
         match s {
             "chat" => Ok(EgressFeature::Chat),
@@ -111,11 +124,12 @@ pub struct EgressPolicy {
     /// Kill-switch «офлайн» (E2): тот же атомик, что и `AppState::egress_offline`.
     offline: Arc<AtomicBool>,
     /// Per-feature opt-in (E6), индекс — [`EgressFeature::idx`]. Chat/Embed/Probe — local-first,
-    /// включены по умолчанию (`net.md`: opt-in-состояния для LAN в фундаменте нет).
-    features: [AtomicBool; 3],
-    /// Exact-host allowlist (как net-allowlist брокера): явные хосты из `local.json ai.*` (E4).
-    /// `RwLock` — частые читатели per-request, редкая замена на open-vault/смене настроек.
-    allowlist: RwLock<HashSet<String>>,
+    /// включены по умолчанию; NewsFeed (web-класс) — ВЫКЛЮЧЕНА (consent, W2/AC-NF-7).
+    features: [AtomicBool; 4],
+    /// Exact-host allowlist ПО СКОУПАМ: "ai" — явные хосты `local.json ai.*` (E4, замещается на
+    /// open-vault/смене настроек), "news" — хосты источников ленты (consent = включение фичи,
+    /// NF-4). `check` смотрит объединение. `RwLock` — частые читатели, редкая замена.
+    allowlist: RwLock<std::collections::HashMap<&'static str, HashSet<String>>>,
 }
 
 impl EgressPolicy {
@@ -128,8 +142,9 @@ impl EgressPolicy {
                 AtomicBool::new(true),
                 AtomicBool::new(true),
                 AtomicBool::new(true),
+                AtomicBool::new(false), // NewsFeed: web-класс не из коробки (W2)
             ],
-            allowlist: RwLock::new(HashSet::new()),
+            allowlist: RwLock::new(std::collections::HashMap::new()),
         }
     }
 
@@ -151,12 +166,21 @@ impl EgressPolicy {
         if !self.features[feature.idx()].load(Ordering::Relaxed) {
             return Err(EgressDenied::FeatureNotEnabled(feature));
         }
-        // 4. Хост: приватный/loopback (local-first, AC-EGR-9) ИЛИ явный allowlist (E4, AC-EGR-2).
-        let allowed = is_private_host(host)
+        // 4а. Web-класс (NewsFeed): приватные/LAN-хосты запрещены ДАЖЕ из allowlist
+        //     (W-аддендум `allow_private=false`; AC-NF-8 — литеральные IP; домены добивает
+        //     DNS-гард фетчера). Metadata уже отрезан шагом 1.
+        if feature.denies_private() && is_private_host(host) {
+            return Err(EgressDenied::HostNotAllowed(Redacted::new(
+                host.to_string(),
+            )));
+        }
+        // 4б. Хост: приватный/loopback (local-first, AC-EGR-9; не для web-класса) ИЛИ
+        //     явный allowlist любого скоупа (E4 — "ai"; NF-4 — "news").
+        let allowed = (!feature.denies_private() && is_private_host(host))
             || self
                 .allowlist
                 .read()
-                .map(|a| a.contains(host))
+                .map(|m| m.values().any(|set| set.contains(host)))
                 .unwrap_or(false); // poisoned lock → fail-closed
         if allowed {
             Ok(())
@@ -177,11 +201,21 @@ impl EgressPolicy {
         self.features[feature.idx()].load(Ordering::Relaxed)
     }
 
-    /// Заменяет allowlist целиком (E4: пересобирается из `local.json ai.*` на open-vault и при
-    /// смене настроек). Consent на pull-changed URL — срез 2 (нужен персист политики, E5).
+    /// Заменяет allowlist скоупа "ai" (E4: пересобирается из `local.json ai.*` на open-vault и
+    /// при смене настроек). Consent на pull-changed URL — хвост среза 2 (персист E5).
     pub fn set_allowlist(&self, hosts: impl IntoIterator<Item = String>) {
-        if let Ok(mut a) = self.allowlist.write() {
-            *a = hosts.into_iter().collect();
+        self.set_scoped_allowlist("ai", hosts);
+    }
+
+    /// Заменяет allowlist именованного скоупа ("news" — хосты источников ленты, NF-4):
+    /// скоупы независимы, `check` смотрит объединение.
+    pub fn set_scoped_allowlist(
+        &self,
+        scope: &'static str,
+        hosts: impl IntoIterator<Item = String>,
+    ) {
+        if let Ok(mut m) = self.allowlist.write() {
+            m.insert(scope, hosts.into_iter().collect());
         }
     }
 }
@@ -523,6 +557,51 @@ mod tests {
             Ok(()),
             "LAN — без allowlist (local-first)"
         );
+    }
+
+    /// NF-4 (AC-NF-7/8): NewsFeed — web-класс. Выключена из коробки (consent W2); после
+    /// включения публичный хост из "news"-скоупа проходит, а приватный/LAN запрещён ДАЖЕ из
+    /// allowlist (`allow_private=false`, W-аддендум); скоупы "ai"/"news" независимы; local-first
+    /// для Chat не задет.
+    #[test]
+    fn news_feed_is_web_class_private_denied_even_allowlisted() {
+        let (policy, _) = policy_with_switch();
+        assert!(
+            matches!(
+                policy.check("feeds.example.com", EgressFeature::NewsFeed),
+                Err(EgressDenied::FeatureNotEnabled(EgressFeature::NewsFeed))
+            ),
+            "web-класс не из коробки"
+        );
+        policy.set_feature_enabled(EgressFeature::NewsFeed, true);
+        assert!(matches!(
+            policy.check("feeds.example.com", EgressFeature::NewsFeed),
+            Err(EgressDenied::HostNotAllowed(_))
+        ));
+        policy.set_scoped_allowlist(
+            "news",
+            ["feeds.example.com".to_string(), "192.168.0.5".to_string()],
+        );
+        assert_eq!(
+            policy.check("feeds.example.com", EgressFeature::NewsFeed),
+            Ok(())
+        );
+        assert!(
+            matches!(
+                policy.check("192.168.0.5", EgressFeature::NewsFeed),
+                Err(EgressDenied::HostNotAllowed(_))
+            ),
+            "allow_private=false: приватный запрещён даже из allowlist"
+        );
+        // Скоупы независимы: ai-замещение не трогает news.
+        policy.set_allowlist(["api.other.com".to_string()]);
+        assert_eq!(
+            policy.check("feeds.example.com", EgressFeature::NewsFeed),
+            Ok(()),
+            "news-скоуп пережил замену ai-скоупа"
+        );
+        // Local-first для Chat не задет web-правилом.
+        assert_eq!(policy.check("192.168.0.5", EgressFeature::Chat), Ok(()));
     }
 
     /// AC-EGR-2 (интеграция): отказ происходит ДО сокета — мок-listener обязан НЕ принять

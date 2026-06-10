@@ -8,12 +8,14 @@
 //! только между injection-маркерами (AC-SEC-7-паттерн), а здесь — никогда не интерпретируется.
 
 mod config;
+mod fetch;
 mod llm;
 mod parse;
 mod run;
 mod store;
 
 pub use config::{load as load_news_config, save as save_news_config, NewsConfig};
+pub use fetch::{GuardedNewsFetcher, Resolver, SystemResolver, FEED_BODY_CAP};
 pub use llm::{daily_digest, evaluate_entries, EvalReport, EvaluatedEntry};
 pub use parse::parse_feed;
 pub use run::{run_news_pipeline, FeedFetcher, NewsFeedHandler, KIND_NEWSFEED, LLM_RUN_CAP};
@@ -276,6 +278,33 @@ pub const DEFAULT_KEYWORDS: &[&str] = &[
     "transformer",
     "reasoning",
 ];
+
+/// Хосты активных источников — для "news"-скоупа allowlist (consent = включение фичи, NF-4).
+/// HN-шаблон резолвится подстановкой плейсхолдера (host от query не зависит).
+pub fn news_hosts(cfg: &NewsConfig) -> Vec<String> {
+    cfg.active_sources()
+        .iter()
+        .filter_map(|s| {
+            let url = s.url.replace("{query}", "q");
+            reqwest::Url::parse(&url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+        })
+        .collect()
+}
+
+/// Синхронизирует политику эгресса с конфигом ленты (NF-4, AC-NF-7): тоггл фичи = consent;
+/// хосты активных источников → "news"-скоуп allowlist (выключена → скоуп пуст — fail-closed).
+/// Единственная истина — `news.json`; вызывается на старте приложения и из `set_news_config`.
+pub fn sync_egress_policy(policy: &crate::net::EgressPolicy, cfg: &NewsConfig) {
+    policy.set_feature_enabled(crate::net::EgressFeature::NewsFeed, cfg.enabled);
+    let hosts = if cfg.enabled {
+        news_hosts(cfg)
+    } else {
+        Vec::new()
+    };
+    policy.set_scoped_allowlist("news", hosts);
+}
 
 /// Этап 1 фильтра (AC-NF-2): для `high_volume`-источников оставляет записи, у которых
 /// title+excerpt (unicode lowercase) содержит хотя бы один ключ; остальные источники проходят
