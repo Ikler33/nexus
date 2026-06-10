@@ -537,7 +537,8 @@ pub const KIND_GC: &str = "gc";
 /// Сколько хранить `done`-джобы до сборки мусора.
 const GC_RETENTION_SECS: i64 = 7 * 24 * 3600;
 
-/// Обработчик «gc»: удаляет `done`-джобы старше retention. Держит свой клон write-actor.
+/// Обработчик «gc»: удаляет `done`-джобы старше retention + самоочистка кэша противоречий
+/// (CT-3+ хвост: пары по удалённым/переименованным заметкам). Держит свой клон write-actor.
 struct GcHandler {
     writer: WriteActor,
     retention_secs: i64,
@@ -548,8 +549,15 @@ impl JobHandler for GcHandler {
     async fn handle(&self, _job: &Job) -> Result<(), String> {
         gc_done(&self.writer, now_secs() - self.retention_secs)
             .await
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // Дёшево (один DELETE по NOT IN живых путей), работает и без сконфигурированного AI.
+        let stale = crate::contradictions::gc_stale_cache(&self.writer)
+            .await
+            .map_err(|e| e.to_string())?;
+        if stale > 0 {
+            tracing::info!(stale, "gc: вычищен contradiction_cache по мёртвым путям");
+        }
+        Ok(())
     }
 }
 

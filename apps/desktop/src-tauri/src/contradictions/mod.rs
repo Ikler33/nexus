@@ -280,6 +280,24 @@ pub async fn list(reader: &ReadPool) -> DbResult<Vec<Contradiction>> {
         .await
 }
 
+/// GC кэша вердиктов (CT-3+ хвост, BACKLOG): выметает пары, у которых хотя бы один путь больше
+/// не живёт в `files` (заметка удалена/переименована — пере-судить нечего, строки копились вечно).
+/// Зовётся встроенным kind «gc» планировщика (периодическая самоочистка вместе с done-джобами);
+/// таблица `contradictions` в GC не нуждается — каждый прогон перезаписывает её целиком (AC-CT-4).
+/// Возвращает число удалённых строк (для лога).
+pub async fn gc_stale_cache(writer: &WriteActor) -> DbResult<usize> {
+    writer
+        .transaction(|tx| {
+            tx.execute(
+                "DELETE FROM contradiction_cache WHERE \
+                 path_a NOT IN (SELECT path FROM files WHERE is_deleted=0) \
+                 OR path_b NOT IN (SELECT path FROM files WHERE is_deleted=0)",
+                [],
+            )
+        })
+        .await
+}
+
 /// Нужно ли запускать (нет прогона за последнее окно) — run-if-overdue seed (AC-CT-6).
 pub async fn should_generate(reader: &ReadPool) -> DbResult<bool> {
     let cutoff = now_secs() - WINDOW_SECS;
@@ -520,6 +538,48 @@ mod tests {
             !should_generate(db.reader()).await.unwrap(),
             "после прогона — не overdue"
         );
+    }
+
+    /// GC кэша (CT-3+ хвост): пары с удалённой заметкой выметаются, живые остаются.
+    #[tokio::test]
+    async fn gc_stale_cache_drops_dead_paths_keeps_live() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let idx = Indexer::new(&db, root.clone());
+        for f in ["a.md", "b.md", "c.md"] {
+            fs::write(root.join(f), "тело").unwrap();
+            idx.index_file(f).await.unwrap();
+        }
+        cache_put(db.writer(), "a.md", "b.md", 1, 2, false, "soft", "", 0)
+            .await
+            .unwrap();
+        cache_put(db.writer(), "b.md", "c.md", 3, 4, true, "hard", "x", 0)
+            .await
+            .unwrap();
+
+        // Заметка c.md удалена (или переименована — старый путь мёртв).
+        fs::remove_file(root.join("c.md")).unwrap();
+        idx.remove_file("c.md").await.unwrap();
+
+        let removed = gc_stale_cache(db.writer()).await.unwrap();
+        assert_eq!(removed, 1, "вычищена ровно пара с мёртвым путём");
+        assert!(
+            cache_lookup(db.reader(), "a.md", "b.md")
+                .await
+                .unwrap()
+                .is_some(),
+            "живая пара пережила GC"
+        );
+        assert!(
+            cache_lookup(db.reader(), "b.md", "c.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "пара с удалённой заметкой вычищена"
+        );
+        // Повторный GC — no-op (идемпотентность).
+        assert_eq!(gc_stale_cache(db.writer()).await.unwrap(), 0);
     }
 
     #[tokio::test]
