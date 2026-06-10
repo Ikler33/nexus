@@ -36,13 +36,16 @@ pub async fn git_status(state: State<'_, AppState>) -> AppResult<Vec<StatusEntry
 /// Авто-коммит изменений vault: secret-scan → при находке коммит НЕ делается (`blocked-by-secrets`),
 /// иначе коммит с авто-сообщением. Возвращает исход (`CommitOutcome`).
 #[tauri::command]
-pub async fn git_commit(state: State<'_, AppState>) -> AppResult<CommitOutcome> {
+pub async fn git_commit(
+    state: State<'_, AppState>,
+    message: Option<String>,
+) -> AppResult<CommitOutcome> {
     let root = vault_root(&state).await?;
     let _lock = state.git_lock.lock().await;
     tokio::task::spawn_blocking(move || -> AppResult<CommitOutcome> {
         let git = GitSync::open_or_init(&root)?;
         git.ensure_gitignore()?;
-        Ok(git.commit_all()?)
+        Ok(git.commit_all_with_message(message.as_deref())?)
     })
     .await
     .map_err(join_err)?
@@ -54,13 +57,14 @@ pub async fn git_commit(state: State<'_, AppState>) -> AppResult<CommitOutcome> 
 pub async fn git_commit_paths(
     state: State<'_, AppState>,
     paths: Vec<String>,
+    message: Option<String>,
 ) -> AppResult<CommitOutcome> {
     let root = vault_root(&state).await?;
     let _lock = state.git_lock.lock().await;
     tokio::task::spawn_blocking(move || -> AppResult<CommitOutcome> {
         let git = GitSync::open_or_init(&root)?;
         git.ensure_gitignore()?;
-        Ok(git.commit_paths(&paths)?)
+        Ok(git.commit_paths_with_message(&paths, message.as_deref())?)
     })
     .await
     .map_err(join_err)?

@@ -25,6 +25,7 @@ export function SyncPanel() {
   const [changes, setChanges] = useState<GitStatusEntry[] | null>(null);
   const [outcome, setOutcome] = useState<GitCommitOutcome | null>(null);
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
 
   // remote-конфиг
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -55,7 +56,8 @@ export function SyncPanel() {
   const commit = async () => {
     setBusy(true);
     try {
-      const o = await tauriApi.git.commit();
+      const o = await tauriApi.git.commit(message.trim() || undefined);
+      if (o.status === 'committed') setMessage('');
       setOutcome(o);
       if (o.status !== 'blocked-by-secrets') {
         await tauriApi.git
@@ -143,6 +145,17 @@ export function SyncPanel() {
                 </li>
               ))}
             </ul>
+          )}
+
+          {changes !== null && changes.length > 0 && (
+            <textarea
+              className={styles.commitMsg}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder={t('git.messagePlaceholder')}
+              rows={2}
+              aria-label={t('git.messageLabel')}
+            />
           )}
 
           {outcome && <CommitResult outcome={outcome} />}
