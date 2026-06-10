@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### CI: bundle-smoke `tauri build --debug` (кросс-план #3)
+
+- Новая CI-джоба `bundle-debug` (только push в main, ubuntu): `tauri build --debug --bundles deb`
+  + проверка артефакта — пайплайн бандлинга (иконки/ресурсы/desktop-файлы/deb) больше не может
+  сломаться тихо (раньше CI гонял только `cargo build/test`). Локальный де-риск на macOS:
+  `.app` собирается, dmg-шаг (`bundle_dmg.sh`, hdiutil+Finder) падает в headless-шелле —
+  зафиксировано в BACKLOG (🔬 проверить на живом сеансе; подпись отложена, #29).
+
 ### Vault: префикс-запрос `list_notes` + бэкенд-резолв ссылок (кросс-план #22)
 
 - **`list_notes(query?, limit?)`** вместо безлимитного SELECT всего vault: подстрочный фильтр по

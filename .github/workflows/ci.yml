@@ -112,6 +112,39 @@ jobs:
       - name: Per-module coverage gate (ratchet)
         run: node ../../../scripts/check-coverage.mjs coverage.json
 
+  # De-risk бандлинга (кросс-план #3): CI гонял только cargo build/test — «бандлится ли приложение»
+  # (иконки/ресурсы/desktop-файлы/deb-пакет) было неизвестно и могло тихо сломаться. Только push в
+  # main (дорого ~10 мин, PR не тормозим) и только deb: appimage/dmg капризны в headless-средах
+  # (локальный macOS-прогон 2026-06-10: .app собрался, dmg-шаг bundle_dmg.sh упал — см. BACKLOG).
+  bundle-debug:
+    name: Bundle smoke (tauri build --debug, deb)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Tauri system deps (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - run: pnpm --dir apps/desktop exec tauri build --debug --bundles deb
+      - name: Бандл существует (deb)
+        run: ls -l target/debug/bundle/deb/*.deb
+
   # Traceability-гейт (V1.3, TESTING_STRATEGY §4): у КАЖДОГО AC из ACCEPTANCE.md есть запись в
   # docs/acceptance/traceability.json (статус covered/partial/pending/manual/deferred + tests).
   # Новый AC без записи о тесте → красный CI. Zero-dep (node:fs) — без pnpm install, ~10с.
