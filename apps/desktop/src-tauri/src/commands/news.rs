@@ -89,12 +89,19 @@ pub async fn get_news_config(app: AppHandle) -> AppResult<NewsConfig> {
     Ok(news::load_news_config(&config_path(&app)?))
 }
 
-/// Сохраняет конфиг (вкл/выкл фичи = consent, источники, ключи) и возвращает применённый.
+/// Сохраняет конфиг (вкл/выкл фичи = consent, источники, ключи), СИНХРОНИЗИРУЕТ политику
+/// эгресса (NF-4: тоггл `NewsFeed`-фичи + "news"-скоуп allowlist — мгновенно, AC-NF-7)
+/// и возвращает применённый конфиг.
 #[tauri::command]
-pub async fn set_news_config(app: AppHandle, config: NewsConfig) -> AppResult<NewsConfig> {
+pub async fn set_news_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: NewsConfig,
+) -> AppResult<NewsConfig> {
     let path = config_path(&app)?;
     news::save_news_config(&path, &config)
         .map_err(|e| AppError::Msg(format!("news.json не записан: {e}")))?;
+    news::sync_egress_policy(&state.egress_policy, &config);
     Ok(config)
 }
 

@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### News Feed NF-4: сетевой слой — NewsFeed-фича эгресса + DNS-гард (AC-NF-6/7/8)
+
+- **`EgressFeature::NewsFeed`** — первый web-класс политики: по умолчанию **ВЫКЛЮЧЕНА**
+  (consent: единственная истина — `news.json`, синхронизируется в политику на старте и в
+  `set_news_config`; через `set_egress_feature` намеренно НЕ переключается);
+  `allow_private=false` — приватные/LAN-хосты запрещены даже из allowlist (W-аддендум).
+  Allowlist стал **скоуповым** ("ai" — хосты `local.json`, "news" — хосты активных источников;
+  `check` смотрит объединение, скоупы не затирают друг друга).
+- **`GuardedNewsFetcher`** — прод-реализация `FeedFetcher`: политика ДО DNS → **DNS-rebinding-гард**
+  (резолв за трейтом `Resolver`, проверка ВСЕХ IP на приватность/metadata, затем **пин
+  проверенного IP** в клиент через `reqwest resolve_to_addrs` — честный
+  resolve-then-connect-check без TOCTOU-щели) → guarded-GET с лимитами W3 (таймаут 20 с,
+  body-cap 2 МБ чанкованным чтением — превышение видимой ошибкой). Адреса не утекают в тексты
+  ошибок (политика приватности как у `EgressDenied`).
+- **Wiring (остаток AC-NF-6):** `open_vault` регистрирует `NewsFeedHandler` (фетчер + утилитарная
+  модель) при наличии LLM; recurring раз/сутки (no-op при выключенной фиче); сид run-if-overdue
+  «при первом открытии за день» (D3). Лента полностью рабочая с бэкенда: включение фичи в
+  `news.json` → прогон при открытии vault. 4 новых теста (DNS-гард: приватный/metadata/смешанный
+  резолв; политика до DNS; body-cap; web-класс политики). **AC-NF-6/7/8 → covered** — из
+  бэкенд-AC ленты остался только UI-срез NF-5.
+
 ### News Feed NF-3: персист + пайплайн прогона + команды (AC-NF-4/5/9/11, частично 6)
 
 - **Миграция 010**: `news_items` (дедуп `url UNIQUE`; `read_at`/`hidden`) + `news_runs`

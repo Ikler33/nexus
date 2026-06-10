@@ -201,20 +201,30 @@
       "note": "NF-3: 30 дней по fetched_at, чистит items и runs; GC-шаг — в конце каждого прогона."
     },
     "AC-NF-6": {
-      "status": "partial",
+      "status": "covered",
       "tests": [
         "news::run::tests::handler_noops_when_disabled",
-        "news::run::tests::llm_cap_truncates_visibly_keeping_freshest"
+        "news::run::tests::llm_cap_truncates_visibly_keeping_freshest",
+        "news::run::tests::pipeline_end_to_end_with_visible_errors_and_no_rerun_llm"
       ],
-      "note": "NF-3: хендлер (no-op при выключенной фиче, defer_under_interactive, cap 60 видимо) + refresh с дедупом готовы. Регистрация в open_vault + recurring раз/сутки — NF-4 (нужен реальный фетчер)."
+      "note": "NF-3/NF-4: kind newsfeed зарегистрирован в open_vault (при наличии LLM), recurring раз/сутки (no-op при выключенной фиче), сид run-if-overdue «при первом открытии за день» (D3), manual refresh с дедупом, defer_under_interactive (S5); офлайн → pending (kill-switch рвёт сеть, джоба ретраится штатно)."
     },
     "AC-NF-7": {
-      "status": "pending",
-      "note": "Срез NF-4 (EgressFeature::NewsFeed, лимиты W3)."
+      "status": "covered",
+      "tests": [
+        "net::tests::news_feed_is_web_class_private_denied_even_allowlisted",
+        "news::fetch::tests::policy_denies_before_dns",
+        "news::fetch::tests::body_cap_rejects_oversized_response"
+      ],
+      "note": "NF-4: EgressFeature::NewsFeed дефолт ВЫКЛ (consent = news.json enabled, синк sync_egress_policy на setup/set_news_config); хосты источников → \"news\"-скоуп allowlist; таймаут 20с + body-cap 2МБ видимой ошибкой."
     },
     "AC-NF-8": {
-      "status": "pending",
-      "note": "Срез NF-4 (DNS-rebinding-гард, мок-резолвер)."
+      "status": "covered",
+      "tests": [
+        "news::fetch::tests::dns_guard_rejects_private_and_metadata_resolution",
+        "net::tests::news_feed_is_web_class_private_denied_even_allowlisted"
+      ],
+      "note": "NF-4: allow_private=false в политике (литеральные IP) + DNS-гард фетчера (резолв → проверка ВСЕХ IP → пин проверенного IP в клиент через reqwest resolve_to_addrs — resolve-then-connect-check без TOCTOU); адреса не утекают в текст ошибок."
     },
     "AC-NF-9": {
       "status": "covered",
