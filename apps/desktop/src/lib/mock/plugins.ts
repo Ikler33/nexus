@@ -93,6 +93,16 @@ export async function list(): Promise<PluginInfo[]> {
     version: m.version,
     compatible: true,
     error: null,
+    // Чипы прав как у Rust `permission_chips` (DP-8): уровни safe/caution/sensitive.
+    permissions: [
+      { kind: 'vault:read', detail: m.read.join(', '), level: 'safe' as const },
+      { kind: 'vault:write', detail: m.write.join(', '), level: 'caution' as const },
+      ...(m.ai ? [{ kind: 'ai:embed', detail: '', level: 'safe' as const }] : []),
+      ...(m.net.length
+        ? [{ kind: 'net', detail: m.net.join(', '), level: 'sensitive' as const }]
+        : []),
+      { kind: 'ui', detail: m.ui.join(', '), level: 'safe' as const },
+    ],
   }));
 }
 
