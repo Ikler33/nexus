@@ -304,6 +304,11 @@
   gap: 14px;
   margin-bottom: var(--space-7);
 }
+/* 1fr = minmax(auto, 1fr): длинные nowrap-заголовки реального vault распирают min-content
+   ячейки и воруют ширину у соседней карточки — фиксируем честные 50/50. */
+.grid2 > * {
+  min-width: 0;
+}
 @media (max-width: 920px) {
   .grid2 {
     grid-template-columns: 1fr;
