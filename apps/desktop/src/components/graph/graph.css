@@ -1,7 +1,8 @@
 /* ============================================================
    Граф — кастомный SVG force-directed (V-граф интерактив).
    Портировано из дизайн-хендоффа (`graph.css`); классы глобальные (префиксы graph-/g-).
-   Цвет узла берётся из CSS (теги-цвета — отдельный срез), анимации — на CSS-классах.
+   Цвет узла: тегированные — хеш-oklch по первому тегу (inline fill, hue из graph-sim,
+   светлота/хрома — переменные ниже), без тегов — фолбэк .g-dot. Анимации — на CSS-классах.
    ============================================================ */
 .graph-view {
   flex: 1;
@@ -9,6 +10,14 @@
   flex-direction: column;
   min-height: 0;
   background: var(--color-bg);
+  /* Светлота/хрома тег-цвета узлов (hue — от хеша тега, graph-sim.ts) */
+  --g-tag-l: 0.55;
+  --g-tag-c: 0.12;
+}
+:root[data-theme='dark'] .graph-view,
+:root[data-theme='midnight'] .graph-view,
+:root[data-theme='platinum'] .graph-view {
+  --g-tag-l: 0.72;
 }
 
 .graph-bar {
@@ -64,6 +73,44 @@
 .graph-depth input[type='range'] {
   width: 80px;
   accent-color: var(--color-accent);
+}
+
+/* Тег-чипы бара (хендофф graph.css): скролл-полоса с fade-маской справа */
+.graph-tags {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 24px), transparent 100%);
+}
+.graph-tags::-webkit-scrollbar {
+  display: none;
+}
+.gt-chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 3px 9px;
+  border-radius: 99px;
+  cursor: pointer;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  transition: all var(--motion-fast);
+}
+.gt-chip:hover {
+  border-color: var(--color-accent-rim);
+  color: var(--color-text);
+}
+.gt-chip.on {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-rim);
+  color: var(--color-accent);
 }
 
 .graph-close {

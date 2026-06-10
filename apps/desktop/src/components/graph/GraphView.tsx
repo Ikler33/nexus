@@ -25,7 +25,9 @@ import {
   endpointId,
   kinSet,
   neighborSet,
+  nodeColor,
   nodeRadius,
+  topTags,
   type EdgeIds,
   type GraphLink,
   type GraphNodeDatum,
@@ -36,6 +38,8 @@ type Mode = 'local' | 'full';
 
 /** Топ-N по связности для единого графа. */
 const FULL_LIMIT = 600;
+/** Сколько тег-чипов показываем в баре (макет graph.jsx: slice(0, 8)). */
+const TAG_CHIP_LIMIT = 8;
 /** Логический размер сцены (SVG viewBox). */
 const STAGE_W = 1000;
 const STAGE_H = 680;
@@ -161,6 +165,7 @@ export default function GraphView() {
   const [loading, setLoading] = useState(true);
   const [hover, setHover] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [settings, setSettings] = useState<GraphSettings>(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
   const [cam, setCam] = useState<Camera>(HOME_CAM);
@@ -200,6 +205,7 @@ export default function GraphView() {
         title: n.title ?? basename(n.path),
         path: n.path,
         deg: deg[String(n.id)] ?? 0,
+        tags: n.tags ?? [],
       }));
       const edgeIds: EdgeIds[] = data.edges.map((e) => ({
         source: String(e.source),
@@ -395,6 +401,15 @@ export default function GraphView() {
     [graph],
   );
 
+  // ── тег-чипы (макет graph.jsx): топ-8 тегов текущего графа; выбранный гасит остальные узлы ──
+  const tagChips = useMemo(() => (graph ? topTags(graph.nodes, TAG_CHIP_LIMIT) : []), [graph]);
+  // После перезагрузки данных (mode/depth/центр) выбранного тега может не быть — фильтр не применяем.
+  const activeTag = tagFilter != null && tagChips.includes(tagFilter) ? tagFilter : null;
+  const tagFaded = useCallback(
+    (n: GraphNodeDatum) => activeTag != null && !n.tags.includes(activeTag),
+    [activeTag],
+  );
+
   const showCanvas = mode === 'full' || !!center;
 
   return (
@@ -426,6 +441,20 @@ export default function GraphView() {
             />
             <span className="graph-mono">{depth}</span>
           </label>
+        )}
+        {tagChips.length > 0 && (
+          <div className="graph-tags" role="group" aria-label={t('graph.tags')}>
+            {tagChips.map((tag) => (
+              <button
+                key={tag}
+                className={'gt-chip' + (activeTag === tag ? ' on' : '')}
+                aria-pressed={activeTag === tag}
+                onClick={() => setTagFilter((f) => (f === tag ? null : tag))}
+              >
+                #{tag}
+              </button>
+            ))}
+          </div>
         )}
         <div className="graph-spacer" />
         {graph && (
@@ -482,7 +511,8 @@ export default function GraphView() {
                 if (s.x == null || s.y == null || tt.x == null || tt.y == null) return null;
                 const sId = endpointId(l.source);
                 const tId = endpointId(l.target);
-                const active = nbrs ? nbrs.has(sId) && nbrs.has(tId) : true;
+                const active =
+                  (nbrs ? nbrs.has(sId) && nbrs.has(tId) : true) && !tagFaded(s) && !tagFaded(tt);
                 const lit = dragId != null && (sId === dragId || tId === dragId);
                 const flow =
                   !dragId && graph.activeId != null && (sId === graph.activeId || tId === graph.activeId);
@@ -503,8 +533,10 @@ export default function GraphView() {
               if (n.x == null || n.y == null) return null;
               const isActive = n.id === graph.activeId;
               const r = nodeRadius(n.deg) * settings.sizeScale;
-              const faded = nbrs != null && !nbrs.has(n.id);
+              const faded = (nbrs != null && !nbrs.has(n.id)) || tagFaded(n);
               const isKin = !isActive && kin.has(n.id);
+              // Активная нота красится акцентом из CSS (inline-fill перебил бы класс .active).
+              const fill = isActive ? null : nodeColor(n.tags);
               return (
                 <g
                   key={n.id}
@@ -522,7 +554,7 @@ export default function GraphView() {
                 >
                   {isActive && <circle r={r + 6} className="g-pulse" />}
                   {isActive && <circle r={r + 6} className="g-ripple" />}
-                  <circle r={r} className="g-dot" />
+                  <circle r={r} className="g-dot" style={fill ? { fill } : undefined} />
                   {isActive && <circle r={r + 5} className="g-ring" />}
                   {isKin && <circle r={r + 3.5} className="g-kinring" />}
                   <text y={r + 14} className="g-label" textAnchor="middle">

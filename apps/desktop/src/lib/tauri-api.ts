@@ -263,6 +263,8 @@ export interface GraphNode {
   id: number;
   path: string;
   title: string | null;
+  /** Теги заметки (без `#`, отсортированы) — цвет узла и фильтр-чипы графа. */
+  tags: string[];
 }
 export interface GraphEdge {
   source: number;
