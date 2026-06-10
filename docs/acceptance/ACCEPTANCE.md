@@ -116,6 +116,24 @@
 - **AC-EGR-13** Composition-root: фасад `AIClient { chat, embedder, policy }` строится в `build_rag`/`build_chat`, один `policy`; hot-swap chat переустанавливает уже-guarded клиент, cold embedder сохраняется.
 - **AC-EGR-14** No-silent-caps (зависит от #9 typed errors, сделан): любой отказ → структурированная причина (enum `EgressDenied`), без `reqwest`/`error sending request` в backend-результате; i18n-рендер RU+EN — отдельным фронт-срезом.
 
+### Лента новостей (News Feed, спека `docs/specs/news-feed.md`, срезы NF-1..5)
+
+> Полные формулировки (Given/When/Then) — в спеке; здесь — реестр для traceability. Механика —
+> автотесты (фикстуры/моки); КАЧЕСТВО RU-резюме/кластеров — human-eval владельцем.
+
+- **AC-NF-1** Парсер RSS 2.0/Atom/HF-JSON/HN-JSON → нормализованный `NewsEntry`; битый фид → пропуск источника с видимой ошибкой прогона, без падения.
+- **AC-NF-2** Keyword-фильтр (unicode case-insensitive, title+excerpt) — только для high-volume источников; малопоточные проходят целиком; пустые ключи → high-volume отбрасывается (fail-closed).
+- **AC-NF-3** LLM-этап: вход между injection-маркерами; строгий JSON `{relevant, title_ru, summary_ru, topic}`; невалидный → item failed, виден в сводке.
+- **AC-NF-4** Дедуп по url между прогонами; обновлённый title не перетирает прочитанность.
+- **AC-NF-5** Ретенция 30 дней GC-джобой; read/hidden живут до ретенции.
+- **AC-NF-6** Kind `newsfeed`: run-if-overdue раз/сутки + manual с дедупом; defer под интерактивом (S5); офлайн → pending (S10).
+- **AC-NF-7** Эгресс только через `GuardedClient` + `EgressFeature::NewsFeed` (дефолт ВЫКЛ → consent); timeout 20 с, body-cap 2 МБ — видимые пропуски.
+- **AC-NF-8** DNS-rebinding-гард: домен → приватный/metadata-IP → отказ ДО коннекта; `allow_private=false`.
+- **AC-NF-9** Типизированные команды `get_news`/`news_mark_read`/`news_to_note`/`refresh_news`/`get|set_news_config`.
+- **AC-NF-10** RU-сводка дня из relevant-items; состояния «нет новостей»/«фича выключена» — не пустой экран.
+- **AC-NF-11** «В заметку»: карточка → уникальная заметка с фронтматтером source/url; индексируется штатно.
+- **AC-NF-12** i18n RU/EN ключи страницы (паритет-тест); качество RU-резюме — human-eval.
+
 ---
 
 ## 4. Производительность (раздел 10) — пороги pass/fail

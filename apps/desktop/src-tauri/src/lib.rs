@@ -35,6 +35,8 @@ pub mod home;
 pub mod indexer;
 /// Egress-граница ядра (ADR-005-ext): `GuardedClient` + политика + audit — единый chokepoint HTTP.
 pub mod net;
+/// Лента новостей (спека `docs/specs/news-feed.md`): NF-1 — парсеры фидов + keyword-фильтр.
+pub mod news;
 /// Markdown-парсер (frontmatter, ссылки, теги).
 pub mod parser;
 /// Plugin loader (минимум): manifest + совместимость версии API (без broker — Ф2).

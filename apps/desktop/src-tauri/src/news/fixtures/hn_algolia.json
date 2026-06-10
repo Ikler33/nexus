@@ -1,0 +1,36 @@
+{
+ "hits": [
+  {
+   "title": "Show HN: Eatmydata.ai – Local-First Question-to-SQL-to-Dashboard AI",
+   "url": "https://eatmydata.ai/",
+   "created_at": "2026-06-10T07:43:21Z",
+   "created_at_i": 1781077401,
+   "objectID": "48472867",
+   "story_text": "Yet another &quot;talk to your data and build a dashboard&quot; app, where data does not leave your browser.<p>You ask a question, agents produce multiple SQL queries to in-browser sqlite, never seeing results, and write dashboard configuration code. The data you analyze will be indexed with a local semantic index (embeddings generation + sqlite vector search fully local).<p>Next, sandboxed QuickJS runs this code to produce rich dashboards directly in your browser, no backend attached. This is a fully frontend app (except OpenRouter or other remote LLM).<p>All data sent to LLM&#x27;s is heavily sanitized and obfuscated at several points. The remote LLM never sees the contents of data it analyzes. Why does it exist - I started this is a testbed for my local-first AI projects, agentic workflows and contextual data analysis experiments.<p>It grew into a tool I use daily for quick and dirty data analytics when I don&#x27;t want to waste time debugging SQL or building charts for simple data questions, when I literally need an answer under 10s.<p>I also don&#x27;t like the idea of sharing random data in Claude&#x2F;ChatGPT chat, neither uploading any work-related datasets to them. Plus they both often choke on tiny 100k rows data.<p>Fully open-sourced under MIT <a href=\"https:&#x2F;&#x2F;github.com&#x2F;eatmydata-org&#x2F;eatmydata\" rel=\"nofollow\">https:&#x2F;&#x2F;github.com&#x2F;eatmydata-org&#x2F;eatmydata</a>, run it yourself it&#x27;s a static web app.<p>What&#x27;s in the box:<p>- SQLite OPFS adapted from wa-sqlite, data queried only locally;<p>- TurboQuant semantic indexing extension for sqlite (MIT-licensed);<p>- Quantized PII detection and embedding generation models straight in browser;<p>- NER and embeddings inference engines in zero-dependency C and wasm-simd128 optimizations (1.7x faster and 38x lighter binary compare to onnxruntime);<p>- QuickJS sandbox for AI-generated code;<p>- Orchestrator &lt;-&gt; SQL Planner &lt;-&gt; Coder agent loop that build SQL and dashboards from user query;<p>- Apache ECharts for dashboards;<p>- Fork of xslx Community edition to support styles (missing in OSS version upstream).<p>Hope it&#x27;ll be useful to anyone who is interested in local-first stuff."
+  },
+  {
+   "title": "Moon Mnf: magic wands,idiots, first principal",
+   "url": "https://www.lmcpress.com/",
+   "created_at": "2026-06-10T07:18:56Z",
+   "created_at_i": 1781075936,
+   "objectID": "48472669",
+   "story_text": null
+  },
+  {
+   "title": "Anthropic is intentionally nerfing Fable when asked to develop other LLMs",
+   "url": "https://old.reddit.com/r/LocalLLaMA/comments/1u1s2oz/anthropic_is_intentionally_nerfing_fable_when/",
+   "created_at": "2026-06-10T06:27:15Z",
+   "created_at_i": 1781072835,
+   "objectID": "48472249",
+   "story_text": null
+  },
+  {
+   "title": "TokenLens",
+   "url": null,
+   "created_at": "2026-06-10T06:14:42Z",
+   "created_at_i": 1781072082,
+   "objectID": "48472158",
+   "story_text": "TokenLens – Real-time token analytics and financial observability for LLMs"
+  }
+ ]
+}
