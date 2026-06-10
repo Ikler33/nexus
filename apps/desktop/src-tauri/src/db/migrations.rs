@@ -74,6 +74,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/009_stale_cache.sql"),
         rebuild_fts: false, // новая таблица-кэш, производных не инвалидирует
     },
+    Migration {
+        version: 10,
+        name: "news",
+        sql: include_str!("migrations/010_news.sql"),
+        rebuild_fts: false, // новые таблицы ленты (NF-3), производных не инвалидирует
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
