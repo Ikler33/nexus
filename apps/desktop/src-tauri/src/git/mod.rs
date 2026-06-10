@@ -217,7 +217,13 @@ impl GitSync {
 
     /// Авто-коммит ВСЕХ не-игнорируемых изменений (как раньше). Делегирует в [`Self::commit_selected`].
     pub fn commit_all(&self) -> GitResult<CommitOutcome> {
-        self.commit_selected(None)
+        self.commit_selected(None, None)
+    }
+
+    /// Коммит всех изменений с пользовательским сообщением (DP-10, макет sync.jsx);
+    /// пустое/пробельное сообщение → авто-саммари как раньше.
+    pub fn commit_all_with_message(&self, message: Option<&str>) -> GitResult<CommitOutcome> {
+        self.commit_selected(None, message)
     }
 
     /// Выборочный коммит (#10): стейджит и коммитит ТОЛЬКО `paths` (пересечение с реальными изменениями
@@ -225,13 +231,26 @@ impl GitSync {
     /// — по коммитимым файлам (секрет в НЕвыбранном файле не блокирует). Пустое пересечение (нечего из
     /// выбранного коммитить / устаревший выбор) → `NothingToCommit`. Пути — как в `status` (рел. от корня).
     pub fn commit_paths(&self, paths: &[String]) -> GitResult<CommitOutcome> {
-        self.commit_selected(Some(paths))
+        self.commit_selected(Some(paths), None)
+    }
+
+    /// Выборочный коммит с пользовательским сообщением (DP-10).
+    pub fn commit_paths_with_message(
+        &self,
+        paths: &[String],
+        message: Option<&str>,
+    ) -> GitResult<CommitOutcome> {
+        self.commit_selected(Some(paths), message)
     }
 
     /// Ядро коммита: стейджит изменения (все при `select=None`, иначе только пути из `select`),
     /// **сканирует коммитимое на секреты** (AC-SEC-3) — при находке коммит НЕ делается; иначе коммитит с
     /// авто-сообщением. Идемпотентно (нечего коммитить → `NothingToCommit`).
-    fn commit_selected(&self, select: Option<&[String]>) -> GitResult<CommitOutcome> {
+    fn commit_selected(
+        &self,
+        select: Option<&[String]>,
+        message: Option<&str>,
+    ) -> GitResult<CommitOutcome> {
         let mut status = self.status()?;
         if let Some(sel) = select {
             let set: HashSet<&str> = sel.iter().map(String::as_str).collect();
@@ -290,7 +309,11 @@ impl GitSync {
         let tree = self.repo.find_tree(index.write_tree()?)?;
 
         let sig = self.signature()?;
-        let message = auto_message(&status);
+        let message = message
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| auto_message(&status));
         let parent = self
             .repo
             .head()
