@@ -236,12 +236,14 @@
       "note": "NF-3: get_news/news_mark_read/news_to_note/refresh_news/get|set_news_config; страницы по 50 (урок #22)."
     },
     "AC-NF-10": {
-      "status": "partial",
+      "status": "covered",
       "tests": [
         "news::llm::tests::daily_digest_uses_topics_and_trims",
-        "news::llm::tests::ru_sources_keep_original_titles_in_instruction"
+        "news::llm::tests::ru_sources_keep_original_titles_in_instruction",
+        "NewsView.test.tsx: лента: сводка дня + рубрики + карточки; пустое резюме → «недоступно»",
+        "NewsView.test.tsx: фича выключена: CTA + согласие с источниками; включение пишет конфиг"
       ],
-      "note": "NF-2: генерация сводки покрыта на моках; состояния «нет новостей»/«фича выключена» — UI-срез NF-5. Качество RU-текста — human-eval."
+      "note": "NF-2 (сводка на моках) + NF-5 (состояния UI: consent-CTA, пустой день, ошибка прогона, «резюме недоступно»). Качество RU-текста — human-eval."
     },
     "AC-NF-11": {
       "status": "covered",
@@ -252,8 +254,12 @@
       "note": "NF-3: News/<дата> <slug>.md, фронтматтер source/news_source, уникализация суффиксом, анти-traversal слаг."
     },
     "AC-NF-12": {
-      "status": "pending",
-      "note": "Срез NF-5 (страница UI + i18n; качество RU-резюме — human-eval)."
+      "status": "covered",
+      "tests": [
+        "i18n.test.ts: AC-I18N-1: ru и en имеют одинаковый набор ключей",
+        "NewsView.test.tsx: в заметку: тост с путём News/…"
+      ],
+      "note": "NF-5: ключи news.* RU/EN под паритет-тестом; качество RU-резюме — human-eval (live-smoke по возвращении сервера)."
     },
     "AC-Б1-1": {
       "status": "pending",

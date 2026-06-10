@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockEgress from './mock/egress';
 import * as mockGit from './mock/git';
+import * as mockNews from './mock/news';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
 import * as mockVault from './mock/vault';
@@ -277,6 +278,56 @@ export interface SetAiResult {
   chatApplied: boolean;
   /** Embedding изменился → нужен перезапуск приложения для переиндексации. */
   embeddingChanged: boolean;
+}
+
+/** Запись ленты новостей (зеркалит Rust `news::NewsItem`, NF-3). Время — Unix-секунды. */
+export interface NewsItem {
+  id: number;
+  sourceId: string;
+  url: string;
+  titleRu: string;
+  summaryRu: string;
+  topic: string;
+  /** Источник русскоязычный (резюме без пометки «перевод»). */
+  langRu: boolean;
+  publishedAt: number;
+  read: boolean;
+}
+
+/** Итог последнего прогона ленты (зеркалит Rust `news::NewsRun`): шапка-сводка дня. */
+export interface NewsRun {
+  runAt: number;
+  digestRu: string;
+  itemsNew: number;
+  sourcesOk: number;
+  sourcesTotal: number;
+  llmFailed: number;
+  /** Видимые ошибки источников («источник: причина») — no silent caps (AC-NF-1). */
+  errors: string[];
+}
+
+/** Страница ленты (зеркалит Rust `commands::news::NewsPageDto`). */
+export interface NewsPage {
+  items: NewsItem[];
+  topics: string[];
+  run: NewsRun | null;
+}
+
+/** Конфиг ленты `news.json` (зеркалит Rust `news::NewsConfig`); `enabled` = consent (AC-NF-7). */
+export interface NewsConfig {
+  enabled: boolean;
+  /** Переопределения вкл/выкл источников реестра: id → bool. */
+  sources: Record<string, boolean>;
+  /** Ключевые слова фильтра; `null` — пресет по умолчанию. */
+  keywords: string[] | null;
+}
+
+/** Источник реестра v1 (зеркалит Rust `commands::news::NewsSourceDto`) — для consent-строки. */
+export interface NewsSource {
+  id: string;
+  title: string;
+  enabled: boolean;
+  langRu: boolean;
 }
 
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
@@ -647,6 +698,44 @@ export const tauriApi = {
       isTauri()
         ? invoke<string>('git_resolve_conflicts', { theirs, resolutions })
         : mockGit.resolveConflicts(theirs, resolutions),
+  },
+
+  /** Лента AI-новостей (NF-3/NF-5, спека `docs/specs/news-feed.md`). Прогон гоняет планировщик
+   * (kind `newsfeed`); готовность — событие `jobs:changed`. Вне Tauri — стейтфул-мок. */
+  news: {
+    /** Страница ленты: записи (свежие сверху) + чипы тем + последний прогон. */
+    page: (opts?: { topic?: string; unreadOnly?: boolean; page?: number }): Promise<NewsPage> =>
+      isTauri()
+        ? invoke<NewsPage>('get_news', {
+            topic: opts?.topic,
+            unreadOnly: opts?.unreadOnly,
+            page: opts?.page,
+          })
+        : mockNews.page(opts),
+
+    /** Отметка прочитано/непрочитано (AC-NF-9). */
+    markRead: (id: number, read: boolean): Promise<void> =>
+      isTauri() ? invoke<void>('news_mark_read', { id, read }) : mockNews.markRead(id, read),
+
+    /** «В заметку» (AC-NF-11): создаёт `News/<дата> <заголовок>.md`, возвращает путь заметки. */
+    toNote: (id: number): Promise<string> =>
+      isTauri() ? invoke<string>('news_to_note', { id }) : mockNews.toNote(id),
+
+    /** Ручной прогон «Обновить» (AC-NF-6): ставит джобу с дедупом; `false` — уже в очереди. */
+    refresh: (): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('refresh_news') : mockNews.refresh(),
+
+    /** Конфиг `news.json` (consent + источники + ключи). */
+    getConfig: (): Promise<NewsConfig> =>
+      isTauri() ? invoke<NewsConfig>('get_news_config') : mockNews.getConfig(),
+
+    /** Сохраняет конфиг и мгновенно синхронизирует политику эгресса (NF-4, AC-NF-7). */
+    setConfig: (config: NewsConfig): Promise<NewsConfig> =>
+      isTauri() ? invoke<NewsConfig>('set_news_config', { config }) : mockNews.setConfig(config),
+
+    /** Реестр источников v1 с действующими флагами — consent показывает, куда пойдут запросы. */
+    sources: (): Promise<NewsSource[]> =>
+      isTauri() ? invoke<NewsSource[]>('news_sources') : mockNews.sources(),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).

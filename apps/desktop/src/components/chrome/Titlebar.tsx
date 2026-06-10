@@ -4,6 +4,7 @@ import {
   MessageSquare,
   Moon,
   Newspaper,
+  Rss,
   Scale,
   Puzzle,
   Search,
@@ -44,6 +45,8 @@ export function Titlebar() {
   const toggleDigest = useUIStore((s) => s.toggleDigest);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
   const toggleContradictions = useUIStore((s) => s.toggleContradictions);
+  const newsOpen = useUIStore((s) => s.newsOpen);
+  const toggleNews = useUIStore((s) => s.toggleNews);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const toggleTweaks = useUIStore((s) => s.toggleTweaks);
   const theme = useThemeStore((s) => s.theme);
@@ -134,6 +137,16 @@ export function Titlebar() {
           aria-pressed={contradictionsOpen}
         >
           <Scale size={16} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`${styles.tbBtn} ${newsOpen ? styles.active : ''}`}
+          onClick={() => toggleNews()}
+          title={t('commands.view.news')}
+          aria-label={t('commands.view.news')}
+          aria-pressed={newsOpen}
+        >
+          <Rss size={16} aria-hidden />
         </button>
 
         <span className={styles.divider} />

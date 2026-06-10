@@ -89,6 +89,32 @@ pub async fn get_news_config(app: AppHandle) -> AppResult<NewsConfig> {
     Ok(news::load_news_config(&config_path(&app)?))
 }
 
+/// Источник реестра для UI (consent-строка CTA и будущие настройки источников, AC-NF-7):
+/// имя + действующий вкл/выкл с учётом переопределений `news.json`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsSourceDto {
+    pub id: String,
+    pub title: String,
+    pub enabled: bool,
+    pub lang_ru: bool,
+}
+
+/// Реестр источников v1 с действующими флагами (consent показывает, КУДА пойдут запросы).
+#[tauri::command]
+pub async fn news_sources(app: AppHandle) -> AppResult<Vec<NewsSourceDto>> {
+    let cfg = news::load_news_config(&config_path(&app)?);
+    Ok(news::SOURCES_V1
+        .iter()
+        .map(|s| NewsSourceDto {
+            id: s.id.to_string(),
+            title: s.title.to_string(),
+            enabled: cfg.source_enabled(s),
+            lang_ru: s.lang_ru,
+        })
+        .collect())
+}
+
 /// Сохраняет конфиг (вкл/выкл фичи = consent, источники, ключи), СИНХРОНИЗИРУЕТ политику
 /// эгресса (NF-4: тоггл `NewsFeed`-фичи + "news"-скоуп allowlist — мгновенно, AC-NF-7)
 /// и возвращает применённый конфиг.
