@@ -35,6 +35,11 @@ import styles from './HomeView.module.css';
 
 const HEAT_WEEKS = 17;
 
+/** Имя заметки для списков Home: title или basename без `.md` (DP-15-семантика). */
+function noteName(title: string | null, path: string): string {
+  return title ?? path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
+}
+
 /** Ключ приветствия по локальному часу. */
 function greetKey(hour: number): string {
   if (hour < 5) return 'night';
@@ -378,7 +383,7 @@ export function HomeView() {
                 >
                   <FileText size={15} aria-hidden />
                   <span className={styles.rBody}>
-                    <span className={styles.rName}>{n.title ?? n.path}</span>
+                    <span className={styles.rName}>{noteName(n.title, n.path)}</span>
                     <span className={styles.rMeta}>
                       {t('home.words', { count: n.words })}
                     </span>
@@ -634,7 +639,7 @@ export function HomeView() {
                   <i
                     className={`${styles.staleDot} ${s.severity === 'red' ? styles.hot : styles.warm}`}
                   />
-                  <span className={styles.staleName}>{s.title ?? s.path}</span>
+                  <span className={styles.staleName}>{noteName(s.title, s.path)}</span>
                   <span className={styles.staleDays}>
                     {t('home.staleDays', { count: s.ageDays })}
                   </span>
