@@ -330,6 +330,12 @@ export interface NewsSource {
   langRu: boolean;
 }
 
+/** Статья reader'а (зеркалит Rust `commands::news::NewsArticleDto`, NF-6). `denied` — хост вне
+ * политики эгресса (HN-домены/офлайн): fail-closed, UI отдаёт резюме + ссылку на оригинал. */
+export type NewsArticle =
+  | { status: 'ready'; paras: string[]; translated: boolean; truncated: boolean }
+  | { status: 'denied'; message: string };
+
 /** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -736,6 +742,14 @@ export const tauriApi = {
     /** Реестр источников v1 с действующими флагами — consent показывает, куда пойдут запросы. */
     sources: (): Promise<NewsSource[]> =>
       isTauri() ? invoke<NewsSource[]>('news_sources') : mockNews.sources(),
+
+    /** Полный текст статьи для reader (NF-6): кэш → guarded-фетч → RU-перевод. Долгий вызов. */
+    article: (id: number): Promise<NewsArticle> =>
+      isTauri() ? invoke<NewsArticle>('news_article', { id }) : mockNews.article(id),
+
+    /** «Сократить» (NF-6): 3–6 RU-тезисов по тексту статьи. */
+    summarize: (id: number): Promise<string[]> =>
+      isTauri() ? invoke<string[]>('news_summarize', { id }) : mockNews.summarize(id),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).

@@ -105,6 +105,50 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     spy.mockRestore();
   });
 
+  // NF-6: клик по заголовку открывает reader (статья помечена прочитанной), приходит полный
+  // RU-текст с пометкой «перевод AI»; «Сократить» → тезисы; «К ленте» возвращает.
+  it('reader: заголовок → полный перевод; «Сократить» → тезисы; «К ленте» → обратно', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+
+    fireEvent.click(screen.getByText(/GPT-5\.2 получил режим длинного контекста/));
+    expect(await screen.findByText(/OpenAI выпустила обновление GPT-5\.2/)).toBeInTheDocument();
+    expect(screen.getByText(/перевод ai|ai translation/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /сократить|summarize/i }));
+    expect(await screen.findByText(/Окно контекста расширено до 2M токенов/)).toBeInTheDocument();
+    expect(screen.getByText(/кратко|tl;dr/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /к ленте|back to feed/i }));
+    expect(await screen.findByText(/сводка дня|daily digest/i)).toBeInTheDocument();
+
+    // Открытие пометило прочитанным — вернуть как было (мок-состояние общее).
+    const unread = screen.getAllByRole('button', {
+      name: /вернуть в непрочитанные|mark as unread/i,
+    });
+    fireEvent.click(unread[0]);
+  });
+
+  // NF-6 fail-closed: статья на хосте вне доверенных источников (HN-кейс) → политика не делает
+  // запрос; reader честно говорит об этом и оставляет резюме + ссылку «Оригинал».
+  it('reader: хост вне политики → denied-состояние с «Оригиналом»', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+
+    fireEvent.click(screen.getByText('Новый метод дистилляции снижает галлюцинации на 40%'));
+    expect(
+      await screen.findByText(/полный текст недоступен|full text unavailable/i),
+    ).toBeInTheDocument();
+    const original = screen.getByRole('link', { name: /оригинал|original/i });
+    expect(original).toHaveAttribute('href', expect.stringContaining('deepmind'));
+
+    fireEvent.click(screen.getByRole('button', { name: /к ленте|back to feed/i }));
+    const unread = await screen.findAllByRole('button', {
+      name: /вернуть в непрочитанные|mark as unread/i,
+    });
+    fireEvent.click(unread[unread.length - 1]);
+  });
+
   // Чипы тем — серверный фильтр: выбор темы перезапрашивает страницу и оставляет одну рубрику.
   it('фильтр темы: чип сужает ленту до рубрики', async () => {
     render(<NewsView />);

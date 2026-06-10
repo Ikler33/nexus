@@ -285,7 +285,8 @@ fn html_to_text(html: &str, max_chars: usize) -> String {
 
 /// Базовые именованные + числовые (`&#NNN;`/`&#xNN;`) энтити — то, что реально встречается
 /// в выжимках фидов. Неизвестные остаются как есть (текст, не рендер).
-fn decode_entities(s: &str) -> String {
+/// `pub(crate)`: переиспользуется извлечением абзацев статьи (NF-6, `news::article`).
+pub(crate) fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
