@@ -51,6 +51,8 @@ const TREE: Record<string, FileEntry[]> = {
   Notes: [
     file('Notes/Idea.md', 210),
     file('Notes/Meeting.md', 980),
+    file('Notes/Scratch.md', 120),
+    file('Notes/Цитаты.md', 300),
     file('Notes/diagram.png', 4096),
   ],
   Empty: [],
@@ -65,6 +67,9 @@ const CONTENT: Record<string, string> = {
   'Projects/Alpha/Notes.md': '# Alpha Notes\n\nЗаметки по Alpha. #alpha\n',
   'Notes/Idea.md': '# Idea\n\nИдея с тегом #idea и ссылкой [[Notes/Meeting]].\n',
   'Notes/Meeting.md': '# Meeting\n\nПротокол встречи.\n',
+  // Сироты без ссылок — гало глобального графа в превью (как halo-точки макета graph.jsx).
+  'Notes/Scratch.md': '# Scratch\n\nЧерновик без связей.\n',
+  'Notes/Цитаты.md': '# Цитаты\n\nКоллекция цитат.\n',
 };
 
 export async function openVault(path: string): Promise<VaultInfo> {

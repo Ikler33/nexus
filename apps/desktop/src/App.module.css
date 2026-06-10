@@ -55,6 +55,14 @@
   justify-content: flex-end;
 }
 
+/* Граф — полноэкранный слой поверх тела (между титлбаром и статусбаром; рейл кликабелен). */
+.graphLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+}
+
 /* Свёрнутый сайдбар (DP-13: кнопка «Файлы» activity-bar). */
 .sidebarCollapsed {
   grid-template-columns: 1fr;

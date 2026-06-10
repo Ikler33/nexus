@@ -3,21 +3,24 @@ import {
   forceCollide,
   forceLink,
   forceManyBody,
+  forceRadial,
   forceSimulation,
   forceX,
   forceY,
+  type Force,
   type ForceCollide,
   type ForceLink,
   type ForceManyBody,
+  type ForceRadial,
   type ForceX,
   type ForceY,
   type Simulation,
 } from 'd3-force';
-import { Maximize2, Minus, Plus, Settings, X } from 'lucide-react';
+import { Link2, Maximize2, Minus, Plus, Settings, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
-import type { FullGraph } from '../../lib/tauri-api';
+import type { FullGraph, LinkSuggestion } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
@@ -40,9 +43,11 @@ type Mode = 'local' | 'full';
 const FULL_LIMIT = 600;
 /** Сколько тег-чипов показываем в баре (макет graph.jsx: slice(0, 8)). */
 const TAG_CHIP_LIMIT = 8;
-/** Логический размер сцены (SVG viewBox). */
-const STAGE_W = 1000;
-const STAGE_H = 680;
+/** Логические сцены макета graph.jsx: глобальный обзор заметно крупнее локального. */
+const STAGE = {
+  local: { w: 900, h: 620 },
+  full: { w: 1500, h: 1300 },
+} as const;
 
 /** Камера пан/зума (DP-6/v2c): прямоугольник viewBox. */
 interface Camera {
@@ -51,24 +56,24 @@ interface Camera {
   w: number;
   h: number;
 }
-const HOME_CAM: Camera = { x: 0, y: 0, w: STAGE_W, h: STAGE_H };
-/** Пределы зума: от ×8 приближения до ×3 отдаления. */
-const MIN_W = STAGE_W / 8;
-const MAX_W = STAGE_W * 3;
+/** Пределы зума макета: scale 0.25…4. */
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 4;
 
 /** Зум вокруг точки (лог. координаты сцены): factor < 1 — приближение. */
-function zoomCamera(cam: Camera, factor: number, cx: number, cy: number): Camera {
-  const w = Math.min(MAX_W, Math.max(MIN_W, cam.w * factor));
+function zoomCamera(cam: Camera, factor: number, cx: number, cy: number, stageW: number): Camera {
+  const w = Math.min(stageW / MIN_SCALE, Math.max(stageW / MAX_SCALE, cam.w * factor));
   const k = w / cam.w;
   const h = cam.h * k;
   return { x: cx - (cx - cam.x) * k, y: cy - (cy - cam.y) * k, w, h };
 }
 
 /** Камера под все узлы с полем (авто-fit). */
-function fitCamera(nodes: GraphNodeDatum[]): Camera {
+function fitCamera(nodes: GraphNodeDatum[], stage: { w: number; h: number }): Camera {
+  const home = { x: 0, y: 0, w: stage.w, h: stage.h };
   const xs = nodes.map((n) => n.x).filter((v): v is number => v != null);
   const ys = nodes.map((n) => n.y).filter((v): v is number => v != null);
-  if (xs.length === 0) return HOME_CAM;
+  if (xs.length === 0) return home;
   const pad = 70;
   const minX = Math.min(...xs) - pad;
   const maxX = Math.max(...xs) + pad;
@@ -77,11 +82,11 @@ function fitCamera(nodes: GraphNodeDatum[]): Camera {
   // Сохраняем аспект сцены, накрывая bounding box целиком.
   let w = maxX - minX;
   let h = maxY - minY;
-  const aspect = STAGE_W / STAGE_H;
+  const aspect = stage.w / stage.h;
   if (w / h > aspect) h = w / aspect;
   else w = h * aspect;
-  w = Math.min(MAX_W, Math.max(MIN_W, w));
-  h = (w / STAGE_W) * STAGE_H;
+  w = Math.min(stage.w / MIN_SCALE, Math.max(stage.w / MAX_SCALE, w));
+  h = (w / stage.w) * stage.h;
   return { x: (minX + maxX) / 2 - w / 2, y: (minY + maxY) / 2 - h / 2, w, h };
 }
 
@@ -91,9 +96,18 @@ interface GraphSettings {
   linkDist: number; // длина пружин-связей
   gravity: number; // притяжение к центру (forceX/Y): выше = плотнее, ниже = разлёт
   sizeScale: number; // множитель радиуса узла
+  group: boolean; // группировка по тегам (макет gs-toggle): общий центроид на первый тег
 }
-const DEFAULT_SETTINGS: GraphSettings = { repel: 420, linkDist: 110, gravity: 0.05, sizeScale: 1 };
-const SETTINGS_KEY = 'nexus.graph.settings.v1';
+// Дефолты подогнаны под компактные «созвездия» макета (linkDist 62, мягкая гравитация).
+const DEFAULT_SETTINGS: GraphSettings = {
+  repel: 360,
+  linkDist: 62,
+  gravity: 0.012,
+  sizeScale: 1,
+  group: false,
+};
+// v2: новые дефолты макета не должны перекрываться старым персистом v1.
+const SETTINGS_KEY = 'nexus.graph.settings.v2';
 function loadSettings(): GraphSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -133,7 +147,7 @@ function SettingRow(props: {
 }
 
 function basename(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
+  return path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
 }
 
 interface GraphState {
@@ -143,15 +157,36 @@ interface GraphState {
   activeId: string | null;
   total: number;
   truncated: boolean;
+  /** Сцена, под которую посеяны позиции (full крупнее local — макет). */
+  stage: { w: number; h: number };
+  isFull: boolean;
+}
+
+/** Поповер изолированной заметки (макет orphan-pop): инфо → AI-предложение связи. */
+interface OrphanPop {
+  path: string;
+  x: number;
+  y: number;
+  phase: 'info' | 'thinking' | 'done';
+  pick?: LinkSuggestion | null;
+}
+
+/** Детерминированный LCG (как в макете) — раскладка сирот стабильна между открытиями. */
+function makeRnd(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
 }
 
 /**
- * Граф ссылок (ADR-004) на **d3-force** (как графы Obsidian-класса): forceManyBody (разлёт по площади),
- * forceLink (пружины), forceCenter (мягкое центрирование), forceCollide (узлы не наезжают). Drag через
- * `fx/fy`: тянем ноду — она пиннится к курсору, связанные подтягиваются с естественным сопротивлением
- * (чем больше связей/инерции — тем больше сопротивление). Рендер — SVG (вид/анимации из дизайна:
- * пульс/halo/kin/«поток»). Чистые помощники (подсветка, радиус) — `graph-sim.ts` (юнит-тесты);
- * раскладка/drag — d3 + визуальная проверка человеком.
+ * Граф ссылок (ADR-004) на **d3-force**, вид и физика — по макету `graph.jsx`: компактные
+ * «созвездия» (короткие пружины, мягкая гравитация), сироты глобального графа — гало мелких
+ * точек на кольце (radial-сила + жёсткий кламп полосы), связанные узлы не покидают ядро
+ * (coreMax-кламп), сим никогда не замерзает полностью («дыхание» alphaTarget). Лейблы — только
+ * у активной/hover-ноды и на среднем зуме (как Obsidian). Drag через `fx/fy`, рендер — SVG.
+ * Чистые помощники — `graph-sim.ts` (юнит-тесты).
  */
 export default function GraphView() {
   const { t } = useTranslation();
@@ -168,17 +203,20 @@ export default function GraphView() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [settings, setSettings] = useState<GraphSettings>(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
-  const [cam, setCam] = useState<Camera>(HOME_CAM);
+  const [orphanPop, setOrphanPop] = useState<OrphanPop | null>(null);
+  const [cam, setCam] = useState<Camera>({ x: 0, y: 0, ...{ w: STAGE.local.w, h: STAGE.local.h } });
   const [, tick] = useState(0); // ре-рендер на каждый tick d3 (позиции живут в узлах, d3 их мутирует)
 
   const simRef = useRef<Simulation<GraphNodeDatum, GraphLink> | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   // ссылки на силы — чтобы менять их вживую из слайдеров без пересоздания сим (позиции сохраняются)
   const settingsRef = useRef(settings);
   const chargeRef = useRef<ForceManyBody<GraphNodeDatum> | null>(null);
   const linkRef = useRef<ForceLink<GraphNodeDatum, GraphLink> | null>(null);
   const gravXRef = useRef<ForceX<GraphNodeDatum> | null>(null);
   const gravYRef = useRef<ForceY<GraphNodeDatum> | null>(null);
+  const radialRef = useRef<ForceRadial<GraphNodeDatum> | null>(null);
   const collideRef = useRef<ForceCollide<GraphNodeDatum> | null>(null);
 
   // ── загрузка данных: локальный N-hop считает Rust (глубина = hops); единый — топ-N ──
@@ -189,6 +227,7 @@ export default function GraphView() {
     }
     let cancelled = false;
     setLoading(true);
+    setOrphanPop(null);
     void (async () => {
       const data =
         mode === 'full'
@@ -200,13 +239,38 @@ export default function GraphView() {
         deg[String(e.source)] = (deg[String(e.source)] ?? 0) + 1;
         deg[String(e.target)] = (deg[String(e.target)] ?? 0) + 1;
       }
-      const nodes: GraphNodeDatum[] = data.nodes.map((n) => ({
-        id: String(n.id),
-        title: n.title ?? basename(n.path),
-        path: n.path,
-        deg: deg[String(n.id)] ?? 0,
-        tags: n.tags ?? [],
-      }));
+      const isFull = mode === 'full';
+      const stage = isFull ? STAGE.full : STAGE.local;
+      const cx = stage.w / 2;
+      const cy = stage.h / 2;
+      const rnd = makeRnd(13);
+      const nodes: GraphNodeDatum[] = data.nodes.map((n, i) => {
+        const d = deg[String(n.id)] ?? 0;
+        const node: GraphNodeDatum = {
+          id: String(n.id),
+          title: n.title ?? basename(n.path),
+          path: n.path,
+          deg: d,
+          tags: n.tags ?? [],
+        };
+        // Seed-позиции макета: сироты — кольцо-гало с джиттером; связанные — у центра;
+        // локальный — круг вокруг центра.
+        if (isFull && d === 0) {
+          const ang = rnd() * Math.PI * 2;
+          const ring = Math.min(stage.w, stage.h) * 0.42 * (0.8 + rnd() * 0.34);
+          node.ring = ring;
+          node.x = cx + Math.cos(ang) * ring;
+          node.y = cy + Math.sin(ang) * ring;
+        } else if (isFull) {
+          node.x = cx + (rnd() - 0.5) * 240;
+          node.y = cy + (rnd() - 0.5) * 240;
+        } else {
+          const ang = (i / data.nodes.length) * Math.PI * 2;
+          node.x = cx + Math.cos(ang) * 120 + (rnd() - 0.5) * 50;
+          node.y = cy + Math.sin(ang) * 120 + (rnd() - 0.5) * 50;
+        }
+        return node;
+      });
       const edgeIds: EdgeIds[] = data.edges.map((e) => ({
         source: String(e.source),
         target: String(e.target),
@@ -221,6 +285,8 @@ export default function GraphView() {
         activeId,
         total: full ? full.totalFiles : nodes.length,
         truncated: full ? full.truncated : false,
+        stage,
+        isFull,
       });
     })();
     return () => {
@@ -228,7 +294,7 @@ export default function GraphView() {
     };
   }, [mode, depth, center]);
 
-  // ── d3-force симуляция на смену данных ──
+  // ── d3-force симуляция на смену данных (силы и клампы — формулы макета graph.jsx) ──
   useEffect(() => {
     if (!graph) {
       simRef.current?.stop();
@@ -237,40 +303,101 @@ export default function GraphView() {
     }
     setLoading(true);
     const s = settingsRef.current;
-    // Отталкивание масштабируется по степени: хабы расталкивают сильнее.
+    const { stage, isFull } = graph;
+    const cx = stage.w / 2;
+    const cy = stage.h / 2;
+    // Отталкивание: хабы сильнее; сироты почти не расталкиваются (рыхлое гало, фактор макета 0.12).
     const charge = forceManyBody<GraphNodeDatum>()
-      .strength((d) => -(s.repel + d.deg * 30))
+      .strength((d) => -(s.repel * (d.ring ? 0.12 : 1) + d.deg * 30))
       .distanceMax(950);
     // ВАЖНО: НЕ задаём link.strength → d3 авто-масштабирует обратно степени (рёбра к хабам слабее).
-    // Это каноничный механизм d3, который раздвигает хабы; жёсткий uniform-strength их стягивал.
     const link = forceLink<GraphNodeDatum, GraphLink>(graph.links)
       .id((d) => d.id)
       .distance(s.linkDist);
-    // Притяжение к центру через forceX/Y (а не forceCenter): это «гравитация» — выше плотнее, ниже разлёт.
-    const gravX = forceX<GraphNodeDatum>(STAGE_W / 2).strength(s.gravity);
-    const gravY = forceY<GraphNodeDatum>(STAGE_H / 2).strength(s.gravity);
+    // Гравитация: сироты — нет (их держит кольцо); глобальное ядро — не слабее 0.022 (макет).
+    const gravStrength = (d: GraphNodeDatum) =>
+      d.ring ? 0 : isFull ? Math.max(s.gravity, 0.022) : s.gravity;
+    const gravX = forceX<GraphNodeDatum>(cx).strength(gravStrength);
+    const gravY = forceY<GraphNodeDatum>(cy).strength(gravStrength);
+    // Кольцо-гало сирот: radial-притяжение к своему радиусу (strength 0.08 — макет).
+    const radial = forceRadial<GraphNodeDatum>((d) => d.ring ?? 0, cx, cy).strength((d) =>
+      d.ring ? 0.08 : 0,
+    );
     const collide = forceCollide<GraphNodeDatum>()
-      .radius((d) => nodeRadius(d.deg) * s.sizeScale + 12)
+      .radius((d) => nodeRadius(d.deg) * s.sizeScale + 6)
       .iterations(2);
+    // Группировка по тегам (макет gs-toggle): мягкое притяжение к центроиду первого тега.
+    const groupForce: Force<GraphNodeDatum, GraphLink> = (alpha: number) => {
+      if (!settingsRef.current.group) return;
+      const cents = new Map<string, { x: number; y: number; n: number }>();
+      for (const n of graph.nodes) {
+        if (n.ring) continue;
+        const g = n.tags[0] ?? '_';
+        const c = cents.get(g) ?? { x: 0, y: 0, n: 0 };
+        c.x += n.x ?? 0;
+        c.y += n.y ?? 0;
+        c.n += 1;
+        cents.set(g, c);
+      }
+      for (const n of graph.nodes) {
+        if (n.ring) continue;
+        const c = cents.get(n.tags[0] ?? '_');
+        if (!c || c.n < 2) continue;
+        n.vx = (n.vx ?? 0) + (c.x / c.n - (n.x ?? 0)) * 0.03 * alpha;
+        n.vy = (n.vy ?? 0) + (c.y / c.n - (n.y ?? 0)) * 0.03 * alpha;
+      }
+    };
+    const coreMax = Math.min(stage.w, stage.h) * 0.27;
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
       .force('charge', charge)
       .force('link', link)
       .force('x', gravX)
       .force('y', gravY)
+      .force('radial', radial)
+      .force('group', groupForce)
       .force('collide', collide)
-      .on('tick', () => tick((v) => v + 1));
+      .on('tick', () => {
+        // Клампы макета: сироты — в полосе кольца [0.78R, 1.18R]; связанные глобального —
+        // не дальше coreMax от центра (никогда не разлетаются по углам); общие границы сцены.
+        // Узлы симуляции === graph.nodes (переданы в forceSimulation) — без обращения к sim
+        // из тика (мок d3 в тестах зовёт тик синхронно, до присвоения const).
+        for (const n of graph.nodes) {
+          if (n.fx != null) continue; // перетаскиваемую не дёргаем
+          const dx = (n.x ?? cx) - cx;
+          const dy = (n.y ?? cy) - cy;
+          const d = Math.hypot(dx, dy) || 0.01;
+          if (n.ring) {
+            const lo = n.ring * 0.78;
+            const hi = n.ring * 1.18;
+            if (d < lo || d > hi) {
+              const k = (d < lo ? lo : hi) / d;
+              n.x = cx + dx * k;
+              n.y = cy + dy * k;
+            }
+          } else if (isFull && d > coreMax) {
+            const k = coreMax / d;
+            n.x = cx + dx * k;
+            n.y = cy + dy * k;
+          }
+          n.x = Math.max(20, Math.min(stage.w - 20, n.x ?? cx));
+          n.y = Math.max(20, Math.min(stage.h - 20, n.y ?? cy));
+        }
+        tick((v) => v + 1);
+      });
     chargeRef.current = charge;
     linkRef.current = link;
     gravXRef.current = gravX;
     gravYRef.current = gravY;
+    radialRef.current = radial;
     collideRef.current = collide;
-    sim.alpha(1).restart();
+    // «Дыхание» макета: alphaTarget чуть выше нуля — граф никогда не замерзает полностью.
+    sim.alpha(1).alphaTarget(0.02).restart();
     simRef.current = sim;
     // По остыванию раскладки — авто-fit камеры (v2c) и снятие лоадера.
     const timer = setTimeout(() => {
       setLoading(false);
-      setCam(fitCamera(sim.nodes()));
-    }, 600);
+      setCam(fitCamera(sim.nodes(), stage));
+    }, 700);
     return () => {
       clearTimeout(timer);
       sim.stop();
@@ -286,13 +413,16 @@ export default function GraphView() {
       /* нет localStorage → просто не сохраняем */
     }
     if (!simRef.current) return;
-    chargeRef.current?.strength((d) => -(settings.repel + d.deg * 30));
+    chargeRef.current?.strength((d) => -(settings.repel * (d.ring ? 0.12 : 1) + d.deg * 30));
     linkRef.current?.distance(settings.linkDist);
-    gravXRef.current?.strength(settings.gravity);
-    gravYRef.current?.strength(settings.gravity);
-    collideRef.current?.radius((d) => nodeRadius(d.deg) * settings.sizeScale + 12);
+    const isFull = graph?.isFull ?? false;
+    const gravStrength = (d: GraphNodeDatum) =>
+      d.ring ? 0 : isFull ? Math.max(settings.gravity, 0.022) : settings.gravity;
+    gravXRef.current?.strength(gravStrength);
+    gravYRef.current?.strength(gravStrength);
+    collideRef.current?.radius((d) => nodeRadius(d.deg) * settings.sizeScale + 6);
     simRef.current.alpha(0.5).restart();
-  }, [settings]);
+  }, [settings, graph]);
 
   useEffect(
     () => () => {
@@ -301,6 +431,8 @@ export default function GraphView() {
     },
     [],
   );
+
+  const stage = graph?.stage ?? STAGE.local;
 
   // ── камера (DP-6/v2c): координаты курсора → логические координаты сцены с учётом viewBox ──
   const camRef = useRef(cam);
@@ -318,12 +450,13 @@ export default function GraphView() {
   // Wheel-зум вокруг курсора (passive: false не нужен — onWheel React достаточно для viewBox).
   const onWheel = (e: React.WheelEvent) => {
     const p = toLocal(e);
-    setCam((c) => zoomCamera(c, Math.exp(e.deltaY * 0.0015), p.x, p.y));
+    setCam((c) => zoomCamera(c, Math.exp(e.deltaY * 0.0015), p.x, p.y, stage.w));
   };
 
   // Пан по пустому фону (mousedown мимо нод; ноды гасят всплытие в onDown).
   const onStagePan = (e: React.MouseEvent) => {
     e.preventDefault();
+    setOrphanPop(null);
     const start = { x: e.clientX, y: e.clientY };
     const startCam = camRef.current;
     const r = svgRef.current?.getBoundingClientRect();
@@ -343,8 +476,8 @@ export default function GraphView() {
 
   const fit = useCallback(() => {
     const nodes = simRef.current?.nodes() ?? [];
-    setCam(fitCamera(nodes));
-  }, []);
+    setCam(fitCamera(nodes, stage));
+  }, [stage]);
 
   // ── drag: пиннуем ноду (fx/fy) + разогрев; связанные подтягиваются физикой с сопротивлением ──
   const onDown = useCallback(
@@ -353,8 +486,7 @@ export default function GraphView() {
       e.stopPropagation(); // не запускать пан фона (DP-6)
       const sim = simRef.current;
       if (!sim) return;
-      // Освобождаем ранее «закреплённые» ноды: при перетягивании другой (связанной) ноды прежние
-      // снова включаются в физику — pin не навсегда (как в Obsidian).
+      // Освобождаем ранее «закреплённые» ноды: pin не навсегда (как в Obsidian).
       for (const other of sim.nodes()) {
         if (other.id !== node.id) {
           other.fx = null;
@@ -372,14 +504,26 @@ export default function GraphView() {
         node.fx = p.x;
         node.fy = p.y;
       };
-      const up = () => {
-        sim.alphaTarget(0);
+      const up = (ev: MouseEvent) => {
+        sim.alphaTarget(0.02); // обратно к «дыханию», не к нулю
         setDragId(null);
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
         if (moved) {
-          // перетащили → нода ОСТАЁТСЯ там, где бросили (sticky, как в Obsidian): fx/fy НЕ сбрасываем,
-          // соседи переселяются вокруг неё. Освобождение — только при следующем drag или новых данных.
+          // перетащили → нода ОСТАЁТСЯ там, где бросили (sticky, как в Obsidian).
+        } else if (node.deg === 0) {
+          // клик по сироте → поповер «Изолированная заметка» (макет orphan-pop), не открытие
+          node.fx = null;
+          node.fy = null;
+          const sr = stageRef.current?.getBoundingClientRect();
+          if (sr) {
+            setOrphanPop({
+              path: node.path,
+              x: ev.clientX - sr.left,
+              y: ev.clientY - sr.top,
+              phase: 'info',
+            });
+          }
         } else {
           // клик без движения → не закрепляем; открываем файл
           node.fx = null;
@@ -393,6 +537,21 @@ export default function GraphView() {
     },
     [close, openFile],
   );
+
+  // «Предложить связь» для изолированной заметки (макет op-ai): топ-1 предложения Ф1-9.
+  const suggestForOrphan = useCallback((path: string) => {
+    setOrphanPop((p) => (p ? { ...p, phase: 'thinking' } : p));
+    tauriApi.suggest
+      .forFile(path, 1)
+      .then((list) =>
+        setOrphanPop((p) =>
+          p && p.phase === 'thinking' ? { ...p, phase: 'done', pick: list[0] ?? null } : p,
+        ),
+      )
+      .catch(() =>
+        setOrphanPop((p) => (p && p.phase === 'thinking' ? { ...p, phase: 'done', pick: null } : p)),
+      );
+  }, []);
 
   const focus = dragId ?? hover;
   const nbrs = useMemo(() => (graph ? neighborSet(graph.edgeIds, focus) : null), [graph, focus]);
@@ -411,6 +570,9 @@ export default function GraphView() {
   );
 
   const showCanvas = mode === 'full' || !!center;
+  // Лейблы макета: всегда у активной/hover/drag; у остальных — только средний зум (1.25…3.2).
+  const scale = stage.w / cam.w;
+  const labelsByZoom = scale >= 1.25 && scale <= 3.2;
 
   return (
     <div className="graph-view">
@@ -486,7 +648,7 @@ export default function GraphView() {
         </div>
       )}
 
-      <div className="graph-stage">
+      <div className="graph-stage" ref={stageRef}>
         {!showCanvas && <div className="graph-loading">{t('graph.empty')}</div>}
         {showCanvas && loading && (
           <div className="graph-loading graph-thinking">
@@ -537,6 +699,8 @@ export default function GraphView() {
               const isKin = !isActive && kin.has(n.id);
               // Активная нота красится акцентом из CSS (inline-fill перебил бы класс .active).
               const fill = isActive ? null : nodeColor(n.tags);
+              const pin = isActive || n.id === focus;
+              const labelOn = pin || labelsByZoom;
               return (
                 <g
                   key={n.id}
@@ -557,9 +721,11 @@ export default function GraphView() {
                   <circle r={r} className="g-dot" style={fill ? { fill } : undefined} />
                   {isActive && <circle r={r + 5} className="g-ring" />}
                   {isKin && <circle r={r + 3.5} className="g-kinring" />}
-                  <text y={r + 14} className="g-label" textAnchor="middle">
-                    {n.title}
-                  </text>
+                  {labelOn && (
+                    <text y={r + 14} className="g-label" textAnchor="middle">
+                      {n.title}
+                    </text>
+                  )}
                 </g>
               );
             })}
@@ -570,7 +736,7 @@ export default function GraphView() {
           <div className="graph-zoom">
             <button
               className="gz-btn"
-              onClick={() => setCam((c) => zoomCamera(c, 0.8, c.x + c.w / 2, c.y + c.h / 2))}
+              onClick={() => setCam((c) => zoomCamera(c, 0.8, c.x + c.w / 2, c.y + c.h / 2, stage.w))}
               title={t('graph.zoomIn')}
               aria-label={t('graph.zoomIn')}
             >
@@ -578,7 +744,7 @@ export default function GraphView() {
             </button>
             <button
               className="gz-btn"
-              onClick={() => setCam((c) => zoomCamera(c, 1.25, c.x + c.w / 2, c.y + c.h / 2))}
+              onClick={() => setCam((c) => zoomCamera(c, 1.25, c.x + c.w / 2, c.y + c.h / 2, stage.w))}
               title={t('graph.zoomOut')}
               aria-label={t('graph.zoomOut')}
             >
@@ -592,6 +758,62 @@ export default function GraphView() {
             >
               <Maximize2 size={14} />
             </button>
+          </div>
+        )}
+
+        {/* Поповер изолированной заметки (макет orphan-pop): почему одна + AI-предложение связи. */}
+        {orphanPop && (
+          <div
+            className="orphan-pop"
+            style={{ left: orphanPop.x, top: orphanPop.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="op-close"
+              onClick={() => setOrphanPop(null)}
+              aria-label={t('graph.close')}
+            >
+              <X size={13} />
+            </button>
+            <div className="op-head">
+              <span className="op-dot" />
+              <span>{t('graph.orphanTitle')}</span>
+            </div>
+            <div className="op-sub">{t('graph.orphanSub')}</div>
+            {orphanPop.phase === 'info' && (
+              <button className="op-ai" onClick={() => suggestForOrphan(orphanPop.path)}>
+                <BrandThinking size={15} />
+                <span>{t('graph.orphanSuggest')}</span>
+              </button>
+            )}
+            {orphanPop.phase === 'thinking' && (
+              <div className="op-think">
+                <BrandThinking size={16} />
+                <span className="mt-label">{t('graph.orphanThinking')}</span>
+              </div>
+            )}
+            {orphanPop.phase === 'done' &&
+              (orphanPop.pick ? (
+                <div className="op-result">
+                  <div className="op-rlabel">{t('graph.orphanResult')}</div>
+                  <button
+                    className="op-link"
+                    onClick={() => {
+                      const target = orphanPop.pick?.path;
+                      setOrphanPop(null);
+                      if (target) {
+                        close();
+                        void openFile(target);
+                      }
+                    }}
+                  >
+                    <Link2 size={13} />
+                    <span>[[{orphanPop.pick.title ?? basename(orphanPop.pick.path)}]]</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="op-sub">{t('graph.orphanNone')}</div>
+              ))}
           </div>
         )}
 
@@ -614,18 +836,18 @@ export default function GraphView() {
             <SettingRow
               label={t('graph.linkDist')}
               min={40}
-              max={240}
-              step={5}
+              max={190}
+              step={2}
               value={settings.linkDist}
               onChange={(v) => setSettings((s) => ({ ...s, linkDist: v }))}
             />
             <SettingRow
               label={t('graph.gravity')}
               min={0}
-              max={0.25}
-              step={0.01}
+              max={0.06}
+              step={0.002}
               value={settings.gravity}
-              fmt={(v) => v.toFixed(2)}
+              fmt={(v) => v.toFixed(3)}
               onChange={(v) => setSettings((s) => ({ ...s, gravity: v }))}
             />
             <SettingRow
@@ -637,6 +859,18 @@ export default function GraphView() {
               fmt={(v) => v.toFixed(1) + '×'}
               onChange={(v) => setSettings((s) => ({ ...s, sizeScale: v }))}
             />
+            {/* Группировка по тегам — gs-toggle макета. */}
+            <button
+              type="button"
+              className="graph-row graph-grouprow"
+              onClick={() => setSettings((s) => ({ ...s, group: !s.group }))}
+              aria-pressed={settings.group}
+            >
+              <span className="graph-row-label">{t('graph.groupTags')}</span>
+              <span className={'gs-switch' + (settings.group ? ' on' : '')}>
+                <span className="gs-knob" />
+              </span>
+            </button>
           </div>
         )}
       </div>

@@ -31,10 +31,10 @@ describe('graph-sim (помощники подсветки/размера)', () 
     expect(kinSet(chain, null)).toEqual(new Set());
   });
 
-  it('nodeRadius: sqrt-шкала, клампится 5..28', () => {
-    expect(nodeRadius(0)).toBe(5);
-    expect(nodeRadius(1)).toBeCloseTo(9.2, 5);
-    expect(nodeRadius(100)).toBe(28); // 5 + 10·4.2 = 47 → клампится в 28
+  it('nodeRadius: формула макета — сирота-точка 3.5, дальше 5.5..15', () => {
+    expect(nodeRadius(0)).toBe(3.5); // сирота — точка гало
+    expect(nodeRadius(1)).toBeCloseTo(6.6, 5); // 5 + 1·1.6
+    expect(nodeRadius(100)).toBe(15); // клампится в 15 (хаб)
   });
 
   it('endpointId: id из строки или из узла (до/после d3-init)', () => {

@@ -10,6 +10,7 @@ vi.mock('d3-force', () => {
     forceLink: () => chain,
     forceX: () => chain,
     forceY: () => chain,
+    forceRadial: () => chain,
     forceCollide: () => chain,
     forceSimulation: (nodes: Array<{ x?: number; y?: number }> = []) => {
       nodes.forEach((n, i) => {
