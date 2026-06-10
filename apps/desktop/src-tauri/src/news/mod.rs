@@ -7,8 +7,10 @@
 //! DNS-rebinding-гард), NF-5 — страница UI. Контент фидов НЕДОВЕРЕННЫЙ: в LLM-промпты он пойдёт
 //! только между injection-маркерами (AC-SEC-7-паттерн), а здесь — никогда не интерпретируется.
 
+mod llm;
 mod parse;
 
+pub use llm::{daily_digest, evaluate_entries, EvalReport, EvaluatedEntry};
 pub use parse::parse_feed;
 
 use thiserror::Error;
