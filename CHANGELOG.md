@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Фикс «вечных воркеров» vault + паника-страховка планировщика (аудит багов 2026-06-10)
+
+- **Жизненный цикл воркеров привязан к `VaultContext`** (новое поле `lifecycle`): воркер
+  планировщика и watcher-петля индексатора раньше были бесконечными циклами — каждый повторный
+  `open_vault` плодил ДУБЛИКАТЫ (два watcher'а на каталог, двойная индексация, LLM-джобы
+  закрытого vault продолжали жечь модель). Теперь: watcher живёт в контексте (drop → mpsc-канал
+  закрыт → петля выходит), воркер планировщика гаснет по `tokio::sync::watch`-shutdown (sender в
+  контексте). `indexer::spawn` возвращает watcher (`#[must_use]`); `scheduler::worker_loop`
+  вынесен из `spawn_worker` с хуками (тестируется без `AppHandle`). Тесты:
+  `worker_loop_stops_when_shutdown_sender_dropped`, `event_loop_indexes_and_stops_when_sender_dropped`.
+- **Паника `JobHandler` больше не валит воркер и не вешает джобу в `running`** (раньше — вечный
+  requeue без backoff на каждом открытии): вызов изолирован в `tokio::spawn`, `JoinError`(паника)
+  → штатный `fail()` (attempts++/backoff/dead). Тест `panicking_handler_fails_job_not_stuck_running`.
+- **Чат: смена vault посреди стрима** — осиротевший стрим теперь дорезается в `hydrate` ДО смены
+  ключа персиста (хвост финализируется в историю СТАРОГО vault, отмена уходит на бэкенд). Тест в
+  `chat.test.ts`. Остальные заявки аудита проверены и отклонены как ложные/by-design — разбор в
+  `NIGHT-PLAN.md` (журнал 2026-06-10). Сверка traceability: **AC-Б10-2 → covered** (сделан в #17,
+  localStorage per-vault).
+
 ### CI: bundle-smoke `tauri build --debug` (кросс-план #3)
 
 - Новая CI-джоба `bundle-debug` (только push в main, ubuntu): `tauri build --debug --bundles deb`

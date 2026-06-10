@@ -552,3 +552,46 @@ async fn live_rag_index_and_semantic_search() {
         "ближайший к запросу про кошку чанк — из cat.md"
     );
 }
+
+/// Фикс «вечных воркеров» (аудит 2026-06-10): петля событий обрабатывает Upsert и ШТАТНО
+/// ЗАВЕРШАЕТСЯ, когда sender канала дропнут (= VaultWatcher дропнут из VaultContext при
+/// повторном open_vault). Раньше watcher жил внутри задачи → петля не завершалась никогда.
+#[tokio::test]
+async fn event_loop_indexes_and_stops_when_sender_dropped() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::create_dir_all(root.join(".nexus")).unwrap();
+    fs::write(root.join("note.md"), "# Заметка\n\nтекст").unwrap();
+    let db = open(&root).await;
+    let indexer = Indexer::new(&db, root.clone());
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::watcher::VaultEvent>();
+    let notified = Arc::new(AtomicUsize::new(0));
+    let n2 = notified.clone();
+    let handle = tokio::spawn(events::event_loop(indexer, rx, move || {
+        n2.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    // Событие обрабатывается (файл попадает в индекс)...
+    fs::write(root.join("new.md"), "# Новая\n\nещё текст").unwrap();
+    tx.send(crate::watcher::VaultEvent::Upsert(root.join("new.md")))
+        .unwrap();
+    // ...дроп sender'а (= дроп watcher'а из VaultContext) штатно завершает петлю.
+    drop(tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("петля обязана завершиться после дропа sender (не вечная)")
+        .expect("петля завершилась без паники");
+
+    assert!(
+        file_id(&db, "new.md").await > 0,
+        "Upsert до дропа обработан"
+    );
+    assert!(
+        notified.load(Ordering::SeqCst) >= 2,
+        "нотификации: начальный скан + событие"
+    );
+}

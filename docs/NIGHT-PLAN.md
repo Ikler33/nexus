@@ -297,7 +297,7 @@
 - `#5` синк доки с кодом (§4.3 AIClient=«план», §5.1 rebuild=«не реализ.», §2 раскладка) + AC-Q-6 авто-линт висячих упоминаний
 - `#6` PRAGMA mmap/cache/temp_store + usearch F32→F16-опция
 - `#7` единый source версии (вместо `0.0.0`×4) + CI-проверка синка 4 файлов
-- `#8`(част.) слить двойной разбор `local.json` в `open_vault` · ~~`#18` per-path coverage~~ **✅** (PR #103: `check-coverage.mjs` + floors `coverage-baseline.json`) · `#23` render-smoke графа · `#33` конвенция `Redacted`
+- ~~`#8`(част.) слить двойной разбор `local.json` в `open_vault`~~ **✅** (сделан ранее: `load_local_config` парсит один раз, коммент в open_vault) · ~~`#18` per-path coverage~~ **✅** (PR #103: `check-coverage.mjs` + floors `coverage-baseline.json`) · `#23` render-smoke графа · `#33` конвенция `Redacted`
 
 **🟡 Wave B — фундамент (M/L, автономно, СТРОГИЙ порядок):**
 - ~~`#13` примитив rebuild FTS5/usearch в раннере миграций~~ **✅** (`rebuild_fts`-флаг на `Migration`)
@@ -371,6 +371,31 @@
   CI-grep-линт `check-egress.mjs` (self-test) + единственность `is_private_host`.
   **AC-EGR-1..13 → covered**, AC-EGR-14 pending (i18n-фронт, срез 2). Срезы 2–4 — `docs/dev/net.md`.
 - 🧹 Хаускипинг: BACKLOG/NIGHT-PLAN сверены с кодом (этот PR); хвосты #91/#93 сняты как смерженные.
+
+### Прогон 2026-06-10 (автономная ночь, продолжение): бэклог-чистка + аудит багов
+- ✅ Хаускипинг доков (PR #107) · **AC-Q-6 линт `check-dangling.mjs`** (PR #108, последний pending
+  AC-Q-блока) · **#22 `list_notes(query,limit)` + `resolve_note`** (PR #109; бонус: алиасные ссылки
+  кликабельны; runtime-проверка в превью) · **#3 bundle-smoke CI-джоба** (PR #110; локально macOS
+  `.app` ок, dmg-шаг в headless падает → BACKLOG 🔬).
+- 🔎 **Аудит багов (Explore-агент + ручная верификация КАЖДОЙ находки).** Подтверждены и
+  ПОЧИНЕНЫ (этот срез): **(а) «вечные воркеры»** — `scheduler::spawn_worker` и watcher-петля
+  индексатора жили вечно; каждый повторный `open_vault` плодил дубликаты (двойная индексация,
+  LLM-джобы закрытого vault). Фикс: `VaultContext::lifecycle` (watcher + watch-sender), drop →
+  петли гаснут; тесты `worker_loop_stops_when_shutdown_sender_dropped`,
+  `event_loop_indexes_and_stops_when_sender_dropped`. **(б) паника JobHandler** оставляла джобу в
+  `running` (вечный requeue без backoff) и валила воркер. Фикс: изоляция `tokio::spawn` →
+  JoinError → штатный `fail()`; тест `panicking_handler_fails_job_not_stuck_running`.
+  **(в) смена vault посреди чат-стрима** — осиротевший стрим продолжал жечь LLM; теперь `hydrate`
+  дорезает его ДО смены ключа (хвост — в историю старого vault); тест в `chat.test.ts`.
+- 🔎 **Отклонённые заявки агента** (проверены кодом, НЕ баги): rAF-буфер чата «теряется при
+  unmount» — нет, стор синглтон, `done/stop` дорезают хвост синхронно; «cancelAnimationFrame
+  гонится с очередью» — нет, отмена до колбэка гарантирована; usearch `save()`-fire-and-forget —
+  осознанный дизайн (crash-reconcile §5.1 восстанавливает); «force-флаг индексатора рассинхронен» —
+  ложь, reconcile идёт ДО создания Indexer; TOCTOU policy/send в net/ — известная микро-щель,
+  приемлема (см. ADR-005-ext).
+- 📎 Сверка traceability: **AC-Б10-2 → covered** (финализация в историю на `done` + видна после
+  перезагрузки = сделано в #17 через localStorage per-vault; медиум отличается от задуманного
+  SQLite `chat_*` — отражено в note; ChatSession-модель «много бесед» — отдельная продуктовая фича).
 
 ### 🏁 Сделано до кросс-плана (дневная сессия)
 граф v2d (#44), V2.2 rename (#45), V4.4 общий чат (#46), V4.3 анти-инъекция (#47), V4.5 eval-гейт (#48),

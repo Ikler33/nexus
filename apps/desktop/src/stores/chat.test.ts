@@ -174,4 +174,23 @@ describe('chat store (Ф1-8)', () => {
     useChatStore.getState().hydrate('/vault/A');
     expect(useChatStore.getState().messages).toHaveLength(0);
   });
+
+  // Аудит 2026-06-10: смена vault ПОСРЕДИ стрима — осиротевший стрим дорезается ДО смены ключа:
+  // хвост финализируется в историю СТАРОГО vault (не утекает в новый), новый vault чист.
+  it('hydrate при активном стриме: стрим дорезан, история не утекает между vault', async () => {
+    useChatStore.getState().hydrate('/vault/A');
+    useChatStore.getState().send('вопрос про A');
+    expect(useChatStore.getState().streaming).toBe(true);
+
+    // Переключаемся на B, НЕ дожидаясь конца стрима.
+    useChatStore.getState().hydrate('/vault/B');
+    expect(useChatStore.getState().streaming).toBe(false);
+    expect(useChatStore.getState().messages).toHaveLength(0); // B чист — стрим A не протёк
+
+    // История A финализирована ПОД КЛЮЧОМ A (вопрос + дорезанный ответ без стрим-флагов).
+    useChatStore.getState().hydrate('/vault/A');
+    const a = useChatStore.getState().messages;
+    expect(a[0]).toMatchObject({ role: 'user', content: 'вопрос про A' });
+    expect(a.every((m) => !m.streaming)).toBe(true);
+  });
 });
