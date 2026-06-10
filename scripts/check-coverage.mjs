@@ -24,7 +24,9 @@ const MODULE_PATHS = {
   'plugin/broker': '/src/plugin/broker.rs',
   'plugin/permission': '/src/plugin/permission.rs',
   watcher: '/src/watcher',
-  eval: '/src/eval/',
+  // eval меряем по mod.rs: live/bench-тесты (`live_tests.rs`, все #[ignore]) в CI принципиально
+  // не исполняются (нужен живой сервер/vault) и лишь давили метрику исполняемого кода.
+  eval: '/src/eval/mod.rs',
 };
 
 const reportPath = process.argv[2];

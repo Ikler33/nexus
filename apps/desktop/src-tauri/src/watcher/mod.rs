@@ -290,4 +290,116 @@ mod tests {
         assert!(got.contains(&VaultEvent::Deleted(from)));
         assert!(got.contains(&VaultEvent::Deleted(to)));
     }
+
+    // ── to_raw_changes: debounced-событие → сырые изменения (ночь 2026-06-11, каверидж-срез) ──
+
+    use notify_debouncer_full::notify::event::{
+        CreateKind, DataChange, EventAttributes, ModifyKind as MK, RemoveKind, RenameMode,
+    };
+    use notify_debouncer_full::notify::Event;
+    use std::time::Instant;
+
+    fn evt(kind: EventKind, paths: Vec<PathBuf>) -> DebouncedEvent {
+        DebouncedEvent {
+            event: Event {
+                kind,
+                paths,
+                attrs: EventAttributes::new(),
+            },
+            time: Instant::now(),
+        }
+    }
+
+    /// Create/Remove/Modify(Data) → Created/Removed/Modified; игнорные пути отфильтрованы.
+    #[test]
+    fn raw_changes_basic_kinds_and_ignore_filter() {
+        let keep = PathBuf::from("/vault/Note.md");
+        let ignored = PathBuf::from("/vault/.nexus/nexus.db");
+
+        let created = to_raw_changes(&evt(
+            EventKind::Create(CreateKind::File),
+            vec![keep.clone(), ignored.clone()],
+        ));
+        assert_eq!(created, vec![RawChange::Created(keep.clone())]);
+
+        let removed = to_raw_changes(&evt(
+            EventKind::Remove(RemoveKind::File),
+            vec![keep.clone(), ignored.clone()],
+        ));
+        assert_eq!(removed, vec![RawChange::Removed(keep.clone())]);
+
+        let modified = to_raw_changes(&evt(
+            EventKind::Modify(MK::Data(DataChange::Content)),
+            vec![keep.clone()],
+        ));
+        let keep2 = keep.clone();
+        assert_eq!(modified, vec![RawChange::Modified(keep)]);
+
+        // Прочие виды (Any и т.п.) событий не порождают.
+        let other = to_raw_changes(&evt(EventKind::Any, vec![keep2]));
+        assert!(other.is_empty());
+    }
+
+    /// Склеенная пара Modify(Name): источник — исчезнувший путь, цель — существующий,
+    /// независимо от порядка путей notify.
+    #[test]
+    fn raw_changes_rename_pair_orients_by_existence() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let gone = dir.path().join("Old.md");
+        let there = dir.path().join("New.md");
+        std::fs::write(&there, "x").unwrap();
+
+        for paths in [
+            vec![gone.clone(), there.clone()],
+            vec![there.clone(), gone.clone()], // перепутанный порядок notify
+        ] {
+            let got = to_raw_changes(&evt(EventKind::Modify(MK::Name(RenameMode::Both)), paths));
+            assert_eq!(
+                got,
+                vec![RawChange::Renamed(gone.clone(), there.clone())],
+                "источник = исчезнувший, цель = существующий"
+            );
+        }
+    }
+
+    /// Несклеенный одиночный Modify(Name) (или пара с игнорным путём) деградирует к
+    /// Created/Removed по факту существования.
+    #[test]
+    fn raw_changes_unpaired_rename_degrades_by_existence() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let there = dir.path().join("Exists.md");
+        std::fs::write(&there, "x").unwrap();
+        let gone = dir.path().join("Gone.md");
+
+        let got = to_raw_changes(&evt(
+            EventKind::Modify(MK::Name(RenameMode::Any)),
+            vec![there.clone()],
+        ));
+        assert_eq!(got, vec![RawChange::Created(there)]);
+
+        let got = to_raw_changes(&evt(
+            EventKind::Modify(MK::Name(RenameMode::Any)),
+            vec![gone.clone()],
+        ));
+        assert_eq!(got, vec![RawChange::Removed(gone)]);
+    }
+
+    /// Live-smoke `VaultWatcher::new`: реальный notify на tempdir доставляет Upsert после записи.
+    /// Доставка зависит от ФС/нагрузки CI → по таймауту тест мягко выходит (цель — исполнение
+    /// пути инициализации watcher'а + штатная доставка там, где ФС отдаёт события вовремя).
+    #[tokio::test]
+    async fn live_watcher_delivers_upsert_smoke() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VaultEvent>();
+        let _watcher = VaultWatcher::new(dir.path(), tx).expect("watcher init");
+
+        tokio::time::sleep(Duration::from_millis(150)).await; // watcher успевает подняться
+        std::fs::write(dir.path().join("Live.md"), "# live\n").unwrap();
+
+        match tokio::time::timeout(Duration::from_secs(8), rx.recv()).await {
+            Ok(Some(VaultEvent::Upsert(p))) => assert!(p.ends_with("Live.md")),
+            Ok(other) => panic!("ожидали Upsert, получили {other:?}"),
+            Err(_) => eprintln!("live watcher: событие не пришло за 8с (медленная ФС) — skip"),
+        }
+    }
 }

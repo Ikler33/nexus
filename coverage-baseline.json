@@ -1,25 +1,25 @@
 {
-  "_note": "Per-module line-coverage floors (ratchet «не ниже»). Гейт: scripts/check-coverage.mjs по отчёту cargo-llvm-cov (TESTING_STRATEGY §6, AC-Q-2). Цель критичных модулей — 70%; watcher/eval пока НИЖЕ цели → floor зафиксирован по факту (ратчет, не регрессировать), растить к 70 отдельными тестовыми срезами. Числа сняты локально (macOS aarch64); floor взят С ЗАПАСОМ под macOS↔Linux-вариативность (особенно watcher/indexer — есть per-OS код) и тюнится вверх по факту CI-Linux (скрипт печатает фактические % каждый прогон). Маппинг модуль→путь — в скрипте.",
+  "_note": "Per-module line-coverage floors (ratchet «не ниже»). Гейт: scripts/check-coverage.mjs по отчёту cargo-llvm-cov (TESTING_STRATEGY §6, AC-Q-2). Цель критичных модулей — 70%; watcher/eval добиты тестовым срезом (ночь 2026-06-11: юниты to_raw_changes + live-smoke watcher; вынос ignored live-тел eval в live_tests.rs) — floors подняты выше цели 70. Числа сняты локально (macOS aarch64); floor взят С ЗАПАСОМ под macOS↔Linux-вариативность (особенно watcher/indexer — есть per-OS код) и тюнится вверх по факту CI-Linux (скрипт печатает фактические % каждый прогон). Маппинг модуль→путь — в скрипте.",
   "_target": 70,
   "_measured_local": {
-    "global": 75.5,
-    "indexer": 70.0,
+    "global": 81.1,
+    "indexer": 84.6,
     "chunker": 98.3,
-    "search": 85.6,
+    "search": 85.8,
     "plugin/broker": 93.0,
-    "plugin/permission": 98.1,
-    "watcher": 61.8,
-    "eval": 48.6
+    "plugin/permission": 98.2,
+    "watcher": 97.1,
+    "eval": 93.5
   },
   "tolerance": 0.5,
-  "global": 68,
+  "global": 75,
   "modules": {
     "indexer": 64,
     "chunker": 96,
     "search": 82,
     "plugin/broker": 90,
     "plugin/permission": 96,
-    "watcher": 52,
-    "eval": 45
+    "watcher": 85,
+    "eval": 85
   }
 }
