@@ -5,7 +5,7 @@ import { BacklinksBar } from './BacklinksBar';
 describe('BacklinksBar (Ф0-6/Ф0-9)', () => {
   it('показывает входящие ссылки переданного файла', async () => {
     render(<BacklinksBar path="Inbox.md" />); // на Inbox ссылается README (mock)
-    expect(await screen.findByText('README.md')).toBeInTheDocument();
+    expect(await screen.findByText('README')).toBeInTheDocument(); // DP-15: title без .md
   });
 
   it('показывает пустое состояние, когда обратных ссылок нет', async () => {

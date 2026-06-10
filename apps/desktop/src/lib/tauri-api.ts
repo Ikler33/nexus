@@ -445,6 +445,12 @@ export const tauriApi = {
     notesCount: (): Promise<number> =>
       isTauri() ? invoke<number>('notes_count') : Promise.resolve(847),
 
+    /** Unix-mtime файла (сек) — clock-чип doc-meta превью (DP-15). Мок — «3 ч назад». */
+    fileMtime: (path: string): Promise<number> =>
+      isTauri()
+        ? invoke<number>('file_mtime', { path })
+        : Promise.resolve(Math.floor(Date.now() / 1000) - 3 * 3600),
+
     /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
     pickDirectory: async (): Promise<string | null> => {
       if (!isTauri()) return null;

@@ -216,12 +216,31 @@
   padding: var(--space-2) var(--space-1);
 }
 .panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--color-text-faint);
   font-weight: 600;
   padding: var(--space-2) var(--space-3) var(--space-1);
+}
+/* «+» в заголовке секции «Файлы» (DP-15, макет side-head). */
+.panelHeadBtn {
+  border: none;
+  background: none;
+  padding: 2px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-faint);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--motion-fast), background var(--motion-fast);
+}
+.panelHeadBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 .panelHint {
   padding: var(--space-3);

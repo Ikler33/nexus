@@ -23,6 +23,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { renderBold } from '../../lib/render';
+import { relTime } from '../../lib/time';
 import { isTauri, tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
 import { useHomeStore } from '../../stores/home';
 import { usePrefsStore } from '../../stores/prefs';
@@ -33,17 +34,6 @@ import { BrandThinking } from '../chrome/BrandThinking';
 import styles from './HomeView.module.css';
 
 const HEAT_WEEKS = 17;
-
-/** Unix-секунды → относительное время в локали UI. */
-function relTime(ts: number, locale: string): string {
-  const diff = Math.max(0, Math.floor(Date.now() / 1000) - ts);
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'short' });
-  if (diff < 90) return rtf.format(-1, 'minute');
-  if (diff < 3600) return rtf.format(-Math.floor(diff / 60), 'minute');
-  if (diff < 86_400) return rtf.format(-Math.floor(diff / 3600), 'hour');
-  if (diff < 30 * 86_400) return rtf.format(-Math.floor(diff / 86_400), 'day');
-  return new Date(ts * 1000).toLocaleDateString(locale, { day: 'numeric', month: 'short' });
-}
 
 /** Ключ приветствия по локальному часу. */
 function greetKey(hour: number): string {

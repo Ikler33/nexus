@@ -64,7 +64,10 @@ export function BacklinksBar({ path }: { path: string }) {
           {items.map((b, i) => (
             <li key={`${b.sourcePath}:${b.lineNumber ?? 0}:${i}`}>
               <button className={styles.item} onClick={() => void openFile(b.sourcePath)}>
-                <span className={styles.itemPath}>{b.sourcePath}</span>
+                {/* DP-15 (макет): title заметки-источника, не путь с .md. */}
+                <span className={styles.itemPath}>
+                  {b.sourceTitle ?? b.sourcePath.replace(/\.md$/, '')}
+                </span>
                 {b.context && <span className={styles.itemContext}>{b.context}</span>}
               </button>
             </li>

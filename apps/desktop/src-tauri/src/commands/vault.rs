@@ -658,6 +658,21 @@ pub async fn notes_count(state: State<'_, AppState>) -> AppResult<i64> {
         .await?)
 }
 
+/// Unix-mtime файла vault (сек) — clock-чип doc-meta превью (DP-15, макет editor.jsx).
+#[tauri::command]
+pub async fn file_mtime(state: State<'_, AppState>, path: String) -> AppResult<i64> {
+    let root = current_root(&state).await?;
+    let abs = vault::resolve_vault_path(&root, Path::new(&path))?;
+    let meta = tokio::fs::metadata(&abs).await?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(mtime)
+}
+
 /// Корень текущего открытого vault (или [`AppError::NoVault`], если не открыт).
 async fn current_root(state: &State<'_, AppState>) -> AppResult<PathBuf> {
     Ok(state.vault().await?.root.clone())

@@ -114,7 +114,26 @@ export function Sidebar() {
         </nav>
       )}
 
-      {panel === 'files' && <FileTree />}
+      {panel === 'files' && (
+        <>
+          {/* DP-15 (макет sidebar.jsx side-head): заголовок секции с «+» (новая заметка). */}
+          {vaultOpen && (
+            <div className={styles.panelHead}>
+              {t('sidebar.files')}
+              <button
+                type="button"
+                className={styles.panelHeadBtn}
+                onClick={() => void createNote().then((path) => openFile(path))}
+                title={t('sidebar.newNote')}
+                aria-label={t('sidebar.newNote')}
+              >
+                <Plus size={14} aria-hidden />
+              </button>
+            </div>
+          )}
+          <FileTree />
+        </>
+      )}
 
       {panel === 'search' && (
         <>
