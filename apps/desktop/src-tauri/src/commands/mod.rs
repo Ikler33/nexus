@@ -10,6 +10,7 @@ pub mod goals;
 pub mod graph;
 pub mod home;
 pub mod inline;
+pub mod news;
 pub mod plugin;
 pub mod scheduler;
 pub mod search;
