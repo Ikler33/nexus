@@ -113,6 +113,7 @@ pub fn run() {
             commands::vault::resolve_note,
             commands::vault::list_tags,
             commands::vault::rescan_vault,
+            commands::vault::notes_count,
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::graph::get_full_graph,

@@ -63,8 +63,26 @@
 .dotOk {
   background: var(--color-success);
 }
+.dotWarn {
+  background: var(--color-warning);
+}
 .dotBad {
   background: var(--color-danger);
+}
+
+/* Конфликт-пилюля (DP-14, макет .sb-conflict): клик открывает резолвер. */
+.conflict {
+  border: 1px solid color-mix(in oklch, var(--color-warning) 55%, transparent);
+  background: color-mix(in oklch, var(--color-warning) 14%, transparent);
+  color: var(--color-warning);
+  border-radius: 99px;
+  padding: 1px 9px;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.conflict:hover {
+  background: color-mix(in oklch, var(--color-warning) 24%, transparent);
 }
 .progress {
   width: 70px;

@@ -431,7 +431,14 @@
     "jobsTitle": "Background tasks: {{running}} running · {{pending}} queued · {{dead}} failed",
     "working_one": "{{count}} task",
     "working_other": "{{count}} tasks",
-    "local": "Local"
+    "local": "Local",
+    "synced": "Synced",
+    "changes_one": "Changes · {{count}}",
+    "changes_other": "Changes · {{count}}",
+    "indexed": "Indexed",
+    "conflict": "Conflict",
+    "conflicts_one": "{{count}} conflict",
+    "conflicts_other": "{{count}} conflicts"
   },
   "plugins": {
     "title": "Plugins",

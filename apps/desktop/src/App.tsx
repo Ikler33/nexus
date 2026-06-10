@@ -33,6 +33,9 @@ const PluginsPanel = lazy(() =>
 const SyncPanel = lazy(() =>
   import('./components/sync/SyncPanel').then((m) => ({ default: m.SyncPanel })),
 );
+const ConflictResolver = lazy(() =>
+  import('./components/sync/ConflictResolver').then((m) => ({ default: m.ConflictResolver })),
+);
 
 /**
  * Оболочка приложения (дизайн-система Hermes): titlebar (бренд / поиск / инструменты) + тело
@@ -45,6 +48,8 @@ export function App() {
   const chatOpen = useUIStore((s) => s.chatOpen);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   const syncOpen = useUIStore((s) => s.syncOpen);
+  const conflictOpen = useUIStore((s) => s.conflictOpen);
+  const closeConflict = useUIStore((s) => s.closeConflict);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
@@ -160,6 +165,12 @@ export function App() {
       {syncOpen && (
         <Suspense fallback={null}>
           <SyncPanel />
+        </Suspense>
+      )}
+      {/* DP-14: конфликт-резолвер из пилюли статусбара (мимо SyncPanel, как onConflict макета). */}
+      {conflictOpen && (
+        <Suspense fallback={null}>
+          <ConflictResolver onClose={closeConflict} />
         </Suspense>
       )}
       {tweaksOpen && <SettingsView />}

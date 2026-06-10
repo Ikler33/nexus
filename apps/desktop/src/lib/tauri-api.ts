@@ -440,6 +440,11 @@ export const tauriApi = {
      * полный обход; по завершении бэкенд шлёт `vault:changed`. В браузере — no-op. */
     rescan: (): Promise<void> => (isTauri() ? invoke<void>('rescan_vault') : Promise.resolve()),
 
+    /** Число живых заметок индекса — статусбар «Проиндексировано · N» (DP-14). Мок — 847,
+     * как в демо-данных Home (`lib/mock/home.ts`). */
+    notesCount: (): Promise<number> =>
+      isTauri() ? invoke<number>('notes_count') : Promise.resolve(847),
+
     /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
     pickDirectory: async (): Promise<string | null> => {
       if (!isTauri()) return null;
