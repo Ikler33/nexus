@@ -119,3 +119,60 @@
     transform: none;
   }
 }
+
+/* ── DP-5: строка ввода с иконкой, секции, футер-хинты ── */
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.inputRow > svg {
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.inputRow .input {
+  flex: 1;
+  border-bottom: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+.section {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
+  font-weight: 600;
+  padding: 8px 12px 4px;
+  list-style: none;
+}
+.itemIco {
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.item[data-active] .itemIco {
+  color: var(--color-accent);
+}
+.hintPath {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}
+.footHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
