@@ -42,6 +42,20 @@ applyReadable(START_READABLE);
 /** Имя для приветствия HOME (DP-1, «Добрый день, …»); пусто — приветствие без имени. */
 const USER_NAME_KEY = 'nexus.user.name';
 
+/** Позиция палитры (DP-11, макет tweaks): top / center / spotlight. */
+export type PaletteStyle = 'top' | 'center' | 'spotlight';
+const PALETTE_KEY = 'nexus.palette.style';
+
+function readPalette(): PaletteStyle {
+  try {
+    const v = localStorage.getItem(PALETTE_KEY);
+    if (v === 'top' || v === 'center' || v === 'spotlight') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'top';
+}
+
 function readString(key: string): string {
   try {
     return localStorage.getItem(key) ?? '';
@@ -54,13 +68,17 @@ interface PrefsState {
   readableLineWidth: boolean;
   /** Имя пользователя для приветствия HOME (необязательное, локальное). */
   userName: string;
+  /** Позиция командной палитры (DP-11). */
+  paletteStyle: PaletteStyle;
   setReadableLineWidth: (on: boolean) => void;
   setUserName: (name: string) => void;
+  setPaletteStyle: (style: PaletteStyle) => void;
 }
 
 export const usePrefsStore = create<PrefsState>((set) => ({
   readableLineWidth: START_READABLE,
   userName: readString(USER_NAME_KEY),
+  paletteStyle: readPalette(),
   setReadableLineWidth: (on) =>
     set(() => {
       persistBool(READABLE_KEY, on);
@@ -75,5 +93,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
         /* ignore */
       }
       return { userName: name };
+    }),
+  setPaletteStyle: (style) =>
+    set(() => {
+      try {
+        localStorage.setItem(PALETTE_KEY, style);
+      } catch {
+        /* ignore */
+      }
+      return { paletteStyle: style };
     }),
 }));

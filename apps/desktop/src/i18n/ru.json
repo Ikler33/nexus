@@ -49,7 +49,29 @@
     "accent": "Акцент",
     "density": "Плотность",
     "comfortable": "Просторно",
-    "compact": "Компактно"
+    "compact": "Компактно",
+    "auto": "Авто",
+    "chrome": "Рамки интерфейса",
+    "chromeStandard": "Стандартные",
+    "chromeMinimal": "Минимум",
+    "editorFont": "Шрифт редактора",
+    "font": {
+      "sans": "Гротеск",
+      "serif": "Сериф",
+      "mono": "Моно"
+    },
+    "paletteStyle": "Палитра команд",
+    "palette": {
+      "top": "Сверху",
+      "center": "По центру",
+      "spotlight": "Spotlight"
+    },
+    "themes": {
+      "light": "Светлая",
+      "dark": "Тёмная",
+      "midnight": "Midnight",
+      "platinum": "Platinum"
+    }
   },
   "settings": {
     "title": "Настройки",
@@ -67,7 +89,10 @@
     "on": "Вкл",
     "off": "Выкл",
     "gen": {
-      "language": "Язык"
+      "language": "Язык",
+      "userName": "Имя для приветствия",
+      "userNamePlaceholder": "Как к вам обращаться на Home…",
+      "userNameHint": "Используется только в приветствии Home; хранится локально."
     },
     "ed": {
       "readableWidth": "Читаемая ширина строки",

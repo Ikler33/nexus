@@ -49,7 +49,29 @@
     "accent": "Accent",
     "density": "Density",
     "comfortable": "Cozy",
-    "compact": "Compact"
+    "compact": "Compact",
+    "auto": "Auto",
+    "chrome": "UI borders",
+    "chromeStandard": "Standard",
+    "chromeMinimal": "Minimal",
+    "editorFont": "Editor font",
+    "font": {
+      "sans": "Grotesk",
+      "serif": "Serif",
+      "mono": "Mono"
+    },
+    "paletteStyle": "Command palette",
+    "palette": {
+      "top": "Top",
+      "center": "Center",
+      "spotlight": "Spotlight"
+    },
+    "themes": {
+      "light": "Light",
+      "dark": "Dark",
+      "midnight": "Midnight",
+      "platinum": "Platinum"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -67,7 +89,10 @@
     "on": "On",
     "off": "Off",
     "gen": {
-      "language": "Language"
+      "language": "Language",
+      "userName": "Greeting name",
+      "userNamePlaceholder": "How should Home greet you…",
+      "userNameHint": "Used only in the Home greeting; stored locally."
     },
     "ed": {
       "readableWidth": "Readable line length",
