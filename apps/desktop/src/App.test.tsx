@@ -8,7 +8,8 @@ import { useWorkspaceStore } from './stores/workspace';
 beforeEach(() => {
   useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
-  useUIStore.setState({ homeOpen: true, newsOpen: false });
+  // onboardingDone: welcome ведёт сразу к «Открыть vault» (4-шаговый flow — отдельный тест).
+  useUIStore.setState({ homeOpen: true, newsOpen: false, onboardingDone: true, onboardingActive: false });
 });
 
 describe('App (Ф0-3 / Ф4-11 / DP-1)', () => {
@@ -32,5 +33,25 @@ describe('App (Ф0-3 / Ф4-11 / DP-1)', () => {
     fireEvent.click(screen.getByText('README.md'));
     expect(await screen.findByRole('tab', { name: /README/ })).toBeInTheDocument();
     expect(useUIStore.getState().homeOpen).toBe(false);
+  });
+
+  // DP-7: первый запуск — 4-шаговый онбординг (welcome → vault → AI → индексация → вход).
+  it('первый запуск: онбординг шагает welcome → vault → AI → индексация → Home', async () => {
+    useUIStore.setState({ onboardingDone: false });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /начать настройку|get started/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /открыть папку|open folder/i }));
+
+    // Шаг AI: мок-конфиг читается, идём дальше.
+    fireEvent.click(await screen.findByRole('button', { name: /продолжить|continue/i }));
+
+    // Шаг индексации: вход доступен сразу (vault уже открыт).
+    fireEvent.click(await screen.findByRole('button', { name: /открыть nexus|open nexus/i }));
+    expect(useUIStore.getState().onboardingDone).toBe(true);
+    // Приложение вошло: Home-лендинг с приветствием.
+    expect(
+      await screen.findByText(/добрый день|доброе утро|добрый вечер|доброй ночи|good/i),
+    ).toBeInTheDocument();
   });
 });

@@ -49,6 +49,7 @@ export function App() {
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
   const newsOpen = useUIStore((s) => s.newsOpen);
   const homeOpen = useUIStore((s) => s.homeOpen);
+  const onboardingActive = useUIStore((s) => s.onboardingActive);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
@@ -114,8 +115,9 @@ export function App() {
     return () => window.removeEventListener('keydown', onEsc);
   }, [reading]);
 
-  // Первый запуск (vault не открыт) — приветственный экран онбординга.
-  if (!info) return <Onboarding />;
+  // Первый запуск (vault не открыт) — онбординг; активный многошаговый flow (DP-7)
+  // держит экран и после открытия vault (шаги AI-проверки и индексации).
+  if (!info || onboardingActive) return <Onboarding />;
 
   return (
     <div className={styles.app}>
