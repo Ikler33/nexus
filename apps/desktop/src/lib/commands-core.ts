@@ -98,6 +98,14 @@ export function registerCoreCommands(): Disposable {
       run: () => runInlineInActiveEditor('summarize'),
     }),
     commands.register({
+      id: 'editor.toggleMode',
+      title: 'Edit / Preview',
+      titleKey: 'commands.editor.toggleMode',
+      source: 'core',
+      defaultKey: 'mod+e',
+      run: () => useWorkspaceStore.getState().toggleMode(),
+    }),
+    commands.register({
       id: 'view.splitRight',
       title: 'Split right',
       titleKey: 'commands.view.splitRight',

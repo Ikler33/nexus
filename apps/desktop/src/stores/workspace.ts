@@ -37,6 +37,12 @@ interface WorkspaceState {
   setActiveTab: (groupId: string, path: string) => void;
   setActiveGroup: (groupId: string) => void;
   closeTab: (groupId: string, path: string) => void;
+  /** DnD вкладок между панами (DP-3, контракт `text/nexus-tab` макета): перенос без дублей,
+   *  опустевшая группа схлопывается, буфер жив (в отличие от closeTab — без GC). */
+  moveTab: (fromGroupId: string, toGroupId: string, path: string) => void;
+  /** Режим source/preview АКТИВНОЙ группы (DP-3 mode-float, ⌘E). */
+  modes: Record<string, 'source' | 'preview'>;
+  toggleMode: (groupId?: string) => void;
   splitRight: () => void;
   updateBufferDoc: (path: string, doc: string) => void;
   saveBuffer: (path: string) => Promise<void>;
@@ -120,6 +126,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
   },
 
+  moveTab(fromGroupId, toGroupId, path) {
+    if (fromGroupId === toGroupId) return;
+    set((s) => {
+      if (!s.groups.some((g) => g.id === toGroupId)) return {};
+      const updated = s.groups.map((g) => {
+        if (g.id === fromGroupId) {
+          const tabs = g.tabs.filter((t) => t !== path);
+          const activeTab = g.activeTab === path ? (tabs[tabs.length - 1] ?? null) : g.activeTab;
+          return { ...g, tabs, activeTab };
+        }
+        if (g.id === toGroupId) {
+          // Если вкладка уже есть в цели — не дублируем, просто активируем (контракт макета).
+          const tabs = g.tabs.includes(path) ? g.tabs : [...g.tabs, path];
+          return { ...g, tabs, activeTab: path };
+        }
+        return g;
+      });
+      const nonEmpty = updated.filter((g) => g.tabs.length > 0);
+      const groups = nonEmpty.length ? nonEmpty : freshGroups();
+      return { groups, activeGroupId: toGroupId };
+    });
+  },
+
+  modes: {},
+  toggleMode(groupId) {
+    set((s) => {
+      const gid = groupId ?? s.activeGroupId;
+      const next = (s.modes[gid] ?? 'source') === 'source' ? 'preview' : 'source';
+      return { modes: { ...s.modes, [gid]: next } };
+    });
+  },
+
   splitRight() {
     set((s) => {
       const active = s.groups.find((g) => g.id === s.activeGroupId);
@@ -152,7 +190,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   reset() {
-    set({ buffers: {}, groups: freshGroups(), activeGroupId: INITIAL_GROUP });
+    set({ buffers: {}, groups: freshGroups(), activeGroupId: INITIAL_GROUP, modes: {} });
   },
 }));
 

@@ -89,4 +89,38 @@ describe('workspace store (Ф0-9, Б12)', () => {
     await useWorkspaceStore.getState().openLink('Projects/Roadmap');
     expect(activePath(useWorkspaceStore.getState())).toBe('Projects/Roadmap.md');
   });
+
+  // DP-3: DnD вкладок между панами — без дублей, буфер жив, пустая группа схлопывается.
+  it('moveTab переносит вкладку между группами и схлопывает пустую', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().splitRight(); // вторая группа с тем же табом
+    const s0 = useWorkspaceStore.getState();
+    const [g1, g2] = s0.groups.map((g) => g.id);
+    await useWorkspaceStore.getState().openFile('Inbox.md', g1);
+
+    // Перенос Inbox.md из g1 в g2: появилась в g2 (активной), из g1 ушла, буфер жив.
+    useWorkspaceStore.getState().moveTab(g1, g2, 'Inbox.md');
+    let s = useWorkspaceStore.getState();
+    expect(s.groups.find((g) => g.id === g2)?.tabs).toContain('Inbox.md');
+    expect(s.groups.find((g) => g.id === g1)?.tabs).not.toContain('Inbox.md');
+    expect(s.activeGroupId).toBe(g2);
+    expect(s.buffers['Inbox.md']).toBeDefined();
+
+    // Перенос дубля (README есть в обеих): в цели НЕ дублируется, источник пустеет и схлопывается.
+    useWorkspaceStore.getState().moveTab(g1, g2, 'README.md');
+    s = useWorkspaceStore.getState();
+    expect(s.groups).toHaveLength(1);
+    expect(s.groups[0].tabs.filter((p) => p === 'README.md')).toHaveLength(1);
+  });
+
+  // DP-3: режим source/preview — пер-группный, toggleMode без аргумента бьёт по активной.
+  it('toggleMode переключает режим активной группы', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    const gid = useWorkspaceStore.getState().activeGroupId;
+    expect(useWorkspaceStore.getState().modes[gid]).toBeUndefined(); // дефолт source
+    useWorkspaceStore.getState().toggleMode();
+    expect(useWorkspaceStore.getState().modes[gid]).toBe('preview');
+    useWorkspaceStore.getState().toggleMode(gid);
+    expect(useWorkspaceStore.getState().modes[gid]).toBe('source');
+  });
 });
