@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import type { ChatStreamEvent, SearchHit } from '../lib/tauri-api';
+import type { ChatStreamEvent, EgressDeniedKind, SearchHit } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
 
 /**
@@ -22,6 +22,14 @@ export interface ChatMessage {
   streaming?: boolean;
   /** Текст ошибки (retrieve/LLM), если стрим завершился неудачно. */
   error?: string;
+  /** Типизированный отказ эгресса (AC-EGR-14) — рендерится i18n-баннером, не сырой строкой. */
+  deniedKind?: EgressDeniedKind;
+  /**
+   * Живая короткая сводка размышления reasoning-модели (R1) — стримится в индикатор «думает».
+   * Эфемерна (показывается только во время стрима, НЕ персистится). Сырой CoT (`reasoning`-событие)
+   * сознательно не храним и не рендерим — только сводку.
+   */
+  reasoningSummary?: string;
 }
 
 interface ChatState {
@@ -65,7 +73,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     try {
       const msgs = get()
         .messages.slice(-MAX_PERSISTED)
-        .map((m) => ({ ...m, streaming: false }));
+        // Живую сводку не персистим — она эфемерна (показывается только в фазе «думает»).
+        .map((m) => ({ ...m, streaming: false, reasoningSummary: undefined }));
       localStorage.setItem(vaultKey, JSON.stringify(msgs));
     } catch {
       /* недоступно/переполнено — не критично */
@@ -108,7 +117,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       cancelFlush();
       set((s) => ({ messages: [...s.messages, userMsg, reply], streaming: true }));
 
-      // Применяет накопленный буфер одним апдейтом (вызывается из rAF).
+      // Применяет накопленный буфер токенов одним апдейтом (вызывается из rAF).
       const flush = () => {
         rafId = null;
         if (!pending) return;
@@ -129,6 +138,15 @@ export const useChatStore = create<ChatState>((set, get) => {
             // Не set() на каждый токен — копим в буфер, рендерим раз в кадр (AC-Б10-4).
             pending += event.text;
             scheduleFlush();
+            break;
+          case 'reasoning':
+            // Сырой chain-of-thought сознательно НЕ рендерим (решение владельца): в UI идёт только
+            // живая сводка (`reasoningSummary`). Событие принимаем и игнорируем.
+            break;
+          case 'reasoningSummary':
+            // Живая короткая сводка — стримится в индикатор «думает». Редкое событие (~1.5с),
+            // патчим напрямую (без буфера).
+            patch(replyId, (m) => ({ ...m, reasoningSummary: event.text }));
             break;
           case 'done': {
             cancelFlush();
@@ -152,6 +170,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               ...m,
               content: m.content + tail,
               error: event.message,
+              deniedKind: event.deniedKind,
               streaming: false,
             }));
             cancelFn = null;

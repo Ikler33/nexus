@@ -285,14 +285,21 @@ export interface FullGraph {
 }
 
 /**
- * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`).
- * Порядок: `sources` → много `token` → `done` (или `error`).
+ * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`, camelCase).
+ * Порядок: `sources` → (для reasoning-модели — живые `reasoningSummary`/`reasoning`) → много `token`
+ * → `done` (или `error`). `reasoning` — сырой chain-of-thought (спойлер), `reasoningSummary` —
+ * короткая живая сводка CoT («💭 …», R1); оба могут не приходить (non-reasoning модель).
  */
+/** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host. */
+export type EgressDeniedKind = 'offline' | 'feature' | 'host';
+
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'token'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'reasoningSummary'; text: string }
   | { type: 'done'; full: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; deniedKind?: EgressDeniedKind };
 
 /** Событие inline-стрима редактора (зеркалит Rust `commands::inline::InlineStreamEvent`). Без `sources`
  * — inline не делает RAG-ретрив (D2). Порядок: много `token` → `done` (или `error`). */

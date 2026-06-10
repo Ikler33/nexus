@@ -19,11 +19,40 @@
   grid-template-columns: 280px 1fr;
   min-width: 0;
   min-height: 0;
+  position: relative; /* якорь для overlay-варианта AI-панели (DP-12) */
 }
 
 /* Открытый RAG-чат добавляет правую колонку (sidebar | editor | chat). */
 .withChat {
   grid-template-columns: 280px 1fr 360px;
+}
+
+/* DP-12 (макет .with-ai-bottom): AI-панель полосой под редактором, сайдбар на обе строки. */
+.withChatBottom {
+  grid-template-rows: 1fr 280px;
+}
+.withChatBottom .sidebar {
+  grid-row: 1 / span 2;
+}
+.aiBottom {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.withChatBottom.sidebarCollapsed .aiBottom {
+  grid-column: 1;
+}
+
+/* DP-12 (макет .ai-overlay-scrim): оверлей-вариант — скрим поверх тела, панель справа. */
+.aiScrim {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: oklch(0 0 0 / 0.32);
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* Свёрнутый сайдбар (DP-13: кнопка «Файлы» activity-bar). */

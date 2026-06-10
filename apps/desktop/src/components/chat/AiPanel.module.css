@@ -1,34 +1,114 @@
+/* AI-панель по макету ai.css (DP-12): ai-panel / ai-overlay / ai-head / ai-tabs / provider. */
 .panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   border-left: 1px solid var(--color-border);
-  background: var(--color-bg-elevated);
+  background: var(--color-chrome);
 }
 
-.tabbar {
+/* Bottom-вариант (настройка «AI-панель: снизу»): полоса под редактором, граница сверху. */
+.panelBottom {
+  border-left: none;
+  border-top: 1px solid var(--color-border);
+}
+
+/* Overlay-вариант (настройка «AI-панель: поверх»): выезжает справа поверх контента. */
+.panelOverlay {
+  width: min(440px, 92%);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--color-bg-elevated);
+  border-left: 1px solid var(--color-border-strong);
+  box-shadow: var(--elevation-2);
+  animation: ai-slide-in var(--dur-3, 320ms) var(--ease-out, ease);
+}
+@keyframes ai-slide-in {
+  from {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panelOverlay {
+    animation: none;
+  }
+}
+
+/* Шапка (макет .ai-head): глиф + заголовок + spacer + provider + действия. */
+.head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  gap: 8px;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.headTitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.headTitle svg {
+  color: var(--color-ai);
+}
+.headSpacer {
+  flex: 1;
+}
+
+/* Бейдж провайдера (макет .provider): local — зелёная иконка; offline — warning. */
+.provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.provider svg {
+  color: var(--color-success);
+}
+.providerOffline {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  background: color-mix(in oklch, var(--color-warning) 8%, transparent);
+}
+.providerOffline svg {
+  color: var(--color-warning);
+}
+
+/* Табы (макет .ai-tabs): строка под шапкой, активный — подчёркивание цветом AI. */
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: var(--space-2) var(--space-2) 0;
   border-bottom: 1px solid var(--color-border);
 }
 
-.tabs {
-  display: flex;
-  gap: var(--space-1);
-}
-
 .tab {
-  padding: var(--space-1) var(--space-2);
+  padding: 7px 12px;
   border: none;
   background: none;
-  border-bottom: 2px solid transparent;
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
+  position: relative;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .tab:hover {
@@ -37,34 +117,21 @@
 
 .tab.active {
   color: var(--color-text);
-  border-bottom-color: var(--color-ai);
+}
+.tab.active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--color-ai);
+  border-radius: 2px;
 }
 
 .tab:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
-}
-
-.badge {
-  margin-left: auto;
-  font-size: var(--text-xs);
-  color: var(--color-ai);
-  border: 1px solid var(--color-border);
-  border-radius: 99px;
-  padding: 2px 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--color-text-muted);
-}
-
-/* Точка-индикатор провайдера (local = success). */
-.badge::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-success);
 }
 
 .iconBtn {

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { AlertTriangle, FileText, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { type ChatMessage, useChatStore } from '../../stores/chat';
+import { type ChatMessage, type ChatSource, useChatStore } from '../../stores/chat';
+import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
+import { BrandThinking } from '../chrome/BrandThinking';
 import styles from './ChatPanel.module.css';
 
 /**
@@ -56,11 +59,38 @@ export function ChatView() {
     setInput('');
   };
 
+  // Клик по suggestion-pill в пустом состоянии — сразу отправляет готовый вопрос.
+  const ask = (q: string) => {
+    if (streaming) return;
+    atBottom.current = true;
+    send(q, center ?? undefined);
+  };
+
+  const pills = [t('chat.ask1'), t('chat.ask2'), t('chat.ask3')];
+
   return (
     <>
       <div className={styles.feed} ref={feedRef} onScroll={onScroll}>
         {messages.length === 0 ? (
-          <p className={styles.empty}>{t('chat.empty')}</p>
+          <div className={styles.emptyState}>
+            <div className={styles.emptyGlyph} aria-hidden>
+              <Sparkles size={24} />
+            </div>
+            <div className={styles.emptyTitle}>{t('chat.emptyTitle')}</div>
+            <p className={styles.empty}>{t('chat.empty')}</p>
+            <div className={styles.suggestPills}>
+              {pills.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={styles.suggestPill}
+                  onClick={() => ask(p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : (
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
             {virtualizer.getVirtualItems().map((vItem) => (
@@ -140,7 +170,84 @@ export function ChatView() {
           </button>
         )}
       </form>
+
+      <div className={styles.composerFoot}>
+        {streaming ? (
+          <span className={styles.footStatus}>
+            <span className={styles.footPulse} aria-hidden />
+            {t('chat.thinking')}
+          </span>
+        ) : (
+          <span className={styles.footHint}>
+            <kbd className={styles.kbd}>↵</kbd> {t('chat.hintSend')}
+          </span>
+        )}
+      </div>
     </>
+  );
+}
+
+/** Имя заметки-источника: title или basename без `.md` (как везде после DP-15). */
+function sourceName(s: ChatSource): string {
+  return s.title ?? s.path.slice(s.path.lastIndexOf('/') + 1).replace(/\.md$/, '');
+}
+
+/**
+ * RAG-источники в одном из трёх стилей макета `ai-panel.jsx` (DP-12, настройка
+ * «Источники в чате»): cards (номер-плашка + заголовок + сниппет) / chips (пилюли) /
+ * footnotes (сноски `[N]` под чертой).
+ */
+function Sources({ sources, onOpen }: { sources: ChatSource[]; onOpen: (path: string) => void }) {
+  const { t } = useTranslation();
+  const style = usePrefsStore((s) => s.ragSources);
+  if (style === 'chips') {
+    return (
+      <div className={styles.srcChips} aria-label={t('chat.sources')}>
+        {sources.map((s, i) => (
+          <button
+            key={s.chunkId}
+            className={styles.srcChip}
+            onClick={() => onOpen(s.path)}
+            title={s.snippet}
+          >
+            <span className={styles.srcChipNum}>{i + 1}</span>
+            <FileText size={12} aria-hidden />
+            {sourceName(s)}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (style === 'footnotes') {
+    return (
+      <div className={styles.srcFoot} aria-label={t('chat.sources')}>
+        <div className={styles.srcFootHead}>{t('chat.sources')}</div>
+        {sources.map((s, i) => (
+          <button
+            key={s.chunkId}
+            className={styles.srcFootRow}
+            onClick={() => onOpen(s.path)}
+            title={s.snippet}
+          >
+            <span className={styles.srcFootNum}>[{i + 1}]</span>
+            <span>{sourceName(s)}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className={styles.srcCards} aria-label={t('chat.sources')}>
+      {sources.map((s, i) => (
+        <button key={s.chunkId} className={styles.srcCard} onClick={() => onOpen(s.path)}>
+          <span className={styles.srcCardNum}>{i + 1}</span>
+          <span className={styles.srcCardBody}>
+            <span className={styles.srcCardTitle}>{sourceName(s)}</span>
+            <span className={styles.srcCardCtx}>{s.snippet}</span>
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -151,7 +258,17 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
   }
   return (
     <div className={styles.assistant}>
-      {message.error ? (
+      {message.deniedKind ? (
+        // AC-EGR-14: типизированный отказ эгресса — i18n-баннер (макет .ai-banner.danger),
+        // не сырая строка ошибки.
+        <div className={styles.banner} role="alert">
+          <AlertTriangle size={16} aria-hidden />
+          <div>
+            <div className={styles.bannerTitle}>{t(`chat.denied.${message.deniedKind}`)}</div>
+            <div className={styles.bannerSub}>{t(`chat.denied.${message.deniedKind}Sub`)}</div>
+          </div>
+        </div>
+      ) : message.error ? (
         <p className={styles.error}>{t('chat.error', { message: message.error })}</p>
       ) : (
         <>
@@ -161,19 +278,20 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
               {message.streaming && <span className={styles.caret} aria-hidden />}
             </div>
           ) : (
-            message.streaming && <div className={styles.thinking}>{t('chat.thinking')}</div>
+            message.streaming && (
+              // Фаза размышления (DESIGN §msg-thinking): анимированный brand-mark + переливающийся
+              // label. В label стримится живая сводка CoT (reasoningSummary); до первой сводки —
+              // дефолтная фраза.
+              <div className={styles.thinkingRow}>
+                <BrandThinking size={28} />
+                <span className={styles.thinkingLabel}>
+                  {message.reasoningSummary || t('chat.thinking')}
+                </span>
+              </div>
+            )
           )}
           {message.sources && message.sources.length > 0 && (
-            <ul className={styles.sources} aria-label={t('chat.sources')}>
-              {message.sources.map((s, i) => (
-                <li key={s.chunkId}>
-                  <button className={styles.source} onClick={() => onOpen(s.path)} title={s.snippet}>
-                    <span className={styles.sourceIdx}>[{i + 1}]</span>
-                    <span className={styles.sourcePath}>{s.title ?? s.path}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <Sources sources={message.sources} onOpen={onOpen} />
           )}
         </>
       )}

@@ -103,6 +103,10 @@ function GeneralSection() {
   const setUserName = usePrefsStore((s) => s.setUserName);
   const paletteStyle = usePrefsStore((s) => s.paletteStyle);
   const setPaletteStyle = usePrefsStore((s) => s.setPaletteStyle);
+  const aiLayout = usePrefsStore((s) => s.aiLayout);
+  const setAiLayout = usePrefsStore((s) => s.setAiLayout);
+  const ragSources = usePrefsStore((s) => s.ragSources);
+  const setRagSources = usePrefsStore((s) => s.setRagSources);
   return (
     <>
       <h2 className={styles.h2}>{t('settings.general')}</h2>
@@ -149,6 +153,37 @@ function GeneralSection() {
               onClick={() => setPaletteStyle(p)}
             >
               {t(`tweaks.palette.${p}`)}
+            </button>
+          ))}
+        </div>
+      </section>
+      {/* DP-12 (макет tweaks): расположение AI-панели + стиль RAG-источников в чате. */}
+      <section className={styles.group}>
+        <span className={styles.label}>{t('tweaks.aiLayout')}</span>
+        <div className={styles.seg}>
+          {(['side', 'bottom', 'overlay'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={`${styles.segBtn} ${aiLayout === p ? styles.on : ''}`}
+              onClick={() => setAiLayout(p)}
+            >
+              {t(`tweaks.aiLayoutOpts.${p}`)}
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className={styles.group}>
+        <span className={styles.label}>{t('tweaks.ragSources')}</span>
+        <div className={styles.seg}>
+          {(['cards', 'chips', 'footnotes'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={`${styles.segBtn} ${ragSources === p ? styles.on : ''}`}
+              onClick={() => setRagSources(p)}
+            >
+              {t(`tweaks.ragSourcesOpts.${p}`)}
             </button>
           ))}
         </div>
