@@ -1,7 +1,17 @@
 //! Watcher-петля индексатора: спавн фоновой задачи (начальный скан → реакция на события vault) и
 //! Tauri-эвент «индекс обновлён» для живого пересчёта зависимых вьюх (ADR-007 S8).
 
+use serde::Serialize;
+
 use crate::watcher::{VaultEvent, VaultWatcher};
+
+/// Payload события `vault:index-progress` (camelCase для фронта).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexProgress {
+    done: usize,
+    total: usize,
+}
 
 use super::fs::rel_of;
 use super::Indexer;
@@ -24,6 +34,12 @@ pub fn spawn(
     app: tauri::AppHandle,
 ) -> Option<(VaultWatcher, tokio::sync::mpsc::UnboundedSender<VaultEvent>)> {
     let root = indexer.root.clone();
+    // Прогресс полного скана → событие фронту (статусбар «Индексация N/M», макет app.jsx).
+    let progress_app = app.clone();
+    let indexer = indexer.with_progress(move |done, total| {
+        use tauri::Emitter;
+        let _ = progress_app.emit("vault:index-progress", IndexProgress { done, total });
+    });
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<VaultEvent>();
     let watcher = match VaultWatcher::new(&root, tx.clone()) {
         Ok(w) => w,

@@ -485,7 +485,8 @@
     "conflict": "Конфликт",
     "conflicts_one": "{{count}} конфликт",
     "conflicts_few": "{{count}} конфликта",
-    "conflicts_many": "{{count}} конфликтов"
+    "conflicts_many": "{{count}} конфликтов",
+    "indexing": "Индексация {{done}}/{{total}}"
   },
   "plugins": {
     "title": "Плагины",

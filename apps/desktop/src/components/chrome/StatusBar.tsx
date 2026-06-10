@@ -29,6 +29,21 @@ export function StatusBar() {
   // null — git-статус неизвестен/vault без репо (блок прячем); число — изменённых файлов.
   const [dirty, setDirty] = useState<number | null>(null);
   const [notes, setNotes] = useState<number | null>(null);
+  // Реальный прогресс полного скана (макет «Индексация N/M»); null — скан не идёт.
+  const [indexProg, setIndexProg] = useState<{ done: number; total: number } | null>(null);
+
+  useEffect(() => {
+    let off = () => {};
+    void tauriApi.events
+      .onIndexProgress((p) => {
+        // Финиш (total,total) или пустой vault — гасим бар (вернётся «Проиндексировано · N»).
+        setIndexProg(p.done >= p.total ? null : p);
+      })
+      .then((fn) => {
+        off = fn;
+      });
+    return () => off();
+  }, []);
 
   // Подписка: первичная загрузка + пере-чтение по `vault:changed` (правки меняют и git-статус,
   // и счётчик заметок) и по «очередь изменилась» (конец индексации).
@@ -79,8 +94,15 @@ export function StatusBar() {
         </span>
       )}
 
-      {/* Индексация: активные джобы → прогресс; иначе «✓ Проиндексировано · N». */}
-      {busy ? (
+      {/* Индексация: реальный прогресс скана N/M (макет) → активные джобы → «✓ Проиндексировано · N». */}
+      {indexProg ? (
+        <span className={`${styles.item} ${styles.jobs}`}>
+          <span className={`${styles.progress} ${styles.progressReal}`} aria-hidden>
+            <i style={{ width: `${Math.round((indexProg.done / Math.max(1, indexProg.total)) * 100)}%` }} />
+          </span>
+          {t('status.indexing', { done: indexProg.done, total: indexProg.total })}
+        </span>
+      ) : busy ? (
         <span className={`${styles.item} ${styles.jobs}`} title={jobsTitle}>
           <span className={styles.progress} aria-hidden>
             <i />

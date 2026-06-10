@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../../lib/tauri-api';
@@ -59,5 +59,25 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
     const pill = screen.getByRole('button', { name: /2 конфликта|2 conflicts/ });
     fireEvent.click(pill);
     expect(useUIStore.getState().conflictOpen).toBe(true);
+  });
+
+  it('прогресс скана (vault:index-progress): реальный бар «Индексация N/M», финиш гасит', async () => {
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0 });
+    vi.spyOn(tauriApi.vault, 'notesCount').mockResolvedValue(10);
+    let emit: (p: { done: number; total: number }) => void = () => {};
+    vi.spyOn(tauriApi.events, 'onIndexProgress').mockImplementation(async (cb) => {
+      emit = cb;
+      return () => {};
+    });
+    render(<StatusBar />);
+    await waitFor(() => expect(tauriApi.events.onIndexProgress).toHaveBeenCalled());
+
+    act(() => emit({ done: 20, total: 100 }));
+    expect(await screen.findByText(/Индексация 20\/100|Indexing 20\/100/)).toBeInTheDocument();
+
+    act(() => emit({ done: 100, total: 100 }));
+    await waitFor(() =>
+      expect(screen.queryByText(/Индексация|Indexing/)).toBeNull(),
+    );
   });
 });

@@ -661,3 +661,28 @@ async fn event_loop_rescan_picks_up_unseen_files() {
         "нотификации: начальный скан + rescan"
     );
 }
+
+/// Срез «прогресс индексации» (ночь 2026-06-11): хук `with_progress` зовётся на старте (0, total),
+/// на финише (total, total), done монотонен и не превышает total.
+#[tokio::test]
+async fn scan_progress_hook_reports_start_and_finish() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    for i in 0..5 {
+        fs::write(root.join(format!("n{i}.md")), format!("# n{i}\n")).unwrap();
+    }
+
+    let db = open(&root).await;
+    let calls: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize)>>> = Default::default();
+    let sink = calls.clone();
+    let idx = Indexer::new(&db, root.clone()).with_progress(move |done, total| {
+        sink.lock().unwrap().push((done, total));
+    });
+    idx.scan_vault().await.unwrap();
+
+    let calls = calls.lock().unwrap().clone();
+    assert_eq!(calls.first(), Some(&(0, 5)), "старт — (0, total)");
+    assert_eq!(calls.last(), Some(&(5, 5)), "финиш — (total, total)");
+    assert!(calls.iter().all(|&(d, t)| d <= t && t == 5));
+    assert!(calls.windows(2).all(|w| w[0].0 <= w[1].0), "done монотонен");
+}

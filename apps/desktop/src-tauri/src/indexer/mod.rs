@@ -51,6 +51,8 @@ const EMBED_CONCURRENCY: usize = 8;
 const SCAN_CONCURRENCY: usize = 16;
 /// Как часто персистить usearch и логировать прогресс во время начального скана (в файлах).
 const SCAN_CHECKPOINT: usize = 256;
+/// Шаг событий прогресса скана наружу (статусбар): чаще чекпойнта, но не на каждый файл.
+const SCAN_PROGRESS_EVERY: usize = 20;
 
 /// RAG-подсистема индексатора: эмбеддер + векторный индекс + параметры чанкинга.
 struct Rag {
@@ -69,9 +71,19 @@ pub struct Indexer {
     /// Когда `true`, `index_file` игнорирует mtime/size-шорткат и переиндексирует принудительно
     /// (первичное наполнение чанков / переэмбеддизация после смены модели — §6.5).
     force: Arc<AtomicBool>,
+    /// Хук прогресса полного скана `(done, total)` — статусбар «Индексация N/M» (макет app.jsx).
+    /// Зовётся на старте (0, total), периодически (чекпойнт) и на финише (total, total).
+    progress: Option<Arc<dyn Fn(usize, usize) + Send + Sync>>,
 }
 
 impl Indexer {
+    /// Задаёт хук прогресса полного скана (события `vault:index-progress` ставит watcher-петля).
+    #[must_use]
+    pub fn with_progress(mut self, hook: impl Fn(usize, usize) + Send + Sync + 'static) -> Self {
+        self.progress = Some(Arc::new(hook));
+        self
+    }
+
     /// Индексатор без RAG (только files/links/tags) — для vault без embedding-провайдера и тестов Ф0.
     pub fn new(db: &Database, root: PathBuf) -> Self {
         Self {
@@ -80,6 +92,7 @@ impl Indexer {
             root,
             rag: None,
             force: Arc::new(AtomicBool::new(false)),
+            progress: None,
         }
     }
 
@@ -103,6 +116,7 @@ impl Indexer {
                 embed_sem: Arc::new(Semaphore::new(EMBED_CONCURRENCY)),
             }),
             force: Arc::new(AtomicBool::new(force_reindex)),
+            progress: None,
         }
     }
 
@@ -455,6 +469,9 @@ impl Indexer {
         .map_err(|_| DbError::Unavailable)?;
 
         let total = rels.len();
+        if let Some(p) = &self.progress {
+            p(0, total);
+        }
         let rag_on = self.rag.is_some();
         if rag_on && self.force.load(Ordering::Relaxed) {
             tracing::info!(
@@ -476,6 +493,12 @@ impl Indexer {
             .buffer_unordered(SCAN_CONCURRENCY);
         while stream.next().await.is_some() {
             done += 1;
+            // Прогресс наружу чаще чекпойнта usearch (статусбар), но не на каждый файл.
+            if done % SCAN_PROGRESS_EVERY == 0 {
+                if let Some(p) = &self.progress {
+                    p(done, total);
+                }
+            }
             // Периодический чекпойнт usearch + прогресс N/M (AC-PERF-5).
             if rag_on && done % SCAN_CHECKPOINT == 0 {
                 self.persist_vectors();
@@ -490,6 +513,9 @@ impl Indexer {
         }
         self.persist_vectors(); // финальный save усearch
         self.force.store(false, Ordering::Relaxed); // дальше — инкрементально, с mtime-шорткатом
+        if let Some(p) = &self.progress {
+            p(total, total); // финиш — фронт гасит прогресс-бар
+        }
         tracing::info!(files = total, "initial vault scan complete");
         Ok(())
     }
