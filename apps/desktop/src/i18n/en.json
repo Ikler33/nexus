@@ -229,7 +229,10 @@
     "linkDist": "Link distance",
     "gravity": "Center gravity",
     "nodeSize": "Node size",
-    "reset": "Reset"
+    "reset": "Reset",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit graph"
   },
   "chat": {
     "title": "AI panel",

@@ -13,13 +13,14 @@ import {
   type ForceY,
   type Simulation,
 } from 'd3-force';
-import { Settings, X } from 'lucide-react';
+import { Maximize2, Minus, Plus, Settings, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
 import type { FullGraph } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
+import { BrandThinking } from '../chrome/BrandThinking';
 import {
   endpointId,
   kinSet,
@@ -33,11 +34,52 @@ import './graph.css';
 
 type Mode = 'local' | 'full';
 
-/** Топ-N по связности для единого графа. Пан/зум-камера (отдельный срез) сделает большой граф удобным. */
+/** Топ-N по связности для единого графа. */
 const FULL_LIMIT = 600;
 /** Логический размер сцены (SVG viewBox). */
 const STAGE_W = 1000;
 const STAGE_H = 680;
+
+/** Камера пан/зума (DP-6/v2c): прямоугольник viewBox. */
+interface Camera {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+const HOME_CAM: Camera = { x: 0, y: 0, w: STAGE_W, h: STAGE_H };
+/** Пределы зума: от ×8 приближения до ×3 отдаления. */
+const MIN_W = STAGE_W / 8;
+const MAX_W = STAGE_W * 3;
+
+/** Зум вокруг точки (лог. координаты сцены): factor < 1 — приближение. */
+function zoomCamera(cam: Camera, factor: number, cx: number, cy: number): Camera {
+  const w = Math.min(MAX_W, Math.max(MIN_W, cam.w * factor));
+  const k = w / cam.w;
+  const h = cam.h * k;
+  return { x: cx - (cx - cam.x) * k, y: cy - (cy - cam.y) * k, w, h };
+}
+
+/** Камера под все узлы с полем (авто-fit). */
+function fitCamera(nodes: GraphNodeDatum[]): Camera {
+  const xs = nodes.map((n) => n.x).filter((v): v is number => v != null);
+  const ys = nodes.map((n) => n.y).filter((v): v is number => v != null);
+  if (xs.length === 0) return HOME_CAM;
+  const pad = 70;
+  const minX = Math.min(...xs) - pad;
+  const maxX = Math.max(...xs) + pad;
+  const minY = Math.min(...ys) - pad;
+  const maxY = Math.max(...ys) + pad;
+  // Сохраняем аспект сцены, накрывая bounding box целиком.
+  let w = maxX - minX;
+  let h = maxY - minY;
+  const aspect = STAGE_W / STAGE_H;
+  if (w / h > aspect) h = w / aspect;
+  else w = h * aspect;
+  w = Math.min(MAX_W, Math.max(MIN_W, w));
+  h = (w / STAGE_W) * STAGE_H;
+  return { x: (minX + maxX) / 2 - w / 2, y: (minY + maxY) / 2 - h / 2, w, h };
+}
 
 /** Параметры физики — пользователь крутит вживую (как ⚙️ в Obsidian); сохраняются в localStorage. */
 interface GraphSettings {
@@ -121,6 +163,7 @@ export default function GraphView() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [settings, setSettings] = useState<GraphSettings>(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
+  const [cam, setCam] = useState<Camera>(HOME_CAM);
   const [, tick] = useState(0); // ре-рендер на каждый tick d3 (позиции живут в узлах, d3 их мутирует)
 
   const simRef = useRef<Simulation<GraphNodeDatum, GraphLink> | null>(null);
@@ -217,7 +260,11 @@ export default function GraphView() {
     collideRef.current = collide;
     sim.alpha(1).restart();
     simRef.current = sim;
-    const timer = setTimeout(() => setLoading(false), 600);
+    // По остыванию раскладки — авто-fit камеры (v2c) и снятие лоадера.
+    const timer = setTimeout(() => {
+      setLoading(false);
+      setCam(fitCamera(sim.nodes()));
+    }, 600);
     return () => {
       clearTimeout(timer);
       sim.stop();
@@ -249,18 +296,55 @@ export default function GraphView() {
     [],
   );
 
-  // ── drag: пиннуем ноду (fx/fy) + разогрев; связанные подтягиваются физикой с сопротивлением ──
+  // ── камера (DP-6/v2c): координаты курсора → логические координаты сцены с учётом viewBox ──
+  const camRef = useRef(cam);
+  camRef.current = cam;
   const toLocal = (e: { clientX: number; clientY: number }) => {
     const r = svgRef.current?.getBoundingClientRect();
+    const c = camRef.current;
     if (!r) return { x: 0, y: 0 };
     return {
-      x: ((e.clientX - r.left) / r.width) * STAGE_W,
-      y: ((e.clientY - r.top) / r.height) * STAGE_H,
+      x: c.x + ((e.clientX - r.left) / r.width) * c.w,
+      y: c.y + ((e.clientY - r.top) / r.height) * c.h,
     };
   };
+
+  // Wheel-зум вокруг курсора (passive: false не нужен — onWheel React достаточно для viewBox).
+  const onWheel = (e: React.WheelEvent) => {
+    const p = toLocal(e);
+    setCam((c) => zoomCamera(c, Math.exp(e.deltaY * 0.0015), p.x, p.y));
+  };
+
+  // Пан по пустому фону (mousedown мимо нод; ноды гасят всплытие в onDown).
+  const onStagePan = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const start = { x: e.clientX, y: e.clientY };
+    const startCam = camRef.current;
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const move = (ev: MouseEvent) => {
+      const dx = ((ev.clientX - start.x) / r.width) * startCam.w;
+      const dy = ((ev.clientY - start.y) / r.height) * startCam.h;
+      setCam({ ...startCam, x: startCam.x - dx, y: startCam.y - dy });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  const fit = useCallback(() => {
+    const nodes = simRef.current?.nodes() ?? [];
+    setCam(fitCamera(nodes));
+  }, []);
+
+  // ── drag: пиннуем ноду (fx/fy) + разогрев; связанные подтягиваются физикой с сопротивлением ──
   const onDown = useCallback(
     (node: GraphNodeDatum) => (e: React.MouseEvent) => {
       e.preventDefault();
+      e.stopPropagation(); // не запускать пан фона (DP-6)
       const sim = simRef.current;
       if (!sim) return;
       // Освобождаем ранее «закреплённые» ноды: при перетягивании другой (связанной) ноды прежние
@@ -375,13 +459,20 @@ export default function GraphView() {
 
       <div className="graph-stage">
         {!showCanvas && <div className="graph-loading">{t('graph.empty')}</div>}
-        {showCanvas && loading && <div className="graph-loading">{t('graph.loading')}</div>}
+        {showCanvas && loading && (
+          <div className="graph-loading graph-thinking">
+            <BrandThinking size={28} />
+            <span className="mt-label">{t('graph.loading')}</span>
+          </div>
+        )}
         {showCanvas && graph && (
           <svg
             ref={svgRef}
             className="graph-svg"
-            viewBox={`0 0 ${STAGE_W} ${STAGE_H}`}
+            viewBox={`${cam.x} ${cam.y} ${cam.w} ${cam.h}`}
             preserveAspectRatio="xMidYMid meet"
+            onWheel={onWheel}
+            onMouseDown={onStagePan}
           >
             {(() => {
               let flowN = 0;
@@ -441,6 +532,35 @@ export default function GraphView() {
               );
             })}
           </svg>
+        )}
+
+        {showCanvas && graph && (
+          <div className="graph-zoom">
+            <button
+              className="gz-btn"
+              onClick={() => setCam((c) => zoomCamera(c, 0.8, c.x + c.w / 2, c.y + c.h / 2))}
+              title={t('graph.zoomIn')}
+              aria-label={t('graph.zoomIn')}
+            >
+              <Plus size={15} />
+            </button>
+            <button
+              className="gz-btn"
+              onClick={() => setCam((c) => zoomCamera(c, 1.25, c.x + c.w / 2, c.y + c.h / 2))}
+              title={t('graph.zoomOut')}
+              aria-label={t('graph.zoomOut')}
+            >
+              <Minus size={15} />
+            </button>
+            <button
+              className="gz-btn gz-fit"
+              onClick={fit}
+              title={t('graph.fit')}
+              aria-label={t('graph.fit')}
+            >
+              <Maximize2 size={14} />
+            </button>
+          </div>
         )}
 
         {showSettings && (
