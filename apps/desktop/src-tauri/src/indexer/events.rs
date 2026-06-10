@@ -9,17 +9,23 @@ use super::Indexer;
 /// Запускает watcher + фоновый цикл индексации для готового `Indexer` (вызывается из `open_vault`,
 /// который решает, с RAG или без).
 ///
-/// **Владение watcher'ом — у ВЫЗЫВАЮЩЕГО** (фикс «вечных воркеров», аудит 2026-06-10): возвращаемый
-/// `VaultWatcher` живёт в `VaultContext::lifecycle`; замена контекста (повторный `open_vault`)
-/// дропает watcher → sender канала закрывается → [`event_loop`] выходит сам. Раньше watcher жил
+/// **Владение watcher'ом — у ВЫЗЫВАЮЩЕГО** (фикс «вечных воркеров», аудит 2026-06-10): возвращаемые
+/// `VaultWatcher` + sender живут в `VaultContext`; замена контекста (повторный `open_vault`)
+/// дропает оба → канал закрывается → [`event_loop`] выходит сам. Раньше watcher жил
 /// ВНУТРИ задачи → петля была вечной, и каждый `open_vault` плодил ещё одну (два watcher'а на
 /// каталог, двойная индексация). `None` — watcher не инициализировался (vault без живой
 /// индексации, как и раньше).
+///
+/// Sender — управляющий вход той же петли: команда `rescan_vault` шлёт [`VaultEvent::Rescan`]
+/// (ручной реиндекс сериализуется с fs-событиями, без второго конкурентного сканера).
 #[must_use = "watcher обязан жить в VaultContext::lifecycle — иначе петля индексации умрёт сразу"]
-pub fn spawn(indexer: Indexer, app: tauri::AppHandle) -> Option<VaultWatcher> {
+pub fn spawn(
+    indexer: Indexer,
+    app: tauri::AppHandle,
+) -> Option<(VaultWatcher, tokio::sync::mpsc::UnboundedSender<VaultEvent>)> {
     let root = indexer.root.clone();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<VaultEvent>();
-    let watcher = match VaultWatcher::new(&root, tx) {
+    let watcher = match VaultWatcher::new(&root, tx.clone()) {
         Ok(w) => w,
         Err(e) => {
             tracing::error!(error = %e, "vault watcher init failed");
@@ -27,7 +33,7 @@ pub fn spawn(indexer: Indexer, app: tauri::AppHandle) -> Option<VaultWatcher> {
         }
     };
     tokio::spawn(event_loop(indexer, rx, move || emit_vault_changed(&app)));
-    Some(watcher)
+    Some((watcher, tx))
 }
 
 /// Петля индексации: начальный скан → инкрементальные события до закрытия канала (= дропа
@@ -61,6 +67,9 @@ pub(super) async fn event_loop(
                     (None, None) => Ok(()),
                 }
             }
+            // Ручной реиндекс (`rescan_vault`): тот же полный обход, что на открытии vault
+            // (mtime-шорткат внутри index_file — неизменённые файлы пролетают быстро).
+            VaultEvent::Rescan => indexer.scan_vault().await,
         };
         match result {
             // Персистим usearch после каждого инкрементального события (события дебаунсятся

@@ -595,3 +595,43 @@ async fn event_loop_indexes_and_stops_when_sender_dropped() {
         "нотификации: начальный скан + событие"
     );
 }
+
+/// Срез «Переиндексировать» (#37): `VaultEvent::Rescan` в петле — полный повторный обход.
+/// Файл, созданный МИМО watcher-событий (петля о нём не знает), попадает в индекс после Rescan;
+/// по завершении прилетает нотификация (фронт перечитывает вьюхи по `vault:changed`).
+#[tokio::test]
+async fn event_loop_rescan_picks_up_unseen_files() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::create_dir_all(root.join(".nexus")).unwrap();
+    let db = open(&root).await;
+    let indexer = Indexer::new(&db, root.clone());
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::watcher::VaultEvent>();
+    let notified = Arc::new(AtomicUsize::new(0));
+    let n2 = notified.clone();
+    let handle = tokio::spawn(events::event_loop(indexer, rx, move || {
+        n2.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    // Файл появляется без Upsert-события (watcher «проспал» / файл писали вне приложения)…
+    fs::write(root.join("ghost.md"), "# Призрак\n\nвне watcher").unwrap();
+    tx.send(crate::watcher::VaultEvent::Rescan).unwrap();
+    drop(tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("петля завершается после дропа sender")
+        .expect("без паники");
+
+    assert!(
+        file_id(&db, "ghost.md").await > 0,
+        "Rescan индексирует файл, не прошедший через события"
+    );
+    assert!(
+        notified.load(Ordering::SeqCst) >= 2,
+        "нотификации: начальный скан + rescan"
+    );
+}

@@ -112,6 +112,7 @@ pub fn run() {
             commands::vault::list_notes,
             commands::vault::resolve_note,
             commands::vault::list_tags,
+            commands::vault::rescan_vault,
             commands::graph::get_backlinks,
             commands::graph::get_local_graph,
             commands::graph::get_full_graph,
