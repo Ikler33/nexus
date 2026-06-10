@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
-  ExternalLink,
+  ChevronRight,
   Eye,
   EyeOff,
   FilePlus2,
@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 
 import { tauriApi, type NewsItem } from '../../lib/tauri-api';
 import { useNewsStore } from '../../stores/news';
+import { NewsReader } from './NewsReader';
 import styles from './NewsView.module.css';
 
 /** Unix-секунды → относительное время («2 ч. назад») в локали UI. */
@@ -82,6 +83,8 @@ export function NewsView() {
   const [showErrors, setShowErrors] = useState(false);
   const [gearOpen, setGearOpen] = useState(false);
   const [offline, setOffline] = useState(false);
+  /** Открытая в reader статья (NF-6); `null` — лента. */
+  const [open, setOpen] = useState<NewsItem | null>(null);
   const gearRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -115,6 +118,11 @@ export function NewsView() {
 
   const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
 
+  const openReader = (it: NewsItem) => {
+    setOpen(it);
+    if (!it.read) void markRead(it.id, true);
+  };
+
   // ── фича выключена: onboarding-CTA + информированное согласие (AC-NF-7) ──
   if (config && !config.enabled) {
     const active = sources.filter((s) => s.enabled);
@@ -145,6 +153,25 @@ export function NewsView() {
     );
   }
 
+  // ── reader (NF-6): открытая статья вместо ленты ──
+  if (open) {
+    return (
+      <main className={`${styles.page} ${styles.pageReader}`} aria-label={t('news.title')}>
+        <NewsReader
+          item={open}
+          sourceTitle={sourceTitle(open.sourceId)}
+          onBack={() => setOpen(null)}
+          onToNote={(id) => void toNote(id)}
+        />
+        {notice && (
+          <div className={styles.toast} role="status">
+            {t('news.noteCreated', { path: notice })}
+          </div>
+        )}
+      </main>
+    );
+  }
+
   const unreadCount = items.filter((it) => !it.read).length;
   const groups = topics
     .map((tp) => ({ topic: tp, items: items.filter((it) => it.topic === tp) }))
@@ -158,19 +185,15 @@ export function NewsView() {
         <i />
       </div>
       <div className={styles.ncMain}>
-        <a
+        <button
+          type="button"
           className={styles.ncTitle}
-          href={it.url}
-          target="_blank"
-          rel="noreferrer noopener"
-          title={t('news.openOriginal')}
-          onClick={() => {
-            if (!it.read) void markRead(it.id, true);
-          }}
+          title={t('news.openArticle')}
+          onClick={() => openReader(it)}
         >
           {it.titleRu}
-          <ExternalLink aria-hidden />
-        </a>
+          <ChevronRight aria-hidden />
+        </button>
         {it.summaryRu ? (
           <div className={styles.ncSummary}>{it.summaryRu}</div>
         ) : (

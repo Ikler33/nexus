@@ -3,10 +3,15 @@
 //! конфиг (`news.json` в OS config-dir — consent-носитель, AC-NF-7). Сам прогон гоняет
 //! планировщик (kind `newsfeed`); регистрация хендлера с реальным фетчером — срез NF-4.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::ai::ChatProvider;
 use crate::error::{AppError, AppResult};
+use crate::net::EgressFeature;
 use crate::news::{self, NewsConfig, NewsItem, NewsRun};
 use crate::state::AppState;
 
@@ -129,6 +134,129 @@ pub async fn set_news_config(
         .map_err(|e| AppError::Msg(format!("news.json не записан: {e}")))?;
     news::sync_egress_policy(&state.egress_policy, &config);
     Ok(config)
+}
+
+/// Статья для reader (NF-6). `denied` — хост вне политики эгресса (HN-ссылки на произвольные
+/// домены, офлайн, выключенная фича): fail-closed БЕЗ расширения allowlist — UI показывает
+/// резюме и ссылку «Оригинал».
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum NewsArticleDto {
+    #[serde(rename_all = "camelCase")]
+    Ready {
+        paras: Vec<String>,
+        /// Текст переведён моделью (EN-источник); RU-источники не переводятся (D1).
+        translated: bool,
+        /// Исходник был усечён потолком символов (no silent caps — пометка в reader).
+        truncated: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    Denied { message: String },
+}
+
+/// Полный текст статьи для reader: кэш → иначе guarded-фетч оригинала (политика NF-4 как есть:
+/// хост вне news-allowlist → `denied`, никакого расширения по клику) → извлечение абзацев →
+/// RU-перевод утилитарной моделью → кэш в БД. Долгий вызов (LLM) — UI показывает прогресс.
+#[tauri::command]
+pub async fn news_article(state: State<'_, AppState>, id: i64) -> AppResult<NewsArticleDto> {
+    let (reader, writer, policy, audit, chat) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.reader().clone(),
+            ctx.db.writer().clone(),
+            ctx.ai.policy.clone(),
+            state.egress_audit.clone(),
+            ctx.ai
+                .chat_util
+                .clone()
+                .or_else(|| ctx.ai.chat_fast.clone()),
+        )
+    };
+    let item = news::get_item(&reader, id)
+        .await?
+        .ok_or_else(|| AppError::Msg(format!("запись ленты не найдена: {id}")))?;
+
+    // Кэш: повторное открытие без сети и LLM.
+    if let Some((body, truncated)) = news::get_body(&reader, id).await? {
+        return Ok(NewsArticleDto::Ready {
+            paras: body.split("\n\n").map(str::to_string).collect(),
+            translated: !item.lang_ru,
+            truncated,
+        });
+    }
+
+    // Fail-closed пре-чек политики (читаемый отказ ДО сети): статья может жить на хосте вне
+    // доверенных источников (HN агрегирует произвольные домены) — это НЕ ошибка, а состояние.
+    let host = reqwest::Url::parse(&item.url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .ok_or_else(|| AppError::Msg("некорректный URL записи".into()))?;
+    if let Err(denied) = policy.check(&host, EgressFeature::NewsFeed) {
+        return Ok(NewsArticleDto::Denied {
+            message: denied.to_string(),
+        });
+    }
+
+    let chat = chat.ok_or_else(|| {
+        AppError::Msg("LLM не сконфигурирован — перевод статьи недоступен".into())
+    })?;
+    let fetcher = news::GuardedNewsFetcher::new(policy, audit, Arc::new(news::SystemResolver));
+    let html = news::FeedFetcher::fetch(&fetcher, &item.url)
+        .await
+        .map_err(|e| AppError::Msg(format!("оригинал не загружен: {e}")))?;
+    let (paras, truncated) = news::extract_paragraphs(&html);
+    if paras.is_empty() {
+        return Err(AppError::Msg(
+            "не удалось извлечь текст статьи — откройте оригинал".into(),
+        ));
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (paras, translated) =
+        news::translate_article(&chat, &item.title_ru, &paras, item.lang_ru, &cancel)
+            .await
+            .map_err(AppError::Msg)?;
+    news::set_body(
+        &writer,
+        id,
+        paras.join("\n\n"),
+        truncated,
+        crate::scheduler::now_secs(),
+    )
+    .await?;
+    Ok(NewsArticleDto::Ready {
+        paras,
+        translated,
+        truncated,
+    })
+}
+
+/// «Сократить» (NF-6): 3–6 RU-тезисов по тексту статьи (кэш тела; без него — по резюме).
+#[tauri::command]
+pub async fn news_summarize(state: State<'_, AppState>, id: i64) -> AppResult<Vec<String>> {
+    let (reader, chat) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.reader().clone(),
+            ctx.ai
+                .chat_util
+                .clone()
+                .or_else(|| ctx.ai.chat_fast.clone()),
+        )
+    };
+    let chat: Arc<dyn ChatProvider> =
+        chat.ok_or_else(|| AppError::Msg("LLM не сконфигурирован — сокращение недоступно".into()))?;
+    let item = news::get_item(&reader, id)
+        .await?
+        .ok_or_else(|| AppError::Msg(format!("запись ленты не найдена: {id}")))?;
+    let paras: Vec<String> = match news::get_body(&reader, id).await? {
+        Some((body, _)) => body.split("\n\n").map(str::to_string).collect(),
+        None if !item.summary_ru.is_empty() => vec![item.summary_ru.clone()],
+        None => return Err(AppError::Msg("нет текста для сокращения".into())),
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    news::summarize_article(&chat, &item.title_ru, &paras, &cancel)
+        .await
+        .map_err(AppError::Msg)
 }
 
 fn config_path(app: &AppHandle) -> AppResult<std::path::PathBuf> {

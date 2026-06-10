@@ -125,6 +125,8 @@ pub fn run() {
             commands::news::get_news_config,
             commands::news::set_news_config,
             commands::news::news_sources,
+            commands::news::news_article,
+            commands::news::news_summarize,
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
             commands::goals::list_goals,

@@ -16,6 +16,12 @@
   margin: 0 auto;
   padding: var(--space-6) var(--space-7) 80px;
 }
+/* В режиме reader страница не скроллится сама — скроллится текст статьи под панелью действий. */
+.pageReader {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 /* ── шапка-сводка дня (AI-карточка: teal-кант + бейдж) ── */
 .headRow {
@@ -364,6 +370,11 @@
   cursor: pointer;
   display: inline;
   text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
 }
 .ncTitle:hover {
   color: var(--color-link);
@@ -618,6 +629,234 @@
 }
 .errBanner svg {
   color: var(--color-danger);
+}
+
+/* ── reader статьи (NF-6, финальная итерация макета) ── */
+.reader {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.readerBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in oklch, var(--color-chrome) 88%, transparent);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+}
+.readerBack {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.readerBack:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.readerBack svg {
+  color: var(--color-accent);
+}
+.readerBarActions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.readerAct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.readerAct:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.readerAct svg {
+  color: var(--color-text-faint);
+}
+.readerActOn {
+  background: var(--color-ai-soft);
+  border-color: color-mix(in oklch, var(--color-ai) 40%, transparent);
+  color: var(--color-ai);
+}
+.readerActOn svg {
+  color: var(--color-ai);
+}
+.readerDoc {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-7) 100px;
+}
+.readerMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  margin-bottom: var(--space-4);
+}
+.rmSrc {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+.rmTrans {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-ai);
+}
+.rmTrans svg {
+  color: var(--color-ai);
+}
+.readerTitle {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-4);
+  text-wrap: balance;
+}
+.readerLede {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  font-style: italic;
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+.readerP {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  line-height: 1.75;
+  color: var(--color-text);
+  margin: 0 0 1.1em;
+  text-wrap: pretty;
+}
+.readerFoot {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: var(--space-6);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  line-height: 1.55;
+}
+.readerLoading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--color-ai);
+  font-size: var(--text-sm);
+  padding: var(--space-4) 0;
+}
+.thinkSpin {
+  animation: gspin 1.6s linear infinite;
+}
+/* панель «Кратко» (TL;DR) */
+.readerSummary {
+  margin: 0 0 var(--space-5);
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-ai-soft);
+  border: 1px solid color-mix(in oklch, var(--color-ai) 30%, transparent);
+}
+.readerSummaryThinking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-ai);
+  font-size: var(--text-sm);
+}
+.rsHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--color-ai);
+  margin-bottom: 9px;
+}
+.rsHead svg {
+  color: var(--color-ai);
+}
+.rsClose {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-faint);
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.rsClose:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.rsList {
+  margin: 0;
+  padding-left: 4px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.rsList li {
+  position: relative;
+  padding-left: 18px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--color-text);
+}
+.rsList li::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-ai);
 }
 
 /* ── транзиентное уведомление («Создана заметка …») ── */

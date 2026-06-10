@@ -222,6 +222,39 @@ pub async fn get_item(reader: &ReadPool, id: i64) -> DbResult<Option<NewsItem>> 
         .await
 }
 
+/// Кэш полного RU-текста статьи (NF-6): абзацы одной строкой через пустую строку + флаг усечения.
+pub async fn get_body(reader: &ReadPool, id: i64) -> DbResult<Option<(String, bool)>> {
+    reader
+        .query(move |c| {
+            c.query_row(
+                "SELECT body_ru, body_truncated FROM news_items WHERE id=?1 AND body_ru IS NOT NULL",
+                [id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
+            )
+            .optional()
+        })
+        .await
+}
+
+/// Пишет кэш тела статьи (NF-6); повторный фетч просто перезаписывает.
+pub async fn set_body(
+    writer: &WriteActor,
+    id: i64,
+    body: String,
+    truncated: bool,
+    now: i64,
+) -> DbResult<()> {
+    writer
+        .call(move |c| {
+            c.execute(
+                "UPDATE news_items SET body_ru=?1, body_truncated=?2, body_fetched_at=?3 WHERE id=?4",
+                params![body, truncated, now, id],
+            )?;
+            Ok(())
+        })
+        .await
+}
+
 /// Ретенция (AC-NF-5): удаляет items и runs старше [`RETENTION_DAYS`] от `now`. Возвращает
 /// число удалённых записей ленты.
 pub async fn retention_gc(writer: &WriteActor, now: i64) -> DbResult<usize> {
@@ -341,6 +374,25 @@ mod tests {
             first.title_ru, "Заголовок",
             "title не перетёрт (DO NOTHING)"
         );
+    }
+
+    /// NF-6: кэш тела статьи — roundtrip с флагом усечения (миграция 011); без кэша — `None`.
+    #[tokio::test]
+    async fn body_cache_roundtrip() {
+        let (_d, db) = open().await;
+        let (w, r) = (db.writer(), db.reader());
+        insert_items(w, vec![row("https://a/1", "Модели")], 100)
+            .await
+            .unwrap();
+        let id = list_items(r, None, false, 10, 0).await.unwrap()[0].id;
+
+        assert!(get_body(r, id).await.unwrap().is_none(), "кэша ещё нет");
+        set_body(w, id, "Абзац один.\n\nАбзац два.".into(), true, 200)
+            .await
+            .unwrap();
+        let (body, truncated) = get_body(r, id).await.unwrap().expect("кэш записан");
+        assert_eq!(body.split("\n\n").count(), 2);
+        assert!(truncated, "флаг усечения сохранён");
     }
 
     /// Фильтры ленты: тема/непрочитанные/скрытые/пагинация; темы — по убыванию частоты.

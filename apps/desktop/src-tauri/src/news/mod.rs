@@ -7,6 +7,7 @@
 //! DNS-rebinding-гард), NF-5 — страница UI. Контент фидов НЕДОВЕРЕННЫЙ: в LLM-промпты он пойдёт
 //! только между injection-маркерами (AC-SEC-7-паттерн), а здесь — никогда не интерпретируется.
 
+mod article;
 mod config;
 mod fetch;
 mod llm;
@@ -14,14 +15,15 @@ mod parse;
 mod run;
 mod store;
 
+pub use article::{extract_paragraphs, summarize_article, translate_article};
 pub use config::{load as load_news_config, save as save_news_config, NewsConfig};
 pub use fetch::{GuardedNewsFetcher, Resolver, SystemResolver, FEED_BODY_CAP};
 pub use llm::{daily_digest, evaluate_entries, EvalReport, EvaluatedEntry};
 pub use parse::parse_feed;
 pub use run::{run_news_pipeline, FeedFetcher, NewsFeedHandler, KIND_NEWSFEED, LLM_RUN_CAP};
 pub use store::{
-    filter_new_urls, get_item, insert_items, latest_run, list_items, list_topics, mark_read,
-    record_run, retention_gc, NewRow, NewsItem, NewsRun, RETENTION_DAYS,
+    filter_new_urls, get_body, get_item, insert_items, latest_run, list_items, list_topics,
+    mark_read, record_run, retention_gc, set_body, NewRow, NewsItem, NewsRun, RETENTION_DAYS,
 };
 
 use thiserror::Error;
