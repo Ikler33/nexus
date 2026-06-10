@@ -640,6 +640,16 @@ export const tauriApi = {
     },
 
     /**
+     * Подписка на прогресс полного скана индексатора (`vault:index-progress`, {done,total}) —
+     * статусбар «Индексация N/M» (макет app.jsx). Старт (0,total) → шаги → финиш (total,total).
+     * Вне Tauri — no-op (мок не сканирует).
+     */
+    onIndexProgress: async (cb: (p: { done: number; total: number }) => void): Promise<() => void> => {
+      if (!isTauri()) return () => {};
+      return listen<{ done: number; total: number }>('vault:index-progress', (e) => cb(e.payload));
+    },
+
+    /**
      * Подписка на «очередь задач изменилась» (backend `emit("jobs:changed")` после продуктивного тика
      * воркера — ADR-007). Используется для refetch дайджеста по завершении джобы. Вне Tauri — no-op.
      */

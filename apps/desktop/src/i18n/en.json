@@ -473,7 +473,8 @@
     "indexed": "Indexed",
     "conflict": "Conflict",
     "conflicts_one": "{{count}} conflict",
-    "conflicts_other": "{{count}} conflicts"
+    "conflicts_other": "{{count}} conflicts",
+    "indexing": "Indexing {{done}}/{{total}}"
   },
   "plugins": {
     "title": "Plugins",

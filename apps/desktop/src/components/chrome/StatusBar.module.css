@@ -113,3 +113,9 @@
     width: 100%;
   }
 }
+
+/* Реальный прогресс скана (макет «Индексация N/M»): ширина по факту, без indeterminate. */
+.progressReal i {
+  animation: none;
+  transition: width 240ms var(--ease-out, ease);
+}
