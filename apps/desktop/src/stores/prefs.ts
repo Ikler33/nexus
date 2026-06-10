@@ -39,17 +39,41 @@ function applyReadable(on: boolean): void {
 const START_READABLE = readBool(READABLE_KEY, true);
 applyReadable(START_READABLE);
 
+/** Имя для приветствия HOME (DP-1, «Добрый день, …»); пусто — приветствие без имени. */
+const USER_NAME_KEY = 'nexus.user.name';
+
+function readString(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 interface PrefsState {
   readableLineWidth: boolean;
+  /** Имя пользователя для приветствия HOME (необязательное, локальное). */
+  userName: string;
   setReadableLineWidth: (on: boolean) => void;
+  setUserName: (name: string) => void;
 }
 
 export const usePrefsStore = create<PrefsState>((set) => ({
   readableLineWidth: START_READABLE,
+  userName: readString(USER_NAME_KEY),
   setReadableLineWidth: (on) =>
     set(() => {
       persistBool(READABLE_KEY, on);
       applyReadable(on);
       return { readableLineWidth: on };
+    }),
+  setUserName: (name) =>
+    set(() => {
+      try {
+        localStorage.setItem(USER_NAME_KEY, name);
+      } catch {
+        /* ignore */
+      }
+      return { userName: name };
     }),
 }));

@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, X } from 'lucide-react';
+import { Home, Plus, Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
+import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
 import styles from './Sidebar.module.css';
 
 /**
- * Сайдбар: поле поиска + дерево файлов / результаты (Ф0-3 + Ф0-7). Пустой запрос → дерево;
- * непустой → результаты по title/path/tags (debounce 150 мс). Клик по результату открывает файл.
+ * Сайдбар: side-nav (Home, DP-1) + поле поиска + дерево файлов / результаты (Ф0-3 + Ф0-7).
+ * Пустой запрос → дерево; непустой → результаты по title/path/tags (debounce 150 мс).
+ * Полный icon-rail (files/search/tags/starred) — срез DP-2.
  */
 export function Sidebar() {
   const { t } = useTranslation();
@@ -18,6 +20,8 @@ export function Sidebar() {
   const openFile = useWorkspaceStore((s) => s.openFile);
   const createNote = useVaultStore((s) => s.createNote);
   const vaultOpen = useVaultStore((s) => s.info != null);
+  const homeOpen = useUIStore((s) => s.homeOpen);
+  const openHome = useUIStore((s) => s.openHome);
   const q = query.trim();
 
   useEffect(() => {
@@ -45,15 +49,25 @@ export function Sidebar() {
   return (
     <div className={styles.sidebar}>
       {vaultOpen && (
-        <button
-          type="button"
-          className={styles.newNote}
-          onClick={() => void createNote().then((path) => openFile(path))}
-          title={t('sidebar.newNote')}
-        >
-          <Plus size={15} aria-hidden />
-          <span>{t('sidebar.newNote')}</span>
-        </button>
+        <nav className={styles.sideNav} aria-label={t('sidebar.navLabel')}>
+          <button
+            type="button"
+            className={`${styles.navItem} ${homeOpen ? styles.navOn : ''}`}
+            onClick={() => openHome()}
+            aria-current={homeOpen ? 'page' : undefined}
+          >
+            <Home size={15} aria-hidden />
+            <span>{t('sidebar.home')}</span>
+          </button>
+          <button
+            type="button"
+            className={styles.navItem}
+            onClick={() => void createNote().then((path) => openFile(path))}
+          >
+            <Plus size={15} aria-hidden />
+            <span>{t('sidebar.newNote')}</span>
+          </button>
+        </nav>
       )}
       <div className={styles.searchBox}>
         <Search size={14} className={styles.searchIcon} aria-hidden />

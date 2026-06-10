@@ -20,6 +20,8 @@ interface UIState {
   contradictionsOpen: boolean;
   /** Открыта ли страница «Новости» (NF-5) — полная вью вместо редактора. */
   newsOpen: boolean;
+  /** Открыт ли HOME-дашборд (DP-1) — лендинг-вью вместо редактора (стартовая после vault). */
+  homeOpen: boolean;
   /** Открыт ли раздел настроек (модалка Obsidian-style; `tweaksOpen` исторически — теперь весь раздел). */
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
@@ -50,6 +52,9 @@ interface UIState {
   toggleContradictions: () => void;
   closeNews: () => void;
   toggleNews: () => void;
+  closeHome: () => void;
+  toggleHome: () => void;
+  openHome: () => void;
   toggleReading: () => void;
   closeReading: () => void;
   toggleTweaks: () => void;
@@ -71,6 +76,8 @@ export const useUIStore = create<UIState>((set) => ({
   digestOpen: false,
   contradictionsOpen: false,
   newsOpen: false,
+  // HOME — стартовый лендинг после открытия vault (макет: Home-вью по умолчанию).
+  homeOpen: true,
   tweaksOpen: false,
   settingsSection: 'general',
   reading: false,
@@ -95,8 +102,12 @@ export const useUIStore = create<UIState>((set) => ({
   toggleDigest: () => set((s) => ({ digestOpen: !s.digestOpen })),
   closeContradictions: () => set({ contradictionsOpen: false }),
   toggleContradictions: () => set((s) => ({ contradictionsOpen: !s.contradictionsOpen })),
+  // Полные вьюхи main-области взаимоисключающие: news ↔ home (редактор — когда обе закрыты).
   closeNews: () => set({ newsOpen: false }),
-  toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen })),
+  toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false })),
+  closeHome: () => set({ homeOpen: false }),
+  toggleHome: () => set((s) => ({ homeOpen: !s.homeOpen, newsOpen: false })),
+  openHome: () => set({ homeOpen: true, newsOpen: false }),
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),

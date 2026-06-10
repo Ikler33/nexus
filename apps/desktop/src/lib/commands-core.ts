@@ -177,6 +177,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleNews(),
     }),
     commands.register({
+      id: 'view.home',
+      title: 'Home',
+      titleKey: 'commands.view.home',
+      source: 'core',
+      run: () => useUIStore.getState().toggleHome(),
+    }),
+    commands.register({
       id: 'theme.toggle',
       title: 'Toggle theme (light/dark)',
       titleKey: 'commands.theme.toggle',

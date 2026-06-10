@@ -131,6 +131,7 @@ pub fn run() {
             commands::suggest::get_related_notes,
             commands::goals::list_goals,
             commands::home::get_home_data,
+            commands::home::get_home_activity,
             commands::home::get_widget,
             commands::home::refresh_widget,
             commands::home::get_stale_radar,
