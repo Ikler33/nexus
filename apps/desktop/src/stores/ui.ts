@@ -1,5 +1,16 @@
 import { create } from 'zustand';
 
+/** Флаг «онбординг пройден» (DP-7): welcome пропускает шаги настройки при повторных запусках. */
+const ONBOARDED_KEY = 'nexus.onboarded.v1';
+
+function readOnboarded(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 type AiTab = 'chat' | 'suggest' | 'related';
 /** Активная секция раздела настроек (Obsidian-style: левый нав → контент). Кросс-план #11. */
 export type SettingsSection = 'general' | 'editor' | 'appearance' | 'ai' | 'hotkeys' | 'about';
@@ -22,6 +33,10 @@ interface UIState {
   newsOpen: boolean;
   /** Открыт ли HOME-дашборд (DP-1) — лендинг-вью вместо редактора (стартовая после vault). */
   homeOpen: boolean;
+  /** Онбординг пройден (DP-7, персист): welcome ведёт сразу к открытию vault. */
+  onboardingDone: boolean;
+  /** Многошаговый онбординг идёт прямо сейчас (держит экран и после открытия vault). */
+  onboardingActive: boolean;
   /** Открыт ли раздел настроек (модалка Obsidian-style; `tweaksOpen` исторически — теперь весь раздел). */
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
@@ -55,6 +70,8 @@ interface UIState {
   closeHome: () => void;
   toggleHome: () => void;
   openHome: () => void;
+  startOnboarding: () => void;
+  finishOnboarding: () => void;
   toggleReading: () => void;
   closeReading: () => void;
   toggleTweaks: () => void;
@@ -78,6 +95,8 @@ export const useUIStore = create<UIState>((set) => ({
   newsOpen: false,
   // HOME — стартовый лендинг после открытия vault (макет: Home-вью по умолчанию).
   homeOpen: true,
+  onboardingDone: readOnboarded(),
+  onboardingActive: false,
   tweaksOpen: false,
   settingsSection: 'general',
   reading: false,
@@ -108,6 +127,15 @@ export const useUIStore = create<UIState>((set) => ({
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () => set((s) => ({ homeOpen: !s.homeOpen, newsOpen: false })),
   openHome: () => set({ homeOpen: true, newsOpen: false }),
+  startOnboarding: () => set({ onboardingActive: true }),
+  finishOnboarding: () => {
+    try {
+      localStorage.setItem(ONBOARDED_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+    set({ onboardingDone: true, onboardingActive: false });
+  },
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),

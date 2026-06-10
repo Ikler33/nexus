@@ -128,7 +128,13 @@ export const useInlineStore = create<InlineState>((set) => {
         view.dispatch({ effects: appendGhost.of(chunk) });
       };
       const scheduleFlush = () => {
-        if (rafId == null) rafId = requestAnimationFrame(flush);
+        // rAF может исчезнуть при teardown jsdom (vitest, node 25) — мок-стрим довершается
+        // после сноса окружения; фолбэк на setTimeout не даёт unhandled-error.
+        if (rafId == null)
+          rafId =
+            typeof requestAnimationFrame === 'function'
+              ? requestAnimationFrame(flush)
+              : (setTimeout(flush, 16) as unknown as number);
       };
 
       cancelStream = tauriApi.inline.complete(mode, context, selection, (event) => {
