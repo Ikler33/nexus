@@ -5,11 +5,14 @@
 //! до-резолвятся: точечно при индексации новой цели ([`path_forms`]) и пакетно после скана
 //! ([`resolve_all_dangling`]).
 
-use rusqlite::{OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction};
 
 /// Резолвит цель ссылки в `file_id` (точный путь, путь+`.md`, basename ± `.md`; затем алиас).
 /// Путь имеет приоритет над алиасом (реальный файл `X` важнее алиаса `X`).
-pub(super) fn resolve_target(tx: &Transaction, target_raw: &str) -> rusqlite::Result<Option<i64>> {
+///
+/// Принимает `&Connection` (а не `Transaction`): индексатор зовёт внутри транзакции (deref),
+/// команда `resolve_note` — на read-пуле. ОДНА семантика резолва на запись и клик (кросс-план #22).
+pub(crate) fn resolve_target(tx: &Connection, target_raw: &str) -> rusqlite::Result<Option<i64>> {
     let by_path = tx
         .query_row(
             "SELECT id FROM files WHERE is_deleted=0 AND ( \

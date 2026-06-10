@@ -5,7 +5,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { Sidebar } from './Sidebar';
 
 beforeEach(() => {
-  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
 });
 

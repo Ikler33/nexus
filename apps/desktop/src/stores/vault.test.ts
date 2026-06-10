@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { tauriApi, type FileEntry, type NoteRef } from '../lib/tauri-api';
-import { flattenVisible, resolveLink, useVaultStore } from './vault';
+import { tauriApi, type FileEntry } from '../lib/tauri-api';
+import { flattenVisible, useVaultStore } from './vault';
 
 const entry = (name: string): FileEntry => ({
   name,
@@ -16,19 +16,17 @@ function reset() {
     childrenByPath: {},
     expanded: {},
     loading: {},
-    notes: [],
   });
 }
 
 beforeEach(reset);
 
 describe('vault store (Ф0-3/Ф0-9)', () => {
-  it('openVault загружает корень и заметки', async () => {
+  it('openVault загружает корень (полный список заметок НЕ грузится, #22)', async () => {
     await useVaultStore.getState().openVault('');
     const s = useVaultStore.getState();
     expect(s.info).not.toBeNull();
     expect(s.childrenByPath['']?.length ?? 0).toBeGreaterThan(0);
-    expect(s.notes.length).toBeGreaterThan(0);
   });
 
   it('toggleDir лениво грузит детей и раскрывает', async () => {
@@ -67,7 +65,6 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
       entry('Untitled.md'),
       entry('Untitled 1.md'),
     ]);
-    vi.spyOn(tauriApi.vault, 'listNotes').mockResolvedValue([]);
 
     const path = await useVaultStore.getState().createNote('', { content: 'hi' });
 
@@ -78,17 +75,22 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
   });
 });
 
-describe('resolveLink (Ф0-5)', () => {
-  const notes: NoteRef[] = [
-    { path: 'Inbox.md', title: null },
-    { path: 'Projects/Roadmap.md', title: null },
-    { path: 'Notes/Meeting.md', title: 'Weekly' },
-  ];
+// #22: автокомплит/клик по ссылке спрашивают бэкенд; вне Tauri отвечает мок с той же семантикой.
+describe('listNotes(query, limit) + resolveNote (#22, мок-зеркало бэкенда)', () => {
+  it('listNotes фильтрует по подстроке и режет limit', async () => {
+    const all = await tauriApi.vault.listNotes();
+    expect(all.length).toBeGreaterThan(2);
+    const road = await tauriApi.vault.listNotes('roadmap');
+    expect(road.length).toBeGreaterThan(0);
+    expect(road.every((n) => n.path.toLowerCase().includes('roadmap'))).toBe(true);
+    const top1 = await tauriApi.vault.listNotes(undefined, 1);
+    expect(top1).toHaveLength(1);
+  });
 
-  it('резолвит по полному пути, пути без .md и по имени', () => {
-    expect(resolveLink('Inbox.md', notes)).toBe('Inbox.md');
-    expect(resolveLink('Projects/Roadmap', notes)).toBe('Projects/Roadmap.md');
-    expect(resolveLink('Meeting', notes)).toBe('Notes/Meeting.md');
-    expect(resolveLink('Nonexistent', notes)).toBeNull();
+  it('resolveNote: полный путь, путь без .md, basename; неизвестное → null', async () => {
+    expect(await tauriApi.vault.resolveNote('Inbox.md')).toBe('Inbox.md');
+    expect(await tauriApi.vault.resolveNote('Projects/Roadmap')).toBe('Projects/Roadmap.md');
+    expect(await tauriApi.vault.resolveNote('Roadmap')).toBe('Projects/Roadmap.md');
+    expect(await tauriApi.vault.resolveNote('Nonexistent')).toBeNull();
   });
 });

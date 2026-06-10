@@ -5,7 +5,7 @@ import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
 
 beforeEach(() => {
-  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
 });
 

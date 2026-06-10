@@ -478,15 +478,25 @@ pub async fn write_file(
     Ok(tokio::fs::write(&abs, content).await?)
 }
 
-/// Все заметки vault (path + title) — для автокомплита `[[wikilink]]` и поиска.
+/// Заметки vault (path + title) для автокомплита `[[wikilink]]`. Кросс-план #22: вместо
+/// безлимитного SELECT всего vault — подстрочный `query`-фильтр + `limit` (IPC-нагрузка ограничена
+/// топ-N, а не ~MB на 50k файлов). Оба параметра опциональны: без них — полный список (прежняя
+/// семантика, нужна мокам/мелким vault). Фильтр — в Rust (unicode-нечувствительность к регистру,
+/// которой нет у SQLite `LIKE` для кириллицы); префикс-совпадения ранжируются выше подстрочных.
 #[tauri::command]
-pub async fn list_notes(state: State<'_, AppState>) -> AppResult<Vec<NoteRef>> {
+pub async fn list_notes(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    limit: Option<u32>,
+) -> AppResult<Vec<NoteRef>> {
     let reader = state.vault().await?.db.reader().clone();
+    let q = query.unwrap_or_default().trim().to_lowercase();
+    let limit = limit.map(|l| l as usize);
     Ok(reader
-        .query(|c| {
+        .query(move |c| {
             let mut stmt =
                 c.prepare("SELECT path, title FROM files WHERE is_deleted=0 ORDER BY path")?;
-            let notes = stmt
+            let rows = stmt
                 .query_map([], |r| {
                     Ok(NoteRef {
                         path: r.get(0)?,
@@ -494,7 +504,54 @@ pub async fn list_notes(state: State<'_, AppState>) -> AppResult<Vec<NoteRef>> {
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(notes)
+            Ok(filter_rank_notes(rows, &q, limit))
+        })
+        .await?)
+}
+
+/// Фильтр+ранжирование заметок для автокомплита (чистая — тестируется без State). Совпадение —
+/// подстрока в пути/заголовке (lowercase, unicode); префикс basename-без-`.md` или заголовка
+/// ранжируется выше; внутри ранга — порядок по пути (стабильная сортировка). Пустой `q` — все.
+fn filter_rank_notes(rows: Vec<NoteRef>, q: &str, limit: Option<usize>) -> Vec<NoteRef> {
+    let mut ranked: Vec<(u8, NoteRef)> = rows
+        .into_iter()
+        .filter_map(|n| {
+            let path_lc = n.path.to_lowercase();
+            let title_lc = n.title.as_deref().unwrap_or_default().to_lowercase();
+            if !q.is_empty() && !path_lc.contains(q) && !title_lc.contains(q) {
+                return None;
+            }
+            let base = path_lc
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path_lc)
+                .trim_end_matches(".md")
+                .to_string();
+            let rank = u8::from(!(q.is_empty() || base.starts_with(q) || title_lc.starts_with(q)));
+            Some((rank, n))
+        })
+        .collect();
+    ranked.sort_by_key(|(rank, _)| *rank);
+    let mut out: Vec<NoteRef> = ranked.into_iter().map(|(_, n)| n).collect();
+    if let Some(l) = limit {
+        out.truncate(l);
+    }
+    out
+}
+
+/// Резолвит цель `[[wikilink]]` в путь файла — ТОЙ ЖЕ функцией, что индексатор резолвит links
+/// (путь / +`.md` / basename, затем алиас V4.1) — кросс-план #22: фронт больше не держит полный
+/// список заметок ради клика по ссылке, а алиасные ссылки начинают резолвиться и по клику.
+#[tauri::command]
+pub async fn resolve_note(state: State<'_, AppState>, target: String) -> AppResult<Option<String>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(reader
+        .query(move |c| {
+            let Some(id) = crate::indexer::resolve_target(c, &target)? else {
+                return Ok(None);
+            };
+            c.query_row("SELECT path FROM files WHERE id = ?1", [id], |r| r.get(0))
+                .optional()
         })
         .await?)
 }
@@ -557,6 +614,92 @@ mod tests {
             .query(|c| c.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0)))
             .await
             .unwrap()
+    }
+
+    /// #22: фильтр+ранжирование автокомплита — подстрока по пути/заголовку (unicode lowercase),
+    /// префикс basename/заголовка выше подстрочного совпадения, limit режет ПОСЛЕ ранжирования.
+    #[test]
+    fn filter_rank_notes_prefix_first_with_limit() {
+        let note = |p: &str, t: Option<&str>| NoteRef {
+            path: p.to_string(),
+            title: t.map(str::to_string),
+        };
+        let rows = vec![
+            note("Notes/CrossRoad.md", None), // подстрочное совпадение basename
+            note("Plans.md", Some("Roadmap-цели")), // префикс заголовка
+            note("Projects/Roadmap.md", Some("План")), // префикс basename
+            note("Прочее.md", None),          // не совпадает
+        ];
+        let out = filter_rank_notes(rows.clone(), "road", None);
+        assert_eq!(
+            out.iter().map(|n| n.path.as_str()).collect::<Vec<_>>(),
+            vec!["Plans.md", "Projects/Roadmap.md", "Notes/CrossRoad.md"],
+            "префикс-совпадения первыми (внутри ранга — порядок по пути)"
+        );
+        // Кириллица: lowercase-подстрока работает (SQLite LIKE так не умеет).
+        let cyr = filter_rank_notes(rows.clone(), "проч", None);
+        assert_eq!(cyr.len(), 1);
+        assert_eq!(cyr[0].path, "Прочее.md");
+        // limit режет после ранжирования: остаётся лучший (префиксный) матч.
+        let top1 = filter_rank_notes(rows.clone(), "road", Some(1));
+        assert_eq!(top1.len(), 1);
+        assert_eq!(top1[0].path, "Plans.md");
+        // Пустой запрос — все в порядке пути, limit применяется.
+        assert_eq!(filter_rank_notes(rows, "", Some(2)).len(), 2);
+    }
+
+    /// #22: `resolve_note`-резолв кликом = резолв индексатора (одна функция): путь / +.md /
+    /// basename, затем алиас (V4.1) — алиасные ссылки резолвятся и по клику.
+    #[tokio::test]
+    async fn resolve_note_matches_indexer_semantics_including_aliases() {
+        let dir = TempDir::new().unwrap();
+        let db = open_db(dir.path()).await;
+        db.writer()
+            .call(|c| {
+                c.execute_batch(
+                    "INSERT INTO files(path,hash,title,created_at,updated_at,indexed_at,size_bytes) \
+                     VALUES ('Notes/Кошка.md','h1','О кошках',0,0,0,1), \
+                            ('Inbox.md','h2',NULL,0,0,0,1); \
+                     INSERT INTO aliases(file_id,alias) \
+                     SELECT id,'Мурка' FROM files WHERE path='Notes/Кошка.md';",
+                )
+                .map(|_| ())
+            })
+            .await
+            .unwrap();
+        let resolve = |target: &'static str| {
+            let reader = db.reader().clone();
+            async move {
+                reader
+                    .query(move |c| {
+                        let Some(id) = crate::indexer::resolve_target(c, target)? else {
+                            return Ok(None);
+                        };
+                        c.query_row("SELECT path FROM files WHERE id=?1", [id], |r| {
+                            r.get::<_, String>(0)
+                        })
+                        .optional()
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(
+            resolve("Кошка").await.as_deref(),
+            Some("Notes/Кошка.md"),
+            "basename"
+        );
+        assert_eq!(
+            resolve("Notes/Кошка.md").await.as_deref(),
+            Some("Notes/Кошка.md")
+        );
+        assert_eq!(resolve("Inbox").await.as_deref(), Some("Inbox.md"), "+.md");
+        assert_eq!(
+            resolve("Мурка").await.as_deref(),
+            Some("Notes/Кошка.md"),
+            "алиас V4.1"
+        );
+        assert_eq!(resolve("Нету такой").await, None);
     }
 
     /// §6.5: первое включение RAG пишет settings и требует force; та же модель — без force.

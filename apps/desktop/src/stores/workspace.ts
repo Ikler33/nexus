@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
-import { resolveLink, useVaultStore } from './vault';
 
 /**
  * Рабочее пространство (§4.1, Б12): группы (сплиты) и вкладки вместо одиночного `currentFile`.
@@ -77,7 +76,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   async openLink(target) {
-    const path = resolveLink(target, useVaultStore.getState().notes);
+    // Резолв на бэкенде (#22) — та же семантика, что у индексатора links (путь/±.md/basename,
+    // затем алиас V4.1): фронт не держит полный список заметок, алиасные ссылки кликабельны.
+    const path = await tauriApi.vault.resolveNote(target).catch(() => null);
     if (path) await get().openFile(path);
   },
 

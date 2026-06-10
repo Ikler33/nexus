@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState } from 'react';
 import { BookOpen, Columns2, PenLine, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useVaultStore } from '../../stores/vault';
+import { tauriApi } from '../../lib/tauri-api';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Editor } from '../editor/Editor';
 import { FileViewer } from '../editor/FileViewer';
@@ -125,7 +125,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                   void saveBuffer(active.path);
                 }}
                 onOpenLink={(t) => void openLink(t)}
-                getNotes={() => useVaultStore.getState().notes}
+                fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
               />
             )}
           </div>

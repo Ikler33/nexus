@@ -5,7 +5,7 @@ import { useVaultStore } from './stores/vault';
 import { useWorkspaceStore } from './stores/workspace';
 
 beforeEach(() => {
-  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {}, notes: [] });
+  useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
 });
 

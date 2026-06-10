@@ -399,12 +399,33 @@ export async function getFullGraph(limit: number): Promise<FullGraph> {
   };
 }
 
-export async function listNotes(): Promise<NoteRef[]> {
+export async function listNotes(query?: string, limit?: number): Promise<NoteRef[]> {
   const files = Object.values(TREE)
     .flat()
     .filter((e) => !e.isDir)
     .map((e) => ({ path: e.path, title: null }));
   // Уникализируем по пути.
   const seen = new Set<string>();
-  return files.filter((n) => (seen.has(n.path) ? false : (seen.add(n.path), true)));
+  let notes = files.filter((n) => (seen.has(n.path) ? false : (seen.add(n.path), true)));
+  // #22: зеркало бэкенд-семантики — подстрочный фильтр (lowercase) + limit.
+  const q = (query ?? '').trim().toLowerCase();
+  if (q) notes = notes.filter((n) => n.path.toLowerCase().includes(q));
+  return limit != null ? notes.slice(0, limit) : notes;
+}
+
+/** Зеркало бэкенд-резолва `[[ссылки]]` (#22): точный путь / +`.md` / basename ± `.md`. Без алиасов
+ * (mock не индексирует frontmatter). */
+export async function resolveNote(target: string): Promise<string | null> {
+  const notes = await listNotes();
+  const want = target.endsWith('.md') ? target.slice(0, -3) : target;
+  const base = (p: string) => {
+    const b = p.slice(p.lastIndexOf('/') + 1);
+    return b.endsWith('.md') ? b.slice(0, -3) : b;
+  };
+  return (
+    notes.find((n) => n.path === target)?.path ??
+    notes.find((n) => n.path.replace(/\.md$/, '') === want)?.path ??
+    notes.find((n) => base(n.path) === base(want))?.path ??
+    null
+  );
 }
