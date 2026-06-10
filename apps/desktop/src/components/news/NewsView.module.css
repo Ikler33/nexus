@@ -1,0 +1,636 @@
+/* ============================================================
+   Страница «Новости» (NF-5) — порт `news.css` дизайн-хендоффа
+   на токены приложения. Плотность списков как в заметках;
+   темы-кластеры — рубрики в потоке.
+   ============================================================ */
+.page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--color-bg);
+  scrollbar-gutter: stable;
+}
+.inner {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-7) 80px;
+}
+
+/* ── шапка-сводка дня (AI-карточка: teal-кант + бейдж) ── */
+.headRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.digest {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid color-mix(in oklch, var(--color-ai) 30%, var(--color-border));
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  margin-bottom: var(--space-5);
+}
+.digest::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--color-ai);
+  opacity: 0.5;
+}
+.ndHead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.ndTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.ndTitle svg {
+  color: var(--color-ai);
+}
+.ndBadge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--color-ai);
+  border: 1px solid color-mix(in oklch, var(--color-ai) 40%, transparent);
+  background: var(--color-ai-soft);
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+.ndRefresh {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.ndRefresh:hover {
+  background: var(--color-surface-hover);
+}
+.ndRefresh svg {
+  color: var(--color-text-muted);
+}
+.spinning svg {
+  animation: gspin 1s linear infinite;
+}
+@keyframes gspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ndBody {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+}
+.ndMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+.ndWarn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-warning);
+  cursor: pointer;
+  background: none;
+  border: none;
+  font-size: inherit;
+  padding: 0;
+}
+.ndWarn:hover {
+  text-decoration: underline;
+}
+.ndErrors {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: oklch(0.8 0.13 75 / 0.08);
+  border: 1px solid color-mix(in oklch, var(--color-warning) 30%, transparent);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.er {
+  display: flex;
+  gap: 7px;
+  padding: 2px 0;
+}
+.er svg {
+  color: var(--color-danger);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ── шестерёнка страницы + меню ── */
+.gearWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.gearBtn {
+  width: 28px;
+  height: 28px;
+  margin-top: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-faint);
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.gearBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.menu {
+  position: absolute;
+  right: 0;
+  top: 36px;
+  min-width: 220px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-2);
+  padding: 6px;
+  z-index: 40;
+}
+.menuHead {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-text-faint);
+  padding: 6px 8px 4px;
+}
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.menuItem:hover {
+  background: var(--color-surface-hover);
+}
+.menuItem svg {
+  color: var(--color-text-faint);
+}
+
+/* ── чипы-фильтры тем + тоггл «Непрочитанные» ── */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+.chip {
+  font-size: var(--text-sm);
+  padding: 5px 12px;
+  border-radius: 99px;
+  cursor: pointer;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  transition:
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
+  white-space: nowrap;
+}
+.chip:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+.chipOn {
+  background: var(--color-selected);
+  border-color: color-mix(in oklch, var(--color-accent) 40%, var(--color-border));
+  color: var(--color-text);
+  font-weight: 600;
+}
+.cnt {
+  opacity: 0.6;
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.unreadToggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.switch {
+  position: relative;
+  width: 36px;
+  height: 21px;
+  border-radius: 99px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.switch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--color-bg-elevated);
+  box-shadow: var(--elevation-1);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+.switchOn {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.switchOn i {
+  transform: translateX(15px);
+}
+
+/* ── рубрика темы в потоке ── */
+.rubric {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
+  font-weight: 600;
+}
+.rubric::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+.rc {
+  font-family: var(--font-mono);
+}
+
+/* ── карточка новости ── */
+.list {
+  display: flex;
+  flex-direction: column;
+}
+.card {
+  display: flex;
+  gap: 12px;
+  padding: 14px 12px;
+  border-radius: var(--radius-md);
+  position: relative;
+  border-top: 1px solid transparent;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.card:hover {
+  background: var(--color-surface-hover);
+}
+.card + .card {
+  border-top-color: var(--color-border);
+}
+.card:hover + .card,
+.card:hover {
+  border-top-color: transparent;
+}
+.cardRead {
+  opacity: 0.5;
+}
+.ncUnread {
+  width: 7px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+.ncUnread i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.cardRead .ncUnread i {
+  background: transparent;
+}
+.ncMain {
+  flex: 1;
+  min-width: 0;
+}
+.ncTitle {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.4;
+  cursor: pointer;
+  display: inline;
+  text-decoration: none;
+}
+.ncTitle:hover {
+  color: var(--color-link);
+}
+.ncTitle svg {
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+  color: var(--color-link);
+}
+.card:hover .ncTitle svg {
+  opacity: 0.7;
+}
+.ncSummary {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.55;
+  margin-top: 4px;
+}
+.ncMissing {
+  font-style: italic;
+  color: var(--color-text-faint);
+}
+.ncMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+.ncSrc {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.ncLang {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+.ncActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+.card:hover .ncActions,
+.ncActions:focus-within {
+  opacity: 1;
+}
+.ncAct {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-faint);
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.ncAct:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+}
+.ncActOn {
+  color: var(--color-accent);
+}
+
+/* ── скелетон первого прогона ── */
+.skel {
+  display: flex;
+  gap: 12px;
+  padding: 14px 12px;
+  border-top: 1px solid var(--color-border);
+}
+.skLine {
+  height: 11px;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface) 25%,
+    var(--color-surface-hover) 50%,
+    var(--color-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: skShimmer 1.4s linear infinite;
+}
+@keyframes skShimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+.gathering {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.gathering svg {
+  color: var(--color-ai);
+  animation: gspin 1.6s linear infinite;
+}
+
+/* ── пустые / ошибочные состояния ── */
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: var(--space-8) var(--space-5);
+}
+.nsGlyph {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  display: grid;
+  place-items: center;
+  background: var(--color-surface);
+  color: var(--color-text-faint);
+}
+.nsGlyphDanger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.nsTitle {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.nsSub {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  max-width: 360px;
+  line-height: 1.6;
+}
+
+/* ── фича выключена: onboarding-CTA + информированное согласие ── */
+.cta {
+  max-width: 520px;
+  margin: var(--space-8) auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+.ctaGlyph {
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-lg);
+  display: grid;
+  place-items: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  margin-bottom: 4px;
+}
+.ctaTitle {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 500;
+}
+.ctaSub {
+  font-size: var(--text-md);
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+.ctaBtn {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 22px;
+  border-radius: 99px;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: var(--text-md);
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.ctaBtn:hover {
+  background: var(--color-accent-hover);
+}
+.ctaBtnSm {
+  height: 38px;
+}
+.consent {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  padding: 13px 15px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.55;
+  text-align: left;
+  max-width: 480px;
+}
+.consent svg {
+  color: var(--color-success);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.consent b {
+  color: var(--color-text);
+  font-weight: 600;
+}
+.srcs {
+  color: var(--color-text-faint);
+}
+
+/* ── баннеры (офлайн / ошибка команды) ── */
+.offlineBanner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border-radius: var(--radius-md);
+  background: oklch(0.8 0.13 75 / 0.1);
+  border: 1px solid color-mix(in oklch, var(--color-warning) 30%, transparent);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  margin-bottom: var(--space-4);
+}
+.offlineBanner svg {
+  color: var(--color-warning);
+}
+.errBanner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  margin-bottom: var(--space-4);
+}
+.errBanner svg {
+  color: var(--color-danger);
+}
+
+/* ── транзиентное уведомление («Создана заметка …») ── */
+.toast {
+  position: fixed;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 99px;
+  padding: 8px 16px;
+  font-size: var(--text-sm);
+  box-shadow: var(--elevation-2);
+  z-index: 60;
+}

@@ -18,6 +18,8 @@ interface UIState {
   digestOpen: boolean;
   /** Открыта ли панель «Поиск противоречий» (#vision). */
   contradictionsOpen: boolean;
+  /** Открыта ли страница «Новости» (NF-5) — полная вью вместо редактора. */
+  newsOpen: boolean;
   /** Открыт ли раздел настроек (модалка Obsidian-style; `tweaksOpen` исторически — теперь весь раздел). */
   tweaksOpen: boolean;
   /** Активная секция раздела настроек. */
@@ -46,6 +48,8 @@ interface UIState {
   toggleDigest: () => void;
   closeContradictions: () => void;
   toggleContradictions: () => void;
+  closeNews: () => void;
+  toggleNews: () => void;
   toggleReading: () => void;
   closeReading: () => void;
   toggleTweaks: () => void;
@@ -66,6 +70,7 @@ export const useUIStore = create<UIState>((set) => ({
   goalsOpen: false,
   digestOpen: false,
   contradictionsOpen: false,
+  newsOpen: false,
   tweaksOpen: false,
   settingsSection: 'general',
   reading: false,
@@ -90,6 +95,8 @@ export const useUIStore = create<UIState>((set) => ({
   toggleDigest: () => set((s) => ({ digestOpen: !s.digestOpen })),
   closeContradictions: () => set({ contradictionsOpen: false }),
   toggleContradictions: () => set((s) => ({ contradictionsOpen: !s.contradictionsOpen })),
+  closeNews: () => set({ newsOpen: false }),
+  toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen })),
   toggleReading: () => set((s) => ({ reading: !s.reading })),
   closeReading: () => set({ reading: false }),
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),

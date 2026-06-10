@@ -12,6 +12,7 @@ import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
+import { NewsView } from './components/news/NewsView';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { Onboarding } from './components/onboarding/Onboarding';
@@ -45,6 +46,7 @@ export function App() {
   const goalsOpen = useUIStore((s) => s.goalsOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
+  const newsOpen = useUIStore((s) => s.newsOpen);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const reading = useUIStore((s) => s.reading);
 
@@ -126,9 +128,7 @@ export function App() {
             <Sidebar />
           </aside>
         )}
-        <main className={styles.main}>
-          <EditorArea />
-        </main>
+        <main className={styles.main}>{newsOpen ? <NewsView /> : <EditorArea />}</main>
         {chatOpen && !reading && <AiPanel />}
       </div>
       <InlineAria />
