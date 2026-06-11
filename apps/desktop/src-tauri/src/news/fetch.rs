@@ -18,8 +18,17 @@ use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
 use crate::plugin::{blocks_cloud_metadata, is_private_host};
 
 /// W3: таймаут запроса фида и потолок тела ответа.
-const FEED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-pub const FEED_BODY_CAP: usize = 2 * 1024 * 1024;
+/// Таймауты фетча (W3, переосмысление 2026-06-11): прежний ЕДИНЫЙ 20-секундный `timeout()`
+/// срабатывал ПОСРЕДИ тела у медленных-но-здоровых фидов (GitHub releases.atom отдаёт ~14 КБ/с →
+/// 421 КБ за ~27 с) и маскировался под «error decoding response body». Анти-зависание теперь
+/// держат connect-таймаут + inactivity-таймаут чтения; общий потолок — страховка от капельницы
+/// (вместе с body-cap 2 МБ время всё равно ограничено).
+const FEED_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const FEED_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const FEED_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// 2→4 МБ (2026-06-11): Substack-фиды с полными текстами (raschka — 2.3 МБ) легитимно больше 2 МБ;
+/// потолок остаётся — это анти-DoS, а не норматив размера.
+pub const FEED_BODY_CAP: usize = 4 * 1024 * 1024;
 
 /// DNS-резолв для гарда — за трейтом ради офлайн-тестов (мок задаёт IP).
 #[async_trait]
@@ -99,7 +108,10 @@ impl FeedFetcher for GuardedNewsFetcher {
         let pinned = SocketAddr::new(ips[0], parsed.port_or_known_default().unwrap_or(443));
 
         let client = GuardedClient::new(self.policy.clone(), self.audit.clone(), move |b| {
-            b.timeout(FEED_TIMEOUT).resolve_to_addrs(&host, &[pinned])
+            b.connect_timeout(FEED_CONNECT_TIMEOUT)
+                .read_timeout(FEED_READ_TIMEOUT)
+                .timeout(FEED_TOTAL_TIMEOUT)
+                .resolve_to_addrs(&host, &[pinned])
         })
         .map_err(|e| e.to_string())?;
         let resp = client
