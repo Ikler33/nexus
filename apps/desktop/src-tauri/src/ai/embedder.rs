@@ -80,7 +80,7 @@ impl OpenAiEmbedder {
         Self {
             client: client.clone(),
             feature,
-            endpoint: format!("{}/v1/embeddings", base_url.trim_end_matches('/')),
+            endpoint: format!("{}/v1/embeddings", crate::ai::api_base(base_url)),
             model: model.to_string(),
             dim,
             query_prefix,
@@ -92,7 +92,7 @@ impl OpenAiEmbedder {
     /// в `local.json`). Не применяет проверку/префиксы — только длину вектора. Через guarded
     /// с [`EgressFeature::Probe`] (AC-EGR-6): url вне политики → `Denied` ДО сети.
     pub async fn probe_dim(client: &GuardedClient, base_url: &str, model: &str) -> AiResult<usize> {
-        let endpoint = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/embeddings", crate::ai::api_base(base_url));
         let body = serde_json::json!({ "model": model, "input": ["dim probe"] });
         let resp = client
             .post_json(&endpoint, EgressFeature::Probe, &body)

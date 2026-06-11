@@ -23,6 +23,33 @@ pub use embedder::{default_prefixes, l2_normalize, EmbeddingProvider, OpenAiEmbe
 
 use thiserror::Error;
 
+/// Нормализует базовый URL OpenAI-совместимого сервера: снимает хвостовые `/` и опциональный
+/// суффикс `/v1`. Иначе пользовательский URL вида `http://host:8080/v1` после добавления
+/// канонического пути даёт `…/v1/v1/chat/completions` → 404 (баг 2026-06-11: чат «Доступен» по
+/// probe, но реальные вызовы падали из-за двойного `/v1`). Терпим оба варианта ввода.
+pub fn api_base(url: &str) -> String {
+    let t = url.trim().trim_end_matches('/');
+    let t = t.strip_suffix("/v1").unwrap_or(t);
+    t.trim_end_matches('/').to_string()
+}
+
+#[cfg(test)]
+mod api_base_tests {
+    use super::api_base;
+
+    #[test]
+    fn strips_trailing_slash_and_v1() {
+        assert_eq!(api_base("http://h:8080"), "http://h:8080");
+        assert_eq!(api_base("http://h:8080/"), "http://h:8080");
+        // Главный кейс бага: пользователь вставил `.../v1` → не должно удваиваться.
+        assert_eq!(api_base("http://h:8080/v1"), "http://h:8080");
+        assert_eq!(api_base("http://h:8080/v1/"), "http://h:8080");
+        assert_eq!(api_base("  http://h:8080/v1  "), "http://h:8080");
+        // Путь, не оканчивающийся на /v1, не трогаем (кроме хвостового слеша).
+        assert_eq!(api_base("http://h:8080/api"), "http://h:8080/api");
+    }
+}
+
 /// Ошибки AI-слоя.
 #[derive(Debug, Error)]
 pub enum AiError {

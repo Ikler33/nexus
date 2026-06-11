@@ -380,6 +380,9 @@ function AiSection() {
   const [chatModel, setChatModel] = useState('');
   const [embUrl, setEmbUrl] = useState('');
   const [embModel, setEmbModel] = useState('');
+  const [fastUrl, setFastUrl] = useState('');
+  const [fastModel, setFastModel] = useState('');
+  const [fastTest, setFastTest] = useState<TestState>({ status: 'idle' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [restart, setRestart] = useState(false);
@@ -394,6 +397,8 @@ function AiSection() {
       setChatModel(cfg.chat?.model ?? '');
       setEmbUrl(cfg.embedding?.url ?? '');
       setEmbModel(cfg.embedding?.model ?? '');
+      setFastUrl(cfg.fast?.url ?? '');
+      setFastModel(cfg.fast?.model ?? '');
     });
     return () => {
       alive = false;
@@ -422,8 +427,9 @@ function AiSection() {
     const embedding = embUrl.trim()
       ? { url: embUrl.trim(), model: embModel.trim() || null }
       : null;
+    const fast = fastUrl.trim() ? { url: fastUrl.trim(), model: fastModel.trim() || null } : null;
     try {
-      const res = await tauriApi.settings.setAiConfig(chat, embedding);
+      const res = await tauriApi.settings.setAiConfig(chat, embedding, fast);
       setRestart(res.embeddingChanged);
       setSaved(true);
     } catch (e) {
@@ -457,6 +463,16 @@ function AiSection() {
         onModel={setEmbModel}
         test={embTest}
         onTest={() => void runTest(embUrl, setEmbTest)}
+      />
+      <Endpoint
+        title={t('settings.aiSec.fastTitle')}
+        desc={t('settings.aiSec.fastDesc')}
+        url={fastUrl}
+        model={fastModel}
+        onUrl={setFastUrl}
+        onModel={setFastModel}
+        test={fastTest}
+        onTest={() => void runTest(fastUrl, setFastTest)}
       />
 
       <div className={styles.saveBar}>

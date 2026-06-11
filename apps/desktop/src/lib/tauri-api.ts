@@ -334,6 +334,8 @@ export interface AiEndpoint {
 export interface AiConfigDto {
   chat: AiEndpoint | null;
   embedding: AiEndpoint | null;
+  /** Утилитарная мелкая модель (`ai.fast`) — inline/судья/новости. */
+  fast: AiEndpoint | null;
 }
 /** Снимок политики эгресса ядра (зеркалит Rust `net::EgressState`; срез 2 net.md). */
 export interface EgressState {
@@ -905,10 +907,14 @@ export const tauriApi = {
      * Записывает AI-конфиг в `.nexus/local.json` (сохраняя прочие ключи) и ГОРЯЧО применяет chat.
      * `embeddingChanged` в ответе → UI просит перезапуск (индексатор перечитает конфиг при старте).
      */
-    setAiConfig: (chat: AiEndpoint | null, embedding: AiEndpoint | null): Promise<SetAiResult> =>
+    setAiConfig: (
+      chat: AiEndpoint | null,
+      embedding: AiEndpoint | null,
+      fast: AiEndpoint | null = null,
+    ): Promise<SetAiResult> =>
       isTauri()
-        ? invoke<SetAiResult>('set_ai_config', { chat, embedding })
-        : mockSettings.setAiConfig(chat, embedding),
+        ? invoke<SetAiResult>('set_ai_config', { chat, embedding, fast })
+        : mockSettings.setAiConfig(chat, embedding, fast),
 
     /** Проверка связи с LLM-эндпоинтом (пробный GET `/v1/models`). Резолвится = достижим; throw = нет. */
     testConnection: (url: string): Promise<void> =>

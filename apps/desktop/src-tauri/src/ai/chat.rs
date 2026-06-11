@@ -109,7 +109,7 @@ impl OpenAiChatProvider {
         Self {
             client: client.clone(),
             feature,
-            endpoint: format!("{}/v1/chat/completions", base_url.trim_end_matches('/')),
+            endpoint: format!("{}/v1/chat/completions", crate::ai::api_base(base_url)),
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
             idle_timeout: STREAM_IDLE_TIMEOUT,

@@ -137,7 +137,9 @@
       "save": "Save",
       "saving": "Saving…",
       "saved": "Saved. Chat applied.",
-      "restart": "Saved. Restart the app — embedding changed (re-indexing needed)."
+      "restart": "Saved. Restart the app — embedding changed (re-indexing needed).",
+      "fastTitle": "Fast model (primitives)",
+      "fastDesc": "A small model for short tasks: inline generation, contradiction judge, reasoning summary, news. Empty → the chat model is used."
     },
     "egress": {
       "title": "Network (egress)",
