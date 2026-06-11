@@ -4,6 +4,7 @@ import { AlertTriangle, FileText, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { type ChatMessage, type ChatSource, useChatStore } from '../../stores/chat';
+import type { WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
@@ -19,8 +20,8 @@ export function ChatView() {
   const { t } = useTranslation();
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
-  const grounded = useChatStore((s) => s.grounded);
-  const setGrounded = useChatStore((s) => s.setGrounded);
+  const mode = useChatStore((s) => s.mode);
+  const setMode = useChatStore((s) => s.setMode);
   const send = useChatStore((s) => s.send);
   const stop = useChatStore((s) => s.stop);
   const center = useWorkspaceStore(activePath);
@@ -115,28 +116,20 @@ export function ChatView() {
       </div>
 
       <div className={styles.modeRow} role="radiogroup" aria-label={t('chat.mode')}>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={grounded}
-          className={`${styles.modeBtn} ${grounded ? styles.modeOn : ''}`}
-          onClick={() => setGrounded(true)}
-          disabled={streaming}
-          title={t('chat.modeVaultHint')}
-        >
-          {t('chat.modeVault')}
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={!grounded}
-          className={`${styles.modeBtn} ${!grounded ? styles.modeOn : ''}`}
-          onClick={() => setGrounded(false)}
-          disabled={streaming}
-          title={t('chat.modeGeneralHint')}
-        >
-          {t('chat.modeGeneral')}
-        </button>
+        {(['vault', 'general', 'web'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={mode === m}
+            className={`${styles.modeBtn} ${mode === m ? styles.modeOn : ''}`}
+            onClick={() => setMode(m)}
+            disabled={streaming}
+            title={t(`chat.mode${m === 'vault' ? 'Vault' : m === 'general' ? 'General' : 'Web'}Hint`)}
+          >
+            {t(`chat.mode${m === 'vault' ? 'Vault' : m === 'general' ? 'General' : 'Web'}`)}
+          </button>
+        ))}
       </div>
 
       <form
@@ -293,8 +286,46 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
           {message.sources && message.sources.length > 0 && (
             <Sources sources={message.sources} onOpen={onOpen} />
           )}
+          {message.webSources && message.webSources.length > 0 && (
+            <WebSources sources={message.webSources} />
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Web-источники (W-3): карточки-цитаты с заголовком, доменом и сниппетом — ссылка открывается
+ * во внешнем браузере (web-контент недоверенный, в приложение его не пускаем). */
+function WebSources({ sources }: { sources: WebSource[] }) {
+  const { t } = useTranslation();
+  const host = (url: string) => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  };
+  return (
+    <div className={styles.srcCards} aria-label={t('chat.webSources')}>
+      {sources.map((s, i) => (
+        <a
+          key={s.url + i}
+          className={styles.srcCard}
+          href={s.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={s.url}
+        >
+          <span className={styles.srcCardNum}>{i + 1}</span>
+          <span className={styles.srcCardBody}>
+            <span className={styles.srcCardTitle}>{s.title}</span>
+            <span className={styles.srcCardCtx}>
+              {host(s.url)} · {s.snippet}
+            </span>
+          </span>
+        </a>
+      ))}
     </div>
   );
 }
