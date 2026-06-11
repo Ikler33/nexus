@@ -56,8 +56,8 @@ pub async fn open_vault(
         Some(cfg) => build_rag(&root, &db, cfg, &state.egress_policy, &state.egress_audit).await,
         None => None,
     };
-    let (vectors, embedder, indexer) = match rag {
-        Some((embedder, vec_index, force)) => {
+    let (vectors, chat_vectors, embedder, indexer) = match rag {
+        Some((embedder, vec_index, chat_vec_index, force)) => {
             let idx = crate::indexer::Indexer::with_rag(
                 &db,
                 root.clone(),
@@ -65,9 +65,14 @@ pub async fn open_vault(
                 vec_index.clone(),
                 force,
             );
-            (Some(vec_index), Some(embedder), idx)
+            (Some(vec_index), Some(chat_vec_index), Some(embedder), idx)
         }
-        None => (None, None, crate::indexer::Indexer::new(&db, root.clone())),
+        None => (
+            None,
+            None,
+            None,
+            crate::indexer::Indexer::new(&db, root.clone()),
+        ),
     };
 
     // Chat-провайдеры (ADR-005): пара — обычный с reasoning (RAG-чат, точность) + «быстрый» без
@@ -265,6 +270,37 @@ pub async fn open_vault(
         on_change,
         shutdown_rx,
     );
+    // Бэкфилл памяти переписки (N4): сессии до N4 (или потерянные векторы) индексируем в фоне —
+    // эмбеддим сообщения, которых нет в chat_vectors. Best-effort, не держит open_vault.
+    if let (Some(chat_vec), Some(emb)) = (&chat_vectors, &embedder) {
+        let (reader, chat_vec, emb) = (db.reader().clone(), chat_vec.clone(), emb.clone());
+        tokio::spawn(async move {
+            // usearch — источник правды о проиндексированном: берём все сообщения, фильтруем `contains`.
+            let all = std::collections::HashSet::new();
+            if let Ok(msgs) = crate::chat_log::messages_missing_vectors(&reader, all).await {
+                let pending: Vec<_> = msgs
+                    .into_iter()
+                    .filter(|m| !chat_vec.contains(m.id as u64))
+                    .collect();
+                if pending.is_empty() {
+                    return;
+                }
+                let n = pending.len();
+                for m in pending {
+                    if let Ok(v) = emb.embed_documents(&[m.content.as_str()]).await {
+                        if let Some(vec) = v.first() {
+                            let _ = chat_vec.upsert(m.id as u64, vec);
+                        }
+                    }
+                }
+                let _ = chat_vec.save();
+                tracing::info!(
+                    messages = n,
+                    "chat-memory: бэкфилл векторов переписки завершён"
+                );
+            }
+        });
+    }
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
     if chat.is_some()
@@ -332,6 +368,7 @@ pub async fn open_vault(
         root,
         db,
         vectors,
+        chat_vectors,
         ai: AIClient {
             chat,
             chat_fast,
@@ -370,7 +407,12 @@ async fn build_rag(
     cfg: &LocalConfig,
     policy: &Arc<EgressPolicy>,
     audit: &Arc<EgressAudit>,
-) -> Option<(Arc<dyn EmbeddingProvider>, Arc<VectorIndex>, bool)> {
+) -> Option<(
+    Arc<dyn EmbeddingProvider>,
+    Arc<VectorIndex>,
+    Arc<VectorIndex>,
+    bool,
+)> {
     let emb = cfg.ai.embedding.as_ref()?;
     let model = emb.model.clone().unwrap_or_else(|| "embedding".to_string());
 
@@ -415,9 +457,20 @@ async fn build_rag(
     let vectors = VectorIndex::open(root.join(".nexus").join("vectors.usearch"), dim)
         .map_err(|e| tracing::warn!(error = %e, "usearch open не удался — RAG отключён"))
         .ok()?;
+    // Отдельный индекс памяти переписки (N4, RAG по чат-сессиям): тот же эмбеддер/dim, но свои
+    // ключи (id сообщений) — не пересекается с чанками заметок. Параллельный канал выдачи, чтобы
+    // переписка не глушила заметки в ранжировании (решение владельца + BACKLOG).
+    let chat_vectors = VectorIndex::open(root.join(".nexus").join("chat_vectors.usearch"), dim)
+        .map_err(|e| tracing::warn!(error = %e, "chat_vectors open не удался — память чата off"))
+        .ok()?;
 
     tracing::info!(model = %model, dim, force, "RAG включён");
-    Some((Arc::new(embedder), Arc::new(vectors), force))
+    Some((
+        Arc::new(embedder),
+        Arc::new(vectors),
+        Arc::new(chat_vectors),
+        force,
+    ))
 }
 
 /// Строит пару chat-провайдеров из конфига (`ai.chat`): `(обычный с reasoning, быстрый без reasoning)`.

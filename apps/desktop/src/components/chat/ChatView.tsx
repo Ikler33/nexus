@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, FileText, Sparkles, Globe, ChevronRight } from 'lucide-react';
+import { AlertTriangle, FileText, Sparkles, Globe, ChevronRight, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,7 +13,7 @@ import {
   useChatStore,
 } from '../../stores/chat';
 import { useUIStore } from '../../stores/ui';
-import type { WebSource } from '../../lib/tauri-api';
+import type { MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
@@ -409,8 +409,46 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
               <WebSources sources={message.webSources} />
             </Disclosure>
           )}
+          {message.memorySources && message.memorySources.length > 0 && (
+            <Disclosure
+              id={`${message.id}:mem`}
+              label={t('chat.memorySourcesToggle', { count: message.memorySources.length })}
+            >
+              <MemorySources sources={message.memorySources} />
+            </Disclosure>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Память переписки (N4b): фрагменты прошлых диалогов — клик грузит ту сессию в ленту (как история).
+ *  Это внутренние данные («второй мозг»), не внешний контент — открываем прямо в панели. */
+function MemorySources({ sources }: { sources: MemoryHit[] }) {
+  const { t } = useTranslation();
+  const loadSession = useChatStore((s) => s.loadSession);
+  return (
+    <div className={styles.srcCards} aria-label={t('chat.memorySources')}>
+      {sources.map((s, i) => (
+        <button
+          key={`${s.sessionId}:${i}`}
+          type="button"
+          className={styles.srcCard}
+          onClick={() => void loadSession(s.sessionId)}
+          title={t('chat.memoryOpen')}
+        >
+          <span className={styles.srcCardNum}>
+            <MessageSquare size={12} aria-hidden />
+          </span>
+          <span className={styles.srcCardBody}>
+            <span className={styles.srcCardTitle}>
+              {s.sessionTitle} · {s.role === 'user' ? t('chat.memoryYou') : t('chat.memoryAi')}
+            </span>
+            <span className={styles.srcCardCtx}>{s.snippet}</span>
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
