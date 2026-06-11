@@ -150,7 +150,11 @@ async fn live_web_agent_plans_searches_answers() {
         .await
         .expect("план+поиск без ошибок");
     let query = outcome.query.expect("свежий факт → модель обязана искать");
-    println!("web agent query: {query}");
+    println!("web agent query: {query} (fresh={})", outcome.fresh);
+    assert!(
+        outcome.fresh,
+        "вопрос про «последнюю версию» — план обязан пометить FRESH (time_range)"
+    );
     assert!(!outcome.results.is_empty(), "SearXNG дал результаты");
     for r in outcome.results.iter().take(3) {
         println!("  {} — {}", r.title, r.url);

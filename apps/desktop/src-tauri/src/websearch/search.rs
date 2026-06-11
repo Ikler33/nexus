@@ -74,13 +74,15 @@ impl std::fmt::Display for SearchError {
 /// не поднимая SearXNG. Прод-реализация — [`WebSearcher`].
 #[async_trait::async_trait]
 pub trait Searcher: Send + Sync {
-    async fn search(&self, query: &str) -> Result<Vec<SearchResult>, SearchError>;
+    /// `fresh` — вопрос про текущее положение дел (план `FRESH:`): выдача ограничивается свежим
+    /// периодом, чтобы не отвечать по многолетним страницам.
+    async fn search(&self, query: &str, fresh: bool) -> Result<Vec<SearchResult>, SearchError>;
 }
 
 #[async_trait::async_trait]
 impl Searcher for WebSearcher {
-    async fn search(&self, query: &str) -> Result<Vec<SearchResult>, SearchError> {
-        WebSearcher::search(self, query).await
+    async fn search(&self, query: &str, fresh: bool) -> Result<Vec<SearchResult>, SearchError> {
+        WebSearcher::search(self, query, fresh).await
     }
 }
 
@@ -109,7 +111,8 @@ impl WebSearcher {
     }
 
     /// Один поиск: до [`MAX_RESULTS`] результатов. W4: запрос сканируется на секреты ДО сети.
-    pub async fn search(&self, query: &str) -> Result<Vec<SearchResult>, SearchError> {
+    /// `fresh` → выдача ограничивается [`FRESH_TIME_RANGE`].
+    pub async fn search(&self, query: &str, fresh: bool) -> Result<Vec<SearchResult>, SearchError> {
         // W4 (AC-SEC-3 на egress-payload): секрет в исходящем запросе → запрос НЕ уходит.
         if !scan_secrets(query).is_empty() {
             return Err(SearchError::SecretInQuery);
@@ -118,15 +121,7 @@ impl WebSearcher {
             return Err(SearchError::NotConfigured);
         }
 
-        let mut url = reqwest::Url::parse(self.base_url.trim_end_matches('/'))
-            .map_err(|_| SearchError::Failed("некорректный URL SearXNG".into()))?;
-        // Гарантируем путь /search (consent-URL может быть и базой, и /search).
-        if !url.path().trim_end_matches('/').ends_with("search") {
-            url.set_path(&format!("{}/search", url.path().trim_end_matches('/')));
-        }
-        url.query_pairs_mut()
-            .append_pair("q", query)
-            .append_pair("format", "json");
+        let url = build_search_url(&self.base_url, query, fresh)?;
         let host = url
             .host_str()
             .ok_or_else(|| SearchError::Failed("URL без хоста".into()))?
@@ -164,6 +159,29 @@ impl WebSearcher {
             .map_err(SearchError::Failed)?;
         parse_searx(&body)
     }
+}
+
+/// SearXNG `time_range` для fresh-запросов: «год» отсекает многолетние страницы (наблюдение
+/// live-smoke 2026-06-11: «последняя версия Python» отвечала по статье 2023-го), не урезая
+/// recall до новостной ленты. Движки без поддержки time_range параметр игнорируют.
+const FRESH_TIME_RANGE: &str = "year";
+
+/// Строит URL запроса к SearXNG (без сети — юнит-тестируемо): путь /search (consent-URL может быть
+/// и базой, и /search), `q`+`format=json`, при `fresh` — `time_range`.
+fn build_search_url(base_url: &str, query: &str, fresh: bool) -> Result<reqwest::Url, SearchError> {
+    let mut url = reqwest::Url::parse(base_url.trim_end_matches('/'))
+        .map_err(|_| SearchError::Failed("некорректный URL SearXNG".into()))?;
+    if !url.path().trim_end_matches('/').ends_with("search") {
+        url.set_path(&format!("{}/search", url.path().trim_end_matches('/')));
+    }
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("format", "json");
+    if fresh {
+        url.query_pairs_mut()
+            .append_pair("time_range", FRESH_TIME_RANGE);
+    }
+    Ok(url)
 }
 
 /// Парсит ответ SearXNG → нормализованные результаты (пустые url отбрасываем, обрезаем до MAX).
@@ -212,8 +230,24 @@ mod tests {
         );
         // Плейсхолдер из gitleaks-allowlist (.gitleaks.toml), но `detect_token` его ловит как github-PAT.
         let q = "ghp_0123456789012345678901234567890123ab";
-        let err = futures::executor::block_on(searcher.search(q));
+        let err = futures::executor::block_on(searcher.search(q, false));
         assert!(matches!(err, Err(SearchError::SecretInQuery)));
+    }
+
+    /// fresh-план ограничивает выдачу свежим периодом; обычный запрос time_range не несёт.
+    /// Путь /search достраивается и для базового consent-URL, и для уже полного.
+    #[test]
+    fn build_search_url_adds_time_range_only_when_fresh() {
+        let u =
+            build_search_url("https://searx.example.com", "последняя версия python", true).unwrap();
+        assert_eq!(u.path(), "/search");
+        assert!(u.query().unwrap().contains("time_range=year"));
+        assert!(u.query().unwrap().contains("format=json"));
+
+        let u =
+            build_search_url("https://searx.example.com/search", "обычный запрос", false).unwrap();
+        assert_eq!(u.path(), "/search");
+        assert!(!u.query().unwrap().contains("time_range"));
     }
 
     #[test]
