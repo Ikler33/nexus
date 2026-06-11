@@ -85,7 +85,10 @@
 }
 
 .tabName {
-  flex: 0 0 auto;
+  /* Сжимаемое имя (баг 2026-06-12: фикс-ширины контента в сумме 218px > max-width 200px пилюли —
+     крестик выдавливался за скруглённую рамку). min-width:0 разрешает ellipsis во flex. */
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
