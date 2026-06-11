@@ -15,7 +15,9 @@ import { dirname, resolve } from 'node:path';
 // 12→16: + 4 live-smoke LLM-этапов (`live_smoke.rs`, 2026-06-11): news-этап (RU-резюме+сводка дня),
 // web-агент целиком (план→SearXNG→ответ), decide «веб не нужен», чат-стрим 26B — всем нужны живые
 // LLM-сервер/SearXNG, в CI принципиально не исполняются; запуск `cargo test live_ -- --ignored`.
-const EXPECTED = 16;
+// 16→17: + `live_eval_llm_rerank_experiment` (eval-гейт LLM-реранка на живых bge+E4B; прод-гейт
+// качества по-прежнему `eval_fixture_meets_baseline` в CI на замороженных векторах).
+const EXPECTED = 17;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');

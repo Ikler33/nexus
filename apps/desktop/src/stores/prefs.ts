@@ -84,6 +84,17 @@ function readRagSources(): RagSources {
   return 'cards';
 }
 
+/** LLM-реранжирование RAG-источников (search::rerank, default ВКЛ — eval: nDCG .883→1.0). */
+const AI_RERANK_KEY = 'nexus.ai.rerank';
+
+function readBoolDefaultTrue(key: string): boolean {
+  try {
+    return localStorage.getItem(key) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 /** Размер AI-панели (фидбэк владельца 11.06: «увеличить окно с чатом») — перетаскивание кромки. */
 const AI_W_KEY = 'nexus.ai.panelW';
 const AI_H_KEY = 'nexus.ai.panelH';
@@ -118,6 +129,8 @@ interface PrefsState {
   aiLayout: AiLayout;
   /** Стиль RAG-источников в чате (DP-12). */
   ragSources: RagSources;
+  /** LLM-реранжирование источников чата (точнее порядок, +~2 с на вопрос). */
+  aiRerank: boolean;
   /** Ширина side-AI-панели, px (драг кромки). */
   aiPanelW: number;
   /** Высота bottom-AI-панели, px (драг кромки). */
@@ -127,6 +140,7 @@ interface PrefsState {
   setPaletteStyle: (style: PaletteStyle) => void;
   setAiLayout: (layout: AiLayout) => void;
   setRagSources: (style: RagSources) => void;
+  setAiRerank: (on: boolean) => void;
   setAiPanelW: (w: number) => void;
   setAiPanelH: (h: number) => void;
 }
@@ -137,6 +151,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   paletteStyle: readPalette(),
   aiLayout: readAiLayout(),
   ragSources: readRagSources(),
+  aiRerank: readBoolDefaultTrue(AI_RERANK_KEY),
   aiPanelW: readNum(AI_W_KEY, AI_PANEL_W.def, AI_PANEL_W.min, AI_PANEL_W.max),
   aiPanelH: readNum(AI_H_KEY, AI_PANEL_H.def, AI_PANEL_H.min, AI_PANEL_H.max),
   setReadableLineWidth: (on) =>
@@ -181,6 +196,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       }
       return { ragSources: style };
     }),
+  setAiRerank: (on) => {
+    try {
+      localStorage.setItem(AI_RERANK_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ aiRerank: on });
+  },
   setAiPanelW: (w) => {
     const v = Math.round(Math.min(AI_PANEL_W.max, Math.max(AI_PANEL_W.min, w)));
     try {
