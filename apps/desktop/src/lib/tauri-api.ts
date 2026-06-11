@@ -300,6 +300,12 @@ export interface WebSource {
   snippet: string;
 }
 
+/** Конфиг web-агента (W-3, зеркалит Rust `WebSearchConfig`): URL SearXNG = consent на эгресс к нему. */
+export interface WebSearchConfig {
+  enabled: boolean;
+  url: string;
+}
+
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'webSources'; sources: WebSource[] }
@@ -407,6 +413,9 @@ export type NewsArticle =
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
+
+/** Мок web-конфига для браузер-превью W-3 (in-memory). */
+let mockWebSearch: WebSearchConfig = { enabled: false, url: '' };
 
 export const tauriApi = {
   app: {
@@ -870,6 +879,21 @@ export const tauriApi = {
       isTauri()
         ? invoke<EgressState>('set_egress_feature', { feature, enabled })
         : mockEgress.setFeature(feature, enabled),
+  },
+
+  /** Web-агент (W-3): consent-конфиг SearXNG (URL = разрешение на эгресс к нему). Вне Tauri — память. */
+  websearch: {
+    getConfig: (): Promise<WebSearchConfig> =>
+      isTauri()
+        ? invoke<WebSearchConfig>('get_websearch_config')
+        : Promise.resolve(mockWebSearch),
+    setConfig: (config: WebSearchConfig): Promise<WebSearchConfig> => {
+      if (!isTauri()) {
+        mockWebSearch = { ...config };
+        return Promise.resolve(mockWebSearch);
+      }
+      return invoke<WebSearchConfig>('set_websearch_config', { config });
+    },
   },
 
   settings: {
