@@ -249,29 +249,42 @@ async fn live_real_vault_smoke() {
     let indexer = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
     indexer.scan_vault().await.unwrap();
 
-    // (запрос, ожидаемый файл-подстрока). Первые две — кросс-язычные (RU-запрос → EN-заметка).
-    let probes = [
-        ("рецепт хлеба на закваске", "Sourdough"),
-        (
-            "борьба с утечками памяти без сборщика мусора",
-            "Rust-Ownership",
-        ),
-        (
-            "how does approximate nearest neighbour search work",
-            "Vector-Search",
-        ),
-        (
-            "права плагинов, аудит и предотвращение confused deputy",
-            "Безопасность",
-        ),
-    ];
-    let mut ok = 0;
-    for (q, expect) in probes {
+    // Self-retrieval (vault-агностично, 2026-06-12): берём выборку заметок vault, запрос — начало
+    // их содержимого, ожидаем, что заметка находит САМУ СЕБЯ в топ-8. Не зависит от конкретного
+    // контента (прежние хардкод-пробы были под старый личный vault и ложно падали на рабочем).
+    let sample: Vec<(String, String)> = db
+        .reader()
+        .query(|c| {
+            let mut stmt = c.prepare(
+                "SELECT f.path, ch.content FROM files f \
+                 JOIN chunks ch ON ch.file_id = f.id \
+                 WHERE f.is_deleted=0 GROUP BY f.id ORDER BY f.path LIMIT 12",
+            )?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await
+        .unwrap();
+    assert!(!sample.is_empty(), "vault пуст или не проиндексировался");
+
+    let mut ok = 0usize;
+    let total = sample.len();
+    for (path, content) in &sample {
+        // Запрос — первые ~120 символов содержимого (заголовок + начало): естественный «вопрос»
+        // про заметку, а не дословная копия чанка целиком.
+        let query: String = content
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(120)
+            .collect();
         let hits = search::hybrid_search(
             db.reader(),
             Some(&vectors),
             Some(embedder.as_ref()),
-            q.to_string(),
+            query,
             SearchOptions {
                 limit: 8,
                 filter: None,
@@ -280,18 +293,20 @@ async fn live_real_vault_smoke() {
         )
         .await
         .unwrap();
-        let rank = hits.iter().position(|h| h.path.contains(expect));
+        let rank = hits.iter().position(|h| &h.path == path);
         ok += usize::from(rank.is_some());
-        let top: Vec<String> = hits
-            .iter()
-            .map(|h| format!("{}({:.3})", h.path, h.score))
-            .collect();
         eprintln!(
-            "[{}] {q:?} → rank={rank:?}\n      {top:?}",
+            "[{}] {path} → self-rank={rank:?}",
             if rank.is_some() { "OK" } else { "--" }
         );
     }
-    assert!(ok >= 3, "ожидали ≥3/4 проб найденными, получили {ok}/4");
+    // Self-retrieval почти идеален: заметка по своему же тексту обязана быть в топ-8. Порог 80% —
+    // запас на дубли/near-duplicate контент рабочих vault.
+    let need = (total * 4).div_ceil(5);
+    assert!(
+        ok >= need,
+        "self-retrieval {ok}/{total} ниже порога {need} — индексация/поиск деградировали"
+    );
 }
 
 /// **Нагрузочный бенчмарк полного пайплайна** (индексация С ЭМБЕДДИНГАМИ) на синтетическом
