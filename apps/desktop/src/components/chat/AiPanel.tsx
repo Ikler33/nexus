@@ -1,8 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
-import { HardDrive, RefreshCw, Sparkles, Trash2, WifiOff, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Check,
+  FilePlus2,
+  HardDrive,
+  History,
+  RefreshCw,
+  Sparkles,
+  SquarePen,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { tauriApi } from '../../lib/tauri-api';
+import { logUi } from '../../lib/debug-log';
+import { tauriApi, type ChatSessionInfo } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { useChatStore } from '../../stores/chat';
 import { useRelatedStore } from '../../stores/related';
@@ -45,6 +56,119 @@ function ProviderBadge() {
   );
 }
 
+/** Группа истории по свежести (Claude-style: Сегодня / Вчера / Неделя / Ранее). */
+function bucketOf(updatedAt: number, now: number): 'today' | 'yesterday' | 'week' | 'earlier' {
+  const days = Math.floor((now - updatedAt) / 86_400);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return 'week';
+  return 'earlier';
+}
+
+/**
+ * История сессий (решение владельца 2026-06-12, вариант А «как в Claude/ChatGPT»): кнопка-часы
+ * в шапке панели → glass-дропдаун с группировкой по датам; клик — загрузить сессию; на ховере
+ * строки — «Сохранить в заметки» (экспорт в `Chats/…md`). Ничего не удаляем — это память
+ * «второго мозга».
+ */
+function SessionHistory() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [sessions, setSessions] = useState<ChatSessionInfo[]>([]);
+  const [savedId, setSavedId] = useState<number | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const sessionId = useChatStore((s) => s.sessionId);
+  const loadSession = useChatStore((s) => s.loadSession);
+
+  useEffect(() => {
+    if (!open) return;
+    void tauriApi.chat.sessions
+      .list()
+      .then(setSessions)
+      .catch(() => setSessions([]));
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const toNote = (id: number) => {
+    logUi('chat:session-to-note', String(id));
+    void tauriApi.chat.sessions
+      .toNote(id)
+      .then(() => {
+        setSavedId(id);
+        setTimeout(() => setSavedId(null), 1800);
+      })
+      .catch(() => {});
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  const buckets = (['today', 'yesterday', 'week', 'earlier'] as const)
+    .map((b) => [b, sessions.filter((s) => bucketOf(s.updatedAt, now) === b)] as const)
+    .filter(([, list]) => list.length > 0);
+
+  return (
+    <div className={styles.histWrap} ref={wrapRef}>
+      <button
+        className={`${styles.iconBtn} ${open ? styles.iconBtnOn : ''}`}
+        onClick={() => setOpen((v) => !v)}
+        title={t('chat.history')}
+        aria-label={t('chat.history')}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        <History size={15} aria-hidden />
+      </button>
+      {open && (
+        <div className={styles.histMenu} role="menu" aria-label={t('chat.history')}>
+          <div className={styles.histHead}>{t('chat.history')}</div>
+          {buckets.length === 0 && <div className={styles.histEmpty}>{t('chat.historyEmpty')}</div>}
+          {buckets.map(([bucket, list]) => (
+            <div key={bucket}>
+              <div className={styles.histBucket}>{t(`chat.hist.${bucket}`)}</div>
+              {list.map((sess, i) => (
+                <div
+                  key={sess.id}
+                  className={`${styles.histRow} ${sess.id === sessionId ? styles.histActive : ''}`}
+                  style={{ animationDelay: `${Math.min(i, 8) * 22}ms` }}
+                >
+                  <button
+                    type="button"
+                    className={styles.histTitle}
+                    role="menuitem"
+                    onClick={() => {
+                      setOpen(false);
+                      logUi('chat:load-session', String(sess.id));
+                      void loadSession(sess.id);
+                    }}
+                  >
+                    {sess.title}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.histNote}
+                    onClick={() => toNote(sess.id)}
+                    title={t('chat.toNote')}
+                    aria-label={t('chat.toNote')}
+                  >
+                    {savedId === sess.id ? (
+                      <Check size={13} aria-hidden />
+                    ) : (
+                      <FilePlus2 size={13} aria-hidden />
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * AI-панель по макету `ai-panel.jsx` (DP-12): шапка ai-head (глиф + «AI-ассистент» + бейдж
  * провайдера + действия), табы отдельной строкой с подчёркиванием активного. Вкладки: «Чат»
@@ -65,7 +189,7 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
 
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
-  const clearChat = useChatStore((s) => s.clear);
+  const newSession = useChatStore((s) => s.newSession);
 
   const reloadSuggest = useSuggestStore((s) => s.load);
   const reloadRelated = useRelatedStore((s) => s.load);
@@ -115,15 +239,20 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
         <span className={styles.headSpacer} />
         <ProviderBadge />
         {tab === 'chat' ? (
-          <button
-            className={styles.iconBtn}
-            onClick={() => clearChat()}
-            disabled={streaming || messages.length === 0}
-            title={t('chat.clear')}
-            aria-label={t('chat.clear')}
-          >
-            <Trash2 size={15} aria-hidden />
-          </button>
+          // Решение владельца 2026-06-12: ничего не удаляем — вместо корзины «История» и
+          // «Новая сессия» (текущая лента уходит в память «второго мозга», не стирается).
+          <>
+            <SessionHistory />
+            <button
+              className={styles.iconBtn}
+              onClick={() => newSession()}
+              disabled={streaming || messages.length === 0}
+              title={t('chat.newSession')}
+              aria-label={t('chat.newSession')}
+            >
+              <SquarePen size={15} aria-hidden />
+            </button>
+          </>
         ) : (
           <button
             className={styles.iconBtn}

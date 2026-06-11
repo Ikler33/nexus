@@ -7,6 +7,8 @@
 
 /// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
 pub mod ai;
+/// Сессии чата в vault-БД («второй мозг» переписки, решение владельца 2026-06-12).
+pub mod chat_log;
 /// Markdown-чанкер для RAG (§6.1).
 pub mod chunker;
 /// Tauri IPC-команды.
@@ -160,6 +162,10 @@ pub fn run() {
             commands::search::search_content,
             commands::chat::chat_rag,
             commands::chat::chat_cancel,
+            commands::chat_sessions::chat_sessions_list,
+            commands::chat_sessions::chat_session_messages,
+            commands::chat_sessions::chat_log_exchange,
+            commands::chat_sessions::chat_session_to_note,
             commands::inline::inline_complete,
             commands::inline::inline_cancel,
             commands::news::get_news,

@@ -62,6 +62,12 @@ interface ChatState {
   stop: () => void;
   /** Очищает сессию (нельзя во время стрима — сначала `stop`). */
   clear: () => void;
+  /** Текущая сессия в БД (`null` — ещё не создана; создастся первым завершённым обменом). */
+  sessionId: number | null;
+  /** Загружает сессию из БД в ленту (клик в истории). */
+  loadSession: (id: number) => Promise<void>;
+  /** Новая сессия: чистая лента, следующий обмен создаст запись в БД. */
+  newSession: () => void;
   /**
    * Загружает сохранённую историю чата для vault (`root`) из localStorage; `null` (vault закрыт) —
    * очистка. Вызывается из `App.tsx` при смене корня vault. Персист идёт автоматически на терминальных
@@ -73,29 +79,29 @@ interface ChatState {
 let seq = 0;
 const nextId = () => `m${++seq}`;
 
-/** Префикс ключа localStorage для истории чата (на каждый vault — свой). */
-const CHAT_KEY_PREFIX = 'nexus.chat.v1:';
-/** Максимум сохраняемых сообщений (хвост) — защита localStorage от разрастания (см. docs/BACKLOG). */
-const MAX_PERSISTED = 100;
-
 export const useChatStore = create<ChatState>((set, get) => {
   let cancelFn: (() => void) | null = null;
-  // Ключ localStorage текущего vault (ставит `hydrate`); `null` — vault не открыт, не персистим.
-  let vaultKey: string | null = null;
+  // Открыт ли vault (ставит hydrate) — без него обмены в БД не пишем.
+  let vaultOpen = false;
 
-  // Сохраняет историю текущего vault (хвост ≤MAX_PERSISTED, без стрим-флагов). Вызывается на
-  // терминальных событиях. Best-effort: localStorage может быть недоступен/переполнен.
+  // Персист обмена в vault-БД (решение владельца 2026-06-12: переписка — часть «второго мозга»,
+  // localStorage-история v1 заменена таблицами chat_sessions/chat_messages). Вызывается на
+  // терминальном done: последний (вопрос, ответ) + JSON источников. Best-effort.
   const save = () => {
-    if (!vaultKey) return;
-    try {
-      const msgs = get()
-        .messages.slice(-MAX_PERSISTED)
-        // Живую сводку не персистим — она эфемерна (показывается только в фазе «думает»).
-        .map((m) => ({ ...m, streaming: false, reasoningSummary: undefined }));
-      localStorage.setItem(vaultKey, JSON.stringify(msgs));
-    } catch {
-      /* недоступно/переполнено — не критично */
-    }
+    if (!vaultOpen) return;
+    const msgs = get().messages;
+    const reply = msgs[msgs.length - 1];
+    const ask = msgs[msgs.length - 2];
+    if (!reply || reply.role !== 'assistant' || !ask || ask.role !== 'user') return;
+    if (reply.error) return; // ошибочные обмены не персистим (нечего вспоминать)
+    const sourcesJson =
+      reply.sources?.length || reply.webSources?.length
+        ? JSON.stringify({ sources: reply.sources ?? [], webSources: reply.webSources ?? [] })
+        : null;
+    void tauriApi.chat.sessions
+      .logExchange(get().sessionId, ask.content, reply.content, sourcesJson)
+      .then((sid) => set({ sessionId: sid }))
+      .catch(() => {});
   };
 
   // Троттлинг рендера токенов (AC-Б10-4 / ревью C9): копим текст в буфер и применяем одним set()
@@ -118,6 +124,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     streaming: false,
     mode: 'vault',
     web: false,
+    sessionId: null,
 
     setMode(mode) {
       if (get().streaming) return; // не переключаем режим на лету
@@ -245,27 +252,60 @@ export const useChatStore = create<ChatState>((set, get) => {
     hydrate(root) {
       disclosureOpen.clear();
       // Смена vault при активном стриме (аудит 2026-06-10): дорезаем осиротевший стрим ДО смены
-      // ключа — хвост финализируется в историю СТАРОГО vault (не утечёт в новый), отмена уходит
-      // на бэкенд (LLM не молотит по закрытому vault).
+      // контекста — хвост финализируется в историю СТАРОГО vault, отмена уходит на бэкенд.
       if (get().streaming) get().stop();
-      vaultKey = root ? CHAT_KEY_PREFIX + root : null;
-      if (!vaultKey) {
-        set({ messages: [] });
-        return;
-      }
-      let restored: ChatMessage[] = [];
+      vaultOpen = root != null;
+      set({ messages: [], sessionId: null });
+      if (!vaultOpen) return;
+      // Продолжаем последнюю сессию (поведение прежнего localStorage-хвоста, теперь из БД).
+      void tauriApi.chat.sessions
+        .list()
+        .then((sessions) => {
+          const last = sessions[0];
+          if (last) void get().loadSession(last.id);
+        })
+        .catch(() => {});
+    },
+
+    async loadSession(id) {
+      if (get().streaming) return; // во время стрима не прыгаем по истории
       try {
-        const raw = localStorage.getItem(vaultKey);
-        if (raw) {
-          const parsed: unknown = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            restored = (parsed as ChatMessage[]).map((m) => ({ ...m, streaming: false }));
+        const stored = await tauriApi.chat.sessions.messages(id);
+        disclosureOpen.clear();
+        const restored: ChatMessage[] = stored.map((m) => {
+          let sources: ChatSource[] | undefined;
+          let webSources: WebSource[] | undefined;
+          if (m.sourcesJson) {
+            try {
+              const parsed = JSON.parse(m.sourcesJson) as {
+                sources?: ChatSource[];
+                webSources?: WebSource[];
+              };
+              sources = parsed.sources?.length ? parsed.sources : undefined;
+              webSources = parsed.webSources?.length ? parsed.webSources : undefined;
+            } catch {
+              /* битый снапшот источников — сообщение без карточек */
+            }
           }
-        }
+          return {
+            id: nextId(),
+            role: m.role,
+            content: m.content,
+            sources,
+            webSources,
+          };
+        });
+        set({ messages: restored, sessionId: id });
       } catch {
-        /* битый JSON / нет localStorage — пустая история */
+        /* сессия недоступна — лента не трогается */
       }
-      set({ messages: restored });
+    },
+
+    newSession() {
+      if (get().streaming) return;
+      logUi('chat:new-session');
+      disclosureOpen.clear();
+      set({ messages: [], sessionId: null });
     },
   };
 });

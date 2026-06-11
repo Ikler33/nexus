@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../lib/tauri-api';
+import { __reset as resetMockSessions } from '../lib/mock/sessions';
 import { useChatStore } from './chat';
 
 // В vitest (не Tauri) `streamRag` проксируется в мок `mock/vault.streamChat` (sources→токены→done).
@@ -13,7 +14,8 @@ beforeEach(() => {
     removeItem: (k: string) => void ls.delete(k),
     clear: () => ls.clear(),
   });
-  useChatStore.getState().hydrate(null); // сброс vaultKey + messages
+  resetMockSessions();
+  useChatStore.getState().hydrate(null); // сброс контекста vault + ленты
   useChatStore.setState({ streaming: false, mode: 'vault' });
 });
 
@@ -150,33 +152,49 @@ describe('chat store (Ф1-8)', () => {
     expect(after?.content).toBe('x'.repeat(N));
   });
 
-  it('персист: история сохраняется и восстанавливается через hydrate (#17)', async () => {
-    useChatStore.getState().hydrate('/vault/A'); // открыли vault A
+  it('сессии (#CS): done пишет обмен в БД; hydrate продолжает последнюю сессию', async () => {
+    useChatStore.getState().hydrate('/vault/A');
     useChatStore.getState().send('Roadmap');
     await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), { timeout: 2000 });
-    expect(useChatStore.getState().messages.length).toBeGreaterThanOrEqual(2);
+    // Обмен ушёл в сессию (мок-БД): sessionId присвоен.
+    await vi.waitFor(() => expect(useChatStore.getState().sessionId).not.toBeNull());
 
-    // Симулируем перезапуск: стираем стейт в памяти, затем hydrate того же vault.
-    useChatStore.setState({ messages: [] });
+    // «Перезапуск»: пустой стейт → hydrate → подтянулась последняя сессия из БД.
+    useChatStore.setState({ messages: [], sessionId: null });
     useChatStore.getState().hydrate('/vault/A');
+    await vi.waitFor(() =>
+      expect(useChatStore.getState().messages.length).toBeGreaterThanOrEqual(2),
+    );
     const restored = useChatStore.getState().messages;
-    expect(restored.length).toBeGreaterThanOrEqual(2);
     expect(restored[0]).toMatchObject({ role: 'user', content: 'Roadmap' });
-    expect(restored.every((m) => !m.streaming)).toBe(true); // стрим-флаги сняты при загрузке
+    expect(restored.every((m) => !m.streaming)).toBe(true);
   });
 
-  it('персист: у разных vault раздельные истории (#17)', async () => {
+  it('сессии (#CS): hydrate(null) чистит ленту и сессию (vault закрыт)', async () => {
     useChatStore.getState().hydrate('/vault/A');
     useChatStore.getState().send('вопрос про A');
     await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), { timeout: 2000 });
 
-    // Переключение на vault B → пусто (история A не протекает).
-    useChatStore.getState().hydrate('/vault/B');
+    useChatStore.getState().hydrate(null);
     expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(useChatStore.getState().sessionId).toBeNull();
+  });
 
-    // Возврат к A → история на месте.
+  it('сессии (#CS): newSession сбрасывает ленту; следующий обмен — НОВАЯ сессия, старая жива', async () => {
+    const { list } = await import('../lib/mock/sessions');
     useChatStore.getState().hydrate('/vault/A');
-    expect(useChatStore.getState().messages[0]).toMatchObject({ content: 'вопрос про A' });
+    useChatStore.getState().send('первый диалог');
+    await vi.waitFor(() => expect(useChatStore.getState().sessionId).not.toBeNull());
+    const firstId = useChatStore.getState().sessionId;
+
+    useChatStore.getState().newSession();
+    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(useChatStore.getState().sessionId).toBeNull();
+
+    useChatStore.getState().send('второй диалог');
+    await vi.waitFor(() => expect(useChatStore.getState().sessionId).not.toBeNull());
+    expect(useChatStore.getState().sessionId).not.toBe(firstId);
+    expect((await list()).length).toBe(2); // ничего не удаляем — память «второго мозга»
   });
 
   it('reasoning (R1): сводка патчится в сообщение; событие raw `reasoning` игнорируется', () => {
@@ -200,43 +218,29 @@ describe('chat store (Ф1-8)', () => {
     useChatStore.getState().hydrate('/vault/R');
     useChatStore.getState().send('Roadmap');
     await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), { timeout: 2000 });
+    await vi.waitFor(() => expect(useChatStore.getState().sessionId).not.toBeNull());
 
     // «Перезапуск» → hydrate: сводка не восстанавливается, ответ — да.
-    useChatStore.setState({ messages: [] });
+    useChatStore.setState({ messages: [], sessionId: null });
     useChatStore.getState().hydrate('/vault/R');
+    await vi.waitFor(() =>
+      expect(useChatStore.getState().messages.some((m) => m.role === 'assistant')).toBe(true),
+    );
     const restored = useChatStore.getState().messages.find((m) => m.role === 'assistant');
     expect(restored?.content.length).toBeGreaterThan(0);
     expect(restored?.reasoningSummary).toBeUndefined();
   });
 
-  it('персист: clear сохраняет пустую историю (#17)', async () => {
+  // Аудит 2026-06-10 (актуализировано под сессии #CS): смена vault ПОСРЕДИ стрима — осиротевший
+  // стрим дорезается, новый контекст чист.
+  it('hydrate при активном стриме: стрим дорезан, лента не утекает', () => {
     useChatStore.getState().hydrate('/vault/A');
-    useChatStore.getState().send('Roadmap');
-    await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), { timeout: 2000 });
-    useChatStore.getState().clear();
-
-    // «Перезапуск» с мусором в памяти → hydrate возвращает пусто (clear персистнул []).
-    useChatStore.setState({ messages: [{ id: 'x', role: 'user', content: 'stale' }] });
-    useChatStore.getState().hydrate('/vault/A');
-    expect(useChatStore.getState().messages).toHaveLength(0);
-  });
-
-  // Аудит 2026-06-10: смена vault ПОСРЕДИ стрима — осиротевший стрим дорезается ДО смены ключа:
-  // хвост финализируется в историю СТАРОГО vault (не утекает в новый), новый vault чист.
-  it('hydrate при активном стриме: стрим дорезан, история не утекает между vault', async () => {
-    useChatStore.getState().hydrate('/vault/A');
+    vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
     useChatStore.getState().send('вопрос про A');
     expect(useChatStore.getState().streaming).toBe(true);
 
-    // Переключаемся на B, НЕ дожидаясь конца стрима.
-    useChatStore.getState().hydrate('/vault/B');
+    useChatStore.getState().hydrate(null);
     expect(useChatStore.getState().streaming).toBe(false);
-    expect(useChatStore.getState().messages).toHaveLength(0); // B чист — стрим A не протёк
-
-    // История A финализирована ПОД КЛЮЧОМ A (вопрос + дорезанный ответ без стрим-флагов).
-    useChatStore.getState().hydrate('/vault/A');
-    const a = useChatStore.getState().messages;
-    expect(a[0]).toMatchObject({ role: 'user', content: 'вопрос про A' });
-    expect(a.every((m) => !m.streaming)).toBe(true);
+    expect(useChatStore.getState().messages).toHaveLength(0);
   });
 });

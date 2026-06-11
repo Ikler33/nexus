@@ -5,6 +5,7 @@ import * as mockEgress from './mock/egress';
 import * as mockGit from './mock/git';
 import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
+import * as mockSessions from './mock/sessions';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
 import * as mockTags from './mock/tags';
@@ -232,6 +233,23 @@ export interface Digest {
   since: number;
   content: string;
   noteCount: number;
+}
+
+/** Сессия чата (зеркалит Rust `chat_log::ChatSession`) — история-дропдаун AI-панели. */
+export interface ChatSessionInfo {
+  id: number;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Сообщение сессии из БД (зеркалит `chat_log::StoredMessage`). */
+export interface StoredChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  /** JSON-снапшот источников ({sources, webSources}) — как было показано. */
+  sourcesJson: string | null;
+  createdAt: number;
 }
 
 /** Сводка очереди планировщика для StatusBar (зеркалит Rust `scheduler::JobCounts`, ADR-007 срез 5). */
@@ -769,6 +787,30 @@ export const tauriApi = {
       return () => {
         void invoke<void>('chat_cancel');
       };
+    },
+
+    /** Сессии чата («второй мозг» переписки): история, загрузка, запись обмена, экспорт. */
+    sessions: {
+      list: (): Promise<ChatSessionInfo[]> =>
+        isTauri() ? invoke<ChatSessionInfo[]>('chat_sessions_list') : mockSessions.list(),
+      messages: (id: number): Promise<StoredChatMessage[]> =>
+        isTauri()
+          ? invoke<StoredChatMessage[]>('chat_session_messages', { id })
+          : mockSessions.messages(id),
+      logExchange: (
+        sessionId: number | null,
+        question: string,
+        answer: string,
+        sourcesJson: string | null,
+      ): Promise<number> =>
+        isTauri()
+          ? invoke<number>('chat_log_exchange', { sessionId, question, answer, sourcesJson })
+          : mockSessions.logExchange(sessionId, question, answer, sourcesJson),
+      /** «Сохранить в заметки» → относительный путь созданной заметки. */
+      toNote: (id: number): Promise<string> =>
+        isTauri()
+          ? invoke<string>('chat_session_to_note', { id })
+          : Promise.resolve('Chats/mock.md'),
     },
   },
 
