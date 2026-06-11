@@ -33,11 +33,12 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     useUIStore.setState({ settingsSection: 'ai' });
     render(<SettingsView />);
 
-    // Два эндпоинта: чат + эмбеддинги.
-    expect(screen.getByText(/чат-модель|chat model/i)).toBeInTheDocument();
+    // Три эндпоинта: чат + эмбеддинги + быстрая модель (примитивы).
+    expect(screen.getByText(/^(чат-модель|chat model)$/i)).toBeInTheDocument();
     expect(screen.getByText(/эмбеддинг|embedding/i)).toBeInTheDocument();
+    expect(screen.getByText(/быстрая модель|fast model/i)).toBeInTheDocument();
     const urls = screen.getAllByPlaceholderText(/127\.0\.0\.1:8080/);
-    expect(urls).toHaveLength(2);
+    expect(urls).toHaveLength(3);
 
     // Ввести chat URL и проверить связь → бейдж «Доступен» (мок резолвит валидный URL).
     fireEvent.change(urls[0], { target: { value: 'http://192.168.0.172:8080' } });

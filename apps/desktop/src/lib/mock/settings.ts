@@ -6,18 +6,19 @@ import type { AiConfigDto, AiEndpoint, SetAiResult } from '../tauri-api';
  * проверка связи) — в Rust `commands/settings.rs`. Здесь — happy-path для UI/тестов.
  */
 
-let config: AiConfigDto = { chat: null, embedding: null };
+let config: AiConfigDto = { chat: null, embedding: null, fast: null };
 
 export async function getAiConfig(): Promise<AiConfigDto> {
-  return { chat: config.chat, embedding: config.embedding };
+  return { chat: config.chat, embedding: config.embedding, fast: config.fast };
 }
 
 export async function setAiConfig(
   chat: AiEndpoint | null,
   embedding: AiEndpoint | null,
+  fast: AiEndpoint | null = null,
 ): Promise<SetAiResult> {
   const embeddingChanged = JSON.stringify(config.embedding) !== JSON.stringify(embedding);
-  config = { chat, embedding };
+  config = { chat, embedding, fast };
   return { chatApplied: true, embeddingChanged };
 }
 

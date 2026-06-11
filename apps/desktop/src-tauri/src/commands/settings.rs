@@ -31,6 +31,8 @@ pub struct EndpointDto {
 pub struct AiConfigDto {
     pub chat: Option<EndpointDto>,
     pub embedding: Option<EndpointDto>,
+    /// Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B) — inline/судья/сводка reasoning/новости.
+    pub fast: Option<EndpointDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +50,7 @@ fn apply_ai(
     doc: &mut serde_json::Value,
     chat: Option<&EndpointDto>,
     embedding: Option<&EndpointDto>,
+    fast: Option<&EndpointDto>,
 ) -> Result<bool, String> {
     if !doc.get("ai").map(|v| v.is_object()).unwrap_or(false) {
         doc["ai"] = serde_json::json!({});
@@ -79,6 +82,18 @@ fn apply_ai(
             ai.remove("embedding");
         }
     }
+    match fast {
+        // Пустой URL = убрать секцию (тогда `n` падает на gemma-fast = chat-модель).
+        Some(f) if !f.url.trim().is_empty() => {
+            ai.insert(
+                "fast".into(),
+                serde_json::to_value(f).map_err(|e| e.to_string())?,
+            );
+        }
+        _ => {
+            ai.remove("fast");
+        }
+    }
     Ok(doc.pointer("/ai/embedding").cloned() != old_emb)
 }
 
@@ -102,6 +117,10 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
             url: e.url,
             model: e.model,
         }),
+        fast: cfg.ai.fast.map(|f| EndpointDto {
+            url: f.url,
+            model: f.model,
+        }),
     })
 }
 
@@ -111,6 +130,7 @@ pub async fn set_ai_config(
     state: State<'_, AppState>,
     chat: Option<EndpointDto>,
     embedding: Option<EndpointDto>,
+    fast: Option<EndpointDto>,
 ) -> AppResult<SetAiResult> {
     let root = state.vault().await?.root.clone();
     let dir = root.join(".nexus");
@@ -123,7 +143,7 @@ pub async fn set_ai_config(
         serde_json::from_str(&raw).map_err(|e| AppError::Msg(format!("local.json не JSON: {e}")))?
     };
     // `apply_ai` отдаёт `String`-ошибку (serde) → поднимается как `AppError::Msg` через `From<String>`.
-    let embedding_changed = apply_ai(&mut doc, chat.as_ref(), embedding.as_ref())?;
+    let embedding_changed = apply_ai(&mut doc, chat.as_ref(), embedding.as_ref(), fast.as_ref())?;
     let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
     tokio::fs::write(&path, &pretty).await?;
 
@@ -151,8 +171,58 @@ pub async fn set_ai_config(
         }
         None => None,
     };
+    // Горячее применение `n` (утилитарная мелкая модель `ai.fast`): задан непустой URL → строим
+    // провайдер; иначе fallback на gemma-fast (chat-модель). Так смена сервера/очистка fast в UI
+    // сразу чинит новости/дайджест/противоречия/сводку-reasoning (баг 2026-06-11: `ai.fast` оставался
+    // на старом мёртвом хосте, эти фичи дохли).
+    let fast_url = fast
+        .as_ref()
+        .map(|f| f.url.trim())
+        .filter(|u| !u.is_empty())
+        // Пустой fast → утилитарная = chat-модель (gemma-fast).
+        .or_else(|| chat.as_ref().map(|c| c.url.as_str()));
+    let fast_provider: Option<Arc<dyn ChatProvider>> = match fast_url {
+        Some(url) => {
+            let model = fast
+                .as_ref()
+                .and_then(|f| f.model.clone())
+                .or_else(|| chat.as_ref().and_then(|c| c.model.clone()))
+                .unwrap_or_else(|| "chat".to_string());
+            let guarded =
+                GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
+                    .map_err(AiError::from)?;
+            Some(Arc::new(OpenAiChatProvider::new(
+                &guarded,
+                EgressFeature::Chat,
+                url,
+                &model,
+                None,
+            )))
+        }
+        None => None,
+    };
+    // gemma-fast (chat_fast, R2 без reasoning на ОСНОВНОЙ модели) пересобираем вместе с chat —
+    // иначе после смены chat-URL дайджест бил бы по старому хосту.
+    let chat_fast_provider: Option<Arc<dyn ChatProvider>> = match &chat {
+        Some(c) => {
+            let model = c.model.clone().unwrap_or_else(|| "chat".to_string());
+            let guarded =
+                GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
+                    .map_err(AiError::from)?;
+            Some(Arc::new(OpenAiChatProvider::new(
+                &guarded,
+                EgressFeature::Chat,
+                &c.url,
+                &model,
+                None,
+            )))
+        }
+        None => None,
+    };
     if let Some(ctx) = state.vault.write().await.as_mut() {
         ctx.ai.chat = chat_provider;
+        ctx.ai.chat_fast = chat_fast_provider;
+        ctx.ai.chat_util = fast_provider;
     }
     Ok(SetAiResult {
         chat_applied: true,
@@ -178,7 +248,7 @@ pub async fn test_ai_connection(state: State<'_, AppState>, url: String) -> AppR
 /// типизированный [`AiError::Denied`] (НЕ reqwest-строка); сетевые ошибки — текстом, как раньше
 /// (i18n-канал — AC-EGR-14, фронт-срез).
 async fn probe_endpoint(probe: &GuardedClient, url: &str) -> AppResult<()> {
-    let target = format!("{}/v1/models", url.trim_end_matches('/'));
+    let target = format!("{}/v1/models", crate::ai::api_base(url));
     match probe.get(&target, EgressFeature::Probe).await {
         Ok(_) => Ok(()),
         Err(NetError::Denied(d)) => Err(AiError::Denied(d).into()),
@@ -202,20 +272,34 @@ mod tests {
             url: "http://192.168.0.29:8083".into(),
             model: Some("bge-m3".into()),
         };
-        let changed = apply_ai(&mut doc, Some(&chat), Some(&emb)).unwrap();
+        let fast = EndpointDto {
+            url: "http://h:8084".into(),
+            model: Some("qwen3-4b".into()),
+        };
+        let changed = apply_ai(&mut doc, Some(&chat), Some(&emb), Some(&fast)).unwrap();
         assert!(changed, "embedding появился → изменился");
         assert_eq!(doc.pointer("/ai/chat/url").unwrap(), "http://h:8080");
         assert_eq!(doc.pointer("/ai/embedding/model").unwrap(), "bge-m3");
+        assert_eq!(doc.pointer("/ai/fast/url").unwrap(), "http://h:8084");
         assert_eq!(
             doc.pointer("/sync/remote").unwrap(),
             "x",
             "прочие ключи сохранены"
         );
 
-        // Повторно тот же embedding → НЕ изменился; убрать chat → удаляется.
-        let changed2 = apply_ai(&mut doc, None, Some(&emb)).unwrap();
+        // Повторно тот же embedding → НЕ изменился; убрать chat → удаляется;
+        // пустой fast-URL → секция fast убирается (fallback на gemma-fast).
+        let empty_fast = EndpointDto {
+            url: "  ".into(),
+            model: None,
+        };
+        let changed2 = apply_ai(&mut doc, None, Some(&emb), Some(&empty_fast)).unwrap();
         assert!(!changed2, "embedding тот же");
         assert!(doc.pointer("/ai/chat").is_none(), "chat=None удаляет ключ");
+        assert!(
+            doc.pointer("/ai/fast").is_none(),
+            "пустой fast-URL удаляет секцию"
+        );
     }
 
     /// AC-EGR-6: probe «Проверить связь» идёт через guarded с `Feature::Probe` — url вне политики
