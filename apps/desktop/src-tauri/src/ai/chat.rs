@@ -328,14 +328,17 @@ pub fn build_chat_messages(question: &str) -> Vec<ChatMessage> {
 // (тесты web-билдеров — в модуле `tests` ниже)
 
 /// Web-агент, шаг 1 (W-2): просим модель решить, нужен ли интернет, и если да — выдать ОДИН
-/// короткий поисковый запрос. Жёсткий контракт вывода: либо `NONE` (интернет не нужен — ответит
-/// общий чат), либо одна строка-запрос. Без рассуждений — это вход в search, не ответ пользователю.
+/// короткий поисковый запрос. Жёсткий контракт вывода: `NONE` (интернет не нужен — ответит общий
+/// чат), `FRESH: <запрос>` (ответ зависит от ТЕКУЩЕГО положения дел — поиск ограничится свежим
+/// периодом) либо просто `<запрос>`. Без рассуждений — это вход в search, не ответ пользователю.
 pub fn build_web_query_messages(question: &str) -> Vec<ChatMessage> {
     const SYSTEM: &str = "Ты планируешь веб-поиск для ассистента. По вопросу пользователя реши, \
         нужны ли СВЕЖИЕ или внешние данные из интернета. Если вопрос можно уверенно ответить без \
         интернета (общие знания, рассуждение, работа с текстом) — выведи ровно одно слово: NONE. \
         Если нужен веб-поиск — выведи ОДНУ строку: короткий поисковый запрос (на языке вопроса, \
-        без кавычек и пояснений). Не отвечай на сам вопрос, не рассуждай — только NONE или запрос.";
+        без кавычек и пояснений). Если ответ зависит от ТЕКУЩЕГО положения дел и устаревает \
+        (последние версии, новости, цены, курсы, расписания, «сейчас/сегодня/последний») — начни \
+        строку запроса с FRESH: . Не отвечай на сам вопрос, не рассуждай — только NONE или запрос.";
     vec![
         ChatMessage::system(SYSTEM),
         ChatMessage::user(format!("Вопрос: {question}")),
@@ -378,9 +381,18 @@ pub fn build_web_answer_messages(
     vec![ChatMessage::system(system), ChatMessage::user(user)]
 }
 
-/// Очищает план-вывод модели до поискового запроса. `NONE` (в любом регистре, возможно с пунктуацией)
-/// → `None` (веб не нужен). Иначе — первая непустая строка, обрезанная (анти-многострочный шум).
-pub fn parse_web_query_plan(raw: &str) -> Option<String> {
+/// План web-поиска из вывода модели: запрос + признак «нужна свежая выдача» (вопрос про текущее
+/// положение дел → SearXNG ограничит выдачу свежим периодом).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebQueryPlan {
+    pub query: String,
+    pub fresh: bool,
+}
+
+/// Очищает план-вывод модели. `NONE` (в любом регистре, возможно с пунктуацией) → `None` (веб не
+/// нужен). Префикс `FRESH:` (регистронезависимо) → `fresh=true`, снимается. Иначе — первая непустая
+/// строка, обрезанная (анти-многострочный шум), кавычки модели снимаются.
+pub fn parse_web_query_plan(raw: &str) -> Option<WebQueryPlan> {
     let line = raw.trim().lines().next().unwrap_or("").trim();
     let normalized: String = line
         .chars()
@@ -390,12 +402,18 @@ pub fn parse_web_query_plan(raw: &str) -> Option<String> {
     if line.is_empty() || normalized == "NONE" {
         return None;
     }
-    // Снимаем обрамляющие кавычки, если модель их добавила вопреки инструкции.
-    Some(
-        line.trim_matches(|c| c == '"' || c == '\'')
-            .trim()
-            .to_string(),
-    )
+    let (line, fresh) = match line.to_uppercase().strip_prefix("FRESH:") {
+        Some(_) => (line[6..].trim(), true),
+        None => (line, false),
+    };
+    let query = line
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim()
+        .to_string();
+    if query.is_empty() {
+        return None; // «FRESH:» без запроса — мусор модели, веб-этап деградирует к общему чату
+    }
+    Some(WebQueryPlan { query, fresh })
 }
 
 /// Режим inline-генерации в редакторе (vision Inline-LLM, AC-IL-*; D4/D5). Контекст — текущая заметка
@@ -458,6 +476,13 @@ pub fn build_inline_messages(mode: InlineMode, payload: &str, marker: &str) -> V
 mod tests {
     use super::*;
 
+    fn plan(query: &str, fresh: bool) -> Option<WebQueryPlan> {
+        Some(WebQueryPlan {
+            query: query.into(),
+            fresh,
+        })
+    }
+
     #[test]
     fn web_query_plan_parses_none_and_query() {
         assert_eq!(parse_web_query_plan("NONE"), None);
@@ -465,12 +490,33 @@ mod tests {
         assert_eq!(parse_web_query_plan(""), None);
         assert_eq!(
             parse_web_query_plan("курс биткоина сегодня"),
-            Some("курс биткоина сегодня".into())
+            plan("курс биткоина сегодня", false)
         );
         // Кавычки снимаются, многострочный шум отбрасывается (берём первую строку).
         assert_eq!(
             parse_web_query_plan("\"react 19 release date\"\nlol ignore"),
-            Some("react 19 release date".into())
+            plan("react 19 release date", false)
+        );
+    }
+
+    /// Префикс FRESH: (любой регистр) взводит признак свежести и снимается с запроса;
+    /// пустой запрос после префикса — мусор модели → None (деградация к общему чату).
+    #[test]
+    fn web_query_plan_parses_fresh_prefix() {
+        assert_eq!(
+            parse_web_query_plan("FRESH: последняя версия python"),
+            plan("последняя версия python", true)
+        );
+        assert_eq!(
+            parse_web_query_plan("fresh: курс доллара"),
+            plan("курс доллара", true)
+        );
+        assert_eq!(parse_web_query_plan("FRESH:"), None);
+        assert_eq!(parse_web_query_plan("FRESH:   "), None);
+        // Слово fresh ВНУТРИ запроса префиксом не считается.
+        assert_eq!(
+            parse_web_query_plan("fresh bread recipe"),
+            plan("fresh bread recipe", false)
         );
     }
 

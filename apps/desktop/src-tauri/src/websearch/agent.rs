@@ -10,7 +10,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::ai::{build_web_query_messages, parse_web_query_plan, ChatProvider};
+use crate::ai::{build_web_query_messages, parse_web_query_plan, ChatProvider, WebQueryPlan};
 
 use super::search::{SearchError, SearchResult, Searcher};
 
@@ -22,6 +22,9 @@ pub const MAX_SEARCHES: usize = 3;
 pub struct WebAgentOutcome {
     /// Поисковый запрос, который выбрала модель (`None` — веб не нужен).
     pub query: Option<String>,
+    /// План помечен `FRESH:` (вопрос про текущее положение дел) → выдача была ограничена
+    /// свежим периодом. Для телеметрии/отладки; на ответ влияет через сам поиск.
+    pub fresh: bool,
     /// Найденные результаты (пусто при `query=None` или нулевой выдаче).
     pub results: Vec<SearchResult>,
 }
@@ -32,7 +35,7 @@ async fn plan_query(
     planner: &dyn ChatProvider,
     question: &str,
     cancel: &Arc<AtomicBool>,
-) -> Option<String> {
+) -> Option<WebQueryPlan> {
     let messages = build_web_query_messages(question);
     let mut out = String::new();
     let mut sink = |t: String| out.push_str(&t);
@@ -51,13 +54,14 @@ pub async fn run(
     question: &str,
     cancel: &Arc<AtomicBool>,
 ) -> Result<WebAgentOutcome, SearchError> {
-    let Some(query) = plan_query(planner, question, cancel).await else {
+    let Some(plan) = plan_query(planner, question, cancel).await else {
         return Ok(WebAgentOutcome::default()); // веб не нужен
     };
     // v1: один запрос (≤ MAX_SEARCHES — потолок назван явно в константе, W3).
-    let results = searcher.search(&query).await?;
+    let results = searcher.search(&plan.query, plan.fresh).await?;
     Ok(WebAgentOutcome {
-        query: Some(query),
+        query: Some(plan.query),
+        fresh: plan.fresh,
         results,
     })
 }
@@ -89,12 +93,14 @@ mod tests {
     /// Поисковик-мок: считает вызовы, отдаёт фиксированную выдачу.
     struct SearcherMock {
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        fresh_seen: Arc<AtomicBool>,
         results: Vec<SearchResult>,
     }
     #[async_trait::async_trait]
     impl Searcher for SearcherMock {
-        async fn search(&self, _q: &str) -> Result<Vec<SearchResult>, SearchError> {
+        async fn search(&self, _q: &str, fresh: bool) -> Result<Vec<SearchResult>, SearchError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.fresh_seen.store(fresh, Ordering::SeqCst);
             Ok(self.results.clone())
         }
     }
@@ -116,6 +122,7 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let searcher = SearcherMock {
             calls: calls.clone(),
+            fresh_seen: Arc::new(AtomicBool::new(false)),
             results: results(),
         };
         let out = run(&PlannerMock("NONE"), &searcher, "сколько 2+2", &cancel())
@@ -133,8 +140,10 @@ mod tests {
     #[tokio::test]
     async fn plan_query_runs_single_search() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fresh_seen = Arc::new(AtomicBool::new(true)); // взведён, чтобы поймать сброс в false
         let searcher = SearcherMock {
             calls: calls.clone(),
+            fresh_seen: fresh_seen.clone(),
             results: results(),
         };
         let out = run(
@@ -148,6 +157,37 @@ mod tests {
         assert_eq!(out.query.as_deref(), Some("react 19 release date"));
         assert_eq!(out.results.len(), 1);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "≤ MAX_SEARCHES (W3)");
+        assert!(!out.fresh, "без префикса FRESH: запрос обычный");
+        assert!(
+            !fresh_seen.load(Ordering::SeqCst),
+            "поисковику передан fresh=false"
+        );
+    }
+
+    /// План с `FRESH:` → префикс снят, в поисковик уходит fresh=true (time_range на стороне SearXNG).
+    #[tokio::test]
+    async fn fresh_plan_propagates_to_searcher() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fresh_seen = Arc::new(AtomicBool::new(false));
+        let searcher = SearcherMock {
+            calls,
+            fresh_seen: fresh_seen.clone(),
+            results: results(),
+        };
+        let out = run(
+            &PlannerMock("FRESH: последняя версия python"),
+            &searcher,
+            "какая сейчас последняя версия python",
+            &cancel(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.query.as_deref(), Some("последняя версия python"));
+        assert!(out.fresh);
+        assert!(
+            fresh_seen.load(Ordering::SeqCst),
+            "поисковик получил fresh=true"
+        );
     }
 
     #[tokio::test]
@@ -155,7 +195,7 @@ mod tests {
         struct FailSearcher;
         #[async_trait::async_trait]
         impl Searcher for FailSearcher {
-            async fn search(&self, _q: &str) -> Result<Vec<SearchResult>, SearchError> {
+            async fn search(&self, _q: &str, _f: bool) -> Result<Vec<SearchResult>, SearchError> {
                 Err(SearchError::SecretInQuery)
             }
         }

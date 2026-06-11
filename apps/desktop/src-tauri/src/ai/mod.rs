@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub use chat::{
     build_chat_messages, build_inline_messages, build_rag_messages, build_web_answer_messages,
     build_web_query_messages, injection_marker, parse_web_query_plan, ChatMessage, ChatProvider,
-    InlineMode, OpenAiChatProvider,
+    InlineMode, OpenAiChatProvider, WebQueryPlan,
 };
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
 #[cfg(test)]
