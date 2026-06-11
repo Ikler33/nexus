@@ -14,7 +14,7 @@ beforeEach(() => {
     clear: () => ls.clear(),
   });
   useChatStore.getState().hydrate(null); // сброс vaultKey + messages
-  useChatStore.setState({ streaming: false, grounded: true });
+  useChatStore.setState({ streaming: false, mode: 'vault' });
 });
 
 afterEach(() => {
@@ -48,29 +48,38 @@ describe('chat store (Ф1-8)', () => {
     expect(useChatStore.getState().streaming).toBe(false);
   });
 
-  it('vault-режим (дефолт) шлёт grounded:true; общий — grounded:false (V4.4)', () => {
+  it('режимы: vault → grounded:true; general → grounded:false; web → web:true', () => {
     const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
 
     useChatStore.getState().send('вопрос');
     expect(spy).toHaveBeenLastCalledWith(
       'вопрос',
       expect.any(Function),
-      expect.objectContaining({ grounded: true }),
+      expect.objectContaining({ grounded: true, web: false }),
     );
 
     useChatStore.setState({ messages: [], streaming: false });
-    useChatStore.getState().setGrounded(false);
-    expect(useChatStore.getState().grounded).toBe(false);
+    useChatStore.getState().setMode('general');
+    expect(useChatStore.getState().mode).toBe('general');
     useChatStore.getState().send('привет');
     expect(spy).toHaveBeenLastCalledWith(
       'привет',
       expect.any(Function),
-      expect.objectContaining({ grounded: false }),
+      expect.objectContaining({ grounded: false, web: false }),
+    );
+
+    useChatStore.setState({ messages: [], streaming: false });
+    useChatStore.getState().setMode('web');
+    useChatStore.getState().send('что нового');
+    expect(spy).toHaveBeenLastCalledWith(
+      'что нового',
+      expect.any(Function),
+      expect.objectContaining({ grounded: false, web: true }),
     );
   });
 
   it('общий чат: ретрив не вызывается → ответ без источников (V4.4)', async () => {
-    useChatStore.getState().setGrounded(false);
+    useChatStore.getState().setMode('general');
     useChatStore.getState().send('Roadmap');
     await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
       timeout: 2000,
@@ -80,11 +89,11 @@ describe('chat store (Ф1-8)', () => {
     expect(reply.sources?.length ?? 0).toBe(0); // общий режим источников не возвращает
   });
 
-  it('setGrounded игнорируется во время стрима', () => {
+  it('setMode игнорируется во время стрима', () => {
     vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
     useChatStore.getState().send('Roadmap'); // streaming=true
-    useChatStore.getState().setGrounded(false);
-    expect(useChatStore.getState().grounded).toBe(true); // на лету не переключается
+    useChatStore.getState().setMode('general');
+    expect(useChatStore.getState().mode).toBe('vault'); // на лету не переключается
   });
 
   it('stop прекращает стрим', () => {

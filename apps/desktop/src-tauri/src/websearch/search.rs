@@ -70,6 +70,20 @@ impl std::fmt::Display for SearchError {
     }
 }
 
+/// Абстракция поиска для agent-loop (W-2) — чтобы оркестрацию тестировать с мок-поисковиком,
+/// не поднимая SearXNG. Прод-реализация — [`WebSearcher`].
+#[async_trait::async_trait]
+pub trait Searcher: Send + Sync {
+    async fn search(&self, query: &str) -> Result<Vec<SearchResult>, SearchError>;
+}
+
+#[async_trait::async_trait]
+impl Searcher for WebSearcher {
+    async fn search(&self, query: &str) -> Result<Vec<SearchResult>, SearchError> {
+        WebSearcher::search(self, query).await
+    }
+}
+
 /// Web-поисковик через SearXNG. На каждый запрос: W4-скан → резолв → DNS-гард → guarded-GET с пином.
 pub struct WebSearcher {
     policy: Arc<EgressPolicy>,

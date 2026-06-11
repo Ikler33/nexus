@@ -151,6 +151,16 @@
       "probe": "Connection test",
       "probeDesc": "Probe requests from “Test connection” to model endpoints.",
       "saveError": "Applied, but not saved: {{msg}}"
+    },
+    "web": {
+      "title": "Web agent (search)",
+      "intro": "The chat's “Web” mode searches the internet via your self-hosted SearXNG. Requests go ONLY to the host you set; they're scanned for secrets before sending (W4).",
+      "url": "SearXNG URL",
+      "urlHint": "Your SearXNG instance address (with ?format=json support). Saving = consent to egress to this host.",
+      "enable": "Enable web agent",
+      "enableDesc": "A third chat mode “Web”: the model decides if internet is needed, searches and answers with sources.",
+      "consentWarn": "Web-search requests will go to {{host}}.",
+      "saved": "Saved."
     }
   },
   "sidebar": {
@@ -339,11 +349,16 @@
       "feature": "Chat network is disabled",
       "featureSub": "The “chat” network feature is not enabled. Enable it in Settings → AI / Models → Network (egress).",
       "host": "Host not allowed",
-      "hostSub": "The model endpoint is outside the core egress policy. Check the URL in Settings → AI / Models."
+      "hostSub": "The model endpoint is outside the core egress policy. Check the URL in Settings → AI / Models.",
+      "secret": "Request not sent",
+      "secretSub": "A secret was detected in the search query — it was not sent over the network (W4)."
     },
     "providerLocal": "Local",
     "providerOffline": "Offline",
-    "title2": "AI assistant"
+    "title2": "AI assistant",
+    "modeWeb": "Web",
+    "modeWebHint": "Web agent: the model searches the internet via your SearXNG and answers with sources.",
+    "webSources": "Web sources"
   },
   "suggest": {
     "title": "Suggested links",

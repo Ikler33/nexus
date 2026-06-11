@@ -17,7 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
-import type { EgressState } from '../../lib/tauri-api';
+import type { EgressState, WebSearchConfig } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, THEMES, useThemeStore } from '../../stores/theme';
 import type { Accent } from '../../stores/theme';
@@ -468,8 +468,87 @@ function AiSection() {
       </div>
 
       <EgressBlock />
+      <WebSearchBlock />
     </>
   );
+}
+
+/**
+ * Настройки web-агента (W-3): URL SearXNG + тоггл. Сохранение непустого URL с включённым тогглом =
+ * явный consent (W2) — показываем warning-баннер «запросы уйдут на этот хост». URL пуст → web-режим
+ * чата работать не будет.
+ */
+function WebSearchBlock() {
+  const { t } = useTranslation();
+  const [cfg, setCfg] = useState<WebSearchConfig | null>(null);
+  const [url, setUrl] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void tauriApi.websearch
+      .getConfig()
+      .then((c) => {
+        if (alive) {
+          setCfg(c);
+          setUrl(c.url);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!cfg) return null;
+  const persist = (next: WebSearchConfig) => {
+    setSaved(false);
+    void tauriApi.websearch.setConfig(next).then((applied) => {
+      setCfg(applied);
+      setUrl(applied.url);
+      setSaved(true);
+    });
+  };
+
+  return (
+    <>
+      <h2 className={styles.h2}>{t('settings.web.title')}</h2>
+      <p className={styles.hint}>{t('settings.web.intro')}</p>
+      <section className={styles.group}>
+        <label className={styles.field}>
+          <span>{t('settings.web.url')}</span>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onBlur={() => url !== cfg.url && persist({ ...cfg, url: url.trim() })}
+            placeholder="https://searx.example.com"
+            spellCheck={false}
+          />
+        </label>
+        <p className={styles.hint}>{t('settings.web.urlHint')}</p>
+      </section>
+      {/* Consent-предупреждение: при активной фиче запросы реально уйдут на указанный хост. */}
+      {url.trim() && cfg.enabled && (
+        <p className={styles.warnText}>{t('settings.web.consentWarn', { host: hostOf(url) })}</p>
+      )}
+      <EgressRow
+        label={t('settings.web.enable')}
+        desc={t('settings.web.enableDesc')}
+        value={cfg.enabled}
+        onChange={(v) => persist({ ...cfg, url: url.trim(), enabled: v })}
+      />
+      {saved && <span className={styles.okText}>{t('settings.web.saved')}</span>}
+    </>
+  );
+}
+
+/** Хост из URL для consent-баннера (или сырой ввод, если не парсится). */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 /**

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import type { ChatStreamEvent, EgressDeniedKind, SearchHit } from '../lib/tauri-api';
+import type { ChatStreamEvent, EgressDeniedKind, SearchHit, WebSource } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
 
 /**
@@ -30,15 +30,20 @@ export interface ChatMessage {
    * сознательно не храним и не рендерим — только сводку.
    */
   reasoningSummary?: string;
+  /** Web-источники (W-3): результаты SearXNG для web-режима — цитаты с URL. */
+  webSources?: WebSource[];
 }
+
+/** Режим чата (W-3): по vault / общий / web-агент. */
+export type ChatMode = 'vault' | 'general' | 'web';
 
 interface ChatState {
   messages: ChatMessage[];
   streaming: boolean;
-  /** Режим: `true` — ответ по vault (RAG-ретрив + источники); `false` — общий чат без грунтинга (V4.4). */
-  grounded: boolean;
-  /** Переключает режим vault/общий (нельзя во время стрима). */
-  setGrounded: (grounded: boolean) => void;
+  /** Режим чата: `vault` (RAG по заметкам), `general` (общий, без грунтинга), `web` (web-агент, W-3). */
+  mode: ChatMode;
+  /** Переключает режим (нельзя во время стрима). */
+  setMode: (mode: ChatMode) => void;
   /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
   /** Останавливает текущий стрим (если идёт). */
@@ -99,11 +104,11 @@ export const useChatStore = create<ChatState>((set, get) => {
   return {
     messages: [],
     streaming: false,
-    grounded: true,
+    mode: 'vault',
 
-    setGrounded(grounded) {
+    setMode(mode) {
       if (get().streaming) return; // не переключаем режим на лету
-      set({ grounded });
+      set({ mode });
     },
 
     send(question, center) {
@@ -133,6 +138,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         switch (event.type) {
           case 'sources':
             patch(replyId, (m) => ({ ...m, sources: event.sources }));
+            break;
+          case 'webSources':
+            // W-3: цитаты web-агента (title/url/snippet) — рендерятся со ссылками наружу.
+            patch(replyId, (m) => ({ ...m, webSources: event.sources }));
             break;
           case 'token':
             // Не set() на каждый токен — копим в буфер, рендерим раз в кадр (AC-Б10-4).
@@ -181,7 +190,12 @@ export const useChatStore = create<ChatState>((set, get) => {
         }
       };
 
-      cancelFn = tauriApi.chat.streamRag(q, onEvent, { center, grounded: get().grounded });
+      const mode = get().mode;
+      cancelFn = tauriApi.chat.streamRag(q, onEvent, {
+        center,
+        grounded: mode === 'vault',
+        web: mode === 'web',
+      });
     },
 
     stop() {

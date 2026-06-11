@@ -290,11 +290,25 @@ export interface FullGraph {
  * → `done` (или `error`). `reasoning` — сырой chain-of-thought (спойлер), `reasoningSummary` —
  * короткая живая сводка CoT («💭 …», R1); оба могут не приходить (non-reasoning модель).
  */
-/** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host. */
-export type EgressDeniedKind = 'offline' | 'feature' | 'host';
+/** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host; web — secret (W4). */
+export type EgressDeniedKind = 'offline' | 'feature' | 'host' | 'secret';
+
+/** Web-источник (W-2): результат SearXNG-поиска — цитата web-ответа (зеркалит Rust `SearchResult`). */
+export interface WebSource {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/** Конфиг web-агента (W-3, зеркалит Rust `WebSearchConfig`): URL SearXNG = consent на эгресс к нему. */
+export interface WebSearchConfig {
+  enabled: boolean;
+  url: string;
+}
 
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
+  | { type: 'webSources'; sources: WebSource[] }
   | { type: 'token'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'reasoningSummary'; text: string }
@@ -399,6 +413,9 @@ export type NewsArticle =
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
+
+/** Мок web-конфига для браузер-превью W-3 (in-memory). */
+let mockWebSearch: WebSearchConfig = { enabled: false, url: '' };
 
 export const tauriApi = {
   app: {
@@ -677,10 +694,14 @@ export const tauriApi = {
     streamRag: (
       question: string,
       onEvent: (event: ChatStreamEvent) => void,
-      opts?: { k?: number; center?: string; grounded?: boolean },
+      opts?: { k?: number; center?: string; grounded?: boolean; web?: boolean },
     ): (() => void) => {
       if (!isTauri())
-        return mockVault.streamChat(question, onEvent, { k: opts?.k, grounded: opts?.grounded });
+        return mockVault.streamChat(question, onEvent, {
+          k: opts?.k,
+          grounded: opts?.grounded,
+          web: opts?.web,
+        });
       const channel = new Channel<ChatStreamEvent>();
       channel.onmessage = onEvent;
       invoke<void>('chat_rag', {
@@ -688,6 +709,7 @@ export const tauriApi = {
         k: opts?.k,
         center: opts?.center,
         grounded: opts?.grounded,
+        web: opts?.web,
         channel,
       }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
       return () => {
@@ -857,6 +879,21 @@ export const tauriApi = {
       isTauri()
         ? invoke<EgressState>('set_egress_feature', { feature, enabled })
         : mockEgress.setFeature(feature, enabled),
+  },
+
+  /** Web-агент (W-3): consent-конфиг SearXNG (URL = разрешение на эгресс к нему). Вне Tauri — память. */
+  websearch: {
+    getConfig: (): Promise<WebSearchConfig> =>
+      isTauri()
+        ? invoke<WebSearchConfig>('get_websearch_config')
+        : Promise.resolve(mockWebSearch),
+    setConfig: (config: WebSearchConfig): Promise<WebSearchConfig> => {
+      if (!isTauri()) {
+        mockWebSearch = { ...config };
+        return Promise.resolve(mockWebSearch);
+      }
+      return invoke<WebSearchConfig>('set_websearch_config', { config });
+    },
   },
 
   settings: {
