@@ -652,3 +652,19 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* CTA в denied-баннере (web не настроен → «Открыть настройки»). */
+.bannerAct {
+  margin-top: 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.bannerAct:hover {
+  background: var(--color-surface-hover);
+}

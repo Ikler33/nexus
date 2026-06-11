@@ -355,14 +355,18 @@
       "host": "Host not allowed",
       "hostSub": "The model endpoint is outside the core egress policy. Check the URL in Settings → AI / Models.",
       "secret": "Request not sent",
-      "secretSub": "A secret was detected in the search query — it was not sent over the network (W4)."
+      "secretSub": "A secret was detected in the search query — it was not sent over the network (W4).",
+      "notConfigured": "Web search is not set up",
+      "notConfiguredSub": "Set the SearXNG URL in Settings → AI / Models → \"Web agent (search)\" and enable it.",
+      "openSettings": "Open settings"
     },
     "providerLocal": "Local",
     "providerOffline": "Offline",
     "title2": "AI assistant",
     "modeWeb": "Web",
     "modeWebHint": "Web agent: the model searches the internet via your SearXNG and answers with sources.",
-    "webSources": "Web sources"
+    "webSources": "Web sources",
+    "resize": "Drag to resize the panel"
   },
   "suggest": {
     "title": "Suggested links",

@@ -84,6 +84,22 @@ function readRagSources(): RagSources {
   return 'cards';
 }
 
+/** Размер AI-панели (фидбэк владельца 11.06: «увеличить окно с чатом») — перетаскивание кромки. */
+const AI_W_KEY = 'nexus.ai.panelW';
+const AI_H_KEY = 'nexus.ai.panelH';
+export const AI_PANEL_W = { min: 300, def: 360, max: 720 };
+export const AI_PANEL_H = { min: 200, def: 280, max: 560 };
+
+function readNum(key: string, def: number, min: number, max: number): number {
+  try {
+    const v = Number(localStorage.getItem(key));
+    if (Number.isFinite(v) && v >= min && v <= max) return v;
+  } catch {
+    /* ignore */
+  }
+  return def;
+}
+
 function readString(key: string): string {
   try {
     return localStorage.getItem(key) ?? '';
@@ -102,11 +118,17 @@ interface PrefsState {
   aiLayout: AiLayout;
   /** Стиль RAG-источников в чате (DP-12). */
   ragSources: RagSources;
+  /** Ширина side-AI-панели, px (драг кромки). */
+  aiPanelW: number;
+  /** Высота bottom-AI-панели, px (драг кромки). */
+  aiPanelH: number;
   setReadableLineWidth: (on: boolean) => void;
   setUserName: (name: string) => void;
   setPaletteStyle: (style: PaletteStyle) => void;
   setAiLayout: (layout: AiLayout) => void;
   setRagSources: (style: RagSources) => void;
+  setAiPanelW: (w: number) => void;
+  setAiPanelH: (h: number) => void;
 }
 
 export const usePrefsStore = create<PrefsState>((set) => ({
@@ -115,6 +137,8 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   paletteStyle: readPalette(),
   aiLayout: readAiLayout(),
   ragSources: readRagSources(),
+  aiPanelW: readNum(AI_W_KEY, AI_PANEL_W.def, AI_PANEL_W.min, AI_PANEL_W.max),
+  aiPanelH: readNum(AI_H_KEY, AI_PANEL_H.def, AI_PANEL_H.min, AI_PANEL_H.max),
   setReadableLineWidth: (on) =>
     set(() => {
       persistBool(READABLE_KEY, on);
@@ -157,4 +181,22 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       }
       return { ragSources: style };
     }),
+  setAiPanelW: (w) => {
+    const v = Math.round(Math.min(AI_PANEL_W.max, Math.max(AI_PANEL_W.min, w)));
+    try {
+      localStorage.setItem(AI_W_KEY, String(v));
+    } catch {
+      /* ignore */
+    }
+    set({ aiPanelW: v });
+  },
+  setAiPanelH: (h) => {
+    const v = Math.round(Math.min(AI_PANEL_H.max, Math.max(AI_PANEL_H.min, h)));
+    try {
+      localStorage.setItem(AI_H_KEY, String(v));
+    } catch {
+      /* ignore */
+    }
+    set({ aiPanelH: v });
+  },
 }));

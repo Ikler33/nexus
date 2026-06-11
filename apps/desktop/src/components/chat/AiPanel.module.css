@@ -1,11 +1,37 @@
 /* AI-панель по макету ai.css (DP-12): ai-panel / ai-overlay / ai-head / ai-tabs / provider. */
 .panel {
+  position: relative; /* якорь ручки ресайза */
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   border-left: 1px solid var(--color-border);
   background: var(--color-chrome);
+}
+
+/* Ручка ресайза (фидбэк 11.06): тонкая зона на кромке, расширяется на ховер. */
+.resizer {
+  position: absolute;
+  z-index: 5;
+  background: transparent;
+}
+.resizer:hover,
+.resizer:active {
+  background: color-mix(in oklch, var(--color-accent) 35%, transparent);
+}
+.resizerV {
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+}
+.resizerH {
+  top: -2px;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: row-resize;
 }
 
 /* Bottom-вариант (настройка «AI-панель: снизу»): полоса под редактором, граница сверху. */

@@ -58,7 +58,7 @@ describe('chat store (Ф1-8)', () => {
       expect.objectContaining({ grounded: true, web: false }),
     );
 
-    useChatStore.setState({ messages: [], streaming: false });
+    useChatStore.setState({ messages: [], streaming: false, web: false });
     useChatStore.getState().setMode('general');
     expect(useChatStore.getState().mode).toBe('general');
     useChatStore.getState().send('привет');
@@ -68,14 +68,21 @@ describe('chat store (Ф1-8)', () => {
       expect.objectContaining({ grounded: false, web: false }),
     );
 
-    useChatStore.setState({ messages: [], streaming: false });
-    useChatStore.getState().setMode('web');
+    // Web — флаг ПОВЕРХ режима (ревизия 11.06): не сбрасывает выбранный режим.
+    useChatStore.setState({ messages: [], streaming: false, web: false });
+    useChatStore.getState().setMode('vault');
+    useChatStore.getState().toggleWeb();
+    expect(useChatStore.getState().mode).toBe('vault');
     useChatStore.getState().send('что нового');
     expect(spy).toHaveBeenLastCalledWith(
       'что нового',
       expect.any(Function),
-      expect.objectContaining({ grounded: false, web: true }),
+      expect.objectContaining({ grounded: true, web: true }),
     );
+    useChatStore.setState({ streaming: false }); // стрим-гард: во время стрима тоггл заморожен
+    useChatStore.getState().toggleWeb(); // выкл — режим остался vault
+    expect(useChatStore.getState().web).toBe(false);
+    expect(useChatStore.getState().mode).toBe('vault');
   });
 
   it('общий чат: ретрив не вызывается → ответ без источников (V4.4)', async () => {

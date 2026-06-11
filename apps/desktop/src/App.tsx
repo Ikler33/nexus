@@ -62,6 +62,8 @@ export function App() {
   const reading = useUIStore((s) => s.reading);
   const closeChat = useUIStore((s) => s.closeChat);
   const aiLayout = usePrefsStore((s) => s.aiLayout);
+  const aiPanelW = usePrefsStore((s) => s.aiPanelW);
+  const aiPanelH = usePrefsStore((s) => s.aiPanelH);
 
   useKeymap();
 
@@ -146,6 +148,12 @@ export function App() {
           className={`${styles.appBody} ${
             reading ? styles.reading : aiSide ? styles.withChat : aiBottom ? styles.withChatBottom : ''
           } ${!reading && !sidebarOpen ? styles.sidebarCollapsed : ''}`}
+          style={
+            {
+              '--ai-panel-w': `${aiPanelW}px`,
+              '--ai-panel-h': `${aiPanelH}px`,
+            } as React.CSSProperties
+          }
         >
           {!reading && sidebarOpen && (
             <aside className={styles.sidebar}>
