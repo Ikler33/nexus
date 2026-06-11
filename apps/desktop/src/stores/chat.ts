@@ -36,16 +36,21 @@ export interface ChatMessage {
   webSources?: WebSource[];
 }
 
-/** Режим чата (W-3): по vault / общий / web-агент. */
-export type ChatMode = 'vault' | 'general' | 'web';
+/** Режим чата: по vault (RAG) / общий. Web — НЕ режим, а дополнительный флаг (`web`): «модель
+ *  может сходить в интернет за уточнениями» поверх любого режима (ревизия владельца 11.06). */
+export type ChatMode = 'vault' | 'general';
 
 interface ChatState {
   messages: ChatMessage[];
   streaming: boolean;
-  /** Режим чата: `vault` (RAG по заметкам), `general` (общий, без грунтинга), `web` (web-агент, W-3). */
+  /** Режим чата: `vault` (RAG по заметкам) или `general` (общий, без грунтинга). */
   mode: ChatMode;
+  /** Web-флаг ПОВЕРХ режима: разрешить модели интернет-поиск (web-агент решает сам, нужен ли). */
+  web: boolean;
   /** Переключает режим (нельзя во время стрима). */
   setMode: (mode: ChatMode) => void;
+  /** Тоггл web-флага (нельзя во время стрима). Режим не трогает. */
+  toggleWeb: () => void;
   /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
   /** Останавливает текущий стрим (если идёт). */
@@ -107,10 +112,17 @@ export const useChatStore = create<ChatState>((set, get) => {
     messages: [],
     streaming: false,
     mode: 'vault',
+    web: false,
 
     setMode(mode) {
       if (get().streaming) return; // не переключаем режим на лету
       set({ mode });
+    },
+    toggleWeb() {
+      if (get().streaming) return; // во время стрима флаг заморожен (как режим)
+      const web = !get().web;
+      logUi('chat:web-toggle', web ? 'on' : 'off');
+      set({ web });
     },
 
     send(question, center) {
@@ -193,11 +205,12 @@ export const useChatStore = create<ChatState>((set, get) => {
       };
 
       const mode = get().mode;
-      logUi('chat:send', `mode=${mode} len=${question.length}`);
+      const web = get().web;
+      logUi('chat:send', `mode=${mode} web=${web} len=${question.length}`);
       cancelFn = tauriApi.chat.streamRag(q, onEvent, {
         center,
         grounded: mode === 'vault',
-        web: mode === 'web',
+        web,
       });
     },
 

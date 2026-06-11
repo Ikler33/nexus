@@ -8,7 +8,7 @@ import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 beforeEach(() => {
-  useChatStore.setState({ messages: [], streaming: false, mode: 'vault' });
+  useChatStore.setState({ messages: [], streaming: false, mode: 'vault', web: false });
 });
 
 afterEach(() => {
@@ -16,23 +16,27 @@ afterEach(() => {
 });
 
 describe('ChatView (Ф1-8)', () => {
-  // Фидбэк владельца 11.06: Web — КНОПКА-тоггл «модель может искать», а не третий пункт сегмента.
-  it('Web — кнопка-тоггл: aria-pressed, сегмент глушится; выключение возвращает прежний режим', () => {
+  // Ревизия владельца 11.06 (вторая итерация): Web — флаг ПОВЕРХ режима, сегмент НЕ трогает.
+  it('Web — независимый тоггл: режим не сбрасывается, сегмент остаётся активным', () => {
     render(<ChatView />);
-    const radios = screen.getAllByRole('radio');
-    expect(radios).toHaveLength(2);
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('radio', { name: /общий|general/i }));
     expect(useChatStore.getState().mode).toBe('general');
 
-    const webBtn = screen.getByRole('button', { name: /web/i, pressed: false });
-    fireEvent.click(webBtn);
-    expect(useChatStore.getState().mode).toBe('web');
-    expect(screen.getByRole('button', { name: /web/i, pressed: true })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /общий|general/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /web/i, pressed: false }));
+    expect(useChatStore.getState().web).toBe(true);
+    expect(useChatStore.getState().mode).toBe('general');
+    // Сегмент живой: можно сменить режим при включённом Web.
+    const vaultRadio = screen.getByRole('radio', { name: /по заметкам|notes/i });
+    expect(vaultRadio).not.toBeDisabled();
+    fireEvent.click(vaultRadio);
+    expect(useChatStore.getState().mode).toBe('vault');
+    expect(useChatStore.getState().web).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: /web/i, pressed: true }));
-    expect(useChatStore.getState().mode).toBe('general');
+    expect(useChatStore.getState().web).toBe(false);
+    expect(useChatStore.getState().mode).toBe('vault');
   });
 
   it('пустое состояние — подсказка', () => {

@@ -314,7 +314,7 @@ export interface FullGraph {
  * короткая живая сводка CoT («💭 …», R1); оба могут не приходить (non-reasoning модель).
  */
 /** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host; web — secret (W4). */
-export type EgressDeniedKind = 'offline' | 'feature' | 'host' | 'secret';
+export type EgressDeniedKind = 'offline' | 'feature' | 'host' | 'secret' | 'notConfigured';
 
 /** Web-источник (W-2): результат SearXNG-поиска — цитата web-ответа (зеркалит Rust `SearchResult`). */
 export interface WebSource {

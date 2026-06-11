@@ -4,6 +4,7 @@ import { AlertTriangle, FileText, Sparkles, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { type ChatMessage, type ChatMode, type ChatSource, useChatStore } from '../../stores/chat';
+import { useUIStore } from '../../stores/ui';
 import type { WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
@@ -21,7 +22,9 @@ export function ChatView() {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
   const mode = useChatStore((s) => s.mode);
+  const web = useChatStore((s) => s.web);
   const setMode = useChatStore((s) => s.setMode);
+  const toggleWeb = useChatStore((s) => s.toggleWeb);
   const send = useChatStore((s) => s.send);
   const stop = useChatStore((s) => s.stop);
   const center = useWorkspaceStore(activePath);
@@ -50,17 +53,6 @@ export function ChatView() {
   const onScroll = () => {
     const el = feedRef.current;
     if (el) atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-  };
-
-  // Последний не-web режим: выключение Web возвращает к нему (кнопка, а не третий пункт сегмента).
-  const [lastSeg, setLastSeg] = useState<'vault' | 'general'>('vault');
-  const toggleWeb = () => {
-    if (mode === 'web') {
-      setMode(lastSeg);
-    } else {
-      setLastSeg(mode === 'general' ? 'general' : 'vault');
-      setMode('web');
-    }
   };
 
   const submit = () => {
@@ -126,8 +118,8 @@ export function ChatView() {
         )}
       </div>
 
-      {/* Web — КНОПКА-тоггл (фидбэк владельца 11.06: «модель может искать», не третий режим в
-          сегменте): глобус с aria-pressed; включена → вопрос идёт web-агенту, сегмент приглушён. */}
+      {/* Web — ДОПОЛНИТЕЛЬНЫЙ флаг поверх режима (ревизия владельца 11.06): сегмент выбирает
+          «По заметкам | Общий», глобус лишь разрешает модели сходить в интернет — режим не трогает. */}
       <div className={styles.modeRow}>
         <div role="radiogroup" aria-label={t('chat.mode')} className={styles.modeSeg}>
           {(['vault', 'general'] as const).map((m) => (
@@ -138,7 +130,7 @@ export function ChatView() {
               aria-checked={mode === m}
               className={`${styles.modeBtn} ${mode === m ? styles.modeOn : ''}`}
               onClick={() => setMode(m)}
-              disabled={streaming || mode === 'web'}
+              disabled={streaming}
               title={t(`chat.mode${m === 'vault' ? 'Vault' : 'General'}Hint`)}
             >
               {t(`chat.mode${m === 'vault' ? 'Vault' : 'General'}`)}
@@ -147,8 +139,8 @@ export function ChatView() {
         </div>
         <button
           type="button"
-          className={`${styles.webBtn} ${mode === 'web' ? styles.webOn : ''}`}
-          aria-pressed={mode === 'web'}
+          className={`${styles.webBtn} ${web ? styles.webOn : ''}`}
+          aria-pressed={web}
           onClick={toggleWeb}
           disabled={streaming}
           title={t('chat.modeWebHint')}
@@ -194,7 +186,7 @@ export function ChatView() {
         {streaming ? (
           <span className={styles.footStatus}>
             <span className={styles.footPulse} aria-hidden />
-            {t('chat.thinking')}
+            {t(thinkingKey(mode, web))}
           </span>
         ) : (
           <span className={styles.footHint}>
@@ -270,18 +262,21 @@ function Sources({ sources, onOpen }: { sources: ChatSource[]; onOpen: (path: st
   );
 }
 
-// Дефолтная фраза «думания» до первой сводки CoT — честная по режиму (баг 2026-06-11: в «Общем»
-// и Web писало «Ищу по заметкам…», хотя ретрива по vault там нет).
+// Дефолтная фраза «думания» до первой сводки CoT — честная по режиму и web-флагу (баг 2026-06-11:
+// в «Общем»/Web писало «Ищу по заметкам…», хотя ретрива по vault там нет).
 const THINKING_KEY: Record<ChatMode, string> = {
   vault: 'chat.thinking',
   general: 'chat.thinkingPlain',
-  web: 'chat.thinkingWeb',
 };
+function thinkingKey(mode: ChatMode, web: boolean): string {
+  return web ? 'chat.thinkingWeb' : THINKING_KEY[mode];
+}
 
 function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: string) => void }) {
   const { t } = useTranslation();
   // Режим заморожен на время стрима (setMode блокируется) → текущий режим честен для этого сообщения.
   const mode = useChatStore((s) => s.mode);
+  const webFlag = useChatStore((s) => s.web);
   if (message.role === 'user') {
     return <div className={styles.user}>{message.content}</div>;
   }
@@ -295,6 +290,15 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
           <div>
             <div className={styles.bannerTitle}>{t(`chat.denied.${message.deniedKind}`)}</div>
             <div className={styles.bannerSub}>{t(`chat.denied.${message.deniedKind}Sub`)}</div>
+            {message.deniedKind === 'notConfigured' && (
+              <button
+                type="button"
+                className={styles.bannerAct}
+                onClick={() => useUIStore.getState().openSettings('ai')}
+              >
+                {t('chat.denied.openSettings')}
+              </button>
+            )}
           </div>
         </div>
       ) : message.error ? (
@@ -314,7 +318,7 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
               <div className={styles.thinkingRow}>
                 <BrandThinking size={28} />
                 <span className={styles.thinkingLabel}>
-                  {message.reasoningSummary || t(THINKING_KEY[mode])}
+                  {message.reasoningSummary || t(thinkingKey(mode, webFlag))}
                 </span>
               </div>
             )

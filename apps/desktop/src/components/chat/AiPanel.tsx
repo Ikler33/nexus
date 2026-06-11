@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { HardDrive, RefreshCw, Sparkles, Trash2, WifiOff, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
+import { usePrefsStore } from '../../stores/prefs';
 import { useChatStore } from '../../stores/chat';
 import { useRelatedStore } from '../../stores/related';
 import { useSuggestStore } from '../../stores/suggest';
@@ -70,8 +71,42 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
   const reloadRelated = useRelatedStore((s) => s.load);
   const path = useWorkspaceStore(activePath);
 
+  // Драг-ресайз панели (фидбэк владельца 11.06): тянем левую кромку (side) / верхнюю (bottom);
+  // размер живёт в prefs (персист) и применяется грид-переменной App. Overlay не ресайзим.
+  const setW = usePrefsStore((s) => s.setAiPanelW);
+  const setH = usePrefsStore((s) => s.setAiPanelH);
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const horizontal = variant === 'side';
+      const onMove = (ev: MouseEvent) => {
+        if (horizontal) setW(window.innerWidth - ev.clientX);
+        else setH(window.innerHeight - ev.clientY);
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+      };
+      document.body.style.cursor = horizontal ? 'col-resize' : 'row-resize';
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [variant, setW, setH],
+  );
+
   return (
     <aside className={panelClass} aria-label={t('chat.title2')}>
+      {variant !== 'overlay' && (
+        <div
+          className={`${styles.resizer} ${variant === 'bottom' ? styles.resizerH : styles.resizerV}`}
+          onMouseDown={startResize}
+          role="separator"
+          aria-orientation={variant === 'bottom' ? 'horizontal' : 'vertical'}
+          aria-label={t('chat.resize')}
+          title={t('chat.resize')}
+        />
+      )}
       <header className={styles.head}>
         <span className={styles.headTitle}>
           <Sparkles size={16} aria-hidden />

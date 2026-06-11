@@ -24,12 +24,13 @@
 
 /* Открытый RAG-чат добавляет правую колонку (sidebar | editor | chat). */
 .withChat {
-  grid-template-columns: 280px 1fr 360px;
+  /* Ширина AI-колонки управляется драгом кромки (prefs, --ai-panel-w). */
+  grid-template-columns: 280px 1fr var(--ai-panel-w, 360px);
 }
 
 /* DP-12 (макет .with-ai-bottom): AI-панель полосой под редактором, сайдбар на обе строки. */
 .withChatBottom {
-  grid-template-rows: 1fr 280px;
+  grid-template-rows: 1fr var(--ai-panel-h, 280px);
 }
 .withChatBottom .sidebar {
   grid-row: 1 / span 2;

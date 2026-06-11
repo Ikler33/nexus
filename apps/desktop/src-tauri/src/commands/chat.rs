@@ -62,6 +62,7 @@ fn denied_code(e: &crate::ai::AiError) -> Option<&'static str> {
 fn web_denied_code(e: &crate::websearch::SearchError) -> Option<&'static str> {
     use crate::websearch::SearchError;
     match e {
+        SearchError::NotConfigured => Some("notConfigured"),
         SearchError::SecretInQuery => Some("secret"),
         SearchError::Failed(m) if m.contains("офлайн") => Some("offline"),
         SearchError::Failed(m) if m.contains("не включена") => Some("feature"),
@@ -108,7 +109,10 @@ pub async fn chat_rag(
     // Web-агент (W-2): LLM решает «нужен интернет» → SearXNG → ответ с цитатами; результаты —
     // НЕДОВЕРЕННЫЙ контекст (anti-injection маркеры), tool-use запрещён, ≤MAX_SEARCHES/ход (W3).
     // Планировщик — мелкая модель (`chat_util`) либо сам `chat` при её отсутствии.
-    let messages = if web {
+    // Web — ДОПОЛНИТЕЛЬНЫЙ флаг к режиму (ревизия владельца 11.06): модель «может сходить в
+    // интернет». План→поиск; если веб не нужен/пуст — отвечаем в ВЫБРАННОМ режиме (vault→RAG,
+    // general→общий), а не принудительно в общем.
+    let web_messages = if web {
         use crate::news::SystemResolver;
         use crate::websearch::{agent, config as web_config, WebSearcher};
 
@@ -138,15 +142,13 @@ pub async fn chat_rag(
                     .iter()
                     .map(|r| (r.title.clone(), r.url.clone(), r.snippet.clone()))
                     .collect();
-                build_web_answer_messages(&question, &triples, &injection_marker())
+                Some(build_web_answer_messages(
+                    &question,
+                    &triples,
+                    &injection_marker(),
+                ))
             }
-            Ok(_) => {
-                // Модель решила, что интернет не нужен → общий чат (источников нет).
-                let _ = channel.send(ChatStreamEvent::Sources {
-                    sources: Vec::new(),
-                });
-                build_chat_messages(&question)
-            }
+            Ok(_) => None, // веб не нужен → ниже отвечаем в выбранном режиме
             Err(e) => {
                 let _ = channel.send(ChatStreamEvent::Error {
                     denied_kind: web_denied_code(&e),
@@ -155,6 +157,11 @@ pub async fn chat_rag(
                 return Ok(());
             }
         }
+    } else {
+        None
+    };
+    let messages = if let Some(m) = web_messages {
+        m
     } else if grounded {
         let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
         // 1) Retrieve: гибридный поиск (с граф-рангом от открытого файла, если задан) → источники.
