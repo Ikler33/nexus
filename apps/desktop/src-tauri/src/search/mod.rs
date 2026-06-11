@@ -121,16 +121,124 @@ pub fn rrf_fuse(lists: &[Vec<i64>], k: f32) -> Vec<(i64, f32)> {
     fused
 }
 
+/// Стоп-слова RU/EN для ЛЕКСИЧЕСКОЙ ветки (живой smoke 2026-06-12 на рабочем vault: «на/без/the»
+/// цепляли неродственные заметки 0.015–0.03 и через RRF теснили кросс-язычную семантику). Список
+/// КОНСЕРВАТИВНЫЙ — только частые низко-IDF служебные слова; не трогает вектор (эмбеддинг сам
+/// разбирается со стоп-словами). N3, под eval-гейтом.
+const STOPWORDS: &[&str] = &[
+    // RU предлоги/союзы/частицы
+    "и",
+    "в",
+    "во",
+    "не",
+    "что",
+    "он",
+    "на",
+    "я",
+    "с",
+    "со",
+    "как",
+    "а",
+    "то",
+    "все",
+    "она",
+    "так",
+    "его",
+    "но",
+    "да",
+    "ты",
+    "к",
+    "у",
+    "же",
+    "вы",
+    "за",
+    "бы",
+    "по",
+    "только",
+    "ее",
+    "мне",
+    "было",
+    "вот",
+    "от",
+    "меня",
+    "о",
+    "из",
+    "ему",
+    "теперь",
+    "был",
+    "до",
+    "вас",
+    "нибудь",
+    "уж",
+    "ли",
+    "если",
+    "или",
+    "ни",
+    "быть",
+    "был",
+    "него",
+    "до",
+    "вам",
+    "ну",
+    "уже",
+    "для",
+    "об",
+    "чтобы",
+    "при",
+    "это",
+    // EN
+    "the",
+    "a",
+    "an",
+    "of",
+    "to",
+    "in",
+    "is",
+    "it",
+    "and",
+    "or",
+    "for",
+    "on",
+    "at",
+    "by",
+    "with",
+    "as",
+    "be",
+    "are",
+    "was",
+    "this",
+    "that",
+    "from",
+    "how",
+    "what",
+    "does",
+    "do",
+];
+
+fn is_stopword(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    STOPWORDS.contains(&lower.as_str())
+}
+
 /// Строит безопасный FTS5-MATCH из пользовательского ввода: токены (по не-буквенно-цифровым
 /// границам, юникод — кириллица сохраняется) в кавычках (фразы, нейтрализуют спецсинтаксис),
-/// через `OR` (recall). `None`, если значимых токенов нет.
+/// через `OR` (recall). Стоп-слова отбрасываются (N3); если после фильтра пусто (запрос целиком из
+/// стоп-слов) — берём исходные токены (лучше шумный FTS, чем потеря лексики). `None` — токенов нет.
 fn fts_query(raw: &str) -> Option<String> {
-    let terms: Vec<String> = raw
+    let all: Vec<&str> = raw
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
+        .collect();
+    if all.is_empty() {
+        return None;
+    }
+    let kept: Vec<&str> = all.iter().copied().filter(|t| !is_stopword(t)).collect();
+    let chosen = if kept.is_empty() { &all } else { &kept };
+    let terms: Vec<String> = chosen
+        .iter()
         .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
         .collect();
-    (!terms.is_empty()).then(|| terms.join(" OR "))
+    Some(terms.join(" OR "))
 }
 
 /// Гибридный поиск по телу заметок (§6.2): вектор + FTS5/BM25 (+ граф соседей центра) → RRF →
@@ -588,12 +696,31 @@ mod tests {
             fts_query("привет мир").as_deref(),
             Some("\"привет\" OR \"мир\"")
         );
-        assert_eq!(fts_query("a-b").as_deref(), Some("\"a\" OR \"b\""));
+        assert_eq!(fts_query("foo-bar").as_deref(), Some("\"foo\" OR \"bar\""));
         assert_eq!(fts_query("   "), None);
-        // спецсимволы FTS не утекают в синтаксис (токены в кавычках)
+        // спецсимволы FTS не утекают в синтаксис (токены в кавычках); «OR» — стоп-слово, отброшено.
         assert_eq!(
             fts_query("foo OR bar").as_deref(),
-            Some("\"foo\" OR \"OR\" OR \"bar\"")
+            Some("\"foo\" OR \"bar\"")
+        );
+    }
+
+    /// N3: стоп-слова отбрасываются из лексической ветки (живой smoke: «на/без/the» цепляли шум).
+    /// Запрос целиком из стоп-слов → fallback на исходные токены (не теряем лексику полностью).
+    #[test]
+    fn fts_query_drops_stopwords_with_fallback() {
+        assert_eq!(
+            fts_query("как работает кэш в сервисе").as_deref(),
+            Some("\"работает\" OR \"кэш\" OR \"сервисе\"")
+        );
+        assert_eq!(
+            fts_query("how does the cache work").as_deref(),
+            Some("\"cache\" OR \"work\"")
+        );
+        // Целиком стоп-слова → не None (fallback), вектор всё равно решит.
+        assert_eq!(
+            fts_query("на и в с").as_deref(),
+            Some("\"на\" OR \"и\" OR \"в\" OR \"с\"")
         );
     }
 
