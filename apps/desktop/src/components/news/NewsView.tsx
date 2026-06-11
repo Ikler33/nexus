@@ -382,6 +382,21 @@ export function NewsView() {
           </div>
         </div>
 
+        {/* Этап прогона видим и при «Обновить» поверх существующей ленты (фидбэк 11.06:
+            «а где этапы?» — раньше строка жила только в первом прогоне без истории). */}
+        {run && refreshing && runStage && (
+          <div className={`${styles.rubric} ${styles.gathering}`}>
+            <RefreshCw size={14} aria-hidden />
+            <span>
+              {t(`news.stage.${runStage.stage}`, {
+                done: runStage.done,
+                total: runStage.total,
+                defaultValue: t('news.gathering'),
+              })}
+            </span>
+          </div>
+        )}
+
         {run && (items.length > 0 || filtersActive) && (
           <div className={styles.filters}>
             <button

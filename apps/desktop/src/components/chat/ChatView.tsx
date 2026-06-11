@@ -5,7 +5,13 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { type ChatMessage, type ChatMode, type ChatSource, useChatStore } from '../../stores/chat';
+import {
+  disclosureOpen,
+  type ChatMessage,
+  type ChatMode,
+  type ChatSource,
+  useChatStore,
+} from '../../stores/chat';
 import { useUIStore } from '../../stores/ui';
 import type { WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
@@ -289,16 +295,25 @@ function StreamingText({ text }: { text: string }) {
   );
 }
 
+// Раскрытость аккордеонов — в disclosureOpen (стор): react-virtual размонтирует сообщения,
+// ушедшие из вьюпорта, и useState сбрасывался — источники «сами сворачивались» при скролле.
+
 /** Компактная плашка-аккордеон для источников (Sonnet-style, фидбэк 11.06): свернуто по умолчанию. */
-function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
+function Disclosure({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(() => disclosureOpen.get(id) ?? false);
+  const toggle = () =>
+    setOpen((o) => {
+      if (disclosureOpen.size > 500) disclosureOpen.clear();
+      disclosureOpen.set(id, !o);
+      return !o;
+    });
   return (
     <div className={styles.srcBox}>
       <button
         type="button"
         className={styles.srcToggle}
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
       >
         <ChevronRight size={13} className={`${styles.chev} ${open ? styles.chevOpen : ''}`} aria-hidden />
         {label}
@@ -379,12 +394,18 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
             )
           )}
           {message.sources && message.sources.length > 0 && (
-            <Disclosure label={t('chat.sourcesToggle', { count: message.sources.length })}>
+            <Disclosure
+              id={`${message.id}:src`}
+              label={t('chat.sourcesToggle', { count: message.sources.length })}
+            >
               <Sources sources={message.sources} onOpen={onOpen} />
             </Disclosure>
           )}
           {message.webSources && message.webSources.length > 0 && (
-            <Disclosure label={t('chat.webSourcesToggle', { count: message.webSources.length })}>
+            <Disclosure
+              id={`${message.id}:web`}
+              label={t('chat.webSourcesToggle', { count: message.webSources.length })}
+            >
               <WebSources sources={message.webSources} />
             </Disclosure>
           )}
