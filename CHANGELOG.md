@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+### Web-агент W-2: agent-loop 3-го режима чата «Web» (decide→search→cite)
+
+- **`websearch::agent`** (тестируемая оркестрация на трейтах `Searcher`/`ChatProvider`):
+  планировщик (мелкая модель) решает «нужен ли интернет» и выдаёт ОДИН поисковый запрос
+  (`NONE` → веб не нужен, деградация к общему чату); поиск через SearXNG; лимит **W3**
+  `MAX_SEARCHES=3` на ход (v1 — один запрос, потолок назван явно).
+- **Билдеры промптов** (`ai::chat`): `build_web_query_messages` (план: NONE | запрос),
+  `build_web_answer_messages` (ответ по результатам — каждый обёрнут anti-injection маркером,
+  цитаты [n]→URL), `parse_web_query_plan` (NONE/кавычки/многострочный шум).
+- **Чат-команда**: режим `web` — план → поиск → `WebSources`-событие (title/url/snippet) →
+  ответ с цитатами; **tool-use запрещён** (результаты только как недоверенный контекст);
+  W4-секрет в запросе и отказы политики → типизированный `denied_kind` (offline|feature|host|secret).
+- Фронт-контракт: `ChatStreamEvent.webSources`, `streamRag({web})`, мок-ветка для превью.
+- Вид режима «Web» в чате + источники-цитаты + настройки SearXNG-URL — W-3.
+
+
 ### Web-агент W-1: EgressFeature::Web + SearXNG-клиент (egress срез 4, W1–W4)
 
 - **`EgressFeature::Web`** — второй web-класс фундамента (как NewsFeed): `allow_private=false`,
