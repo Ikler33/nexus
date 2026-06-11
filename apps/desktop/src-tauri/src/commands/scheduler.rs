@@ -18,7 +18,7 @@ pub async fn get_job_counts(state: State<'_, AppState>) -> AppResult<JobCounts> 
             None => return Ok(JobCounts::default()),
         }
     };
-    Ok(scheduler::counts(&reader).await?)
+    Ok(scheduler::counts(&reader, scheduler::now_secs()).await?)
 }
 
 /// Идёт ли ещё работа над `kind` (pending|running) — для UI «Генерирую…» дайджеста/противоречий:

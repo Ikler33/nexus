@@ -13,7 +13,7 @@ interface JobsState {
 }
 
 export const useJobsStore = create<JobsState>((set) => ({
-  counts: { pending: 0, running: 0, dead: 0 },
+  counts: { pending: 0, ready: 0, running: 0, dead: 0 },
   async refresh() {
     try {
       set({ counts: await tauriApi.scheduler.counts() });

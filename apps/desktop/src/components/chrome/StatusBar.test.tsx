@@ -9,21 +9,39 @@ import { StatusBar } from './StatusBar';
 
 afterEach(() => {
   vi.restoreAllMocks();
-  useJobsStore.setState({ counts: { pending: 0, running: 0, dead: 0 } });
+  useJobsStore.setState({ counts: { pending: 0, running: 0, dead: 0, ready: 0 } });
   useSyncStore.setState({ mergeRequired: false, conflictFiles: null });
   useUIStore.setState({ conflictOpen: false });
 });
 
 describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4)', () => {
   it('занятый планировщик → прогресс «N задач»; ошибки — отдельным бейджем', async () => {
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 1, pending: 2, dead: 1 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 1, pending: 2, dead: 1, ready: 2 });
     render(<StatusBar />);
     await waitFor(() => expect(screen.getByText(/3 задач|3 tasks/)).toBeInTheDocument());
     expect(screen.getByText(/⚠ 1/)).toBeInTheDocument();
   });
 
+  // Баг вечного пульса (2026-06-11): суточные recurring (pending в будущем, ready=0) НЕ должны
+  // показываться как «работают» — статичный чип «Запланировано · N», без анимации прогресса.
+  it('только запланированные джобы (ready=0) → статичный чип без пульса, не «N задач»', async () => {
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({
+      running: 0,
+      pending: 4,
+      ready: 0,
+      dead: 0,
+    });
+    vi.spyOn(tauriApi.vault, 'notesCount').mockResolvedValue(159);
+    render(<StatusBar />);
+    await waitFor(() =>
+      expect(screen.getByText(/Запланировано · 4|Scheduled · 4/)).toBeInTheDocument(),
+    );
+    // НЕ «работает»: нет ни «N задач», ни анимированного прогресс-бара.
+    expect(screen.queryByText(/задач|tasks/)).toBeNull();
+  });
+
   it('пустая очередь → индикатора нет; right-блок Local/UTF-8/Markdown на месте', async () => {
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
     render(<StatusBar />);
     await waitFor(() => expect(tauriApi.scheduler.counts).toHaveBeenCalled());
     expect(screen.queryByText(/задач|tasks|⚠/)).toBeNull();
@@ -35,7 +53,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
   // ── DP-14 (макет app.jsx StatusBar): synced/изменения слева, «Проиндексировано · N», пилюля ──
 
   it('чистое дерево → «Синхронизировано»; пустая очередь → «Проиндексировано · N»', async () => {
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
     vi.spyOn(tauriApi.git, 'status').mockResolvedValue([]);
     vi.spyOn(tauriApi.vault, 'notesCount').mockResolvedValue(42);
     render(<StatusBar />);
@@ -47,7 +65,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
   });
 
   it('правки в дереве → «Изменения · N»; merge-required → конфликт-пилюля открывает резолвер', async () => {
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
     vi.spyOn(tauriApi.git, 'status').mockResolvedValue([
       { path: 'a.md', kind: 'modified' },
       { path: 'b.md', kind: 'new' },
@@ -65,7 +83,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
 
   it('клик по «⚠ N» открывает модалку: kind по-человечески, текст ошибки, «Повторить» зовёт retry', async () => {
     const now = Math.floor(Date.now() / 1000);
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 2 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 2, ready: 0 });
     vi.spyOn(tauriApi.scheduler, 'deadJobs').mockResolvedValue([
       { id: 7, kind: 'newsfeed', attempts: 3, lastError: 'HTTP 404: нет связи с моделью', updatedAt: now - 120 },
       { id: 8, kind: 'home_widget:context_drift', attempts: 2, lastError: null, updatedAt: now - 600 },
@@ -86,7 +104,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
 
   it('«Очистить все» зовёт clearDead → пустое состояние модалки', async () => {
     const now = Math.floor(Date.now() / 1000);
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 1 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 1, ready: 0 });
     vi.spyOn(tauriApi.scheduler, 'deadJobs')
       .mockResolvedValueOnce([
         { id: 9, kind: 'digest', attempts: 5, lastError: 'таймаут', updatedAt: now - 60 },
@@ -104,7 +122,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
 
   it('клик по «N задач» открывает модалку очереди: running/pending с человеческими именами', async () => {
     const now = Math.floor(Date.now() / 1000);
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 1, pending: 1, dead: 0 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 1, pending: 1, dead: 0, ready: 1 });
     vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([
       { id: 1, kind: 'digest', state: 'running', runAt: now, attempts: 0 },
       { id: 2, kind: 'newsfeed', state: 'pending', runAt: now + 600, attempts: 0 },
@@ -120,7 +138,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
   });
 
   it('прогресс скана (vault:index-progress): реальный бар «Индексация N/M», финиш гасит', async () => {
-    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0 });
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
     vi.spyOn(tauriApi.vault, 'notesCount').mockResolvedValue(10);
     let emit: (p: { done: number; total: number }) => void = () => {};
     vi.spyOn(tauriApi.events, 'onIndexProgress').mockImplementation(async (cb) => {
