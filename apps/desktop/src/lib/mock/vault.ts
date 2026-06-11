@@ -237,13 +237,23 @@ export async function getDigest(): Promise<Digest> {
 export function streamChat(
   question: string,
   onEvent: (event: ChatStreamEvent) => void,
-  opts: { k?: number; grounded?: boolean } = {},
+  opts: { k?: number; grounded?: boolean; web?: boolean } = {},
 ): () => void {
-  const { k = 8, grounded = true } = opts;
+  const { k = 8, grounded = true, web = false } = opts;
   let cancelled = false;
   void (async () => {
     let answer: string;
-    if (grounded) {
+    if (web) {
+      // W-2 (мок): web-агент «нашёл» источники в SearXNG и отвечает с цитатами.
+      onEvent({
+        type: 'webSources',
+        sources: [
+          { title: 'Документация по теме', url: 'https://example.com/docs', snippet: 'Краткий фрагмент из найденной страницы.' },
+          { title: 'Обсуждение на форуме', url: 'https://forum.example.com/t/123', snippet: 'Ещё один релевантный результат поиска.' },
+        ],
+      });
+      answer = `По результатам веб-поиска: ${question} — см. источники [1][2].`;
+    } else if (grounded) {
       const sources = await searchContent(question, { limit: k });
       if (cancelled) return;
       onEvent({ type: 'sources', sources });

@@ -12,7 +12,8 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{
-    build_chat_messages, build_rag_messages, injection_marker, ChatMessage, ChatProvider,
+    build_chat_messages, build_rag_messages, build_web_answer_messages, injection_marker,
+    ChatMessage, ChatProvider,
 };
 use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
@@ -24,6 +25,10 @@ use crate::state::AppState;
 pub enum ChatStreamEvent {
     /// Источники (найденные RAG-чанки) — приходит первым, до токенов.
     Sources { sources: Vec<SearchHit> },
+    /// Web-источники (W-2): результаты поиска SearXNG (title/url/snippet) — цитаты web-ответа.
+    WebSources {
+        sources: Vec<crate::websearch::SearchResult>,
+    },
     /// Очередная текстовая дельта ответа.
     Token { text: String },
     /// Сырая дельта «размышления» reasoning-модели (R1) — для спойлера «развернуть».
@@ -52,6 +57,19 @@ fn denied_code(e: &crate::ai::AiError) -> Option<&'static str> {
     }
 }
 
+/// Код отказа для web-поиска (AC-EGR-14 + W4): секрет в запросе → "secret", отказ политики —
+/// offline|feature|host, прочее — None (генерик-рендер).
+fn web_denied_code(e: &crate::websearch::SearchError) -> Option<&'static str> {
+    use crate::websearch::SearchError;
+    match e {
+        SearchError::SecretInQuery => Some("secret"),
+        SearchError::Failed(m) if m.contains("офлайн") => Some("offline"),
+        SearchError::Failed(m) if m.contains("не включена") => Some("feature"),
+        SearchError::Failed(m) if m.contains("не разрешён") => Some("host"),
+        _ => None,
+    }
+}
+
 /// Кол-во RAG-чанков в контексте по умолчанию (калибруется eval-харнессом, Ф1-10).
 const DEFAULT_K: usize = 8;
 
@@ -59,15 +77,19 @@ const DEFAULT_K: usize = 8;
 /// промпт с контекстом. `grounded=false` — **общий чат** (V4.4): БЕЗ ретрива, ответ напрямую от
 /// модели (источники пустые). Ответ стримится в `channel`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // tauri-команда: web-режим добавил app+web к существующим
 pub async fn chat_rag(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     channel: Channel<ChatStreamEvent>,
     question: String,
     k: Option<usize>,
     center: Option<String>,
     grounded: Option<bool>,
+    web: Option<bool>,
 ) -> AppResult<()> {
     let grounded = grounded.unwrap_or(true);
+    let web = web.unwrap_or(false);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
     let (reader, vectors, embedder, chat, chat_util) = {
         let ctx = state.vault().await?;
@@ -83,8 +105,57 @@ pub async fn chat_rag(
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
     };
 
-    // Сборка сообщений: vault-режим (RAG-ретрив + источники) ИЛИ общий чат (без грунтинга, V4.4).
-    let messages = if grounded {
+    // Web-агент (W-2): LLM решает «нужен интернет» → SearXNG → ответ с цитатами; результаты —
+    // НЕДОВЕРЕННЫЙ контекст (anti-injection маркеры), tool-use запрещён, ≤MAX_SEARCHES/ход (W3).
+    // Планировщик — мелкая модель (`chat_util`) либо сам `chat` при её отсутствии.
+    let messages = if web {
+        use crate::news::SystemResolver;
+        use crate::websearch::{agent, config as web_config, WebSearcher};
+
+        use tauri::Manager;
+        let url = app
+            .path()
+            .app_config_dir()
+            .ok()
+            .map(|d| web_config::load(&d.join("websearch.json")))
+            .unwrap_or_default()
+            .url;
+        let planner: &dyn crate::ai::ChatProvider = chat_util.as_deref().unwrap_or(chat.as_ref());
+        let searcher = WebSearcher::new(
+            state.egress_policy.clone(),
+            state.egress_audit.clone(),
+            std::sync::Arc::new(SystemResolver),
+            url,
+        );
+        let cancel_plan = std::sync::Arc::new(AtomicBool::new(false));
+        match agent::run(planner, &searcher, &question, &cancel_plan).await {
+            Ok(outcome) if outcome.query.is_some() => {
+                let _ = channel.send(ChatStreamEvent::WebSources {
+                    sources: outcome.results.clone(),
+                });
+                let triples: Vec<(String, String, String)> = outcome
+                    .results
+                    .iter()
+                    .map(|r| (r.title.clone(), r.url.clone(), r.snippet.clone()))
+                    .collect();
+                build_web_answer_messages(&question, &triples, &injection_marker())
+            }
+            Ok(_) => {
+                // Модель решила, что интернет не нужен → общий чат (источников нет).
+                let _ = channel.send(ChatStreamEvent::Sources {
+                    sources: Vec::new(),
+                });
+                build_chat_messages(&question)
+            }
+            Err(e) => {
+                let _ = channel.send(ChatStreamEvent::Error {
+                    denied_kind: web_denied_code(&e),
+                    message: e.to_string(),
+                });
+                return Ok(());
+            }
+        }
+    } else if grounded {
         let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
         // 1) Retrieve: гибридный поиск (с граф-рангом от открытого файла, если задан) → источники.
         let opts = SearchOptions {

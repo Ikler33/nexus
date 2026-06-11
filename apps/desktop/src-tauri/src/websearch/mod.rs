@@ -8,8 +8,9 @@
 //!
 //! Сам agent-loop (LLM решает «нужен интернет» → поиск → ответ с цитатами) — срез W-2.
 
+pub mod agent;
 pub mod config;
 pub mod search;
 
 pub use config::WebSearchConfig;
-pub use search::{SearchResult, WebSearcher};
+pub use search::{SearchError, SearchResult, Searcher, WebSearcher};
