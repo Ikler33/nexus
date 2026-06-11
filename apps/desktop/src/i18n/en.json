@@ -515,8 +515,10 @@
     "queue": "Queue",
     "running": "running…",
     "queued": "waiting to start",
-    "scheduled": "in {{m}} min",
-    "errorsSection": "Errors"
+    "errorsSection": "Errors",
+    "inMin": "in {{n}} min",
+    "inHours": "in {{n}} h",
+    "inDays": "in {{n}} d"
   },
   "plugins": {
     "title": "Plugins",

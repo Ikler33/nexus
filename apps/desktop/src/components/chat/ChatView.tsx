@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, FileText, Sparkles } from 'lucide-react';
+import { AlertTriangle, FileText, Sparkles, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { type ChatMessage, type ChatMode, type ChatSource, useChatStore } from '../../stores/chat';
@@ -50,6 +50,17 @@ export function ChatView() {
   const onScroll = () => {
     const el = feedRef.current;
     if (el) atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
+
+  // Последний не-web режим: выключение Web возвращает к нему (кнопка, а не третий пункт сегмента).
+  const [lastSeg, setLastSeg] = useState<'vault' | 'general'>('vault');
+  const toggleWeb = () => {
+    if (mode === 'web') {
+      setMode(lastSeg);
+    } else {
+      setLastSeg(mode === 'general' ? 'general' : 'vault');
+      setMode('web');
+    }
   };
 
   const submit = () => {
@@ -115,21 +126,36 @@ export function ChatView() {
         )}
       </div>
 
-      <div className={styles.modeRow} role="radiogroup" aria-label={t('chat.mode')}>
-        {(['vault', 'general', 'web'] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="radio"
-            aria-checked={mode === m}
-            className={`${styles.modeBtn} ${mode === m ? styles.modeOn : ''}`}
-            onClick={() => setMode(m)}
-            disabled={streaming}
-            title={t(`chat.mode${m === 'vault' ? 'Vault' : m === 'general' ? 'General' : 'Web'}Hint`)}
-          >
-            {t(`chat.mode${m === 'vault' ? 'Vault' : m === 'general' ? 'General' : 'Web'}`)}
-          </button>
-        ))}
+      {/* Web — КНОПКА-тоггл (фидбэк владельца 11.06: «модель может искать», не третий режим в
+          сегменте): глобус с aria-pressed; включена → вопрос идёт web-агенту, сегмент приглушён. */}
+      <div className={styles.modeRow}>
+        <div role="radiogroup" aria-label={t('chat.mode')} className={styles.modeSeg}>
+          {(['vault', 'general'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={mode === m}
+              className={`${styles.modeBtn} ${mode === m ? styles.modeOn : ''}`}
+              onClick={() => setMode(m)}
+              disabled={streaming || mode === 'web'}
+              title={t(`chat.mode${m === 'vault' ? 'Vault' : 'General'}Hint`)}
+            >
+              {t(`chat.mode${m === 'vault' ? 'Vault' : 'General'}`)}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`${styles.webBtn} ${mode === 'web' ? styles.webOn : ''}`}
+          aria-pressed={mode === 'web'}
+          onClick={toggleWeb}
+          disabled={streaming}
+          title={t('chat.modeWebHint')}
+        >
+          <Globe size={13} aria-hidden />
+          {t('chat.modeWeb')}
+        </button>
       </div>
 
       <form
