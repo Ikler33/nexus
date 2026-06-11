@@ -118,9 +118,18 @@ export const useUIStore = create<UIState>((set) => ({
   openGraph: () => set({ graphOpen: true }),
   closeGraph: () => set({ graphOpen: false }),
   toggleGraph: () => set((s) => ({ graphOpen: !s.graphOpen })),
-  openChat: () => set({ chatOpen: true }),
+  // AI-панель живёт только в workspace-вью (DP-12, макет) → открытие чата с Home/News обязано
+  // выводить в workspace, иначе флаг взводится, а панель не видна — «мёртвая кнопка» (баг
+  // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
+  openChat: () => set({ chatOpen: true, homeOpen: false, newsOpen: false }),
   closeChat: () => set({ chatOpen: false }),
-  toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
+  toggleChat: () =>
+    set((s) => {
+      if (!s.chatOpen) return { chatOpen: true, homeOpen: false, newsOpen: false };
+      // Панель уже «открыта», но скрыта за Home/News → клик возвращает её в поле зрения.
+      if (s.homeOpen || s.newsOpen) return { homeOpen: false, newsOpen: false };
+      return { chatOpen: false };
+    }),
   openPlugins: () => set({ pluginsOpen: true }),
   closePlugins: () => set({ pluginsOpen: false }),
   togglePlugins: () => set((s) => ({ pluginsOpen: !s.pluginsOpen })),
