@@ -268,7 +268,7 @@ export function NewsView() {
         {error && (
           <div className={styles.errBanner}>
             <AlertTriangle size={15} aria-hidden />
-            {error}
+            {error === 'stalled' ? t('news.stalled') : error}
           </div>
         )}
 

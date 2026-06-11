@@ -495,7 +495,8 @@
       "sources": "Polling sources · {{done}}/{{total}}",
       "llm": "Analyzing entries · {{done}}/{{total}}",
       "digest": "Writing the daily digest…"
-    }
+    },
+    "stalled": "The scheduler is not responding: the job is queued but never runs. Restart the app — diagnostics are written to the log (Library/Application Support/app.nexus.desktop/logs)."
   },
   "inline": {
     "continue": "Continue",

@@ -68,6 +68,9 @@ export function StatusBar() {
       timer = setTimeout(refresh, REFRESH_DEBOUNCE_MS);
     };
     refresh();
+    // Страховочный поллинг (инцидент 2026-06-12): при мёртвом воркере события jobs:changed не
+    // приходят и чип застывает («Запланировано» при давно готовых джобах). Раз в минуту — дёшево.
+    const poll = setInterval(refresh, 60_000);
     let offVault = () => {};
     let offJobs = () => {};
     void tauriApi.events.onVaultChanged(debounced).then((fn) => {
@@ -78,6 +81,7 @@ export function StatusBar() {
     });
     return () => {
       clearTimeout(timer);
+      clearInterval(poll);
       offVault();
       offJobs();
     };
