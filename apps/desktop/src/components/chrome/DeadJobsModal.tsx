@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, ListTodo, RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi } from '../../lib/tauri-api';
-import type { DeadJob } from '../../lib/tauri-api';
+import type { ActiveJob, DeadJob } from '../../lib/tauri-api';
 import { relTime } from '../../lib/time';
 import { useJobsStore } from '../../stores/jobs';
 import styles from './DeadJobsModal.module.css';
@@ -18,12 +18,16 @@ const KIND_KEYS: Record<string, string> = {
 };
 const HOME_WIDGET_PREFIX = 'home_widget:';
 
-type Phase = { kind: 'loading' } | { kind: 'list'; jobs: DeadJob[] } | { kind: 'error'; message: string };
+type Phase =
+  | { kind: 'loading' }
+  | { kind: 'list'; jobs: DeadJob[]; active: ActiveJob[] }
+  | { kind: 'error'; message: string };
 
 /**
- * Модалка за «⚠ N» статусбара (ADR-007 S7: dead-джобы не только видимы счётчиком, но и разбираемы):
- * список упавших фоновых задач — какая, почему (`last_error`), сколько попыток, когда; «Повторить»
- * (после исправления причины, напр. URL модели в Настройках) и «Очистить все» (видел, чинить не буду).
+ * Модалка фоновых задач за «N задач»/«⚠ N» статусбара (ADR-007 S7 + запрос владельца 2026-06-11
+ * «посмотреть, какие джобы сейчас отрабатывают»): сверху очередь (выполняется/ждёт — какая задача
+ * и когда готова), ниже ошибки — какая, почему (`last_error`), сколько попыток; «Повторить» (после
+ * исправления причины, напр. URL модели в Настройках) и «Очистить все» (видел, чинить не буду).
  */
 export function DeadJobsModal({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
@@ -32,8 +36,11 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
 
   const reload = useCallback(async () => {
     try {
-      const jobs = await tauriApi.scheduler.deadJobs();
-      setPhase({ kind: 'list', jobs });
+      const [jobs, active] = await Promise.all([
+        tauriApi.scheduler.deadJobs(),
+        tauriApi.scheduler.activeJobs(),
+      ]);
+      setPhase({ kind: 'list', jobs, active });
     } catch (e) {
       setPhase({ kind: 'error', message: String(e) });
     }
@@ -96,11 +103,37 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
         <div className={styles.body}>
           {phase.kind === 'loading' && <p className={styles.muted}>{t('git.loading')}</p>}
           {phase.kind === 'error' && <p className={styles.errorMsg}>✋ {phase.message}</p>}
-          {phase.kind === 'list' && phase.jobs.length === 0 && (
+          {phase.kind === 'list' && phase.active.length === 0 && phase.jobs.length === 0 && (
             <p className={styles.muted}>✓ {t('deadJobs.empty')}</p>
+          )}
+          {phase.kind === 'list' && phase.active.length > 0 && (
+            <>
+              <p className={styles.section}>
+                <ListTodo size={13} aria-hidden /> {t('deadJobs.queue')}
+              </p>
+              {phase.active.map((j) => (
+                <section key={j.id} className={styles.job}>
+                  <div className={styles.jobHead}>
+                    <span className={styles.kind}>{kindLabel(j.kind)}</span>
+                    <span className={styles.meta}>
+                      {j.state === 'running'
+                        ? t('deadJobs.running')
+                        : j.runAt * 1000 <= Date.now()
+                          ? t('deadJobs.queued')
+                          : t('deadJobs.scheduled', {
+                              m: Math.max(1, Math.ceil((j.runAt * 1000 - Date.now()) / 60_000)),
+                            })}
+                    </span>
+                  </div>
+                </section>
+              ))}
+            </>
           )}
           {phase.kind === 'list' && phase.jobs.length > 0 && (
             <>
+              <p className={styles.section}>
+                <AlertTriangle size={13} aria-hidden /> {t('deadJobs.errorsSection')}
+              </p>
               <p className={styles.muted}>{t('deadJobs.hint')}</p>
               {phase.jobs.map((j) => (
                 <section key={j.id} className={styles.job}>

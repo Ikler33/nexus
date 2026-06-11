@@ -106,12 +106,17 @@ export function StatusBar() {
           {t('status.indexing', { done: indexProg.done, total: indexProg.total })}
         </span>
       ) : busy ? (
-        <span className={`${styles.item} ${styles.jobs}`} title={jobsTitle}>
+        <button
+          type="button"
+          className={`${styles.item} ${styles.jobs} ${styles.jobsBtn}`}
+          title={jobsTitle}
+          onClick={() => setDeadOpen(true)}
+        >
           <span className={styles.progress} aria-hidden>
             <i />
           </span>
           {t('status.working', { count: running + pending })}
-        </span>
+        </button>
       ) : (
         notes !== null && (
           <span className={styles.item}>

@@ -241,6 +241,16 @@ export interface JobCounts {
   dead: number;
 }
 
+/** Активная фоновая джоба (зеркалит Rust `scheduler::ActiveJob`) — модалка очереди за «N задач». */
+export interface ActiveJob {
+  id: number;
+  kind: string;
+  state: 'running' | 'pending';
+  /** Когда джоба готова к запуску (unix-секунды); для running — момент последнего перехода. */
+  runAt: number;
+  attempts: number;
+}
+
 /** Мёртвая фоновая джоба (зеркалит Rust `scheduler::DeadJob`) — детали для модалки за «⚠ N». */
 export interface DeadJob {
   id: number;
@@ -643,6 +653,10 @@ export const tauriApi = {
      *  завершилась/упала без нового результата. Вне Tauri — `false`. */
     jobActive: (kind: string): Promise<boolean> =>
       isTauri() ? invoke<boolean>('job_active', { kind }) : Promise.resolve(false),
+
+    /** Активные джобы (running/pending) — модалка очереди за «N задач». Вне Tauri — пусто. */
+    activeJobs: (): Promise<ActiveJob[]> =>
+      isTauri() ? invoke<ActiveJob[]>('get_active_jobs') : Promise.resolve([]),
 
     /** Детали dead-джоб (kind/ошибка/попытки/когда) — модалка за «⚠ N» в StatusBar. Вне Tauri — пусто. */
     deadJobs: (): Promise<DeadJob[]> =>

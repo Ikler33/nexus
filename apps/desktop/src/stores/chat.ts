@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import { logUi } from '../lib/debug-log';
+
 import type { ChatStreamEvent, EgressDeniedKind, SearchHit, WebSource } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
 
@@ -191,6 +193,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       };
 
       const mode = get().mode;
+      logUi('chat:send', `mode=${mode} len=${question.length}`);
       cancelFn = tauriApi.chat.streamRag(q, onEvent, {
         center,
         grounded: mode === 'vault',

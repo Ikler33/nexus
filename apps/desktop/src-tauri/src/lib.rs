@@ -73,17 +73,46 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Точка входа: настраивает логирование и запускает event loop Tauri.
+/// Guard non-blocking-писателя файлового лога: живёт до конца процесса (дроп = потеря хвоста лога).
+static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+    std::sync::OnceLock::new();
+
+/// Каталог файлового лога отладки: `<data_local>/app.nexus.desktop/logs` (macOS —
+/// `~/Library/Application Support/app.nexus.desktop/logs`). Режим отладки (запрос владельца
+/// 2026-06-11): «кликнул — ничего не произошло» нечем ловить без персистентного журнала.
+fn log_dir() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("app.nexus.desktop").join("logs"))
+}
+
+/// Точка входа: настраивает логирование (stdout + файловый журнал с ротацией по дням) и запускает
+/// event loop Tauri. В файл идёт то же, что в stdout, ПЛЮС UI-события фронта (`log_ui_event`):
+/// только ИМЕНА действий и метаданные, никакого контента заметок/вопросов (принцип AC-SEC-6).
 pub fn run() {
     // Локальный crash-reporter до всего остального (Ф4-14): паники → scrubbed-лог в ~/.nexus/crashes/.
     crash::install_hook();
 
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let file_layer = log_dir().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        let (writer, guard) =
+            tracing_appender::non_blocking(tracing_appender::rolling::daily(dir, "nexus.log"));
+        LOG_GUARD.set(guard).ok();
+        Some(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(writer),
+        )
+    });
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::INFO)
+        .with(tracing_subscriber::fmt::layer())
+        .with(file_layer)
         .init();
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
+        log_dir = %log_dir().map(|d| d.display().to_string()).unwrap_or_default(),
         "starting Nexus desktop"
     );
 
@@ -160,6 +189,8 @@ pub fn run() {
             commands::scheduler::get_job_counts,
             commands::scheduler::job_active,
             commands::scheduler::get_dead_jobs,
+            commands::scheduler::get_active_jobs,
+            commands::debug::log_ui_event,
             commands::scheduler::retry_dead_job,
             commands::scheduler::clear_dead_jobs,
             commands::settings::get_ai_config,

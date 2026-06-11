@@ -23,6 +23,13 @@ use crate::plugin::{blocks_cloud_metadata, is_private_host};
 /// 421 КБ за ~27 с) и маскировался под «error decoding response body». Анти-зависание теперь
 /// держат connect-таймаут + inactivity-таймаут чтения; общий потолок — страховка от капельницы
 /// (вместе с body-cap 2 МБ время всё равно ограничено).
+/// User-Agent фетчера новостей/статей. Браузерный, НЕ honest-bot: антибот Хабра (Qrator) запросы
+/// без UA / с bot-UA душит «капельницей» и рвёт соединение (замер 2026-06-11: без UA — 64 КБ и
+/// Connection reset / таймаут; с браузерным UA — 176 КБ за 19 с целиком). Это локальный личный
+/// ридер, статьи открывает человек кликом — UA обычного браузера честен по сути.
+const FEED_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
 const FEED_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FEED_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 const FEED_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -108,7 +115,8 @@ impl FeedFetcher for GuardedNewsFetcher {
         let pinned = SocketAddr::new(ips[0], parsed.port_or_known_default().unwrap_or(443));
 
         let client = GuardedClient::new(self.policy.clone(), self.audit.clone(), move |b| {
-            b.connect_timeout(FEED_CONNECT_TIMEOUT)
+            b.user_agent(FEED_USER_AGENT)
+                .connect_timeout(FEED_CONNECT_TIMEOUT)
                 .read_timeout(FEED_READ_TIMEOUT)
                 .timeout(FEED_TOTAL_TIMEOUT)
                 .resolve_to_addrs(&host, &[pinned])

@@ -3,6 +3,7 @@
 
 pub mod chat;
 pub mod contradictions;
+pub mod debug;
 pub mod digest;
 pub mod egress;
 pub mod git;

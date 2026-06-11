@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import { logUi } from '../lib/debug-log';
+
 /** Флаг «онбординг пройден» (DP-7): welcome пропускает шаги настройки при повторных запусках. */
 const ONBOARDED_KEY = 'nexus.onboarded.v1';
 
@@ -117,14 +119,22 @@ export const useUIStore = create<UIState>((set) => ({
   togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
   openGraph: () => set({ graphOpen: true }),
   closeGraph: () => set({ graphOpen: false }),
-  toggleGraph: () => set((s) => ({ graphOpen: !s.graphOpen })),
+  toggleGraph: () =>
+    set((s) => {
+      logUi('graph:toggle', s.graphOpen ? 'close' : 'open');
+      return { graphOpen: !s.graphOpen };
+    }),
   // AI-панель живёт только в workspace-вью (DP-12, макет) → открытие чата с Home/News обязано
   // выводить в workspace, иначе флаг взводится, а панель не видна — «мёртвая кнопка» (баг
   // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
-  openChat: () => set({ chatOpen: true, homeOpen: false, newsOpen: false }),
+  openChat: () => {
+    logUi('chat:open');
+    set({ chatOpen: true, homeOpen: false, newsOpen: false });
+  },
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () =>
     set((s) => {
+      logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
       if (!s.chatOpen) return { chatOpen: true, homeOpen: false, newsOpen: false };
       // Панель уже «открыта», но скрыта за Home/News → клик возвращает её в поле зрения.
       if (s.homeOpen || s.newsOpen) return { homeOpen: false, newsOpen: false };
@@ -138,18 +148,37 @@ export const useUIStore = create<UIState>((set) => ({
   openConflict: () => set({ conflictOpen: true }),
   closeConflict: () => set({ conflictOpen: false }),
   closeGoals: () => set({ goalsOpen: false }),
-  toggleGoals: () => set((s) => ({ goalsOpen: !s.goalsOpen })),
+  toggleGoals: () =>
+    set((s) => {
+      logUi('goals:toggle', s.goalsOpen ? 'close' : 'open');
+      return { goalsOpen: !s.goalsOpen };
+    }),
   closeDigest: () => set({ digestOpen: false }),
-  toggleDigest: () => set((s) => ({ digestOpen: !s.digestOpen })),
+  toggleDigest: () =>
+    set((s) => {
+      logUi('digest:toggle', s.digestOpen ? 'close' : 'open');
+      return { digestOpen: !s.digestOpen };
+    }),
   closeContradictions: () => set({ contradictionsOpen: false }),
-  toggleContradictions: () => set((s) => ({ contradictionsOpen: !s.contradictionsOpen })),
+  toggleContradictions: () =>
+    set((s) => {
+      logUi('contradictions:toggle', s.contradictionsOpen ? 'close' : 'open');
+      return { contradictionsOpen: !s.contradictionsOpen };
+    }),
   // Полные вьюхи main-области взаимоисключающие: news ↔ home (редактор — когда обе закрыты).
   closeNews: () => set({ newsOpen: false }),
   toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false })),
-  openNews: () => set({ newsOpen: true, homeOpen: false }),
+  openNews: () => {
+    logUi('news:open');
+    set({ newsOpen: true, homeOpen: false });
+  },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
-  toggleHome: () => set((s) => ({ homeOpen: !s.homeOpen, newsOpen: false })),
+  toggleHome: () =>
+    set((s) => {
+      logUi('home:toggle', s.homeOpen ? 'close' : 'open');
+      return { homeOpen: !s.homeOpen, newsOpen: false };
+    }),
   openHome: () => set({ homeOpen: true, newsOpen: false }),
   startOnboarding: () => set({ onboardingActive: true }),
   finishOnboarding: () => {
@@ -165,6 +194,9 @@ export const useUIStore = create<UIState>((set) => ({
   toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),
   closeTweaks: () => set({ tweaksOpen: false }),
   setSettingsSection: (settingsSection) => set({ settingsSection }),
-  openSettings: (section = 'general') => set({ tweaksOpen: true, settingsSection: section }),
+  openSettings: (section = 'general') => {
+    logUi('settings:open', section);
+    set({ tweaksOpen: true, settingsSection: section });
+  },
   setAiTab: (tab) => set({ aiTab: tab }),
 }));

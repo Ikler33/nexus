@@ -99,7 +99,24 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
     fireEvent.click(await screen.findByRole('button', { name: /Очистить все|Clear all/ }));
 
     await waitFor(() => expect(clear).toHaveBeenCalled());
-    expect(await screen.findByText(/Ошибок нет|No errors/)).toBeInTheDocument();
+    expect(await screen.findByText(/Пусто|Empty/)).toBeInTheDocument();
+  });
+
+  it('клик по «N задач» открывает модалку очереди: running/pending с человеческими именами', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 1, pending: 1, dead: 0 });
+    vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([
+      { id: 1, kind: 'digest', state: 'running', runAt: now, attempts: 0 },
+      { id: 2, kind: 'newsfeed', state: 'pending', runAt: now + 600, attempts: 0 },
+    ]);
+    vi.spyOn(tauriApi.scheduler, 'deadJobs').mockResolvedValue([]);
+
+    render(<StatusBar />);
+    fireEvent.click(await screen.findByRole('button', { name: /2 задач|2 tasks/ }));
+
+    expect(await screen.findByText(/Дайджест изменений|Changes digest/)).toBeInTheDocument();
+    expect(screen.getByText(/выполняется|running/)).toBeInTheDocument();
+    expect(screen.getByText(/через 10 мин|in 10 min/)).toBeInTheDocument();
   });
 
   it('прогресс скана (vault:index-progress): реальный бар «Индексация N/M», финиш гасит', async () => {
