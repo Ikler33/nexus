@@ -236,7 +236,10 @@ export interface Digest {
 
 /** Сводка очереди планировщика для StatusBar (зеркалит Rust `scheduler::JobCounts`, ADR-007 срез 5). */
 export interface JobCounts {
+  /** Всего ожидающих (в т.ч. запланированные на будущее recurring) — для тултипа/модалки. */
   pending: number;
+  /** Готовы к запуску сейчас (`pending` с наступившим `run_at`) — только это «работа сейчас». */
+  ready: number;
   running: number;
   dead: number;
 }
@@ -649,7 +652,7 @@ export const tauriApi = {
     counts: (): Promise<JobCounts> =>
       isTauri()
         ? invoke<JobCounts>('get_job_counts')
-        : Promise.resolve({ pending: 0, running: 0, dead: 0 }),
+        : Promise.resolve({ pending: 0, ready: 0, running: 0, dead: 0 }),
 
     /** Идёт ли ещё работа над `kind` (pending|running) — для сброса «Генерирую…», когда джоба
      *  завершилась/упала без нового результата. Вне Tauri — `false`. */
