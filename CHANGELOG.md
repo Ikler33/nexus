@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### Web-агент W-1: EgressFeature::Web + SearXNG-клиент (egress срез 4, W1–W4)
+
+- **`EgressFeature::Web`** — второй web-класс фундамента (как NewsFeed): `allow_private=false`,
+  DNS-rebinding-гард обязателен, по умолчанию ВЫКЛ; не парсится из `set_egress_feature`
+  (consent = URL SearXNG, не egress-настройки).
+- **Модуль `websearch/`**:
+  - `config` — consent-конфиг `websearch.json` в OS config-dir (URL SearXNG = явный consent;
+    сохранение непустого URL + `enabled` → `sync_egress_policy` включает фичу и кладёт хост в
+    allowlist скоупа "web"; fail-safe дефолты).
+  - `search` — SearXNG JSON-клиент через `GuardedClient` с `EgressFeature::Web`: переиспользует
+    DNS-гард ленты (resolve→проверка всех IP→пин), **W3** (таймаут 20 с, body-cap 2 МБ),
+    **W4** — исходящий запрос сканируется `git::scan_secrets` ДО сети (секрет → `SecretInQuery`,
+    запрос не уходит). Нормализация результатов (title/url/snippet), cap MAX_RESULTS.
+- Команды `get_websearch_config`/`set_websearch_config`; восстановление consent на старте
+  (setup-hook, как news).
+- Agent-loop (3-й режим чата «Web»: decide→search→ответ с цитатами, anti-injection, ≤3/ход) — W-2.
+
+
 ### Ночной хаускипинг 2026-06-11: перф графа + актуализация доков
 
 - **Граф, рендер-троттл «дыхания»**: физика тикает как прежде, но на остывшем симе (после

@@ -17,3 +17,4 @@ pub mod search;
 pub mod settings;
 pub mod suggest;
 pub mod vault;
+pub mod websearch;

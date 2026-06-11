@@ -59,6 +59,7 @@ pub mod vault;
 pub mod vector;
 /// Файловый watcher (debounce + ignore + нормализация по пути).
 pub mod watcher;
+pub mod websearch;
 
 /// Возвращает версию приложения из `CARGO_PKG_VERSION`.
 ///
@@ -97,6 +98,10 @@ pub fn run() {
                 // (единственная истина consent); восстанавливаем на старте.
                 let news_cfg = news::load_news_config(&dir.join("news.json"));
                 news::sync_egress_policy(&st.egress_policy, &news_cfg);
+                // W-1 (W2): Web-фича и "web"-allowlist — производные от websearch.json
+                // (consent = сохранённый URL SearXNG); восстанавливаем на старте.
+                let web_cfg = websearch::config::load(&dir.join("websearch.json"));
+                websearch::config::sync_egress_policy(&st.egress_policy, &web_cfg);
             }
             Ok(())
         })
@@ -130,6 +135,8 @@ pub fn run() {
             commands::news::refresh_news,
             commands::news::get_news_config,
             commands::news::set_news_config,
+            commands::websearch::get_websearch_config,
+            commands::websearch::set_websearch_config,
             commands::news::news_sources,
             commands::news::news_article,
             commands::news::news_summarize,
