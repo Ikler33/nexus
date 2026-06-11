@@ -370,7 +370,17 @@
     "webSources": "Web sources",
     "resize": "Drag to resize the panel",
     "sourcesToggle": "Sources · {{count}}",
-    "webSourcesToggle": "Web sources · {{count}}"
+    "webSourcesToggle": "Web sources · {{count}}",
+    "history": "Session history",
+    "historyEmpty": "Nothing yet — ask your first question.",
+    "newSession": "New session",
+    "toNote": "Save to notes",
+    "hist": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "week": "This week",
+      "earlier": "Earlier"
+    }
   },
   "suggest": {
     "title": "Suggested links",

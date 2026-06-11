@@ -2,6 +2,7 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1).
 
 pub mod chat;
+pub mod chat_sessions;
 pub mod contradictions;
 pub mod debug;
 pub mod digest;
