@@ -35,8 +35,17 @@
   color: var(--color-accent);
   animation: statusbar-jobs-pulse 1.2s ease-in-out infinite;
 }
+/* «⚠ N» — кнопка (клик → модалка деталей dead-джоб), не пассивный бейдж. */
 .jobsDead {
   color: var(--color-danger, oklch(0.6 0.2 25));
+  border: none;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.jobsDead:hover {
+  text-decoration: underline;
 }
 @keyframes statusbar-jobs-pulse {
   0%,

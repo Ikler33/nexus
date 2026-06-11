@@ -6,6 +6,7 @@ import { useJobsStore } from '../../stores/jobs';
 import { useSyncStore } from '../../stores/sync';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
+import { DeadJobsModal } from './DeadJobsModal';
 import styles from './StatusBar.module.css';
 
 /** Дебаунс пере-чтения git-статуса/счётчика заметок по `vault:changed` (события идут пачками). */
@@ -31,6 +32,8 @@ export function StatusBar() {
   const [notes, setNotes] = useState<number | null>(null);
   // Реальный прогресс полного скана (макет «Индексация N/M»); null — скан не идёт.
   const [indexProg, setIndexProg] = useState<{ done: number; total: number } | null>(null);
+  // Модалка деталей dead-джоб (клик по «⚠ N» — отчёт владельца 2026-06-11: ошибки нечем посмотреть).
+  const [deadOpen, setDeadOpen] = useState(false);
 
   useEffect(() => {
     let off = () => {};
@@ -118,10 +121,16 @@ export function StatusBar() {
         )
       )}
       {dead > 0 && (
-        <span className={`${styles.item} ${styles.jobsDead}`} title={jobsTitle}>
+        <button
+          type="button"
+          className={`${styles.item} ${styles.jobsDead}`}
+          title={jobsTitle}
+          onClick={() => setDeadOpen(true)}
+        >
           ⚠ {dead}
-        </span>
+        </button>
       )}
+      {deadOpen && <DeadJobsModal onClose={() => setDeadOpen(false)} />}
 
       <div className={styles.right}>
         {mergeRequired && (

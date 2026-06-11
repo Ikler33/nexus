@@ -1,0 +1,153 @@
+/* Модалка «Ошибки фоновых задач» за «⚠ N» статусбара — каркас как у ConflictResolver (DP-10). */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  /* Модалка живёт в DOM статусбара → сбрасываем его наследуемый white-space: nowrap. */
+  white-space: normal;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: var(--space-4);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 94vw);
+  max-height: min(520px, 88vh);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.headIco {
+  color: var(--color-danger);
+}
+
+/* Заголовок отжимает «Очистить»/крест вправо (кнопки опциональны — auto-отступ тут, не на них). */
+.title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-right: auto;
+}
+
+.clearBtn {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.clearBtn:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.close {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.errorMsg {
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+}
+
+.job {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.jobHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.kind {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+
+.retryBtn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.retryBtn:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: color-mix(in oklch, var(--color-accent) 45%, transparent);
+}
+
+.error {
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+  margin: 0;
+}
