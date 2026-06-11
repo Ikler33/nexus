@@ -34,6 +34,15 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
 
+  // «через 507 мин» пугает (суточные джобы) → человеческие единицы: мин до 1.5 ч, часы до 1.5 сут, дни.
+  const inLabel = (runAt: number): string => {
+    const mins = Math.max(1, Math.ceil((runAt * 1000 - Date.now()) / 60_000));
+    if (mins < 90) return t('deadJobs.inMin', { n: mins });
+    const hours = Math.round(mins / 60);
+    if (hours < 36) return t('deadJobs.inHours', { n: hours });
+    return t('deadJobs.inDays', { n: Math.round(hours / 24) });
+  };
+
   const reload = useCallback(async () => {
     try {
       const [jobs, active] = await Promise.all([
@@ -120,9 +129,7 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
                         ? t('deadJobs.running')
                         : j.runAt * 1000 <= Date.now()
                           ? t('deadJobs.queued')
-                          : t('deadJobs.scheduled', {
-                              m: Math.max(1, Math.ceil((j.runAt * 1000 - Date.now()) / 60_000)),
-                            })}
+                          : inLabel(j.runAt)}
                     </span>
                   </div>
                 </section>

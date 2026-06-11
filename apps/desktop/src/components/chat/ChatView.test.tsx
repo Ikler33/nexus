@@ -8,7 +8,7 @@ import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 beforeEach(() => {
-  useChatStore.setState({ messages: [], streaming: false });
+  useChatStore.setState({ messages: [], streaming: false, mode: 'vault' });
 });
 
 afterEach(() => {
@@ -16,6 +16,25 @@ afterEach(() => {
 });
 
 describe('ChatView (Ф1-8)', () => {
+  // Фидбэк владельца 11.06: Web — КНОПКА-тоггл «модель может искать», а не третий пункт сегмента.
+  it('Web — кнопка-тоггл: aria-pressed, сегмент глушится; выключение возвращает прежний режим', () => {
+    render(<ChatView />);
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('radio', { name: /общий|general/i }));
+    expect(useChatStore.getState().mode).toBe('general');
+
+    const webBtn = screen.getByRole('button', { name: /web/i, pressed: false });
+    fireEvent.click(webBtn);
+    expect(useChatStore.getState().mode).toBe('web');
+    expect(screen.getByRole('button', { name: /web/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /общий|general/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /web/i, pressed: true }));
+    expect(useChatStore.getState().mode).toBe('general');
+  });
+
   it('пустое состояние — подсказка', () => {
     render(<ChatView />);
     expect(screen.getByText(/Спросите что-нибудь о ваших заметках/)).toBeInTheDocument();
