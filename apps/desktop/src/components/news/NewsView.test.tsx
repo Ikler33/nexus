@@ -142,6 +142,16 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     const original = screen.getByRole('link', { name: /оригинал|original/i });
     expect(original).toHaveAttribute('href', expect.stringContaining('deepmind'));
 
+    // Per-host consent (ревизия NF-6): кнопка называет ИМЕННО хост статьи; клик зовёт allowHost
+    // и перезапрашивает статью (в моке снова denied — состояние остаётся честным).
+    const allowSpy = vi.spyOn(tauriApi.news, 'allowHost');
+    const articleSpy = vi.spyOn(tauriApi.news, 'article');
+    const allowBtn = screen.getByRole('button', { name: /разрешить .*deepmind|allow .*deepmind/i });
+    fireEvent.click(allowBtn);
+    await vi.waitFor(() => expect(allowSpy).toHaveBeenCalledTimes(1));
+    expect(String(allowSpy.mock.calls[0][0])).toContain('deepmind');
+    await vi.waitFor(() => expect(articleSpy).toHaveBeenCalled());
+
     fireEvent.click(screen.getByRole('button', { name: /к ленте|back to feed/i }));
     const unread = await screen.findAllByRole('button', {
       name: /вернуть в непрочитанные|mark as unread/i,

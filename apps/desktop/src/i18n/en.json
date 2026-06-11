@@ -454,7 +454,10 @@
       "footTranslated": "Full text translated by a local model. Original at the link.",
       "footOriginalRu": "Russian-language source — text extracted from the original without translation.",
       "footDenied": "The article lives on a host outside the trusted sources — the egress policy makes no request. Showing the summary; full version at the “Original” link.",
-      "footTruncated": "Text truncated by the length cap — full version at the “Original” link."
+      "footTruncated": "Text truncated by the length cap — full version at the “Original” link.",
+      "allowHost": "Allow {{host}} and load",
+      "allowing": "Allowing…",
+      "allowHint": "Only this host becomes trusted. Remove it from the feed's ⚙ menu."
     },
     "gathering": "Gathering news…",
     "emptyTitle": "No fresh news",
@@ -467,7 +470,9 @@
     "neverSub": "Start the first run — fetching and summarizing takes about a minute.",
     "offlineBanner": "Offline — feed paused. Showing last run's data.",
     "pageSettings": "Page settings",
-    "disable": "Disable feed"
+    "disable": "Disable feed",
+    "trustedHosts": "Trusted article hosts",
+    "dropHost": "Remove {{host}}"
   },
   "inline": {
     "continue": "Continue",

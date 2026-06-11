@@ -168,6 +168,8 @@ pub fn run() {
             commands::news::refresh_news,
             commands::news::get_news_config,
             commands::news::set_news_config,
+            commands::news::news_allow_host,
+            commands::news::news_disallow_host,
             commands::websearch::get_websearch_config,
             commands::websearch::set_websearch_config,
             commands::news::news_sources,

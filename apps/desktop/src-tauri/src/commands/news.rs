@@ -136,9 +136,68 @@ pub async fn set_news_config(
     Ok(config)
 }
 
+/// Разрешает хост статьи по клику из ридера (opt-in владельца 2026-06-11, ревизия решения NF-6):
+/// добавляет ПУБЛИЧНЫЙ хост в `news.json::extra_hosts` + мгновенно пересинхронизирует "news"-скоуп.
+/// Гарантии: per-host (не глобальный тумблер), персист вне vault/git, снимается из gear-меню;
+/// приватные/LAN-хосты отвергаются здесь же (и всё равно были бы отрезаны политикой web-класса
+/// + DNS-гардом — defense-in-depth). Возвращает применённый конфиг.
+#[tauri::command]
+pub async fn news_allow_host(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host: String,
+) -> AppResult<NewsConfig> {
+    let host = host.trim().to_lowercase();
+    // Синтаксис: парсим как хост абсолютного URL — отрезает схемы/пути/порты/мусор.
+    let parsed = reqwest::Url::parse(&format!("https://{host}/"))
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string));
+    if parsed.as_deref() != Some(host.as_str()) || host.is_empty() {
+        return Err(AppError::Msg(format!("некорректный хост: {host:?}")));
+    }
+    if crate::plugin::is_private_host(&host) {
+        return Err(AppError::Msg(
+            "приватные/LAN-хосты запрещены политикой эгресса (W-аддендум)".into(),
+        ));
+    }
+    let path = config_path(&app)?;
+    let mut cfg = news::load_news_config(&path);
+    if !cfg.enabled {
+        return Err(AppError::Msg(
+            "лента выключена — включите её сначала".into(),
+        ));
+    }
+    if !cfg.extra_hosts.contains(&host) {
+        cfg.extra_hosts.push(host.clone());
+        news::save_news_config(&path, &cfg)
+            .map_err(|e| AppError::Msg(format!("news.json не записан: {e}")))?;
+    }
+    news::sync_egress_policy(&state.egress_policy, &cfg);
+    tracing::info!(host = %host, "ридер: хост статьи разрешён владельцем (extra_hosts)");
+    Ok(cfg)
+}
+
+/// Снимает разрешение с хоста статьи (gear-меню ленты). Идемпотентно; возвращает конфиг.
+#[tauri::command]
+pub async fn news_disallow_host(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host: String,
+) -> AppResult<NewsConfig> {
+    let host = host.trim().to_lowercase();
+    let path = config_path(&app)?;
+    let mut cfg = news::load_news_config(&path);
+    cfg.extra_hosts.retain(|h| h != &host);
+    news::save_news_config(&path, &cfg)
+        .map_err(|e| AppError::Msg(format!("news.json не записан: {e}")))?;
+    news::sync_egress_policy(&state.egress_policy, &cfg);
+    tracing::info!(host = %host, "ридер: разрешение хоста снято");
+    Ok(cfg)
+}
+
 /// Статья для reader (NF-6). `denied` — хост вне политики эгресса (HN-ссылки на произвольные
-/// домены, офлайн, выключенная фича): fail-closed БЕЗ расширения allowlist — UI показывает
-/// резюме и ссылку «Оригинал».
+/// домены, офлайн, выключенная фича): fail-closed; расширение allowlist — ТОЛЬКО явным per-host
+/// consent (`news_allow_host`), UI показывает резюме, ссылку «Оригинал» и кнопку «Разрешить».
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum NewsArticleDto {

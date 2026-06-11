@@ -8,7 +8,7 @@ import type { NewsArticle, NewsConfig, NewsItem, NewsPage, NewsRun, NewsSource }
 const NOW = Math.floor(Date.now() / 1000);
 const H = 3600;
 
-let config: NewsConfig = { enabled: true, sources: {}, keywords: null };
+let config: NewsConfig = { enabled: true, sources: {}, keywords: null, extraHosts: [] };
 
 const registry: NewsSource[] = [
   { id: 'openai', title: 'OpenAI', enabled: true, langRu: false },

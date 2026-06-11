@@ -415,6 +415,8 @@ export interface NewsConfig {
   sources: Record<string, boolean>;
   /** Ключевые слова фильтра; `null` — пресет по умолчанию. */
   keywords: string[] | null;
+  /** Доп. хосты статей, разрешённые по клику из ридера (per-host consent, ревизия NF-6). */
+  extraHosts: string[];
 }
 
 /** Источник реестра v1 (зеркалит Rust `commands::news::NewsSourceDto`) — для consent-строки. */
@@ -885,6 +887,14 @@ export const tauriApi = {
     /** Конфиг `news.json` (consent + источники + ключи). */
     getConfig: (): Promise<NewsConfig> =>
       isTauri() ? invoke<NewsConfig>('get_news_config') : mockNews.getConfig(),
+
+    /** Разрешить хост статьи (per-host consent из Denied-баннера ридера). Возвращает конфиг. */
+    allowHost: (host: string): Promise<NewsConfig> =>
+      isTauri() ? invoke<NewsConfig>('news_allow_host', { host }) : mockNews.getConfig(),
+
+    /** Снять разрешение с хоста (gear-меню ленты). Возвращает конфиг. */
+    disallowHost: (host: string): Promise<NewsConfig> =>
+      isTauri() ? invoke<NewsConfig>('news_disallow_host', { host }) : mockNews.getConfig(),
 
     /** Сохраняет конфиг и мгновенно синхронизирует политику эгресса (NF-4, AC-NF-7). */
     setConfig: (config: NewsConfig): Promise<NewsConfig> =>

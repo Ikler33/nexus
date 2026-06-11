@@ -82,6 +82,8 @@ export function NewsView() {
   } = useNewsStore();
   const [showErrors, setShowErrors] = useState(false);
   const [gearOpen, setGearOpen] = useState(false);
+  // Доверенные хосты статей (per-host consent из ридера) — для управления в gear-меню.
+  const [extraHosts, setExtraHosts] = useState<string[]>([]);
   const [offline, setOffline] = useState(false);
   /** Открытая в reader статья (NF-6); `null` — лента. */
   const [open, setOpen] = useState<NewsItem | null>(null);
@@ -100,6 +102,15 @@ export function NewsView() {
     });
     return () => unlisten();
   }, [load]);
+
+  // При открытии меню подтягиваем актуальный список доверенных хостов.
+  useEffect(() => {
+    if (!gearOpen) return;
+    void tauriApi.news
+      .getConfig()
+      .then((c) => setExtraHosts(c.extraHosts))
+      .catch(() => setExtraHosts([]));
+  }, [gearOpen]);
 
   useEffect(() => {
     if (!gearOpen) return;
@@ -328,6 +339,30 @@ export function NewsView() {
                   <Power size={15} aria-hidden />
                   {t('news.disable')}
                 </button>
+                {extraHosts.length > 0 && (
+                  <>
+                    <div className={styles.menuHead}>{t('news.trustedHosts')}</div>
+                    {extraHosts.map((h) => (
+                      <div key={h} className={styles.hostRow}>
+                        <span className={styles.hostName}>{h}</span>
+                        <button
+                          type="button"
+                          className={styles.hostDrop}
+                          aria-label={t('news.dropHost', { host: h })}
+                          title={t('news.dropHost', { host: h })}
+                          onClick={() => {
+                            void tauriApi.news
+                              .disallowHost(h)
+                              .then((c) => setExtraHosts(c.extraHosts))
+                              .catch(() => {});
+                          }}
+                        >
+                          <X size={13} aria-hidden />
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>

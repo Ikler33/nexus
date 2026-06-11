@@ -297,6 +297,8 @@ pub fn news_hosts(cfg: &NewsConfig) -> Vec<String> {
                 .ok()
                 .and_then(|u| u.host_str().map(str::to_string))
         })
+        // Доп. хосты статей (opt-in по клику из ридера) — равноправная часть "news"-скоупа.
+        .chain(cfg.extra_hosts.iter().map(|h| h.to_lowercase()))
         .collect()
 }
 
@@ -366,6 +368,35 @@ mod tests {
             default_enabled: true,
             lang_ru: false,
         }
+    }
+
+    /// Opt-in хосты статей (ревизия NF-6, 2026-06-11): попадают в "news"-скоуп вместе с хостами
+    /// источников; выключенная лента — скоуп пуст (fail-closed, consent не переживает выключение).
+    #[test]
+    fn extra_hosts_join_allowlist_and_die_with_feature() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let policy = crate::net::EgressPolicy::new(Arc::new(AtomicBool::new(false)));
+        let mut cfg = NewsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        cfg.extra_hosts = vec!["Example.COM".into()];
+        sync_egress_policy(&policy, &cfg);
+        assert!(
+            policy
+                .check("example.com", crate::net::EgressFeature::NewsFeed)
+                .is_ok(),
+            "разрешённый хост статьи проходит (нормализован к lowercase)"
+        );
+        cfg.enabled = false;
+        sync_egress_policy(&policy, &cfg);
+        assert!(
+            policy
+                .check("example.com", crate::net::EgressFeature::NewsFeed)
+                .is_err(),
+            "выключенная лента → fail-closed, extra_hosts не действуют"
+        );
     }
 
     /// AC-NF-2: high_volume фильтруется по ключам (unicode case-insensitive, title+excerpt);
