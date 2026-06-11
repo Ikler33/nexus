@@ -510,6 +510,7 @@
     "changes_few": "Изменения · {{count}}",
     "changes_many": "Изменения · {{count}}",
     "indexed": "Проиндексировано",
+    "scheduled": "Запланировано · {{count}}",
     "conflict": "Конфликт",
     "conflicts_one": "{{count}} конфликт",
     "conflicts_few": "{{count}} конфликта",

@@ -187,18 +187,23 @@ pub async fn gc_done(writer: &WriteActor, before: i64) -> DbResult<usize> {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobCounts {
-    /// Ожидают выполнения (в т.ч. отложенные backpressure'ом).
+    /// Ожидают выполнения ВСЕГО (в т.ч. запланированные на будущее recurring — суточные дайджест/
+    /// лента/противоречия). Для тултипа/модалки. НЕ годится как «идёт работа» — будущие джобы тоже тут.
     pub pending: i64,
+    /// Готовы к запуску СЕЙЧАС (`pending` и `run_at <= now`) — вот это «работа на ближайший тик».
+    /// Введено 2026-06-11: статусбар пульсировал вечно, считая суточные recurring «выполняющимися».
+    pub ready: i64,
     /// Выполняются сейчас.
     pub running: i64,
     /// Исчерпали ретраи — видимый «мёртвый» (S7), нужен взгляд пользователя.
     pub dead: i64,
 }
 
-/// Считает джобы по состояниям (для StatusBar N/M). Один GROUP BY — дёшево по `idx_jobs_claim`.
-pub async fn counts(reader: &ReadPool) -> DbResult<JobCounts> {
+/// Считает джобы по состояниям (для StatusBar). `now` — для `ready` (готовые к запуску `pending`):
+/// явный параметр → детерминированно в тестах. Дёшево по `idx_jobs_claim`.
+pub async fn counts(reader: &ReadPool, now: i64) -> DbResult<JobCounts> {
     reader
-        .query(|c| {
+        .query(move |c| {
             let mut out = JobCounts::default();
             let mut stmt = c.prepare(
                 "SELECT state, count(*) FROM jobs \
@@ -214,6 +219,12 @@ pub async fn counts(reader: &ReadPool) -> DbResult<JobCounts> {
                     _ => {}
                 }
             }
+            // `ready` — pending, у которых наступил run_at: только это «работа сейчас» в индикаторе.
+            out.ready = c.query_row(
+                "SELECT count(*) FROM jobs WHERE state='pending' AND run_at<=?1",
+                [now],
+                |r| r.get(0),
+            )?;
             Ok(out)
         })
         .await
@@ -923,10 +934,31 @@ mod tests {
         enqueue(w, "b", "", 1000, 5).await.unwrap(); // будущая → остаётся pending
         let _running = claim_next(w, 100).await.unwrap().expect("a готова");
 
-        let c = counts(db.reader()).await.unwrap();
+        let c = counts(db.reader(), 100).await.unwrap();
         assert_eq!(c.running, 1, "a выполняется");
         assert_eq!(c.pending, 1, "b ждёт");
+        assert_eq!(
+            c.ready, 0,
+            "b запланирована на будущее (run_at=1000>100) — не готова"
+        );
         assert_eq!(c.dead, 0);
+    }
+
+    /// `ready` отделяет «работа сейчас» (pending с наступившим run_at) от запланированных recurring
+    /// (run_at в будущем) — статусбар пульсирует только по running+ready (баг вечного пульса 2026-06-11).
+    #[tokio::test]
+    async fn counts_ready_excludes_future_scheduled() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        enqueue(w, "digest", "", 10_000, 5).await.unwrap(); // суточная recurring — далеко в будущем
+        enqueue(w, "ready_now", "", 0, 5).await.unwrap(); // готова сейчас
+        let c = counts(db.reader(), 100).await.unwrap();
+        assert_eq!(c.pending, 2, "обе ожидают (всего)");
+        assert_eq!(
+            c.ready, 1,
+            "готова только одна — запланированная на будущее не пульсирует"
+        );
+        assert_eq!(c.running, 0);
     }
 
     /// Встроенный kind `gc` зарегистрирован в `default_registry`, прогоняется воркером и завершается
@@ -991,7 +1023,7 @@ mod tests {
         let w = db.writer();
         reschedule_if_absent(w, "digest", 5000, 2).await.unwrap();
         reschedule_if_absent(w, "digest", 6000, 2).await.unwrap(); // уже есть pending → no-op
-        let c = counts(db.reader()).await.unwrap();
+        let c = counts(db.reader(), 0).await.unwrap();
         assert_eq!(c.pending, 1, "одна ожидающая, не две");
     }
 
@@ -1059,7 +1091,7 @@ mod tests {
         // clear: остался только b — выметаем; счётчик dead обнулился.
         assert_eq!(clear_dead(w).await.unwrap(), 1);
         assert!(list_dead(db.reader()).await.unwrap().is_empty());
-        assert_eq!(counts(db.reader()).await.unwrap().dead, 0);
+        assert_eq!(counts(db.reader(), now_secs()).await.unwrap().dead, 0);
     }
 
     /// list_active: running сверху, pending по готовности (модалка очереди за «N задач»).

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, GitMerge, HardDrive } from 'lucide-react';
+import { Check, Clock, GitMerge, HardDrive } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi } from '../../lib/tauri-api';
 import { useJobsStore } from '../../stores/jobs';
@@ -83,8 +83,13 @@ export function StatusBar() {
     };
   }, []);
 
-  const { running, pending, dead } = counts;
-  const busy = running > 0 || pending > 0;
+  const { running, pending, ready, dead } = counts;
+  // «Работа сейчас» (анимированный пульс) — только running + готовые к запуску (ready). Запланированные
+  // на будущее recurring-джобы (суточные дайджест/лента/противоконфликт) НЕ пульсируют — это вводило в
+  // заблуждение «будто что-то работает» (баг 2026-06-11). Их показываем статичным чипом-часами.
+  const active = running + ready;
+  const scheduled = Math.max(0, pending - ready);
+  const busy = active > 0;
   const jobsTitle = t('status.jobsTitle', { running, pending, dead });
 
   return (
@@ -115,7 +120,19 @@ export function StatusBar() {
           <span className={styles.progress} aria-hidden>
             <i />
           </span>
-          {t('status.working', { count: running + pending })}
+          {t('status.working', { count: active })}
+        </button>
+      ) : scheduled > 0 ? (
+        // Запланированные на будущее джобы есть, но сейчас ничего не выполняется → статичный
+        // чип-часы (без пульса), кликабелен → модалка очереди со временем следующего запуска.
+        <button
+          type="button"
+          className={`${styles.item} ${styles.jobsBtn}`}
+          title={jobsTitle}
+          onClick={() => setDeadOpen(true)}
+        >
+          <Clock size={12} aria-hidden />
+          {t('status.scheduled', { count: scheduled })}
         </button>
       ) : (
         notes !== null && (
