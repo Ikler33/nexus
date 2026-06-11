@@ -60,6 +60,11 @@ struct Rag {
     vectors: Arc<VectorIndex>,
     chunk_opts: ChunkOptions,
     embed_sem: Arc<Semaphore>,
+    /// Кэш векторов ТЕКУЩЕЙ группы полного скана (cross-file батчинг, perf.md): text → vec.
+    /// Пер-файловые батчи на реальных vault почти пусты (бенч: 1 чанк/файл = 1 HTTP-вызов на файл,
+    /// 23 эмб/с); префилл группы бьёт ПОЛНЫЕ батчи по [`EMBED_BATCH`] поперёк файлов, `index_file`
+    /// берёт готовое отсюда. `None` вне скана — инкрементальные правки идут напрямую.
+    scan_cache: std::sync::Mutex<Option<std::collections::HashMap<String, Vec<f32>>>>,
 }
 
 /// Индексатор одного vault. Дёшево клонируемые writer/reader + корень. RAG — опционально.
@@ -114,6 +119,7 @@ impl Indexer {
                 vectors,
                 chunk_opts: ChunkOptions::default(),
                 embed_sem: Arc::new(Semaphore::new(EMBED_CONCURRENCY)),
+                scan_cache: std::sync::Mutex::new(None),
             }),
             force: Arc::new(AtomicBool::new(force_reindex)),
             progress: None,
@@ -483,29 +489,38 @@ impl Indexer {
         // перекрываются (потолок embed — семафор `EMBED_CONCURRENCY`). Кооперативно в ОДНОЙ задаче:
         // синхронные секции usearch/БД не исполняются параллельно (между `.next()` ни одна future не
         // поллится) → `persist_vectors()` в теле цикла и upsert'ы векторов без гонок.
+        // Cross-file батчинг (perf.md): скан идёт ГРУППАМИ; перед группой все её чанки эмбеддятся
+        // полными батчами поперёк файлов (кэш в Rag), index_file внутри группы берёт векторы из
+        // кэша. Без RAG group-проход вырождается в прежний поток.
         let mut done = 0usize;
-        let mut stream = stream::iter(rels)
-            .map(|rel| async move {
-                if let Err(e) = self.index_file(&rel).await {
-                    tracing::warn!(file = %rel, error = %e, "index_file failed during scan");
-                }
-            })
-            .buffer_unordered(SCAN_CONCURRENCY);
-        while stream.next().await.is_some() {
-            done += 1;
-            // Прогресс наружу чаще чекпойнта usearch (статусбар), но не на каждый файл.
-            if done % SCAN_PROGRESS_EVERY == 0 {
-                if let Some(p) = &self.progress {
-                    p(done, total);
+        for group in rels.chunks(SCAN_CHECKPOINT) {
+            if rag_on {
+                self.prefill_scan_cache(group).await;
+            }
+            let mut stream = stream::iter(group.iter().cloned())
+                .map(|rel| async move {
+                    if let Err(e) = self.index_file(&rel).await {
+                        tracing::warn!(file = %rel, error = %e, "index_file failed during scan");
+                    }
+                })
+                .buffer_unordered(SCAN_CONCURRENCY);
+            while stream.next().await.is_some() {
+                done += 1;
+                // Прогресс наружу чаще чекпойнта usearch (статусбар), но не на каждый файл.
+                if done % SCAN_PROGRESS_EVERY == 0 {
+                    if let Some(p) = &self.progress {
+                        p(done, total);
+                    }
                 }
             }
-            // Периодический чекпойнт usearch + прогресс N/M (AC-PERF-5).
-            if rag_on && done % SCAN_CHECKPOINT == 0 {
+            drop(stream);
+            if rag_on {
+                self.clear_scan_cache();
+                // Чекпойнт usearch на границе группы + прогресс N/M (AC-PERF-5).
                 self.persist_vectors();
                 tracing::info!(done, total, "indexing progress");
             }
         }
-        drop(stream);
         self.writer.transaction(resolve_all_dangling).await?;
         // §5.1: дочинить векторы, потерянные при крахе между commit и save (на force-скане no-op).
         if let Err(e) = self.reconcile_vectors().await {
