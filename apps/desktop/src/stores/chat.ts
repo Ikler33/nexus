@@ -36,6 +36,10 @@ export interface ChatMessage {
   webSources?: WebSource[];
 }
 
+/** Раскрытость аккордеонов источников ВНЕ React-состояния (см. ChatView.Disclosure): живёт со
+ *  стором, чтобы чиститься вместе с историей (clear/hydrate) и в тестах. Не персистится. */
+export const disclosureOpen = new Map<string, boolean>();
+
 /** Режим чата: по vault (RAG) / общий. Web — НЕ режим, а дополнительный флаг (`web`): «модель
  *  может сходить в интернет за уточнениями» поверх любого режима (ревизия владельца 11.06). */
 export type ChatMode = 'vault' | 'general';
@@ -230,12 +234,14 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     clear() {
+      disclosureOpen.clear();
       if (get().streaming) return;
       set({ messages: [] });
       save();
     },
 
     hydrate(root) {
+      disclosureOpen.clear();
       // Смена vault при активном стриме (аудит 2026-06-10): дорезаем осиротевший стрим ДО смены
       // ключа — хвост финализируется в историю СТАРОГО vault (не утечёт в новый), отмена уходит
       // на бэкенд (LLM не молотит по закрытому vault).

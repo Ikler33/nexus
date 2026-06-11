@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatView } from './ChatView';
 import { tauriApi } from '../../lib/tauri-api';
-import { useChatStore } from '../../stores/chat';
+import { disclosureOpen, useChatStore } from '../../stores/chat';
 import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 beforeEach(() => {
   useChatStore.setState({ messages: [], streaming: false, mode: 'vault', web: false });
+  disclosureOpen.clear();
 });
 
 afterEach(() => {
@@ -188,7 +189,12 @@ describe('ChatView (Ф1-8)', () => {
 
     usePrefsStore.setState({ ragSources: 'footnotes' });
     render(<ChatView />);
-    fireEvent.click(screen.getByRole('button', { name: /Источники · 1|Sources · 1/ }));
+    // Раскрытость пережила перемонтирование (реестр вне React — фикс «сворачивались при скролле»
+    // из-за размонтирования виртуализацией): повторный клик не нужен.
+    expect(screen.getByRole('button', { name: /Источники · 1|Sources · 1/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
     expect(screen.getByText('[1]')).toBeInTheDocument(); // сноска `[N]`
     usePrefsStore.setState({ ragSources: 'cards' });
   });
