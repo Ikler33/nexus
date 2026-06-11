@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { AlertTriangle, FileText, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { type ChatMessage, type ChatSource, useChatStore } from '../../stores/chat';
+import { type ChatMessage, type ChatMode, type ChatSource, useChatStore } from '../../stores/chat';
 import type { WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
@@ -244,8 +244,18 @@ function Sources({ sources, onOpen }: { sources: ChatSource[]; onOpen: (path: st
   );
 }
 
+// Дефолтная фраза «думания» до первой сводки CoT — честная по режиму (баг 2026-06-11: в «Общем»
+// и Web писало «Ищу по заметкам…», хотя ретрива по vault там нет).
+const THINKING_KEY: Record<ChatMode, string> = {
+  vault: 'chat.thinking',
+  general: 'chat.thinkingPlain',
+  web: 'chat.thinkingWeb',
+};
+
 function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: string) => void }) {
   const { t } = useTranslation();
+  // Режим заморожен на время стрима (setMode блокируется) → текущий режим честен для этого сообщения.
+  const mode = useChatStore((s) => s.mode);
   if (message.role === 'user') {
     return <div className={styles.user}>{message.content}</div>;
   }
@@ -278,7 +288,7 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
               <div className={styles.thinkingRow}>
                 <BrandThinking size={28} />
                 <span className={styles.thinkingLabel}>
-                  {message.reasoningSummary || t('chat.thinking')}
+                  {message.reasoningSummary || t(THINKING_KEY[mode])}
                 </span>
               </div>
             )
