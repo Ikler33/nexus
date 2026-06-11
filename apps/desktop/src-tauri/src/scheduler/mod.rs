@@ -24,6 +24,15 @@ const BACKOFF_BASE_SECS: i64 = 30;
 const BACKOFF_MAX_SECS: i64 = 3600;
 /// Интервал опроса очереди воркером (S1: tokio-interval пока vault открыт).
 const TICK_SECS: u64 = 5;
+/// Жёсткий потолок ОДНОГО тика (вотчдог, инцидент 2026-06-12: воркер «тихо исчез», ready-джобы
+/// стояли 13 часов). Зависший await внутри тика обрывается с ERROR — цикл продолжает жить.
+/// Запас над самым долгим легитимным тиком: LLM-джобы исполняются ВНУТРИ тика (newsfeed-прогон
+/// на E4B — минуты), поэтому потолок щедрый.
+const TICK_HARD_TIMEOUT_SECS: u64 = 15 * 60;
+/// Heartbeat в журнал раз в N тиков (10 мин при TICK_SECS=5) — по файлу видно, жив ли воркер.
+const HEARTBEAT_EVERY_TICKS: u64 = 120;
+/// Пауза перед рестартом умершего воркера (супервизор) — не молотим при систематической ошибке.
+const RESPAWN_DELAY_SECS: u64 = 5;
 /// Потолок джоб за один тик — анти-голодание (no silent caps: излишек растащится на следующие тики).
 const MAX_PER_TICK: usize = 64;
 /// On-change (S4, slice 7): сколько ждать «тишины» после правок vault перед перезапуском on-change-kind
@@ -560,25 +569,55 @@ pub fn spawn_worker(
     shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     use tauri::Manager;
-    let app2 = app.clone();
-    let hooks = WorkerHooks {
-        interactive_busy: Box::new(move || {
-            app.state::<crate::state::AppState>().is_interactive_busy()
-        }),
-        jobs_changed: Box::new(move || emit_jobs_changed(&app2)),
-    };
-    tokio::spawn(worker_loop(
-        writer, registry, recurring, reader, on_change, hooks, shutdown,
-    ));
+    // Супервизор (инцидент 2026-06-12: воркер «тихо исчез» без паники и следа — ready-джобы
+    // стояли 13 часов): держим JoinHandle цикла; неожиданное завершение (паника/return) —
+    // ERROR с причиной и РЕСТАРТ через паузу. Штатный выход (shutdown/дроп sender) — стоп.
+    tokio::spawn(async move {
+        loop {
+            let app2 = app.clone();
+            let app3 = app.clone();
+            let hooks = WorkerHooks {
+                interactive_busy: Box::new(move || {
+                    app2.state::<crate::state::AppState>().is_interactive_busy()
+                }),
+                jobs_changed: Box::new(move || emit_jobs_changed(&app3)),
+            };
+            let handle = tokio::spawn(worker_loop(
+                writer.clone(),
+                registry.clone(),
+                recurring.clone(),
+                reader.clone(),
+                on_change.clone(),
+                hooks,
+                shutdown.clone(),
+            ));
+            match handle.await {
+                Ok(()) => {
+                    // worker_loop возвращается ТОЛЬКО по shutdown — штатно гасим супервизор.
+                    tracing::info!("scheduler worker stopped (shutdown)");
+                    break;
+                }
+                Err(join_err) => {
+                    tracing::error!(error = %join_err, "scheduler worker УМЕР — рестарт супервизором");
+                }
+            }
+            // Перед рестартом уважаем shutdown (vault мог закрыться, пока воркер умирал).
+            if *shutdown.borrow() || shutdown.has_changed().is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(RESPAWN_DELAY_SECS)).await;
+        }
+    });
 }
 
 /// Хуки воркера к Tauri-окружению — вынесены, чтобы [`worker_loop`] тестировался без `AppHandle`
 /// (у tauri нет mock-фичи в зависимостях): backpressure-проба (S5) и нотификация StatusBar.
 pub struct WorkerHooks {
     /// Идёт ли интерактивная LLM-операция (чат/inline) — фон уступает (S5).
-    pub interactive_busy: Box<dyn Fn() -> bool + Send>,
+    /// `Sync` — хуки берутся по ссылке внутри тика под вотчдог-timeout (Send-фьючер).
+    pub interactive_busy: Box<dyn Fn() -> bool + Send + Sync>,
     /// «Состояние очереди изменилось» — событие для UI (best-effort).
-    pub jobs_changed: Box<dyn Fn() + Send>,
+    pub jobs_changed: Box<dyn Fn() + Send + Sync>,
 }
 
 /// Цикл воркера. Живёт, пока жив `shutdown`-sender (он — в `VaultContext::lifecycle`): замена
@@ -597,8 +636,10 @@ async fn worker_loop(
     if let Err(e) = requeue_running(&writer).await {
         tracing::warn!(error = %e, "scheduler crash-recovery failed");
     }
+    tracing::info!("scheduler worker started");
     let mut interval = tokio::time::interval(Duration::from_secs(TICK_SECS));
     let mut oc = OnChangeState::default();
+    let mut ticks: u64 = 0;
     loop {
         tokio::select! {
             _ = interval.tick() => {}
@@ -610,31 +651,59 @@ async fn worker_loop(
                 continue;
             }
         }
-        let now = now_secs();
-        let busy = (hooks.interactive_busy)();
+        ticks += 1;
+        if ticks % HEARTBEAT_EVERY_TICKS == 0 {
+            tracing::info!(ticks, "scheduler heartbeat");
+        }
+        // Вотчдог тика (инцидент 2026-06-12): зависший await внутри тика не должен убивать
+        // планировщик навсегда — обрываем по жёсткому потолку и живём дальше.
+        let tick = tick_once(
+            &writer, &registry, &reader, &on_change, &recurring, &hooks, &mut oc,
+        );
+        match tokio::time::timeout(Duration::from_secs(TICK_HARD_TIMEOUT_SECS), tick).await {
+            Ok(()) => {}
+            Err(_) => tracing::error!(
+                timeout_secs = TICK_HARD_TIMEOUT_SECS,
+                "scheduler: тик завис и оборван вотчдогом — цикл продолжает работу"
+            ),
+        }
+    }
+    tracing::debug!("scheduler worker loop exit (vault закрыт/заменён)");
+}
 
-        // On-change (S4): правки vault → после тишины перезапустить on-change-kind.
-        if !on_change.is_empty() {
-            if let Ok(mtime) = max_file_mtime(&reader).await {
-                let (next, fire) = onchange_step(oc, mtime, now);
-                oc = next;
-                if fire {
-                    for kind in &on_change {
-                        if !has_ready_job(&reader, kind, now).await.unwrap_or(true) {
-                            let _ = enqueue(&writer, kind, "", now, 2).await;
-                        }
+/// Тело одного тика (вынесено из цикла под вотчдог-timeout): on-change-детект + прогон готовых.
+async fn tick_once(
+    writer: &WriteActor,
+    registry: &Registry,
+    reader: &ReadPool,
+    on_change: &[String],
+    recurring: &HashMap<String, i64>,
+    hooks: &WorkerHooks,
+    oc: &mut OnChangeState,
+) {
+    let now = now_secs();
+    let busy = (hooks.interactive_busy)();
+
+    // On-change (S4): правки vault → после тишины перезапустить on-change-kind.
+    if !on_change.is_empty() {
+        if let Ok(mtime) = max_file_mtime(reader).await {
+            let (next, fire) = onchange_step(*oc, mtime, now);
+            *oc = next;
+            if fire {
+                for kind in on_change {
+                    if !has_ready_job(reader, kind, now).await.unwrap_or(true) {
+                        let _ = enqueue(writer, kind, "", now, 2).await;
                     }
                 }
             }
         }
-
-        match run_due(&writer, &registry, now, busy, &recurring).await {
-            Ok(n) if n > 0 => (hooks.jobs_changed)(),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
-        }
     }
-    tracing::debug!("scheduler worker stopped (vault закрыт/заменён)");
+
+    match run_due(writer, registry, now, busy, recurring).await {
+        Ok(n) if n > 0 => (hooks.jobs_changed)(),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "scheduler tick failed"),
+    }
 }
 
 /// Tauri-событие «состояние очереди изменилось» (для StatusBar N/M — срез UI). Best-effort.
