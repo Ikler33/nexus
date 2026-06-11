@@ -219,6 +219,69 @@ pub async fn counts(reader: &ReadPool) -> DbResult<JobCounts> {
         .await
 }
 
+/// Мёртвая джоба для UI «Ошибки фоновых задач» (S7: dead не только видим счётчиком, но и разбираем —
+/// кто упал, почему, сколько раз). `payload` не отдаём: внутренний JSON, пользователю не о чем.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeadJob {
+    pub id: i64,
+    pub kind: String,
+    pub attempts: i64,
+    pub last_error: Option<String>,
+    /// Когда джоба перешла в `dead` (unix-сек) — для «N мин назад» в списке.
+    pub updated_at: i64,
+}
+
+/// Детали dead-джоб (свежие сверху) — модалка за «⚠ N» в StatusBar.
+pub async fn list_dead(reader: &ReadPool) -> DbResult<Vec<DeadJob>> {
+    reader
+        .query(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id,kind,attempts,last_error,updated_at FROM jobs \
+                 WHERE state='dead' ORDER BY updated_at DESC, id DESC",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok(DeadJob {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    attempts: r.get(2)?,
+                    last_error: r.get(3)?,
+                    updated_at: r.get(4)?,
+                })
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// Ручной перезапуск dead-джобы («Повторить» в модалке): `dead → pending`, `attempts=0` (ретраи с
+/// чистого листа — пользователь обычно жмёт ПОСЛЕ исправления причины, напр. URL модели), `run_at=now`.
+/// Не-dead id (гонка/повторный клик) — no-op, возвращает `false`.
+pub async fn retry_dead(writer: &WriteActor, id: i64, now: i64) -> DbResult<bool> {
+    writer
+        .transaction(move |tx| {
+            let n = tx.execute(
+                "UPDATE jobs SET state='pending', attempts=0, run_at=?2, updated_at=?3 \
+                 WHERE id=?1 AND state='dead'",
+                params![id, now, now_secs()],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// Удаляет ВСЕ dead-джобы («Очистить» в модалке) — осознанное «видел, чинить не буду» (S7: смерть
+/// видима, но не вечна). Возвращает число удалённых.
+pub async fn clear_dead(writer: &WriteActor) -> DbResult<usize> {
+    writer
+        .transaction(move |tx| tx.execute("DELETE FROM jobs WHERE state='dead'", []))
+        .await
+}
+
 /// Есть ли **готовая или выполняющаяся** джоба этого `kind` (`running` ИЛИ `pending` с `run_at<=now`) —
 /// для дедупа ручного запуска. Будущая периодическая джоба (`run_at>now`) НЕ считается, чтобы ручной
 /// запуск всегда срабатывал немедленно, даже когда в очереди ждёт отложенный recurring (slice 6).
@@ -925,6 +988,39 @@ mod tests {
             is_kind_busy(db.reader(), "digest").await.unwrap(),
             "будущая pending → busy (в отличие от has_ready_job)"
         );
+    }
+
+    /// list_dead отдаёт детали (kind/ошибка/попытки, свежие сверху); retry_dead возвращает в очередь
+    /// с чистыми attempts; clear_dead выметает остальных (модалка за «⚠ N», S7).
+    #[tokio::test]
+    async fn dead_jobs_listed_retried_and_cleared() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        // Две джобы с max_attempts=1 → первый же fail кладёт в dead.
+        let a = enqueue(w, "digest", "", 0, 1).await.unwrap();
+        let b = enqueue(w, "newsfeed", "", 0, 1).await.unwrap();
+        claim_next(w, 10).await.unwrap().unwrap();
+        fail(w, a, "нет связи с моделью", 10).await.unwrap();
+        claim_next(w, 10).await.unwrap().unwrap();
+        fail(w, b, "HTTP 404", 10).await.unwrap();
+
+        let dead = list_dead(db.reader()).await.unwrap();
+        assert_eq!(dead.len(), 2);
+        let da = dead.iter().find(|d| d.id == a).expect("digest в списке");
+        assert_eq!(da.kind, "digest");
+        assert_eq!(da.attempts, 1);
+        assert_eq!(da.last_error.as_deref(), Some("нет связи с моделью"));
+
+        // retry: dead → pending с attempts=0, сразу claimable; повторный retry того же id — no-op.
+        assert!(retry_dead(w, a, 20).await.unwrap());
+        assert!(!retry_dead(w, a, 20).await.unwrap(), "уже не dead → no-op");
+        let j = claim_next(w, 20).await.unwrap().expect("ретраенная готова");
+        assert_eq!((j.id, j.attempts), (a, 0), "попытки с чистого листа");
+
+        // clear: остался только b — выметаем; счётчик dead обнулился.
+        assert_eq!(clear_dead(w).await.unwrap(), 1);
+        assert!(list_dead(db.reader()).await.unwrap().is_empty());
+        assert_eq!(counts(db.reader()).await.unwrap().dead, 0);
     }
 
     /// slice 7: пустой vault → mtime 0.

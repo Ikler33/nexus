@@ -61,6 +61,47 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
     expect(useUIStore.getState().conflictOpen).toBe(true);
   });
 
+  // ── Модалка деталей dead-джоб за «⚠ N» (отчёт владельца 2026-06-11: ошибки нечем посмотреть) ──
+
+  it('клик по «⚠ N» открывает модалку: kind по-человечески, текст ошибки, «Повторить» зовёт retry', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 2 });
+    vi.spyOn(tauriApi.scheduler, 'deadJobs').mockResolvedValue([
+      { id: 7, kind: 'newsfeed', attempts: 3, lastError: 'HTTP 404: нет связи с моделью', updatedAt: now - 120 },
+      { id: 8, kind: 'home_widget:context_drift', attempts: 2, lastError: null, updatedAt: now - 600 },
+    ]);
+    const retry = vi.spyOn(tauriApi.scheduler, 'retryDead').mockResolvedValue(true);
+
+    render(<StatusBar />);
+    fireEvent.click(await screen.findByRole('button', { name: /⚠ 2/ }));
+
+    // Известный kind — человеческое имя; home_widget:* — по префиксу; ошибка — как есть.
+    expect(await screen.findByText(/Лента новостей|News feed/)).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 404: нет связи с моделью/)).toBeInTheDocument();
+    expect(screen.getByText(/(Виджет Home|Home widget) · context_drift/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Повторить|Retry/ })[0]);
+    await waitFor(() => expect(retry).toHaveBeenCalledWith(7));
+  });
+
+  it('«Очистить все» зовёт clearDead → пустое состояние модалки', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 1 });
+    vi.spyOn(tauriApi.scheduler, 'deadJobs')
+      .mockResolvedValueOnce([
+        { id: 9, kind: 'digest', attempts: 5, lastError: 'таймаут', updatedAt: now - 60 },
+      ])
+      .mockResolvedValue([]);
+    const clear = vi.spyOn(tauriApi.scheduler, 'clearDead').mockResolvedValue(1);
+
+    render(<StatusBar />);
+    fireEvent.click(await screen.findByRole('button', { name: /⚠ 1/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Очистить все|Clear all/ }));
+
+    await waitFor(() => expect(clear).toHaveBeenCalled());
+    expect(await screen.findByText(/Ошибок нет|No errors/)).toBeInTheDocument();
+  });
+
   it('прогресс скана (vault:index-progress): реальный бар «Индексация N/M», финиш гасит', async () => {
     vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0 });
     vi.spyOn(tauriApi.vault, 'notesCount').mockResolvedValue(10);

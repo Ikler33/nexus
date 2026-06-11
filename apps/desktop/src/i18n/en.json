@@ -493,6 +493,24 @@
     "conflicts_other": "{{count}} conflicts",
     "indexing": "Indexing {{done}}/{{total}}"
   },
+  "deadJobs": {
+    "title": "Background task errors",
+    "hint": "These tasks ran out of retries. Fix the cause (usually the model URL in Settings → AI / Models) and hit “Retry”, or clear the list.",
+    "empty": "No errors — all background tasks are running normally.",
+    "attempts_one": "{{count}} attempt",
+    "attempts_other": "{{count}} attempts",
+    "retry": "Retry",
+    "clearAll": "Clear all",
+    "noError": "no error text",
+    "kind": {
+      "digest": "Changes digest",
+      "contradictions": "Contradiction search",
+      "staleRadar": "Stale notes radar",
+      "newsfeed": "News feed",
+      "gc": "Queue cleanup",
+      "homeWidget": "Home widget"
+    }
+  },
   "plugins": {
     "title": "Plugins",
     "sandbox": "sandbox",

@@ -241,6 +241,16 @@ export interface JobCounts {
   dead: number;
 }
 
+/** Мёртвая фоновая джоба (зеркалит Rust `scheduler::DeadJob`) — детали для модалки за «⚠ N». */
+export interface DeadJob {
+  id: number;
+  kind: string;
+  attempts: number;
+  lastError: string | null;
+  /** Когда перешла в dead (unix-секунды). */
+  updatedAt: number;
+}
+
 /** Найденное противоречие (зеркалит Rust `contradictions::Contradiction`). `ctype` — hard|soft|temporal. */
 export interface Contradiction {
   pathA: string;
@@ -633,6 +643,18 @@ export const tauriApi = {
      *  завершилась/упала без нового результата. Вне Tauri — `false`. */
     jobActive: (kind: string): Promise<boolean> =>
       isTauri() ? invoke<boolean>('job_active', { kind }) : Promise.resolve(false),
+
+    /** Детали dead-джоб (kind/ошибка/попытки/когда) — модалка за «⚠ N» в StatusBar. Вне Tauri — пусто. */
+    deadJobs: (): Promise<DeadJob[]> =>
+      isTauri() ? invoke<DeadJob[]>('get_dead_jobs') : Promise.resolve([]),
+
+    /** «Повторить» dead-джобу: pending с чистыми attempts. `false` — уже не dead (гонка), не ошибка. */
+    retryDead: (id: number): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('retry_dead_job', { id }) : Promise.resolve(false),
+
+    /** Удалить все dead-джобы («Очистить» в модалке). Возвращает число удалённых. */
+    clearDead: (): Promise<number> =>
+      isTauri() ? invoke<number>('clear_dead_jobs') : Promise.resolve(0),
   },
 
   contradictions: {
