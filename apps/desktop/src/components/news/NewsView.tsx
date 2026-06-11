@@ -82,6 +82,10 @@ export function NewsView() {
   } = useNewsStore();
   const [showErrors, setShowErrors] = useState(false);
   const [gearOpen, setGearOpen] = useState(false);
+  // Этапный прогресс прогона (фидбэк 11.06): «Опрашиваю источники 7/16» вместо немого «Собираю…».
+  const [runStage, setRunStage] = useState<{ stage: string; done: number; total: number } | null>(
+    null,
+  );
   // Доверенные хосты статей (per-host consent из ридера) — для управления в gear-меню.
   const [extraHosts, setExtraHosts] = useState<string[]>([]);
   const [offline, setOffline] = useState(false);
@@ -102,6 +106,16 @@ export function NewsView() {
     });
     return () => unlisten();
   }, [load]);
+
+  useEffect(() => {
+    let off = () => {};
+    void tauriApi.events
+      .onNewsProgress((p) => setRunStage(p.stage === 'save' ? null : p))
+      .then((fn) => {
+        off = fn;
+      });
+    return () => off();
+  }, []);
 
   // При открытии меню подтягиваем актуальный список доверенных хостов.
   useEffect(() => {
@@ -407,7 +421,15 @@ export function NewsView() {
           <div>
             <div className={`${styles.rubric} ${styles.gathering}`}>
               <RefreshCw size={14} aria-hidden />
-              <span>{t('news.gathering')}</span>
+              <span>
+                {runStage
+                  ? t(`news.stage.${runStage.stage}`, {
+                      done: runStage.done,
+                      total: runStage.total,
+                      defaultValue: t('news.gathering'),
+                    })
+                  : t('news.gathering')}
+              </span>
             </div>
             <Skeleton />
           </div>

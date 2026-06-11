@@ -70,6 +70,8 @@ describe('ChatView (Ф1-8)', () => {
     useWorkspaceStore.setState({ openFile });
 
     render(<ChatView />);
+    // Источники теперь свернуты компактной плашкой (Sonnet-style) — раскрываем.
+    fireEvent.click(screen.getByRole('button', { name: /Источники · 1|Sources · 1/ }));
     expect(screen.getByText('План здесь [1]')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Roadmap')); // DP-15/DP-12: источник — title без .md
     expect(openFile).toHaveBeenCalledWith('Projects/Roadmap.md');
@@ -180,11 +182,13 @@ describe('ChatView (Ф1-8)', () => {
     useChatStore.setState({ messages: msgs, streaming: false });
     usePrefsStore.setState({ ragSources: 'chips' });
     const { unmount } = render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: /Источники · 1|Sources · 1/ }));
     expect(screen.getByRole('button', { name: /1.*Roadmap/ })).toBeInTheDocument();
     unmount();
 
     usePrefsStore.setState({ ragSources: 'footnotes' });
     render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: /Источники · 1|Sources · 1/ }));
     expect(screen.getByText('[1]')).toBeInTheDocument(); // сноска `[N]`
     usePrefsStore.setState({ ragSources: 'cards' });
   });

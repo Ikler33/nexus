@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, FileText, Sparkles, Globe } from 'lucide-react';
+import { AlertTriangle, FileText, Sparkles, Globe, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { type ChatMessage, type ChatMode, type ChatSource, useChatStore } from '../../stores/chat';
 import { useUIStore } from '../../stores/ui';
@@ -190,7 +192,8 @@ export function ChatView() {
           </span>
         ) : (
           <span className={styles.footHint}>
-            <kbd className={styles.kbd}>↵</kbd> {t('chat.hintSend')}
+            <kbd className={styles.kbd}>Shift</kbd>+<kbd className={styles.kbd}>↵</kbd>{' '}
+            {t('chat.hintSend')}
           </span>
         )}
       </div>
@@ -262,6 +265,49 @@ function Sources({ sources, onOpen }: { sources: ChatSource[]; onOpen: (path: st
   );
 }
 
+/**
+ * Плавный вывод стрима (фидбэк 11.06, «айфон-стайл»): свежий чанк токенов появляется с лёгким
+ * fade/blur. Во время стрима — плейн-текст (markdown по живому дёргал бы вёрстку), по завершении
+ * Message переключается на markdown-рендер.
+ */
+function StreamingText({ text }: { text: string }) {
+  const seen = useRef(0);
+  const stable = text.slice(0, seen.current);
+  const fresh = text.slice(seen.current);
+  useEffect(() => {
+    seen.current = text.length;
+  });
+  return (
+    <>
+      {stable}
+      {fresh && (
+        <span key={text.length} className={styles.fresh}>
+          {fresh}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** Компактная плашка-аккордеон для источников (Sonnet-style, фидбэк 11.06): свернуто по умолчанию. */
+function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.srcBox}>
+      <button
+        type="button"
+        className={styles.srcToggle}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <ChevronRight size={13} className={`${styles.chev} ${open ? styles.chevOpen : ''}`} aria-hidden />
+        {label}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 // Дефолтная фраза «думания» до первой сводки CoT — честная по режиму и web-флагу (баг 2026-06-11:
 // в «Общем»/Web писало «Ищу по заметкам…», хотя ретрива по vault там нет).
 const THINKING_KEY: Record<ChatMode, string> = {
@@ -307,8 +353,17 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
         <>
           {message.content ? (
             <div className={styles.answer}>
-              {message.content}
-              {message.streaming && <span className={styles.caret} aria-hidden />}
+              {message.streaming ? (
+                <>
+                  <StreamingText text={message.content} />
+                  <span className={styles.caret} aria-hidden />
+                </>
+              ) : (
+                // LLM отвечает в markdown (фидбэк 11.06: «## выглядят не очень») → рендерим.
+                <div className={styles.md}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                </div>
+              )}
             </div>
           ) : (
             message.streaming && (
@@ -324,10 +379,14 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
             )
           )}
           {message.sources && message.sources.length > 0 && (
-            <Sources sources={message.sources} onOpen={onOpen} />
+            <Disclosure label={t('chat.sourcesToggle', { count: message.sources.length })}>
+              <Sources sources={message.sources} onOpen={onOpen} />
+            </Disclosure>
           )}
           {message.webSources && message.webSources.length > 0 && (
-            <WebSources sources={message.webSources} />
+            <Disclosure label={t('chat.webSourcesToggle', { count: message.webSources.length })}>
+              <WebSources sources={message.webSources} />
+            </Disclosure>
           )}
         </>
       )}

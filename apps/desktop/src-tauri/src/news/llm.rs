@@ -61,9 +61,11 @@ pub async fn evaluate_entries(
     entries: &[NewsEntry],
     lang_ru: bool,
     cancel: &Arc<AtomicBool>,
+    on_batch: &(dyn Fn(usize) + Send + Sync),
 ) -> EvalReport {
     let mut report = EvalReport::default();
     for batch in entries.chunks(LLM_BATCH) {
+        on_batch(batch.len());
         match eval_batch(chat, batch, lang_ru, cancel).await {
             Ok(part) => {
                 report.items.extend(part.items);
@@ -249,7 +251,7 @@ mod tests {
 ```"#;
         let chat = mock(reply);
         let entries = vec![entry("A"), entry("B"), entry("C")]; // i=2 модель «забыла»
-        let report = evaluate_entries(&chat, &entries, false, &cancel()).await;
+        let report = evaluate_entries(&chat, &entries, false, &cancel(), &|_| {}).await;
 
         assert_eq!(report.items.len(), 1);
         assert_eq!(report.items[0].title_ru, "Заголовок А");
@@ -267,13 +269,14 @@ mod tests {
             &[entry("A"), entry("B")],
             false,
             &cancel(),
+            &|_| {},
         )
         .await;
         assert!(report.items.is_empty());
         assert_eq!(report.failed, 2);
 
         let half = r#"[{"i":0,"relevant":true,"title_ru":"","summary_ru":"x","topic":"y"}]"#;
-        let report2 = evaluate_entries(&mock(half), &[entry("A")], false, &cancel()).await;
+        let report2 = evaluate_entries(&mock(half), &[entry("A")], false, &cancel(), &|_| {}).await;
         assert!(report2.items.is_empty());
         assert_eq!(report2.failed, 1, "relevant без title_ru — вне контракта");
     }
@@ -287,7 +290,7 @@ mod tests {
             prompts: Mutex::new(Vec::new()),
         });
         let provider: Arc<dyn ChatProvider> = chat.clone();
-        let _ = evaluate_entries(&provider, &[entry("Evil")], false, &cancel()).await;
+        let _ = evaluate_entries(&provider, &[entry("Evil")], false, &cancel(), &|_| {}).await;
 
         let prompts = chat.prompts.lock().unwrap();
         let (sys, user) = (&prompts[0][0].content, &prompts[0][1].content);
@@ -318,7 +321,7 @@ mod tests {
             prompts: Mutex::new(Vec::new()),
         });
         let provider: Arc<dyn ChatProvider> = chat.clone();
-        let _ = evaluate_entries(&provider, &[entry("Хабр")], true, &cancel()).await;
+        let _ = evaluate_entries(&provider, &[entry("Хабр")], true, &cancel(), &|_| {}).await;
         let prompts = chat.prompts.lock().unwrap();
         assert!(prompts[0][0].content.contains("уже на русском"));
     }
@@ -332,7 +335,7 @@ mod tests {
         });
         let provider: Arc<dyn ChatProvider> = chat.clone();
         let entries: Vec<NewsEntry> = (0..25).map(|i| entry(&format!("e{i}"))).collect();
-        let report = evaluate_entries(&provider, &entries, false, &cancel()).await;
+        let report = evaluate_entries(&provider, &entries, false, &cancel(), &|_| {}).await;
         assert_eq!(chat.prompts.lock().unwrap().len(), 3, "батчи по 10");
         assert_eq!(report.failed, 25);
     }

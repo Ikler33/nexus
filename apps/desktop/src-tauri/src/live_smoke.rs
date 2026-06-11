@@ -108,7 +108,7 @@ async fn live_news_eval_and_daily_digest() {
         },
     ];
 
-    let report = evaluate_entries(&chat, &entries, false, &cancel()).await;
+    let report = evaluate_entries(&chat, &entries, false, &cancel(), &|_| {}).await;
     println!(
         "news eval: items={} irrelevant={} failed={}",
         report.items.len(),
