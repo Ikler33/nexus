@@ -26,6 +26,13 @@ pub struct NewsConfig {
     /// Ключевые слова этапа 1 (D2). `None` → пресет (отличаем «не трогал» от «очистил сам»).
     #[serde(default)]
     pub keywords: Option<Vec<String>>,
+    /// Доп. хосты статей, разрешённые владельцем по клику из ридера (opt-in 2026-06-11): статья
+    /// агрегатора (HN и т.п.) может жить вне хостов источников — каждый хост разрешается ЯВНО и
+    /// по одному, хранится здесь (вне vault/git, как весь consent), снимается из gear-меню ленты.
+    /// Класс защиты НЕ ослабляется: web-класс по-прежнему режет приватные/LAN (+DNS-гард с пином),
+    /// капы/таймауты/маркеры те же — consent добавляет только ПУБЛИЧНЫЙ хост в "news"-скоуп.
+    #[serde(default)]
+    pub extra_hosts: Vec<String>,
 }
 
 impl NewsConfig {
@@ -114,6 +121,7 @@ mod tests {
             ..Default::default()
         };
         cfg.sources.insert("hn".into(), false);
+        cfg.extra_hosts = vec!["example.com".into()];
         save(&path, &cfg).unwrap();
         assert_eq!(load(&path), cfg);
 

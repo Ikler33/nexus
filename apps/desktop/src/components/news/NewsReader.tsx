@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { logUi } from '../../lib/debug-log';
 import { tauriApi, type NewsArticle, type NewsItem } from '../../lib/tauri-api';
 import styles from './NewsView.module.css';
 
@@ -43,6 +44,9 @@ export function NewsReader(props: {
   const { t, i18n } = useTranslation();
   const [article, setArticle] = useState<ArticleState>('loading');
   const [summary, setSummary] = useState<'thinking' | string[] | null>(null);
+  // Инкремент = повторная загрузка статьи (после «Разрешить хост», per-host consent NF-6-rev).
+  const [reloadTick, setReloadTick] = useState(0);
+  const [allowBusy, setAllowBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -59,7 +63,27 @@ export function NewsReader(props: {
     return () => {
       alive = false;
     };
-  }, [item.id]);
+  }, [item.id, reloadTick]);
+
+  // Хост статьи — для per-host consent в denied-состоянии (показываем, ЧТО именно разрешаем).
+  const articleHost = (() => {
+    try {
+      return new URL(item.url).hostname;
+    } catch {
+      return null;
+    }
+  })();
+
+  const allowHost = () => {
+    if (!articleHost || allowBusy) return;
+    setAllowBusy(true);
+    logUi('news:allow-host', articleHost);
+    tauriApi.news
+      .allowHost(articleHost)
+      .then(() => setReloadTick((n) => n + 1))
+      .catch((e: unknown) => setArticle({ status: 'error', message: String(e) }))
+      .finally(() => setAllowBusy(false));
+  };
 
   // Esc возвращает в ленту (как выход из оверлеев).
   useEffect(() => {
@@ -180,7 +204,24 @@ export function NewsReader(props: {
         {denied && (
           <div className={styles.offlineBanner}>
             <AlertTriangle size={15} aria-hidden />
-            {t('news.reader.denied', { message: denied.message })}
+            <div className={styles.deniedBody}>
+              {t('news.reader.denied', { message: denied.message })}
+              {articleHost && (
+                <div className={styles.allowRow}>
+                  <button
+                    type="button"
+                    className={styles.allowBtn}
+                    onClick={allowHost}
+                    disabled={allowBusy}
+                  >
+                    {allowBusy
+                      ? t('news.reader.allowing')
+                      : t('news.reader.allowHost', { host: articleHost })}
+                  </button>
+                  <span className={styles.allowHint}>{t('news.reader.allowHint')}</span>
+                </div>
+              )}
+            </div>
           </div>
         )}
         {ready?.paras.map((p) => (
