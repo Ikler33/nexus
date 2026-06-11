@@ -85,7 +85,43 @@ export const useNewsStore = create<NewsState>((set, get) => ({
     try {
       await tauriApi.news.refresh();
       // Вне Tauri событий `jobs:changed` нет — мок «завершает прогон» отложенным refetch'ом.
-      if (!isTauri()) setTimeout(() => void get().load(), 1500);
+      if (!isTauri()) {
+        setTimeout(() => void get().load(), 1500);
+        return;
+      }
+      // Вотчдог «Собираю…» (инцидент 2026-06-12: воркер планировщика умер → джоба стояла
+      // pending вечно, спиннер крутился часами). Поллим очередь: завершилась → refetch;
+      // pending дольше минуты без запуска → планировщик мёртв, честная ошибка 'stalled';
+      // running дольше потолка → тоже 'stalled' (вотчдог тика на бэке оборвёт сам тик).
+      const startedAt = Date.now();
+      const RUNNING_CAP_MS = 20 * 60_000;
+      const tick = async () => {
+        if (!get().refreshing) return; // load() уже снял спиннер
+        let jobs;
+        try {
+          jobs = await tauriApi.scheduler.activeJobs();
+        } catch {
+          setTimeout(() => void tick(), 5000);
+          return;
+        }
+        const nf = jobs.find((j) => j.kind === 'newsfeed');
+        if (!nf) {
+          // Джобы нет → прогон завершился (или умер в dead — load покажет состояние/ошибки).
+          void get().load();
+          return;
+        }
+        const readyAgoMs = Date.now() - nf.runAt * 1000;
+        if (nf.state === 'pending' && readyAgoMs > 60_000) {
+          set({ refreshing: false, error: 'stalled' });
+          return;
+        }
+        if (Date.now() - startedAt > RUNNING_CAP_MS) {
+          set({ refreshing: false, error: 'stalled' });
+          return;
+        }
+        setTimeout(() => void tick(), 5000);
+      };
+      setTimeout(() => void tick(), 5000);
     } catch (e) {
       set({ refreshing: false, error: String(e) });
     }
