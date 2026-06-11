@@ -107,7 +107,8 @@ pub const SOURCES_V1: &[Source] = &[
     Source {
         id: "google-ai",
         title: "Google AI",
-        url: "https://blog.google/technology/ai/rss/",
+        // 301 с 2026-06: фид переехал (редиректы у GuardedClient отключены, AC-EGR-7 — URL держим конечным).
+        url: "https://blog.google/innovation-and-ai/technology/ai/rss/",
         kind: FeedKind::Rss,
         high_volume: false,
         default_enabled: true,
@@ -224,7 +225,8 @@ pub const SOURCES_V1: &[Source] = &[
     Source {
         id: "habr-ai",
         title: "Хабр · Искусственный интеллект",
-        url: "https://habr.com/ru/rss/hub/artificial_intelligence/all/",
+        // 301 с 2026-06: hub→hubs + /articles/all/ (конечный адрес, см. комментарий google-ai).
+        url: "https://habr.com/ru/rss/hubs/artificial_intelligence/articles/all/",
         kind: FeedKind::Rss,
         high_volume: true,
         default_enabled: true,
