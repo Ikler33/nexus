@@ -258,6 +258,45 @@ pub async fn list_dead(reader: &ReadPool) -> DbResult<Vec<DeadJob>> {
         .await
 }
 
+/// Активная джоба для модалки очереди («N задач» в статусбаре кликабелен, 2026-06-11): что
+/// выполняется и что ждёт. `run_at` — когда джоба готова (для pending в будущем — «через N мин»).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveJob {
+    pub id: i64,
+    pub kind: String,
+    pub state: String,
+    pub run_at: i64,
+    pub attempts: i64,
+}
+
+/// Активные джобы (`running` сверху, затем `pending` по готовности) — модалка очереди.
+pub async fn list_active(reader: &ReadPool) -> DbResult<Vec<ActiveJob>> {
+    reader
+        .query(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id,kind,state,run_at,attempts FROM jobs \
+                 WHERE state IN ('running','pending') \
+                 ORDER BY CASE state WHEN 'running' THEN 0 ELSE 1 END, run_at, id",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok(ActiveJob {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    state: r.get(2)?,
+                    run_at: r.get(3)?,
+                    attempts: r.get(4)?,
+                })
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
 /// Ручной перезапуск dead-джобы («Повторить» в модалке): `dead → pending`, `attempts=0` (ретраи с
 /// чистого листа — пользователь обычно жмёт ПОСЛЕ исправления причины, напр. URL модели), `run_at=now`.
 /// Не-dead id (гонка/повторный клик) — no-op, возвращает `false`.
@@ -1021,6 +1060,26 @@ mod tests {
         assert_eq!(clear_dead(w).await.unwrap(), 1);
         assert!(list_dead(db.reader()).await.unwrap().is_empty());
         assert_eq!(counts(db.reader()).await.unwrap().dead, 0);
+    }
+
+    /// list_active: running сверху, pending по готовности (модалка очереди за «N задач»).
+    #[tokio::test]
+    async fn active_jobs_listed_running_first() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        enqueue(w, "later", "", 5000, 3).await.unwrap();
+        enqueue(w, "soon", "", 10, 3).await.unwrap();
+        let r = enqueue(w, "busy", "", 0, 3).await.unwrap();
+        claim_next(w, 1).await.unwrap().unwrap(); // busy → running
+
+        let active = list_active(db.reader()).await.unwrap();
+        assert_eq!(
+            active.iter().map(|j| j.kind.as_str()).collect::<Vec<_>>(),
+            vec!["busy", "soon", "later"],
+            "running сверху, дальше pending по run_at"
+        );
+        assert_eq!(active[0].id, r);
+        assert_eq!(active[0].state, "running");
     }
 
     /// slice 7: пустой vault → mtime 0.

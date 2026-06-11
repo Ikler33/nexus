@@ -35,6 +35,18 @@
   color: var(--color-accent);
   animation: statusbar-jobs-pulse 1.2s ease-in-out infinite;
 }
+/* «N задач» — кнопка (клик → модалка очереди: что выполняется/ждёт), не пассивный индикатор. */
+.jobsBtn {
+  border: none;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.jobsBtn:hover {
+  text-decoration: underline;
+}
+
 /* «⚠ N» — кнопка (клик → модалка деталей dead-джоб), не пассивный бейдж. */
 .jobsDead {
   color: var(--color-danger, oklch(0.6 0.2 25));

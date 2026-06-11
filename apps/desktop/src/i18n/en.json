@@ -494,9 +494,9 @@
     "indexing": "Indexing {{done}}/{{total}}"
   },
   "deadJobs": {
-    "title": "Background task errors",
+    "title": "Background tasks",
     "hint": "These tasks ran out of retries. Fix the cause (usually the model URL in Settings → AI / Models) and hit “Retry”, or clear the list.",
-    "empty": "No errors — all background tasks are running normally.",
+    "empty": "Empty: queue is clear, no errors.",
     "attempts_one": "{{count}} attempt",
     "attempts_other": "{{count}} attempts",
     "retry": "Retry",
@@ -509,7 +509,12 @@
       "newsfeed": "News feed",
       "gc": "Queue cleanup",
       "homeWidget": "Home widget"
-    }
+    },
+    "queue": "Queue",
+    "running": "running…",
+    "queued": "waiting to start",
+    "scheduled": "in {{m}} min",
+    "errorsSection": "Errors"
   },
   "plugins": {
     "title": "Plugins",

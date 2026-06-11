@@ -4,7 +4,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::scheduler::{self, DeadJob, JobCounts};
+use crate::scheduler::{self, ActiveJob, DeadJob, JobCounts};
 use crate::state::AppState;
 
 /// Счётчики джоб (pending/running/dead) для индикатора в StatusBar. Без открытого vault — нули
@@ -47,6 +47,19 @@ pub async fn get_dead_jobs(state: State<'_, AppState>) -> AppResult<Vec<DeadJob>
         }
     };
     Ok(scheduler::list_dead(&reader).await?)
+}
+
+/// Активные джобы (running/pending) — модалка очереди за «N задач» в статусбаре. Без vault — пусто.
+#[tauri::command]
+pub async fn get_active_jobs(state: State<'_, AppState>) -> AppResult<Vec<ActiveJob>> {
+    let reader = {
+        let g = state.vault.read().await;
+        match g.as_ref() {
+            Some(ctx) => ctx.db.reader().clone(),
+            None => return Ok(Vec::new()),
+        }
+    };
+    Ok(scheduler::list_active(&reader).await?)
 }
 
 /// «Повторить» из модалки: dead → pending с чистыми attempts (жмут после исправления причины —
