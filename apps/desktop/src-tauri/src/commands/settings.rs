@@ -191,13 +191,12 @@ pub async fn set_ai_config(
             let guarded =
                 GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
                     .map_err(AiError::from)?;
-            Some(Arc::new(OpenAiChatProvider::new(
-                &guarded,
-                EgressFeature::Chat,
-                url,
-                &model,
-                None,
-            )))
+            // R2 как в open_vault (`build_util_chat`): примитивам CoT не нужен, а на ai.fast может
+            // жить reasoning-модель (баг 2026-06-11: gemma12 думала ~40 с над 6-словной сводкой R1).
+            Some(Arc::new(
+                OpenAiChatProvider::new(&guarded, EgressFeature::Chat, url, &model, None)
+                    .without_reasoning(),
+            ))
         }
         None => None,
     };
@@ -209,13 +208,12 @@ pub async fn set_ai_config(
             let guarded =
                 GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
                     .map_err(AiError::from)?;
-            Some(Arc::new(OpenAiChatProvider::new(
-                &guarded,
-                EgressFeature::Chat,
-                &c.url,
-                &model,
-                None,
-            )))
+            // Хот-апплай #153 забыл R2: после сохранения настроек дайджест становился «думающим»
+            // до переоткрытия vault. Теперь зеркалит `build_chat`.
+            Some(Arc::new(
+                OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &c.url, &model, None)
+                    .without_reasoning(),
+            ))
         }
         None => None,
     };

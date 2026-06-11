@@ -428,9 +428,12 @@ async fn build_chat(
     Some((Arc::new(normal), Arc::new(fast)))
 }
 
-/// Утилитарная chat-модель из `ai.fast` (мелкая non-reasoning, напр. Qwen3-4B :8084). `None` — секции
-/// нет / guarded-клиент не построился → вызывающий делает fallback на gemma-fast. Plain-провайдер (без
-/// `enable_thinking` — модель не reasoning, лишний kwarg ей не нужен).
+/// Утилитарная chat-модель из `ai.fast` (мелкая, для примитивов: inline/судья/сводка reasoning).
+/// `None` — секции нет / guarded-клиент не построился → вызывающий делает fallback на gemma-fast.
+/// ВСЕГДА `without_reasoning()`: примитивам CoT не нужен по определению, а на `ai.fast` может жить
+/// reasoning-модель — баг 2026-06-11: gemma12 на :8084 думала ~40 с над 6-словной сводкой R1, и
+/// «стрим размышлений» молчал весь ответ (с Qwen3 это занимало ~1 с). Для non-thinking шаблонов
+/// лишний kwarg безвреден (jinja игнорирует неизвестную переменную).
 fn build_util_chat(
     cfg: &LocalConfig,
     policy: &Arc<EgressPolicy>,
@@ -443,7 +446,8 @@ fn build_util_chat(
             |e| tracing::warn!(error = %e, "ai.fast: провайдер не создан — fallback на gemma-fast"),
         )
         .ok()?;
-    let provider = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &fast.url, &model, None);
+    let provider = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &fast.url, &model, None)
+        .without_reasoning();
     tracing::info!(model = %model, url = %fast.url, "ai.fast (утилитарная модель) включена");
     Some(Arc::new(provider))
 }
