@@ -314,6 +314,31 @@ async fn indexes_and_replaces_frontmatter_fields() {
 // ── RAG (Ф1-5): чанки + эмбеддинги + usearch ──────────────────────────────────────────────
 
 use crate::ai::MockEmbedder;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+/// Эмбеддер-счётчик ВЫЗОВОВ (не текстов): cross-file батчинг должен схлопывать группу файлов в
+/// число сетевых вызовов = числу батчей, а не файлов (perf.md; бенч 1 чанк/файл = 1 вызов/файл).
+struct CountingEmbedder {
+    calls: std::sync::Arc<AtomicUsize>,
+    dim: usize,
+}
+#[async_trait::async_trait]
+impl crate::ai::EmbeddingProvider for CountingEmbedder {
+    async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
+        self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+        let mock = MockEmbedder { dim: self.dim };
+        mock.embed_documents(texts).await
+    }
+    async fn embed_query(&self, text: &str) -> crate::ai::AiResult<Vec<f32>> {
+        MockEmbedder { dim: self.dim }.embed_query(text).await
+    }
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn model_id(&self) -> &str {
+        "counting-mock"
+    }
+}
 
 /// Индексатор с RAG поверх детерминированного мок-эмбеддера и собственного usearch-файла.
 fn rag_indexer(db: &Database, root: &Path, dim: usize, force: bool) -> (Indexer, Arc<VectorIndex>) {
@@ -683,4 +708,41 @@ async fn scan_progress_hook_reports_start_and_finish() {
     assert_eq!(calls.last(), Some(&(5, 5)), "финиш — (total, total)");
     assert!(calls.iter().all(|&(d, t)| d <= t && t == 5));
     assert!(calls.windows(2).all(|w| w[0].0 <= w[1].0), "done монотонен");
+}
+
+/// Cross-file батчинг (perf.md): на скане группа маленьких файлов уходит эмбеддеру ОДНИМ батчем
+/// (префилл), а не вызовом на каждый файл. 6 файлов × 1 чанк → 1 сетевой вызов (≤2 со страховкой),
+/// раньше было 6.
+#[tokio::test]
+async fn scan_batches_chunks_across_files() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    for i in 0..6 {
+        std::fs::write(
+            root.join(format!("n{i}.md")),
+            format!("# Note {i}\n\nКороткая заметка номер {i} про батчинг эмбеддингов."),
+        )
+        .unwrap();
+    }
+    let db = crate::db::Database::open(root.join(".nexus/nexus.db"))
+        .await
+        .unwrap();
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let embedder: std::sync::Arc<dyn crate::ai::EmbeddingProvider> =
+        std::sync::Arc::new(CountingEmbedder {
+            calls: calls.clone(),
+            dim: 16,
+        });
+    let vectors = std::sync::Arc::new(
+        crate::vector::VectorIndex::open(root.join(".nexus/vectors.usearch"), 16).unwrap(),
+    );
+    let idx = Indexer::with_rag(&db, root.clone(), embedder, vectors.clone(), true);
+    idx.scan_vault().await.unwrap();
+
+    assert!(vectors.len() >= 6, "все чанки получили векторы");
+    let n = calls.load(AtomicOrdering::SeqCst);
+    assert!(
+        n <= 2,
+        "группа из 6 файлов должна уйти 1 батчем префилла (+страховка), а не {n} вызовами"
+    );
 }
