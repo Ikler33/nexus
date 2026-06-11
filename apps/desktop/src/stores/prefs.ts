@@ -86,6 +86,7 @@ function readRagSources(): RagSources {
 
 /** LLM-реранжирование RAG-источников (search::rerank, default ВКЛ — eval: nDCG .883→1.0). */
 const AI_RERANK_KEY = 'nexus.ai.rerank';
+const AI_CHAT_MEMORY_KEY = 'nexus.ai.chatMemory';
 
 function readBoolDefaultTrue(key: string): boolean {
   try {
@@ -131,6 +132,8 @@ interface PrefsState {
   ragSources: RagSources;
   /** LLM-реранжирование источников чата (точнее порядок, +~2 с на вопрос). */
   aiRerank: boolean;
+  /** Память переписки (N4b): подмешивать релевантные фрагменты прошлых диалогов в контекст. ВКЛ. */
+  aiChatMemory: boolean;
   /** Ширина side-AI-панели, px (драг кромки). */
   aiPanelW: number;
   /** Высота bottom-AI-панели, px (драг кромки). */
@@ -141,6 +144,7 @@ interface PrefsState {
   setAiLayout: (layout: AiLayout) => void;
   setRagSources: (style: RagSources) => void;
   setAiRerank: (on: boolean) => void;
+  setAiChatMemory: (on: boolean) => void;
   setAiPanelW: (w: number) => void;
   setAiPanelH: (h: number) => void;
 }
@@ -152,6 +156,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   aiLayout: readAiLayout(),
   ragSources: readRagSources(),
   aiRerank: readBoolDefaultTrue(AI_RERANK_KEY),
+  aiChatMemory: readBoolDefaultTrue(AI_CHAT_MEMORY_KEY),
   aiPanelW: readNum(AI_W_KEY, AI_PANEL_W.def, AI_PANEL_W.min, AI_PANEL_W.max),
   aiPanelH: readNum(AI_H_KEY, AI_PANEL_H.def, AI_PANEL_H.min, AI_PANEL_H.max),
   setReadableLineWidth: (on) =>
@@ -203,6 +208,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       /* ignore */
     }
     set({ aiRerank: on });
+  },
+  setAiChatMemory: (on) => {
+    try {
+      localStorage.setItem(AI_CHAT_MEMORY_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ aiChatMemory: on });
   },
   setAiPanelW: (w) => {
     const v = Math.round(Math.min(AI_PANEL_W.max, Math.max(AI_PANEL_W.min, w)));
