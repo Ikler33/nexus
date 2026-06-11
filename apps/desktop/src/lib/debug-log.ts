@@ -19,7 +19,10 @@ export function logUi(event: string, detail?: string): void {
 export function installErrorLog(): void {
   if (!isTauri()) return;
   window.addEventListener('error', (e) => {
-    logUi('js-error', String(e.error?.stack ?? e.message).slice(0, 600));
+    const msg = String(e.error?.stack ?? e.message);
+    // Браузерный шум, не ошибка приложения (Chrome/WebKit кидают при «опоздавших» нотификациях).
+    if (msg.includes('ResizeObserver loop')) return;
+    logUi('js-error', msg.slice(0, 600));
   });
   window.addEventListener('unhandledrejection', (e) => {
     logUi('js-unhandled-rejection', String(e.reason?.stack ?? e.reason).slice(0, 600));

@@ -209,6 +209,18 @@ pub async fn open_vault(
                 writer: db.writer().clone(),
                 reader: db.reader().clone(),
                 config_path: config_path.clone(),
+                progress: {
+                    // Этапы прогона → UI (фидбэк 11.06: живой статус «Опрашиваю источники 7/16»
+                    // вместо немого «Собираю…»). Best-effort, как jobs:changed.
+                    let app = app.clone();
+                    Arc::new(move |stage: &str, done: usize, total: usize| {
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "news:progress",
+                            serde_json::json!({ "stage": stage, "done": done, "total": total }),
+                        );
+                    })
+                },
             });
         registry.insert(crate::news::KIND_NEWSFEED.to_string(), handler);
         true

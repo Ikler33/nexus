@@ -531,7 +531,7 @@ function WebSearchBlock() {
       <h2 className={styles.h2}>{t('settings.web.title')}</h2>
       <p className={styles.hint}>{t('settings.web.intro')}</p>
       <section className={styles.group}>
-        <label className={styles.field}>
+        <label className={`${styles.field} ${styles.fieldWide}`}>
           <span>{t('settings.web.url')}</span>
           <input
             value={url}

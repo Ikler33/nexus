@@ -33,7 +33,15 @@ pub trait FeedFetcher: Send + Sync {
     async fn fetch(&self, url: &str) -> Result<String, String>;
 }
 
+/// Колбэк этапного прогресса прогона (фидбэк владельца 11.06: «что сейчас происходит с лентой»):
+/// `(этап, готово, всего)`; этапы: `sources` → `llm` → `digest` → `save`. Хендлер шлёт их
+/// tauri-событием `news:progress`, UI показывает живой статус вместо немого «Собираю…».
+pub type NewsProgress = dyn Fn(&str, usize, usize) + Send + Sync;
+
 /// Полный прогон ленты. Вызывающий гарантирует `cfg.enabled` (хендлер гейтит до вызова).
+/// 8 аргументов: пайплайн собирает независимые зависимости (фетчер/LLM/БД/конфиг/время/отмена/
+/// прогресс) — группировка в структуру дала бы один одноразовый тип без выигрыша в ясности.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_news_pipeline(
     fetcher: &dyn FeedFetcher,
     chat: &Arc<dyn ChatProvider>,
@@ -42,6 +50,7 @@ pub async fn run_news_pipeline(
     cfg: &NewsConfig,
     now: i64,
     cancel: &Arc<AtomicBool>,
+    progress: &NewsProgress,
 ) -> DbResult<NewsRun> {
     let sources = cfg.active_sources();
     let keywords = cfg.effective_keywords();
@@ -50,7 +59,9 @@ pub async fn run_news_pipeline(
     // (запись, lang_ru источника) — язык нужен LLM-этапу (D1: RU не «переводим»).
     let mut entries: Vec<(NewsEntry, bool)> = Vec::new();
 
-    for s in &sources {
+    let total_sources = sources.len();
+    for (i, s) in sources.iter().enumerate() {
+        progress("sources", i, total_sources);
         match fetch_source(fetcher, s, &keywords).await {
             Ok(parsed) => {
                 sources_ok += 1;
@@ -77,6 +88,9 @@ pub async fn run_news_pipeline(
     }
 
     // LLM-этап двумя языковыми группами (инструкция различается, D1).
+    let total_entries = entries.len();
+    let llm_done = std::sync::atomic::AtomicUsize::new(0);
+    progress("llm", 0, total_entries);
     let mut llm_failed = 0i64;
     let mut rows: Vec<NewRow> = Vec::new();
     for lang_ru in [false, true] {
@@ -88,7 +102,12 @@ pub async fn run_news_pipeline(
         if group.is_empty() {
             continue;
         }
-        let report = evaluate_entries(chat, &group, lang_ru, cancel).await;
+        let report = evaluate_entries(chat, &group, lang_ru, cancel, &|batch_done| {
+            let done =
+                llm_done.fetch_add(batch_done, std::sync::atomic::Ordering::Relaxed) + batch_done;
+            progress("llm", done.min(total_entries), total_entries);
+        })
+        .await;
         llm_failed += report.failed as i64;
         rows.extend(report.items.into_iter().map(|ev| NewRow {
             source_id: ev.entry.source_id.clone(),
@@ -102,6 +121,7 @@ pub async fn run_news_pipeline(
         }));
     }
 
+    progress("digest", 0, 1);
     // Сводка дня — по тому, что реально нового (пусто → '' , UI покажет «нет новостей»).
     let evaluated_for_digest: Vec<super::EvaluatedEntry> = rows
         .iter()
@@ -208,6 +228,8 @@ pub struct NewsFeedHandler {
     pub reader: ReadPool,
     /// Путь `news.json` (OS config-dir; резолвится в open_vault — у хендлера нет AppHandle).
     pub config_path: std::path::PathBuf,
+    /// Сток этапного прогресса (`news:progress` для UI); тестам — no-op.
+    pub progress: Arc<NewsProgress>,
 }
 
 #[async_trait]
@@ -227,9 +249,11 @@ impl JobHandler for NewsFeedHandler {
             &cfg,
             crate::scheduler::now_secs(),
             &cancel,
+            &*self.progress,
         )
         .await
         .map_err(|e| e.to_string())?;
+        (self.progress)("save", 1, 1);
         tracing::info!(
             new = run.items_new,
             sources = format!("{}/{}", run.sources_ok, run.sources_total),
@@ -352,6 +376,7 @@ mod tests {
             &cfg,
             1_800_000_000,
             &cancel,
+            &|_, _, _| {},
         )
         .await
         .unwrap();
@@ -378,6 +403,7 @@ mod tests {
             &cfg,
             1_800_000_100,
             &cancel,
+            &|_, _, _| {},
         )
         .await
         .unwrap();
@@ -415,6 +441,7 @@ mod tests {
             writer: db.writer().clone(),
             reader: db.reader().clone(),
             config_path,
+            progress: Arc::new(|_, _, _| {}),
         };
         let job = Job {
             id: 1,
@@ -470,6 +497,7 @@ mod tests {
             &cfg,
             1_800_000_000,
             &cancel,
+            &|_, _, _| {},
         )
         .await
         .unwrap();

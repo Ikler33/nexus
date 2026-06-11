@@ -227,6 +227,13 @@
   gap: var(--space-3);
   margin-bottom: var(--space-2);
 }
+/* Поле-в-flex-группе (web-секция): без flex:1 грид-колонка 1fr схлопывалась до ~36px
+   (отчёт владельца: «очень маленькое поле для ввода урлы»). */
+.fieldWide {
+  flex: 1;
+  min-width: 300px;
+}
+
 .field span {
   font-size: var(--text-sm);
   color: var(--color-text-muted);

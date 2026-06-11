@@ -184,6 +184,11 @@
 }
 
 .user {
+  /* Типографика как у ответа (.answer) — вопрос и ответ читались разным кеглем (фидбэк 11.06). */
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   align-self: flex-end;
   max-width: 92%;
   padding: 9px 12px;
@@ -192,10 +197,6 @@
   background: var(--color-accent-soft);
   border: 1px solid var(--color-border);
   color: var(--color-text);
-  font-size: var(--text-md);
-  line-height: var(--leading-normal);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .assistant {
@@ -209,9 +210,13 @@
 .answer {
   font-size: var(--text-sm);
   line-height: 1.55;
+  /* pre-wrap — только пока стримим плейн-текст; в md-рендере переносы делает разметка. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--color-text);
+}
+.answer .md {
+  white-space: normal;
 }
 
 .error {
@@ -667,4 +672,138 @@
 }
 .bannerAct:hover {
   background: var(--color-surface-hover);
+}
+
+/* Плавный вывод стрима («айфон-стайл», фидбэк 11.06): свежий чанк проявляется мягко. */
+.fresh {
+  animation: chunk-in 240ms var(--ease-out, ease-out);
+}
+@keyframes chunk-in {
+  from {
+    opacity: 0;
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fresh {
+    animation: none;
+  }
+}
+
+/* Markdown-типографика ответа (LLM пишет md; сырые ## выглядели плохо — фидбэк 11.06). */
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md p {
+  margin: 0 0 8px;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 12px 0 6px;
+  font-weight: 700;
+  color: var(--color-text);
+  line-height: 1.3;
+}
+.md h1 {
+  font-size: 1.1em;
+}
+.md h2 {
+  font-size: 1.05em;
+}
+.md h3,
+.md h4 {
+  font-size: 1em;
+}
+.md ul,
+.md ol {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.md li > p {
+  margin: 0;
+}
+.md code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.md pre {
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.md pre code {
+  border: none;
+  background: none;
+  padding: 0;
+}
+.md blockquote {
+  margin: 6px 0;
+  padding: 2px 12px;
+  border-left: 2px solid var(--color-accent);
+  color: var(--color-text-muted);
+}
+.md a {
+  color: var(--color-accent);
+}
+.md table {
+  border-collapse: collapse;
+  margin: 6px 0 10px;
+  font-size: 0.95em;
+}
+.md th,
+.md td {
+  border: 1px solid var(--color-border);
+  padding: 4px 8px;
+}
+.md hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 10px 0;
+}
+
+/* Аккордеон источников (Sonnet-style, фидбэк 11.06): компактная плашка, раскрытие по клику. */
+.srcBox {
+  margin-top: 8px;
+}
+.srcToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.srcToggle:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+.chev {
+  transition: transform 160ms var(--ease-out, ease-out);
+}
+.chevOpen {
+  transform: rotate(90deg);
 }

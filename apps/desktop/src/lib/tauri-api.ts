@@ -694,6 +694,16 @@ export const tauriApi = {
      * Подписка на событие «индекс vault обновлён» (backend `emit("vault:changed")` после реиндекса —
      * ADR-007 S8 event-канал). Возвращает функцию отписки. Вне Tauri — no-op (мок-бэкенд не индексирует).
      */
+    /** Этапный прогресс прогона ленты (`news:progress`): sources → llm → digest → save. */
+    onNewsProgress: async (
+      cb: (p: { stage: string; done: number; total: number }) => void,
+    ): Promise<() => void> => {
+      if (!isTauri()) return () => {};
+      return listen('news:progress', (e) =>
+        cb(e.payload as { stage: string; done: number; total: number }),
+      );
+    },
+
     onVaultChanged: async (cb: () => void): Promise<() => void> => {
       if (!isTauri()) return () => {};
       return listen('vault:changed', () => cb());

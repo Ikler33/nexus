@@ -342,7 +342,7 @@
     "ask1": "How does RAG work in Nexus?",
     "ask2": "What are embeddings?",
     "ask3": "Explain local-first",
-    "hintSend": "to send",
+    "hintSend": "new line",
     "sources": "Sources",
     "clear": "Clear chat",
     "close": "Close panel",
@@ -366,7 +366,9 @@
     "modeWeb": "Web",
     "modeWebHint": "Web agent: the model searches the internet via your SearXNG and answers with sources.",
     "webSources": "Web sources",
-    "resize": "Drag to resize the panel"
+    "resize": "Drag to resize the panel",
+    "sourcesToggle": "Sources · {{count}}",
+    "webSourcesToggle": "Web sources · {{count}}"
   },
   "suggest": {
     "title": "Suggested links",
@@ -476,7 +478,12 @@
     "pageSettings": "Page settings",
     "disable": "Disable feed",
     "trustedHosts": "Trusted article hosts",
-    "dropHost": "Remove {{host}}"
+    "dropHost": "Remove {{host}}",
+    "stage": {
+      "sources": "Polling sources · {{done}}/{{total}}",
+      "llm": "Analyzing entries · {{done}}/{{total}}",
+      "digest": "Writing the daily digest…"
+    }
   },
   "inline": {
     "continue": "Continue",
