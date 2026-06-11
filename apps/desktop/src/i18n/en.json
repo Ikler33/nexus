@@ -139,7 +139,9 @@
       "saved": "Saved. Chat applied.",
       "restart": "Saved. Restart the app — embedding changed (re-indexing needed).",
       "fastTitle": "Fast model (primitives)",
-      "fastDesc": "A small model for short tasks: inline generation, contradiction judge, reasoning summary, news. Empty → the chat model is used."
+      "fastDesc": "A small model for short tasks: inline generation, contradiction judge, reasoning summary, news. Empty → the chat model is used.",
+      "rerank": "Source reranking (LLM)",
+      "rerankDesc": "The fast model reorders retrieved fragments before answering: sharper citations, +~2 s per question. Golden-set: nDCG 0.88 → 1.00."
     },
     "egress": {
       "title": "Network (egress)",

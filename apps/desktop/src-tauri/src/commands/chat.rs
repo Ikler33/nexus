@@ -88,9 +88,13 @@ pub async fn chat_rag(
     center: Option<String>,
     grounded: Option<bool>,
     web: Option<bool>,
+    rerank: Option<bool>,
 ) -> AppResult<()> {
     let grounded = grounded.unwrap_or(true);
     let web = web.unwrap_or(false);
+    // LLM-реранк источников (search::rerank, eval-гейт пройден): по умолчанию ВКЛ при наличии
+    // утилитарной модели; тумблер — в настройках AI фронта.
+    let rerank = rerank.unwrap_or(true);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
     let (reader, vectors, embedder, chat, chat_util) = {
         let ctx = state.vault().await?;
@@ -164,13 +168,20 @@ pub async fn chat_rag(
         m
     } else if grounded {
         let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
+        // Реранк активен при включённом флаге И доступной мелкой модели: ретрив глубже (топ-24),
+        // LLM переупорядочивает, дальше берём k. Гейт: nDCG .883→1.0, MRR .848→1.0 на golden.
+        let do_rerank = rerank && chat_util.is_some();
         // 1) Retrieve: гибридный поиск (с граф-рангом от открытого файла, если задан) → источники.
         let opts = SearchOptions {
-            limit: k,
+            limit: if do_rerank {
+                search::rerank::RERANK_RETRIEVE
+            } else {
+                k
+            },
             filter: None,
             center,
         };
-        let hits = match search::hybrid_search(
+        let mut hits = match search::hybrid_search(
             &reader,
             vectors.as_deref(),
             embedder.as_deref(),
@@ -188,6 +199,12 @@ pub async fn chat_rag(
                 return Ok(());
             }
         };
+        if do_rerank {
+            let util = chat_util.as_ref().expect("do_rerank ⇒ util");
+            let rerank_cancel = std::sync::Arc::new(AtomicBool::new(false));
+            hits = search::rerank::llm_rerank(util.as_ref(), &question, hits, &rerank_cancel).await;
+            hits.truncate(k);
+        }
         let _ = channel.send(ChatStreamEvent::Sources {
             sources: hits.clone(),
         });

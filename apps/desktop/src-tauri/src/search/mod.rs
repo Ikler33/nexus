@@ -7,6 +7,8 @@
 //! (usearch `filtered_search`, AC-Б6-2). Перекрывающиеся соседние чанки одного файла дедуплицируются.
 //! Деградация изящная: нет эмбеддера → FTS(+граф); нет центра → без граф-ранга; всё пусто → пусто.
 
+pub mod rerank;
+
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::OptionalExtension;

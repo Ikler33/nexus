@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { logUi } from '../lib/debug-log';
+import { usePrefsStore } from './prefs';
 
 import type { ChatStreamEvent, EgressDeniedKind, SearchHit, WebSource } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
@@ -215,6 +216,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         center,
         grounded: mode === 'vault',
         web,
+        rerank: usePrefsStore.getState().aiRerank,
       });
     },
 

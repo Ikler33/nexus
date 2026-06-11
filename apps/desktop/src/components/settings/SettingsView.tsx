@@ -376,6 +376,8 @@ type TestState = { status: 'idle' | 'testing' | 'ok' | 'fail'; msg?: string };
  */
 function AiSection() {
   const { t } = useTranslation();
+  const aiRerank = usePrefsStore((s) => s.aiRerank);
+  const setAiRerank = usePrefsStore((s) => s.setAiRerank);
   const [chatUrl, setChatUrl] = useState('');
   const [chatModel, setChatModel] = useState('');
   const [embUrl, setEmbUrl] = useState('');
@@ -482,6 +484,15 @@ function AiSection() {
         {saved && !restart && <span className={styles.okText}>{t('settings.aiSec.saved')}</span>}
         {saved && restart && <span className={styles.warnText}>{t('settings.aiSec.restart')}</span>}
       </div>
+
+      {/* LLM-реранжирование источников (search::rerank, eval: nDCG .883→1.0 / MRR .848→1.0):
+          переупорядочивает топ-24 кандидатов мелкой моделью перед выбором k. Цена ~1–3 с. */}
+      <EgressRow
+        label={t('settings.aiSec.rerank')}
+        desc={t('settings.aiSec.rerankDesc')}
+        value={aiRerank}
+        onChange={setAiRerank}
+      />
 
       <EgressBlock />
       <WebSearchBlock />

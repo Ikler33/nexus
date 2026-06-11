@@ -415,3 +415,143 @@ async fn bench_index_scale() {
     assert!(!hits.is_empty(), "поиск должен находить на синтетике");
     assert!(!full.nodes.is_empty());
 }
+
+/// ЭКСПЕРИМЕНТ (карт-бланш 2026-06-11, BACKLOG «Реранкер»): LLM-реранк топ-выдачи гибрида мелкой
+/// моделью (E4B no-think) против baseline-ранжирования. Файлы топ-24 чанков → модель упорядочивает
+/// по релевантности вопросу → метрики@8 против обычного ретрива. НЕ гейт: исследование — печатает
+/// сравнение, решение о вливании в прод принимается по числам (AC-EVAL-3: ранжирование без eval
+/// не менять).
+#[tokio::test]
+#[ignore = "нужны embedding-сервер и LLM (NEXUS_EMBED_URL/NEXUS_FAST_URL)"]
+async fn live_eval_llm_rerank_experiment() {
+    use crate::ai::{default_prefixes, ChatMessage, ChatProvider, OpenAiChatProvider};
+    use crate::net::{EgressFeature, GuardedClient};
+    use std::collections::HashSet;
+    use std::sync::atomic::AtomicBool;
+
+    let golden = load_golden();
+    let baseline = load_baseline();
+    let cond = &baseline.conditions;
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
+        &GuardedClient::unchecked(),
+        EgressFeature::Embed,
+        &live_embed_url(cond),
+        &cond.embedding_model,
+        cond.embedding_dim,
+        default_prefixes(&cond.embedding_model),
+    ));
+    let vectors = Arc::new(
+        VectorIndex::open(root.join(".nexus/vectors.usearch"), cond.embedding_dim).unwrap(),
+    );
+    let db = index_corpus(&root, &golden.corpus, embedder.clone(), vectors.clone())
+        .await
+        .unwrap();
+
+    let fast_url =
+        std::env::var("NEXUS_FAST_URL").unwrap_or_else(|_| "http://192.168.0.31:8084".into());
+    let reranker = OpenAiChatProvider::new(
+        &GuardedClient::unchecked(),
+        EgressFeature::Chat,
+        &fast_url,
+        "rerank-e4b",
+        Some(0.0),
+    )
+    .without_reasoning();
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    const RETRIEVE: usize = 24; // глубина кандидатов для реранка
+    let k = cond.k; // метрики на тех же k=8, что baseline
+
+    let (mut b_r, mut b_n, mut b_m) = (0f32, 0f32, 0f32);
+    let (mut r_r, mut r_n, mut r_m) = (0f32, 0f32, 0f32);
+    let n_cases = golden.cases.len() as f32;
+
+    for case in &golden.cases {
+        let hits = search::hybrid_search(
+            db.reader(),
+            Some(&vectors),
+            Some(embedder.as_ref()),
+            case.query.clone(),
+            SearchOptions {
+                limit: RETRIEVE,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        // Чанки → уникальные файлы (первый сниппет файла — представитель для модели).
+        let mut seen = HashSet::new();
+        let files: Vec<(String, String)> = hits
+            .into_iter()
+            .filter_map(|h| seen.insert(h.path.clone()).then_some((h.path, h.snippet)))
+            .collect();
+        let base_ranked: Vec<String> = files.iter().map(|(p, _)| p.clone()).collect();
+        let relevant: HashSet<String> = case.relevant.iter().cloned().collect();
+        b_r += recall_at_k(&base_ranked, &relevant, k);
+        b_n += ndcg_at_k(&base_ranked, &relevant, k);
+        b_m += reciprocal_rank(&base_ranked, &relevant);
+
+        // LLM-реранк: нумерованные кандидаты → JSON-массив номеров по релевантности.
+        let mut listing = String::new();
+        for (i, (path, snip)) in files.iter().enumerate() {
+            let cut: String = snip.chars().take(240).collect();
+            listing.push_str(&format!("[{}] {path}: {cut}\n", i + 1));
+        }
+        let messages = [
+            ChatMessage::system(
+                "Ты ранжируешь фрагменты заметок по релевантности вопросу. Ответь СТРОГО \
+                 JSON-массивом номеров фрагментов от самого релевантного к наименее, без \
+                 пояснений: [3,1,2,...]. Включи каждый номер ровно один раз.",
+            ),
+            ChatMessage::user(format!("Вопрос: {}\n\nФрагменты:\n{listing}", case.query)),
+        ];
+        let mut out = String::new();
+        reranker
+            .stream_chat(&messages, &mut |t| out.push_str(&t), &cancel)
+            .await
+            .expect("реранк-вызов");
+        // Парс: первый JSON-массив чисел; недостающие индексы — хвостом в исходном порядке.
+        let order: Vec<usize> = out
+            .find('[')
+            .and_then(|a| out[a..].find(']').map(|b| &out[a + 1..a + b]))
+            .map(|inner| {
+                inner
+                    .split(',')
+                    .filter_map(|x| x.trim().parse::<usize>().ok())
+                    .filter(|i| *i >= 1 && *i <= files.len())
+                    .map(|i| i - 1)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut used = HashSet::new();
+        let mut reranked: Vec<String> = order
+            .into_iter()
+            .filter(|i| used.insert(*i))
+            .map(|i| files[i].0.clone())
+            .collect();
+        for (i, (p, _)) in files.iter().enumerate() {
+            if !used.contains(&i) {
+                reranked.push(p.clone());
+            }
+        }
+        r_r += recall_at_k(&reranked, &relevant, k);
+        r_n += ndcg_at_k(&reranked, &relevant, k);
+        r_m += reciprocal_rank(&reranked, &relevant);
+    }
+
+    eprintln!(
+        "\n=== LLM-RERANK EXPERIMENT (retrieve={RETRIEVE}, метрики@{k}, n={}) ===\n\
+         base   : recall={:.3} nDCG={:.3} MRR={:.3}\n\
+         rerank : recall={:.3} nDCG={:.3} MRR={:.3}",
+        golden.cases.len(),
+        b_r / n_cases,
+        b_n / n_cases,
+        b_m / n_cases,
+        r_r / n_cases,
+        r_n / n_cases,
+        r_m / n_cases,
+    );
+}

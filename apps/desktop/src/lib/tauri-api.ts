@@ -747,7 +747,7 @@ export const tauriApi = {
     streamRag: (
       question: string,
       onEvent: (event: ChatStreamEvent) => void,
-      opts?: { k?: number; center?: string; grounded?: boolean; web?: boolean },
+      opts?: { k?: number; center?: string; grounded?: boolean; web?: boolean; rerank?: boolean },
     ): (() => void) => {
       if (!isTauri())
         return mockVault.streamChat(question, onEvent, {
@@ -763,6 +763,7 @@ export const tauriApi = {
         center: opts?.center,
         grounded: opts?.grounded,
         web: opts?.web,
+        rerank: opts?.rerank,
         channel,
       }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
       return () => {
