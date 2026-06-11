@@ -533,8 +533,10 @@
     "queue": "Очередь",
     "running": "выполняется…",
     "queued": "ждёт запуска",
-    "scheduled": "через {{m}} мин",
-    "errorsSection": "Ошибки"
+    "errorsSection": "Ошибки",
+    "inMin": "через {{n}} мин",
+    "inHours": "через {{n}} ч",
+    "inDays": "через {{n}} дн"
   },
   "plugins": {
     "title": "Плагины",
