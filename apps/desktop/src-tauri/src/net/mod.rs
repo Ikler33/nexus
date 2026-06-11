@@ -45,6 +45,10 @@ pub enum EgressFeature {
     /// включении, W2/AC-NF-7); `allow_private=false` — приватные/LAN-хосты ей запрещены
     /// (W-аддендум: web-хосты только публичные, LAN-исключение E2/E6 не распространяется).
     NewsFeed,
+    /// Web-агент чата (W1, срез 4): поиск через self-hosted SearXNG. Web-класс — `allow_private=false`,
+    /// DNS-гард обязателен; consent = сохранённый URL SearXNG → авто-allowlist скоупа "web" (W2).
+    /// По умолчанию ВЫКЛЮЧЕНА.
+    Web,
 }
 
 impl EgressFeature {
@@ -55,12 +59,13 @@ impl EgressFeature {
             EgressFeature::Embed => 1,
             EgressFeature::Probe => 2,
             EgressFeature::NewsFeed => 3,
+            EgressFeature::Web => 4,
         }
     }
 
     /// Web-класс (W-аддендум): приватные хосты запрещены даже из allowlist; DNS-гард обязателен.
     fn denies_private(self) -> bool {
-        matches!(self, EgressFeature::NewsFeed)
+        matches!(self, EgressFeature::NewsFeed | EgressFeature::Web)
     }
 }
 
@@ -71,6 +76,7 @@ impl std::fmt::Display for EgressFeature {
             EgressFeature::Embed => "embed",
             EgressFeature::Probe => "probe",
             EgressFeature::NewsFeed => "news_feed",
+            EgressFeature::Web => "web",
         })
     }
 }
@@ -85,6 +91,8 @@ impl std::str::FromStr for EgressFeature {
             "chat" => Ok(EgressFeature::Chat),
             "embed" => Ok(EgressFeature::Embed),
             "probe" => Ok(EgressFeature::Probe),
+            // "web" НАМЕРЕННО не парсится: consent = сохранённый URL SearXNG (websearch.json),
+            // не egress-настройки — как news_feed.
             _ => Err(()),
         }
     }
@@ -125,7 +133,7 @@ pub struct EgressPolicy {
     offline: Arc<AtomicBool>,
     /// Per-feature opt-in (E6), индекс — [`EgressFeature::idx`]. Chat/Embed/Probe — local-first,
     /// включены по умолчанию; NewsFeed (web-класс) — ВЫКЛЮЧЕНА (consent, W2/AC-NF-7).
-    features: [AtomicBool; 4],
+    features: [AtomicBool; 5],
     /// Exact-host allowlist ПО СКОУПАМ: "ai" — явные хосты `local.json ai.*` (E4, замещается на
     /// open-vault/смене настроек), "news" — хосты источников ленты (consent = включение фичи,
     /// NF-4). `check` смотрит объединение. `RwLock` — частые читатели, редкая замена.
@@ -143,6 +151,7 @@ impl EgressPolicy {
                 AtomicBool::new(true),
                 AtomicBool::new(true),
                 AtomicBool::new(false), // NewsFeed: web-класс не из коробки (W2)
+                AtomicBool::new(false), // Web: web-агент не из коробки (W2, consent = URL SearXNG)
             ],
             allowlist: RwLock::new(std::collections::HashMap::new()),
         }
