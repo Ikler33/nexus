@@ -49,6 +49,32 @@ pub async fn get_dead_jobs(state: State<'_, AppState>) -> AppResult<Vec<DeadJob>
     Ok(scheduler::list_dead(&reader).await?)
 }
 
+/// Перезапуск воркера планировщика (N1, кнопка в модалке очереди): аварийная мера, если фоновые
+/// задачи зависли (инцидент 2026-06-12). Рвёт старый супервизор + дропает его shutdown-канал,
+/// поднимает новый воркер тем же конфигом — БЕЗ переоткрытия vault. На старте новый цикл делает
+/// crash-recovery (running→pending) и тут же клеймит готовые джобы. Без vault — no-op.
+#[tauri::command]
+pub async fn restart_scheduler(state: State<'_, AppState>) -> AppResult<()> {
+    let g = state.vault.read().await;
+    let Some(ctx) = g.as_ref() else {
+        return Ok(());
+    };
+    let fresh = ctx.lifecycle.scheduler_spawner.start();
+    {
+        let mut slot = ctx
+            .lifecycle
+            .scheduler_worker
+            .lock()
+            .expect("scheduler_worker lock");
+        // Гасим старый: явный shutdown (на случай живого цикла) + abort супервизора.
+        let _ = slot.shutdown.send(true);
+        slot.supervisor.abort();
+        *slot = fresh;
+    }
+    tracing::info!("scheduler перезапущен вручную (UI)");
+    Ok(())
+}
+
 /// Активные джобы (running/pending) — модалка очереди за «N задач» в статусбаре. Без vault — пусто.
 #[tauri::command]
 pub async fn get_active_jobs(state: State<'_, AppState>) -> AppResult<Vec<ActiveJob>> {

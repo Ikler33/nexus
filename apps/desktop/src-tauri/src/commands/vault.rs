@@ -253,18 +253,17 @@ pub async fn open_vault(
     if news_active {
         recurring.insert(crate::news::KIND_NEWSFEED.to_string(), DAY_SECS);
     }
-    // Shutdown-канал воркера: sender живёт в VaultContext::lifecycle — его дроп (повторный
-    // open_vault / закрытие) гасит worker_loop. Фикс «вечных воркеров» (аудит 2026-06-10).
-    let (scheduler_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-    crate::scheduler::spawn_worker(
-        db.writer().clone(),
+    // Воркер планировщика: spawner хранит конфиг (для ручного рестарта N1), хендл — в lifecycle.
+    // Дроп sender'а в хендле (повторный open_vault / закрытие) гасит worker_loop (аудит 2026-06-10).
+    let scheduler_spawner = crate::scheduler::WorkerSpawner {
+        writer: db.writer().clone(),
         app,
-        Arc::new(registry),
+        registry: Arc::new(registry),
         recurring,
-        db.reader().clone(),
+        reader: db.reader().clone(),
         on_change,
-        shutdown_rx,
-    );
+    };
+    let scheduler_worker = scheduler_spawner.start();
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
     if chat.is_some()
@@ -343,7 +342,8 @@ pub async fn open_vault(
         index_tx,
         lifecycle: crate::state::VaultLifecycle {
             watcher,
-            scheduler_shutdown,
+            scheduler_spawner,
+            scheduler_worker: std::sync::Mutex::new(scheduler_worker),
         },
     });
     tracing::info!(vault = %info.root, "opened vault");

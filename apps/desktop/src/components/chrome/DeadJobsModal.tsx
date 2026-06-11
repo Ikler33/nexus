@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, ListTodo, RotateCcw } from 'lucide-react';
+import { AlertTriangle, ListTodo, RotateCcw, Power } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi } from '../../lib/tauri-api';
 import type { ActiveJob, DeadJob } from '../../lib/tauri-api';
@@ -33,6 +33,7 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   // «через 507 мин» пугает (суточные джобы) → человеческие единицы: мин до 1.5 ч, часы до 1.5 сут, дни.
   const inLabel = (runAt: number): string => {
@@ -41,6 +42,20 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
     const hours = Math.round(mins / 60);
     if (hours < 36) return t('deadJobs.inHours', { n: hours });
     return t('deadJobs.inDays', { n: Math.round(hours / 24) });
+  };
+
+  const restart = async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      await tauriApi.scheduler.restart();
+      // Дать новому воркеру тик заклеймить готовые джобы, затем перечитать.
+      await new Promise((r) => setTimeout(r, 1500));
+      await reload();
+      void useJobsStore.getState().refresh();
+    } finally {
+      setRestarting(false);
+    }
   };
 
   const reload = useCallback(async () => {
@@ -100,6 +115,17 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
         <header className={styles.header}>
           <AlertTriangle size={15} className={styles.headIco} aria-hidden />
           <span className={styles.title}>{t('deadJobs.title')}</span>
+          {phase.kind === 'list' && (
+            <button
+              type="button"
+              className={styles.clearBtn}
+              disabled={busy || restarting}
+              onClick={() => void restart()}
+              title={t('deadJobs.restartHint')}
+            >
+              <Power size={12} aria-hidden /> {restarting ? t('deadJobs.restarting') : t('deadJobs.restart')}
+            </button>
+          )}
           {phase.kind === 'list' && phase.jobs.length > 0 && (
             <button type="button" className={styles.clearBtn} disabled={busy} onClick={() => void clearAll()}>
               {t('deadJobs.clearAll')}

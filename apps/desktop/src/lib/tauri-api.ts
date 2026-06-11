@@ -678,6 +678,10 @@ export const tauriApi = {
       isTauri() ? invoke<boolean>('job_active', { kind }) : Promise.resolve(false),
 
     /** Активные джобы (running/pending) — модалка очереди за «N задач». Вне Tauri — пусто. */
+    /** Перезапуск воркера планировщика (N1, аварийная кнопка в модалке очереди). Вне Tauri — no-op. */
+    restart: (): Promise<void> =>
+      isTauri() ? invoke<void>('restart_scheduler') : Promise.resolve(),
+
     activeJobs: (): Promise<ActiveJob[]> =>
       isTauri() ? invoke<ActiveJob[]>('get_active_jobs') : Promise.resolve([]),
 
