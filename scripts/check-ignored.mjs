@@ -12,7 +12,10 @@ import { dirname, resolve } from 'node:path';
 // вместе с объяснением, ПОЧЕМУ тест отключён (а не «чтобы CI позеленел»).
 // 11→12: + `regen_eval_fixture` (разовая регенерация реальной eval-фикстуры на живом bge-m3; сам гейт
 // качества `eval_fixture_meets_baseline` НЕ ignored — гоняется в CI на замороженных векторах).
-const EXPECTED = 12;
+// 12→16: + 4 live-smoke LLM-этапов (`live_smoke.rs`, 2026-06-11): news-этап (RU-резюме+сводка дня),
+// web-агент целиком (план→SearXNG→ответ), decide «веб не нужен», чат-стрим 26B — всем нужны живые
+// LLM-сервер/SearXNG, в CI принципиально не исполняются; запуск `cargo test live_ -- --ignored`.
+const EXPECTED = 16;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');

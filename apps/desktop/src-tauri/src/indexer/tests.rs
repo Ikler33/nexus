@@ -313,7 +313,7 @@ async fn indexes_and_replaces_frontmatter_fields() {
 
 // ── RAG (Ф1-5): чанки + эмбеддинги + usearch ──────────────────────────────────────────────
 
-use crate::ai::{default_prefixes, MockEmbedder, OpenAiEmbedder};
+use crate::ai::MockEmbedder;
 
 /// Индексатор с RAG поверх детерминированного мок-эмбеддера и собственного usearch-файла.
 fn rag_indexer(db: &Database, root: &Path, dim: usize, force: bool) -> (Indexer, Arc<VectorIndex>) {
@@ -528,7 +528,7 @@ async fn reconcile_restores_lost_vectors() {
 /// Живой end-to-end против nomic на :8081 (`cargo test -- --ignored`): индексируем два файла,
 /// семантический запрос про кошку находит чанк именно из cat.md (а не из физики).
 #[tokio::test]
-#[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
+#[ignore = "нужен embedding-сервер (NEXUS_EMBED_URL, default 192.168.0.31:8083)"]
 async fn live_rag_index_and_semantic_search() {
     let dir = TempDir::new().unwrap();
     let root = dir.path().to_path_buf();
@@ -544,16 +544,14 @@ async fn live_rag_index_and_semantic_search() {
     .unwrap();
 
     let db = open(&root).await;
-    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
-        &crate::net::GuardedClient::unchecked(),
-        crate::net::EgressFeature::Embed,
-        "http://192.168.0.29:8081",
-        "nomic-embed-text",
-        768,
-        default_prefixes("nomic-embed-text"),
-    ));
-    let vectors =
-        Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 768).unwrap());
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(crate::ai::live_test_embedder());
+    let vectors = Arc::new(
+        VectorIndex::open(
+            root.join(".nexus").join("vectors.usearch"),
+            crate::ai::LIVE_EMBED_DIM,
+        )
+        .unwrap(),
+    );
     let idx = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
     idx.index_file("cat.md").await.unwrap();
     idx.index_file("physics.md").await.unwrap();
