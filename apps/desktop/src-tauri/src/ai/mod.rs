@@ -50,6 +50,28 @@ mod api_base_tests {
     }
 }
 
+/// Прод-эмбеддер для live-тестов (игнорируемых по умолчанию): bge-m3/1024 на актуальном LLM-сервере,
+/// хост переопределяется `NEXUS_EMBED_URL`. Один помощник вместо хардкодов по тестам —
+/// при переезде сервера live-сьют переключается в одном месте (грабля 2026-06-11: три теста
+/// остались на стёртом 192.168.0.29 и молча падали бы по сети).
+#[cfg(test)]
+pub(crate) fn live_test_embedder() -> OpenAiEmbedder {
+    let url =
+        std::env::var("NEXUS_EMBED_URL").unwrap_or_else(|_| "http://192.168.0.31:8083".into());
+    OpenAiEmbedder::new(
+        &crate::net::GuardedClient::unchecked(),
+        crate::net::EgressFeature::Embed,
+        &url,
+        "bge-m3",
+        LIVE_EMBED_DIM,
+        default_prefixes("bge-m3"),
+    )
+}
+
+/// Размерность прод-эмбеддера live-тестов (bge-m3) — для `VectorIndex::open` тех же тестов.
+#[cfg(test)]
+pub(crate) const LIVE_EMBED_DIM: usize = 1024;
+
 /// Ошибки AI-слоя.
 #[derive(Debug, Error)]
 pub enum AiError {

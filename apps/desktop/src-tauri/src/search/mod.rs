@@ -690,9 +690,8 @@ mod tests {
 
     /// Живой гибрид на nomic :8081: запрос БЕЗ лексических пересечений → решает вектор (семантика).
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
+    #[ignore = "нужен embedding-сервер (NEXUS_EMBED_URL, default 192.168.0.31:8083)"]
     async fn live_hybrid_ranks_semantically() {
-        use crate::ai::{default_prefixes, OpenAiEmbedder};
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
         fs::write(
@@ -706,16 +705,14 @@ mod tests {
         )
         .unwrap();
         let db = open_db(&root).await;
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
-            &crate::net::GuardedClient::unchecked(),
-            crate::net::EgressFeature::Embed,
-            "http://192.168.0.29:8081",
-            "nomic-embed-text",
-            768,
-            default_prefixes("nomic-embed-text"),
-        ));
-        let vectors =
-            Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 768).unwrap());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(crate::ai::live_test_embedder());
+        let vectors = Arc::new(
+            VectorIndex::open(
+                root.join(".nexus").join("vectors.usearch"),
+                crate::ai::LIVE_EMBED_DIM,
+            )
+            .unwrap(),
+        );
         let idx = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
         idx.index_file("cat.md").await.unwrap();
         idx.index_file("car.md").await.unwrap();

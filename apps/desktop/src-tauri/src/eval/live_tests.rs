@@ -2,7 +2,7 @@
 //! Вынесены из `mod.rs` (ночь 2026-06-11): их тела принципиально не исполняются в CI (нужен
 //! сервер) и давили метрику покрытия модуля; гейт покрытия меряет `eval/mod.rs`
 //! (`scripts/check-coverage.mjs`). Запуск как раньше:
-//!   `NEXUS_EMBED_URL=http://192.168.0.29:8083 cargo test <имя> -- --ignored --nocapture`
+//!   `NEXUS_EMBED_URL=http://192.168.0.31:8083 cargo test <имя> -- --ignored --nocapture`
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -57,7 +57,7 @@ impl EmbeddingProvider for RecordingEmbedder {
 
 /// Регенерация фикстуры (ignored-тест): прогон golden через ЖИВОЙ bge-m3 → запись реальных векторов в
 /// `eval/fixture_bge_m3.json`. Пишет ТОЛЬКО если метрики ≥ baseline (не фиксируем плохой прогон).
-/// `NEXUS_EMBED_URL=http://192.168.0.29:8083 cargo test regen_eval_fixture -- --ignored --nocapture`
+/// `NEXUS_EMBED_URL=http://192.168.0.31:8083 cargo test regen_eval_fixture -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "разовая регенерация: нужен живой bge-m3 (NEXUS_EMBED_URL или baseline server)"]
 async fn regen_eval_fixture() {
@@ -239,7 +239,7 @@ async fn live_real_vault_smoke() {
     let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
         &crate::net::GuardedClient::unchecked(),
         crate::net::EgressFeature::Embed,
-        "http://192.168.0.29:8083",
+        &std::env::var("NEXUS_EMBED_URL").unwrap_or_else(|_| "http://192.168.0.31:8083".into()),
         "bge-m3",
         1024,
         default_prefixes("bge-m3"),
@@ -335,7 +335,7 @@ async fn bench_index_scale() {
     let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
         &crate::net::GuardedClient::unchecked(),
         crate::net::EgressFeature::Embed,
-        "http://192.168.0.29:8083",
+        &std::env::var("NEXUS_EMBED_URL").unwrap_or_else(|_| "http://192.168.0.31:8083".into()),
         "bge-m3",
         1024,
         default_prefixes("bge-m3"),

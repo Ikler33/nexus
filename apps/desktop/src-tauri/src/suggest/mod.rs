@@ -359,9 +359,8 @@ mod tests {
     /// на коротких RU-текстах кучкует similarity высоко (зафиксированный риск ADR-005) — значима
     /// именно относительная близость. Векторы реальные (не mock).
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
+    #[ignore = "нужен embedding-сервер (NEXUS_EMBED_URL, default 192.168.0.31:8083)"]
     async fn live_suggests_topically_similar() {
-        use crate::ai::{default_prefixes, OpenAiEmbedder};
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
         fs::write(
@@ -381,16 +380,14 @@ mod tests {
         .unwrap();
 
         let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(OpenAiEmbedder::new(
-            &crate::net::GuardedClient::unchecked(),
-            crate::net::EgressFeature::Embed,
-            "http://192.168.0.29:8081",
-            "nomic-embed-text",
-            768,
-            default_prefixes("nomic-embed-text"),
-        ));
-        let vectors =
-            Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 768).unwrap());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(crate::ai::live_test_embedder());
+        let vectors = Arc::new(
+            VectorIndex::open(
+                root.join(".nexus").join("vectors.usearch"),
+                crate::ai::LIVE_EMBED_DIM,
+            )
+            .unwrap(),
+        );
         let idx = Indexer::with_rag(&db, root.clone(), embedder, vectors.clone(), true);
         for f in ["cat1.md", "cat2.md", "phys.md"] {
             idx.index_file(f).await.unwrap();

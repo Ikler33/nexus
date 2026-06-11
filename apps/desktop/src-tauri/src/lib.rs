@@ -61,6 +61,10 @@ pub mod vector;
 pub mod watcher;
 pub mod websearch;
 
+/// Live-smoke LLM-этапов на прод-серверах (тесты игнорируются по умолчанию, см. модуль).
+#[cfg(test)]
+mod live_smoke;
+
 /// Возвращает версию приложения из `CARGO_PKG_VERSION`.
 ///
 /// Первая сквозная IPC-команда — служит дымовым тестом моста фронт ↔ Rust.

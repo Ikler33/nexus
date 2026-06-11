@@ -722,14 +722,16 @@ mod tests {
         assert!(sm[1].content.contains("Суммируй"));
     }
 
-    /// Живой стриминг против Gemma на 192.168.0.29:8080 (`cargo test -- --ignored`).
+    /// Живой стриминг против Gemma (`cargo test -- --ignored`; `NEXUS_CHAT_URL` — оверрайд хоста).
     #[tokio::test]
-    #[ignore = "нужен chat-сервер на 192.168.0.29:8080"]
+    #[ignore = "нужен chat-сервер (NEXUS_CHAT_URL, default 192.168.0.31:8080)"]
     async fn live_chat_streams_tokens() {
+        let url =
+            std::env::var("NEXUS_CHAT_URL").unwrap_or_else(|_| "http://192.168.0.31:8080".into());
         let provider = OpenAiChatProvider::new(
             &GuardedClient::unchecked(),
             EgressFeature::Chat,
-            "http://192.168.0.29:8080",
+            &url,
             "gemma-4-26B-A4B-it",
             Some(0.0),
         );

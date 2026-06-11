@@ -258,17 +258,20 @@ mod tests {
         );
     }
 
-    /// Живой smoke против nomic на :8081 (запуск: `cargo test -- --ignored`). В CI пропускается.
+    /// Живой smoke против прод-эмбеддера bge-m3 (запуск: `cargo test -- --ignored`;
+    /// `NEXUS_EMBED_URL` — оверрайд хоста). В CI пропускается.
     #[tokio::test]
-    #[ignore = "нужен embedding-сервер на 192.168.0.29:8081"]
-    async fn live_nomic_embeds_and_ranks_semantically() {
+    #[ignore = "нужен embedding-сервер (NEXUS_EMBED_URL, default 192.168.0.31:8083)"]
+    async fn live_embedder_embeds_and_ranks_semantically() {
+        let url =
+            std::env::var("NEXUS_EMBED_URL").unwrap_or_else(|_| "http://192.168.0.31:8083".into());
         let e = OpenAiEmbedder::new(
             &GuardedClient::unchecked(),
             EgressFeature::Embed,
-            "http://192.168.0.29:8081",
-            "nomic-embed-text",
-            768,
-            Some(("search_query: ".into(), "search_document: ".into())),
+            &url,
+            "bge-m3",
+            1024,
+            default_prefixes("bge-m3"),
         );
 
         let docs = e
@@ -279,7 +282,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(docs.len(), 2);
-        assert_eq!(docs[0].len(), 768);
+        assert_eq!(docs[0].len(), 1024);
         let norm = docs[0].iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3);
 
