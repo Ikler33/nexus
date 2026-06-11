@@ -347,9 +347,19 @@ export interface WebSearchConfig {
   url: string;
 }
 
+/** Фрагмент памяти переписки (N4b, зеркалит Rust `chat_log::MemoryHit`) — «из прошлых разговоров». */
+export interface MemoryHit {
+  sessionId: number;
+  sessionTitle: string;
+  role: string;
+  snippet: string;
+  score: number;
+}
+
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'webSources'; sources: WebSource[] }
+  | { type: 'memorySources'; sources: MemoryHit[] }
   | { type: 'token'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'reasoningSummary'; text: string }
@@ -769,7 +779,15 @@ export const tauriApi = {
     streamRag: (
       question: string,
       onEvent: (event: ChatStreamEvent) => void,
-      opts?: { k?: number; center?: string; grounded?: boolean; web?: boolean; rerank?: boolean },
+      opts?: {
+        k?: number;
+        center?: string;
+        grounded?: boolean;
+        web?: boolean;
+        rerank?: boolean;
+        memory?: boolean;
+        sessionId?: number | null;
+      },
     ): (() => void) => {
       if (!isTauri())
         return mockVault.streamChat(question, onEvent, {
@@ -786,6 +804,8 @@ export const tauriApi = {
         grounded: opts?.grounded,
         web: opts?.web,
         rerank: opts?.rerank,
+        memory: opts?.memory,
+        sessionId: opts?.sessionId,
         channel,
       }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
       return () => {

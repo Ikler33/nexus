@@ -186,6 +186,9 @@ pub struct VaultContext {
     /// Векторный ANN-индекс RAG. `None`, если embedding-провайдер не сконфигурирован
     /// (vault работает и без AI — local-first). Делится с индексатором (пишет) и поиском (читает).
     pub vectors: Option<Arc<VectorIndex>>,
+    /// Индекс памяти переписки (N4, RAG по чат-сессиям): векторы сообщений чата, отдельные ключи
+    /// (id сообщений). `None` синхронно с `vectors` (оба требуют embedding-провайдера).
+    pub chat_vectors: Option<Arc<VectorIndex>>,
     /// Фасад AI-подсистемы (§4.3, AC-EGR-13): все провайдеры (chat/chat_fast/chat_util/embedder)
     /// плюс политика эгресса одним полем — вместо четырёх независимых `Arc`. Провайдеры ходят в
     /// сеть ТОЛЬКО через `net::GuardedClient` (ADR-005-ext).

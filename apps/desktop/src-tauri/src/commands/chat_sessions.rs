@@ -40,7 +40,7 @@ pub async fn chat_log_exchange(
     answer: String,
     sources_json: Option<String>,
 ) -> AppResult<i64> {
-    let (writer, util) = {
+    let (writer, util, embedder, chat_vectors) = {
         let ctx = state.vault().await?;
         (
             ctx.db.writer().clone(),
@@ -48,10 +48,39 @@ pub async fn chat_log_exchange(
                 .chat_util
                 .clone()
                 .or_else(|| ctx.ai.chat_fast.clone()),
+            ctx.ai.embedder.clone(),
+            ctx.chat_vectors.clone(),
         )
     };
-    let (sid, created) =
-        chat_log::log_exchange(&writer, session_id, &question, &answer, sources_json).await?;
+    let ex = chat_log::log_exchange(&writer, session_id, &question, &answer, sources_json).await?;
+    let sid = ex.session_id;
+    let created = ex.created;
+
+    // RAG переписки (N4): индексируем оба сообщения в `chat_vectors` (память «второго мозга»).
+    // Best-effort, не блокирует ответ команды. Ключ usearch — id сообщения.
+    if let (Some(embedder), Some(vectors)) = (embedder, chat_vectors) {
+        let pairs = [
+            (ex.user_msg_id, question.clone()),
+            (ex.assistant_msg_id, answer.clone()),
+        ];
+        tokio::spawn(async move {
+            for (id, text) in pairs {
+                match embedder.embed_documents(&[text.as_str()]).await {
+                    Ok(vecs) if !vecs.is_empty() => {
+                        if let Err(e) = vectors.upsert(id as u64, &vecs[0]) {
+                            tracing::warn!(error = %e, "chat-memory: upsert вектора не удался");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "chat-memory: эмбеддинг сообщения не удался")
+                    }
+                }
+            }
+            let _ = vectors.save();
+        });
+    }
+
     if created {
         if let Some(util) = util {
             // Заголовок — суммарайз первого вопроса (решение владельца). Не блокируем ответ команды.

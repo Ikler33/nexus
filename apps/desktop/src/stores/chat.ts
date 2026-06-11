@@ -3,7 +3,13 @@ import { create } from 'zustand';
 import { logUi } from '../lib/debug-log';
 import { usePrefsStore } from './prefs';
 
-import type { ChatStreamEvent, EgressDeniedKind, SearchHit, WebSource } from '../lib/tauri-api';
+import type {
+  ChatStreamEvent,
+  EgressDeniedKind,
+  MemoryHit,
+  SearchHit,
+  WebSource,
+} from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
 
 /**
@@ -35,6 +41,8 @@ export interface ChatMessage {
   reasoningSummary?: string;
   /** Web-источники (W-3): результаты SearXNG для web-режима — цитаты с URL. */
   webSources?: WebSource[];
+  /** Память переписки (N4b): фрагменты прошлых диалогов, подмешанные в контекст ответа. */
+  memorySources?: MemoryHit[];
 }
 
 /** Раскрытость аккордеонов источников ВНЕ React-состояния (см. ChatView.Disclosure): живёт со
@@ -95,8 +103,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     if (!reply || reply.role !== 'assistant' || !ask || ask.role !== 'user') return;
     if (reply.error) return; // ошибочные обмены не персистим (нечего вспоминать)
     const sourcesJson =
-      reply.sources?.length || reply.webSources?.length
-        ? JSON.stringify({ sources: reply.sources ?? [], webSources: reply.webSources ?? [] })
+      reply.sources?.length || reply.webSources?.length || reply.memorySources?.length
+        ? JSON.stringify({
+            sources: reply.sources ?? [],
+            webSources: reply.webSources ?? [],
+            memorySources: reply.memorySources ?? [],
+          })
         : null;
     void tauriApi.chat.sessions
       .logExchange(get().sessionId, ask.content, reply.content, sourcesJson)
@@ -169,6 +181,10 @@ export const useChatStore = create<ChatState>((set, get) => {
             // W-3: цитаты web-агента (title/url/snippet) — рендерятся со ссылками наружу.
             patch(replyId, (m) => ({ ...m, webSources: event.sources }));
             break;
+          case 'memorySources':
+            // N4b: фрагменты прошлых диалогов — отдельная плашка «из прошлых разговоров».
+            patch(replyId, (m) => ({ ...m, memorySources: event.sources }));
+            break;
           case 'token':
             // Не set() на каждый токен — копим в буфер, рендерим раз в кадр (AC-Б10-4).
             pending += event.text;
@@ -224,6 +240,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         grounded: mode === 'vault',
         web,
         rerank: usePrefsStore.getState().aiRerank,
+        // N4b: память переписки (отдельный канал chat_vectors). Текущую сессию исключаем на бэке
+        // по sessionId — не пересказываем ассистенту его же реплики из этого диалога.
+        memory: usePrefsStore.getState().aiChatMemory,
+        sessionId: get().sessionId,
       });
     },
 
@@ -275,14 +295,17 @@ export const useChatStore = create<ChatState>((set, get) => {
         const restored: ChatMessage[] = stored.map((m) => {
           let sources: ChatSource[] | undefined;
           let webSources: WebSource[] | undefined;
+          let memorySources: MemoryHit[] | undefined;
           if (m.sourcesJson) {
             try {
               const parsed = JSON.parse(m.sourcesJson) as {
                 sources?: ChatSource[];
                 webSources?: WebSource[];
+                memorySources?: MemoryHit[];
               };
               sources = parsed.sources?.length ? parsed.sources : undefined;
               webSources = parsed.webSources?.length ? parsed.webSources : undefined;
+              memorySources = parsed.memorySources?.length ? parsed.memorySources : undefined;
             } catch {
               /* битый снапшот источников — сообщение без карточек */
             }
@@ -293,6 +316,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             content: m.content,
             sources,
             webSources,
+            memorySources,
           };
         });
         set({ messages: restored, sessionId: id });

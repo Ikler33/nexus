@@ -12,8 +12,8 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{
-    build_chat_messages, build_rag_messages, build_web_answer_messages, injection_marker,
-    ChatMessage, ChatProvider,
+    build_chat_messages, build_memory_block, build_rag_messages, build_web_answer_messages,
+    injection_marker, prepend_memory_block, ChatMessage, ChatProvider,
 };
 use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
@@ -28,6 +28,11 @@ pub enum ChatStreamEvent {
     /// Web-источники (W-2): результаты поиска SearXNG (title/url/snippet) — цитаты web-ответа.
     WebSources {
         sources: Vec<crate::websearch::SearchResult>,
+    },
+    /// Память переписки (N4b): релевантные фрагменты прошлых диалогов (отдельный канал chat_vectors).
+    /// Приходит до токенов, как и `Sources`; UI помечает их «из прошлых разговоров».
+    MemorySources {
+        sources: Vec<crate::chat_log::MemoryHit>,
     },
     /// Очередная текстовая дельта ответа.
     Token { text: String },
@@ -73,6 +78,10 @@ fn web_denied_code(e: &crate::websearch::SearchError) -> Option<&'static str> {
 
 /// Кол-во RAG-чанков в контексте по умолчанию (калибруется eval-харнессом, Ф1-10).
 const DEFAULT_K: usize = 8;
+/// Память переписки (N4b): сколько фрагментов прошлых диалогов подмешивать и до какой длины резать.
+/// Консервативно мало — память это ФОН, а не основной контекст (не должна глушить заметки/ответ).
+const MEMORY_K: usize = 3;
+const MEMORY_SNIPPET_CHARS: usize = 280;
 
 /// Чат со стримингом. `grounded` (по умолчанию `true`) — режим «по vault»: RAG-ретрив → источники →
 /// промпт с контекстом. `grounded=false` — **общий чат** (V4.4): БЕЗ ретрива, ответ напрямую от
@@ -89,18 +98,24 @@ pub async fn chat_rag(
     grounded: Option<bool>,
     web: Option<bool>,
     rerank: Option<bool>,
+    memory: Option<bool>,
+    session_id: Option<i64>,
 ) -> AppResult<()> {
     let grounded = grounded.unwrap_or(true);
     let web = web.unwrap_or(false);
     // LLM-реранк источников (search::rerank, eval-гейт пройден): по умолчанию ВКЛ при наличии
     // утилитарной модели; тумблер — в настройках AI фронта.
     let rerank = rerank.unwrap_or(true);
+    // Память переписки (N4b) — отдельный канал (chat_vectors), ВКЛ по умолчанию (решение владельца:
+    // переписка часть «второго мозга»). Тумблер `aiChatMemory` в настройках AI фронта.
+    let memory = memory.unwrap_or(true);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
-    let (reader, vectors, embedder, chat, chat_util) = {
+    let (reader, vectors, chat_vectors, embedder, chat, chat_util) = {
         let ctx = state.vault().await?;
         (
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
+            ctx.chat_vectors.clone(),
             ctx.ai.embedder.clone(),
             ctx.ai.chat.clone(),
             ctx.ai.chat_util.clone(),
@@ -164,7 +179,7 @@ pub async fn chat_rag(
     } else {
         None
     };
-    let messages = if let Some(m) = web_messages {
+    let mut messages = if let Some(m) = web_messages {
         m
     } else if grounded {
         let k = k.unwrap_or(DEFAULT_K).clamp(1, 20);
@@ -225,6 +240,52 @@ pub async fn chat_rag(
         });
         build_chat_messages(&question)
     };
+
+    // N4b: память переписки — отдельный КАНАЛ (chat_vectors), не трогает note-RAG ранжирование
+    // (eval-гейт держится: hybrid_search не задействован). Подмешиваем как фон к user-сообщению
+    // ЛЮБОГО режима (vault/общий/web). Текущую сессию исключаем (не пересказываем сам себе).
+    // Best-effort: ошибка эмбеддинга/поиска не валит чат — просто без памяти.
+    if memory {
+        if let (Some(embedder), Some(chat_vectors)) = (embedder.as_ref(), chat_vectors.as_ref()) {
+            match crate::chat_log::search_memory(
+                &reader,
+                chat_vectors,
+                embedder.as_ref(),
+                &question,
+                MEMORY_K,
+                session_id,
+                MEMORY_SNIPPET_CHARS,
+            )
+            .await
+            {
+                Ok(hits) if !hits.is_empty() => {
+                    let _ = channel.send(ChatStreamEvent::MemorySources {
+                        sources: hits.clone(),
+                    });
+                    let snippets: Vec<(String, String)> = hits
+                        .iter()
+                        .map(|h| {
+                            let who = if h.role == "user" {
+                                "вы"
+                            } else {
+                                "ассистент"
+                            };
+                            (
+                                format!("Диалог «{}» ({who})", h.session_title),
+                                h.snippet.clone(),
+                            )
+                        })
+                        .collect();
+                    prepend_memory_block(
+                        &mut messages,
+                        build_memory_block(&snippets, &injection_marker()),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "chat-memory: поиск памяти не удался"),
+            }
+        }
+    }
 
     // 3) Стриминг ответа (с отменой). Помечаем интерактивную LLM-операцию (S5): планировщик уступит
     // фоновые LLM-джобы, пока идёт чат.

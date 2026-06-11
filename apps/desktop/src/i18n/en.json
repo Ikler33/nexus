@@ -141,7 +141,9 @@
       "fastTitle": "Fast model (primitives)",
       "fastDesc": "A small model for short tasks: inline generation, contradiction judge, reasoning summary, news. Empty → the chat model is used.",
       "rerank": "Source reranking (LLM)",
-      "rerankDesc": "The fast model reorders retrieved fragments before answering: sharper citations, +~2 s per question. Golden-set: nDCG 0.88 → 1.00."
+      "rerankDesc": "The fast model reorders retrieved fragments before answering: sharper citations, +~2 s per question. Golden-set: nDCG 0.88 → 1.00.",
+      "chatMemory": "Conversation memory",
+      "chatMemoryDesc": "Mix relevant snippets from past conversations into the answer's context (your \"second brain\"). Separate index — does not affect note search."
     },
     "egress": {
       "title": "Network (egress)",
@@ -371,6 +373,11 @@
     "resize": "Drag to resize the panel",
     "sourcesToggle": "Sources · {{count}}",
     "webSourcesToggle": "Web sources · {{count}}",
+    "memorySources": "From past conversations",
+    "memorySourcesToggle": "From past conversations · {{count}}",
+    "memoryOpen": "Open this conversation",
+    "memoryYou": "you",
+    "memoryAi": "assistant",
     "history": "Session history",
     "historyEmpty": "Nothing yet — ask your first question.",
     "newSession": "New session",
