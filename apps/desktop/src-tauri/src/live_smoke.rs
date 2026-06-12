@@ -220,3 +220,116 @@ async fn live_gemma26_chat_answers() {
     assert!(tokens > 0);
     assert!(full.to_lowercase().contains("токио") || full.to_lowercase().contains("tokyo"));
 }
+
+/// N4 (RAG по чат-сессиям) — ЖИВАЯ сквозная проверка «второго мозга»: в ПРОШЛОЙ сессии пользователь
+/// зафиксировал необычный факт; в НОВОЙ сессии спрашивает о нём перефразированно → реальный bge-m3
+/// достаёт ту сессию из `chat_vectors`, врезка (`build_memory_block`) уходит в промпт, живая gemma
+/// вспоминает факт. КОНТРОЛЬ: без памяти модель факт знать не может (иначе тест не дискриминирует).
+/// Это доказывает, что фича работает на настоящих моделях, а не только на моках.
+#[tokio::test]
+#[ignore = "нужны LLM-сервер + bge-m3 (NEXUS_CHAT_URL/NEXUS_EMBED_URL, default 192.168.0.31)"]
+async fn live_chat_memory_recall_end_to_end() {
+    use crate::ai::{
+        build_chat_messages, build_memory_block, prepend_memory_block, EmbeddingProvider,
+    };
+    use crate::chat_log::{log_exchange, search_memory};
+    use crate::db::Database;
+    use crate::vector::VectorIndex;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(dir.path().join(".nexus/nexus.db"))
+        .await
+        .unwrap();
+    let vectors = VectorIndex::open(dir.path().join("chat_vectors.usearch"), 1024).unwrap();
+    let emb = crate::ai::live_test_embedder();
+    let chat = provider(&chat_url(), "gemma-4-26B-A4B-it-qat");
+
+    // Прошлая сессия A: факт, который модель не выдумает («Гелиодор» — редкий минерал, не дефолт).
+    let fact_q = "Зафиксируй: кодовое имя следующего релиза нашего проекта — «Гелиодор».";
+    let fact_a = "Принято, релиз называется «Гелиодор».";
+    let a = log_exchange(db.writer(), None, fact_q, fact_a, None)
+        .await
+        .unwrap();
+    // Сессия-шум B (не про релиз) — поиск должен быть нетривиальным, не «единственный кандидат».
+    let noise_q = "Какой соус к пасте карбонара?";
+    let noise_a = "Классическая карбонара — на яйце и пекорино, без сливок.";
+    let b = log_exchange(db.writer(), None, noise_q, noise_a, None)
+        .await
+        .unwrap();
+    // Индексируем все сообщения реальными bge-m3 эмбеддингами (ключ usearch = id сообщения).
+    for (id, text) in [
+        (a.user_msg_id, fact_q),
+        (a.assistant_msg_id, fact_a),
+        (b.user_msg_id, noise_q),
+        (b.assistant_msg_id, noise_a),
+    ] {
+        let v = emb.embed_documents(&[text]).await.unwrap();
+        vectors.upsert(id as u64, &v[0]).unwrap();
+    }
+
+    // НОВАЯ сессия: вопрос перефразирован (проверяем СЕМАНТИКУ, не совпадение слов).
+    let question = "Напомни, как мы назвали наш следующий релиз?";
+
+    // КОНТРОЛЬ: без памяти модель факт знать не может.
+    let mut ctrl = String::new();
+    chat.stream_chat(
+        &build_chat_messages(question),
+        &mut |t| ctrl.push_str(&t),
+        &cancel(),
+    )
+    .await
+    .unwrap();
+    println!("[контроль, без памяти] {ctrl}");
+    assert!(
+        !ctrl.to_lowercase().contains("гелиодор"),
+        "контроль: без памяти модель не должна знать факт"
+    );
+
+    // С ПАМЯТЬЮ: search_memory достаёт сессию A (мы в новой сессии → exclude None).
+    let hits = search_memory(db.reader(), &vectors, &emb, question, 3, None, 280)
+        .await
+        .unwrap();
+    println!(
+        "[память] {} фрагм.: {:?}",
+        hits.len(),
+        hits.iter()
+            .map(|h| (h.session_title.as_str(), h.snippet.as_str()))
+            .collect::<Vec<_>>()
+    );
+    assert!(!hits.is_empty(), "память нашла прошлую сессию");
+    assert_eq!(
+        hits[0].session_id, a.session_id,
+        "ближайший фрагмент — из сессии про релиз, не из шумовой"
+    );
+
+    // Врезка памяти в промпт + ответ реальной модели.
+    let snippets: Vec<(String, String)> = hits
+        .iter()
+        .map(|h| {
+            let who = if h.role == "user" {
+                "вы"
+            } else {
+                "ассистент"
+            };
+            (
+                format!("Диалог «{}» ({who})", h.session_title),
+                h.snippet.clone(),
+            )
+        })
+        .collect();
+    let mut msgs = build_chat_messages(question);
+    prepend_memory_block(
+        &mut msgs,
+        build_memory_block(&snippets, &injection_marker()),
+    );
+    let mut ans = String::new();
+    chat.stream_chat(&msgs, &mut |t| ans.push_str(&t), &cancel())
+        .await
+        .unwrap();
+    println!("[с памятью] {ans}");
+    assert!(
+        ans.to_lowercase().contains("гелиодор"),
+        "с памятью модель должна вспомнить «Гелиодор»"
+    );
+}

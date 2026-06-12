@@ -92,6 +92,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/012_chat_sessions.sql"),
         rebuild_fts: false, // новые таблицы переписки, производных не инвалидирует
     },
+    Migration {
+        version: 13,
+        name: "links_dangling_index",
+        sql: include_str!("migrations/013_links_dangling_index.sql"),
+        rebuild_fts: false, // только индекс для перф-резолва ссылок, данные не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
