@@ -555,7 +555,10 @@
     "errorsSection": "Errors",
     "inMin": "in {{n}} min",
     "inHours": "in {{n}} h",
-    "inDays": "in {{n}} d"
+    "inDays": "in {{n}} d",
+    "restart": "Restart",
+    "restarting": "Restarting…",
+    "restartHint": "Respawn the background worker (if jobs are stuck) — no app restart needed."
   },
   "plugins": {
     "title": "Plugins",

@@ -198,6 +198,7 @@ pub fn run() {
             commands::scheduler::job_active,
             commands::scheduler::get_dead_jobs,
             commands::scheduler::get_active_jobs,
+            commands::scheduler::restart_scheduler,
             commands::debug::log_ui_event,
             commands::scheduler::retry_dead_job,
             commands::scheduler::clear_dead_jobs,

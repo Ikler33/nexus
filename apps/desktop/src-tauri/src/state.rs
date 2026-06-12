@@ -214,8 +214,12 @@ pub struct VaultContext {
 pub struct VaultLifecycle {
     /// FS-watcher vault: дроп → sender событий закрыт → петля индексации выходит.
     pub watcher: Option<crate::watcher::VaultWatcher>,
-    /// Shutdown-канал воркера планировщика: дроп sender'а гасит цикл.
-    pub scheduler_shutdown: tokio::sync::watch::Sender<bool>,
+    /// Конфиг воркера планировщика — для ручного перезапуска (N1) без переоткрытия vault.
+    pub scheduler_spawner: crate::scheduler::WorkerSpawner,
+    /// Живой хендл воркера (shutdown-sender + abort супервизора). Под `Mutex` — `restart_scheduler`
+    /// заменяет его из команды (write-доступ через лок, а не &mut контекста). Дроп sender'а в нём
+    /// гасит цикл при закрытии vault (Drop-семантика сохранена).
+    pub scheduler_worker: std::sync::Mutex<crate::scheduler::WorkerHandle>,
 }
 
 #[cfg(test)]

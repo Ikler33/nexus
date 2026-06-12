@@ -559,55 +559,76 @@ pub fn onchange_step(state: OnChangeState, mtime: i64, now: i64) -> (OnChangeSta
 /// жив токен задачи. **Backpressure (S5):** каждый тик снимает «занят ли интерактивный LLM» из
 /// `AppState`. **On-change (S4, slice 7):** опрашивает `max_file_mtime`; когда после правок vault
 /// настала тишина (дебаунс), перезапускает `on_change`-kind (готовый job, дедуп `has_ready_job`).
-pub fn spawn_worker(
-    writer: WriteActor,
-    app: tauri::AppHandle,
-    registry: Arc<Registry>,
-    recurring: HashMap<String, i64>,
-    reader: ReadPool,
-    on_change: Vec<String>,
-    shutdown: tokio::sync::watch::Receiver<bool>,
-) {
-    use tauri::Manager;
-    // Супервизор (инцидент 2026-06-12: воркер «тихо исчез» без паники и следа — ready-джобы
-    // стояли 13 часов): держим JoinHandle цикла; неожиданное завершение (паника/return) —
-    // ERROR с причиной и РЕСТАРТ через паузу. Штатный выход (shutdown/дроп sender) — стоп.
-    tokio::spawn(async move {
-        loop {
-            let app2 = app.clone();
-            let app3 = app.clone();
-            let hooks = WorkerHooks {
-                interactive_busy: Box::new(move || {
-                    app2.state::<crate::state::AppState>().is_interactive_busy()
-                }),
-                jobs_changed: Box::new(move || emit_jobs_changed(&app3)),
-            };
-            let handle = tokio::spawn(worker_loop(
-                writer.clone(),
-                registry.clone(),
-                recurring.clone(),
-                reader.clone(),
-                on_change.clone(),
-                hooks,
-                shutdown.clone(),
-            ));
-            match handle.await {
-                Ok(()) => {
-                    // worker_loop возвращается ТОЛЬКО по shutdown — штатно гасим супервизор.
-                    tracing::info!("scheduler worker stopped (shutdown)");
+/// Конфигурация воркера планировщика: все (клонируемо-дешёвые) зависимости в одном месте, чтобы
+/// супервизор можно было перезапустить заново (N1, ручной «Перезапустить фоновые задачи» из UI —
+/// поднимаем воркер без переоткрытия vault). `start()` поднимает супервизор и отдаёт хендл.
+#[derive(Clone)]
+pub struct WorkerSpawner {
+    pub writer: WriteActor,
+    pub app: tauri::AppHandle,
+    pub registry: Arc<Registry>,
+    pub recurring: HashMap<String, i64>,
+    pub reader: ReadPool,
+    pub on_change: Vec<String>,
+}
+
+/// Хендл живого воркера (хранится в `VaultContext::lifecycle`): shutdown-sender (дроп → штатный
+/// стоп, Drop-семантика как раньше) + abort-хендл супервизора (для явного перезапуска).
+pub struct WorkerHandle {
+    /// Дроп sender'а гасит цикл (changed()→Err→break). Живёт в lifecycle.
+    pub shutdown: tokio::sync::watch::Sender<bool>,
+    /// Принудительная остановка супервизора (при перезапуске — рвём старый до старта нового).
+    pub supervisor: tokio::task::AbortHandle,
+}
+
+impl WorkerSpawner {
+    /// Поднимает супервизор воркера со свежим shutdown-каналом. Возвращает хендл для хранения/рестарта.
+    pub fn start(&self) -> WorkerHandle {
+        use tauri::Manager;
+        let (shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let cfg = self.clone();
+        // Супервизор (инцидент 2026-06-12: воркер «тихо исчез» без паники — ready-джобы стояли 13ч):
+        // неожиданное завершение цикла (паника/return) → ERROR с причиной и РЕСТАРТ через паузу.
+        // Штатный выход (shutdown/дроп sender) — стоп.
+        let supervisor = tokio::spawn(async move {
+            loop {
+                let app2 = cfg.app.clone();
+                let app3 = cfg.app.clone();
+                let hooks = WorkerHooks {
+                    interactive_busy: Box::new(move || {
+                        app2.state::<crate::state::AppState>().is_interactive_busy()
+                    }),
+                    jobs_changed: Box::new(move || emit_jobs_changed(&app3)),
+                };
+                let handle = tokio::spawn(worker_loop(
+                    cfg.writer.clone(),
+                    cfg.registry.clone(),
+                    cfg.recurring.clone(),
+                    cfg.reader.clone(),
+                    cfg.on_change.clone(),
+                    hooks,
+                    shutdown.clone(),
+                ));
+                match handle.await {
+                    Ok(()) => {
+                        tracing::info!("scheduler worker stopped (shutdown)");
+                        break;
+                    }
+                    Err(join_err) => {
+                        tracing::error!(error = %join_err, "scheduler worker УМЕР — рестарт супервизором");
+                    }
+                }
+                if *shutdown.borrow() || shutdown.has_changed().is_err() {
                     break;
                 }
-                Err(join_err) => {
-                    tracing::error!(error = %join_err, "scheduler worker УМЕР — рестарт супервизором");
-                }
+                tokio::time::sleep(Duration::from_secs(RESPAWN_DELAY_SECS)).await;
             }
-            // Перед рестартом уважаем shutdown (vault мог закрыться, пока воркер умирал).
-            if *shutdown.borrow() || shutdown.has_changed().is_err() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_secs(RESPAWN_DELAY_SECS)).await;
+        });
+        WorkerHandle {
+            shutdown: shutdown_tx,
+            supervisor: supervisor.abort_handle(),
         }
-    });
+    }
 }
 
 /// Хуки воркера к Tauri-окружению — вынесены, чтобы [`worker_loop`] тестировался без `AppHandle`
