@@ -120,6 +120,35 @@ async fn aliases_resolve_links_and_populate_table() {
     );
 }
 
+/// Перф #19 (резолв по индексам): bare-basename `[[Note]]` резолвится в файл во ВЛОЖЕННОЙ папке
+/// (через индекс-выражение `idx_files_basename`), а мульти-сегментный `[[dir/Note]]` — через
+/// суффикс-ветку. Гард, чтобы оптимизация резолва не сломала семантику для реального Obsidian.
+#[tokio::test]
+async fn basename_shortcut_resolves_into_subfolder() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::create_dir_all(root.join("notes/deep")).unwrap();
+    fs::write(root.join("notes/deep/Target.md"), "# Target\n").unwrap();
+    // Bare-basename шорткат + мульти-сегментный шорткат — оба должны указать на тот же файл.
+    fs::write(root.join("Bare.md"), "see [[Target]]\n").unwrap();
+    fs::write(root.join("Seg.md"), "see [[deep/Target]]\n").unwrap();
+
+    let db = open(&root).await;
+    let idx = Indexer::new(&db, root.clone());
+    idx.index_file("notes/deep/Target.md").await.unwrap();
+    idx.index_file("Bare.md").await.unwrap();
+    idx.index_file("Seg.md").await.unwrap();
+
+    let target_id = file_id(&db, "notes/deep/Target.md").await;
+    let mut bl = backlink_sources(&db, target_id).await;
+    bl.sort();
+    assert_eq!(
+        bl,
+        vec!["Bare.md".to_string(), "Seg.md".to_string()],
+        "[[Note]] и [[dir/Note]] резолвятся в файл во вложенной папке"
+    );
+}
+
 /// AC-Б9-1: atomic-save (перезапись того же пути) сохраняет file_id, беклинки целы.
 #[tokio::test]
 async fn atomic_save_preserves_file_id_and_backlinks() {

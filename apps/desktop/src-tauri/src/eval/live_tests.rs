@@ -431,6 +431,135 @@ async fn bench_index_scale() {
     assert!(!full.nodes.is_empty());
 }
 
+/// **Cold-bench ЛОКАЛЬНОГО пайплайна (#19)** — масштабирование БЕЗ сети: эмбеддинги мокаются
+/// (`MockEmbedder`, мгновенные, детерминированные), поэтому изолируем РЕАЛЬНЫЕ узкие места локали —
+/// парсинг/чанкинг, запись в FTS5/SQLite (write-actor), построение usearch ANN, латентность
+/// гибридного поиска и графа на БОЛЬШИХ N. Сетевой throughput эмбеддинга мерится отдельно
+/// (`bench_index_scale` вживую, ~30 чанков/с на риге) — здесь его НЕ ждём, поэтому 50k+ за секунды.
+/// Размер: `NEXUS_BENCH_FILES=50000 cargo test bench_local_pipeline_scale -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "cold-bench: тяжёлый (10k–100k файлов); запускать вручную через NEXUS_BENCH_FILES"]
+async fn bench_local_pipeline_scale() {
+    use crate::ai::MockEmbedder;
+    use std::time::Instant;
+
+    let n: usize = std::env::var("NEXUS_BENCH_FILES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000);
+
+    // 1) Синтетический vault: N заметок РАЗЛОЖЕНЫ ПО ПАПКАМ (как реальный Obsidian), ссылки —
+    //    bare-basename `[[Note-J]]` (шорткат без пути/.md). Это нагружает basename-резолв
+    //    (`resolve_target` шаг 2) — самое узкое место на масштабе (#19). 50 папок, ~3 ссылки + теги.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    for d in 0..50 {
+        std::fs::create_dir_all(root.join(format!("dir{d}"))).unwrap();
+    }
+    let gen0 = Instant::now();
+    for i in 0..n {
+        let body = format!(
+            "# Note {i}\n\n\
+             Синтетическая заметка номер {i} для cold-bench. Русский текст и some English text про \
+             vector search, knowledge base и retrieval augmented generation. Второй параграф: \
+             индексация, эмбеддинги, гибридный поиск, граф связей, чанкинг, FTS5, usearch.\n\n\
+             Связи: [[Note-{}]] [[Note-{}]] [[Note-{}]]\n\n#bench #note{}\n",
+            (i + 1) % n,
+            (i + 7) % n,
+            (i + 53) % n,
+            i % 20,
+        );
+        std::fs::write(root.join(format!("dir{}/Note-{i}.md", i % 50)), body).unwrap();
+    }
+    let gen_s = gen0.elapsed().as_secs_f64();
+
+    // 2) Пайплайн с МОК-эмбеддером (эмбеддинг мгновенный → меряем только локаль).
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbedder { dim: 1024 });
+    let vectors = Arc::new(VectorIndex::open(root.join(".nexus/vectors.usearch"), 1024).unwrap());
+    let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+    let indexer = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
+
+    let idx0 = Instant::now();
+    indexer.scan_vault().await.unwrap();
+    let idx_s = idx0.elapsed().as_secs_f64();
+
+    let chunks: i64 = db
+        .reader()
+        .query(|c| c.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get::<_, i64>(0)))
+        .await
+        .unwrap();
+
+    // Размер артефактов на диске (масштабируется ли память/диск линейно).
+    let db_mb = std::fs::metadata(root.join(".nexus/nexus.db"))
+        .map(|m| m.len() as f64 / 1.048576e6)
+        .unwrap_or(0.0);
+    let usearch_mb = std::fs::metadata(root.join(".nexus/vectors.usearch"))
+        .map(|m| m.len() as f64 / 1.048576e6)
+        .unwrap_or(0.0);
+
+    // 3) Латентность поиска: K запросов с РАЗНЫМ текстом (без кэш-артефактов) → p50/p95/max.
+    let mut lat = Vec::new();
+    for k in 0..20 {
+        let q = format!("vector search граф связей чанкинг note {k}");
+        let t = Instant::now();
+        let hits = search::hybrid_search(
+            db.reader(),
+            Some(&vectors),
+            Some(embedder.as_ref()),
+            q,
+            SearchOptions {
+                limit: 8,
+                filter: None,
+                center: None,
+            },
+        )
+        .await
+        .unwrap();
+        lat.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(!hits.is_empty());
+    }
+    lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let p50 = lat[lat.len() / 2];
+    let p95 = lat[(lat.len() * 95 / 100).min(lat.len() - 1)];
+    let pmax = *lat.last().unwrap();
+
+    // 4) Граф: единый топ-2000 + локальный 2-hop.
+    let fg0 = Instant::now();
+    let full = crate::graph::get_full_graph(db.reader(), 2000)
+        .await
+        .unwrap();
+    let full_ms = fg0.elapsed().as_millis();
+    let lg0 = Instant::now();
+    let local = crate::graph::get_local_graph(db.reader(), "dir0/Note-0.md".to_string(), 2)
+        .await
+        .unwrap();
+    let local_ms = lg0.elapsed().as_millis();
+
+    eprintln!("\n=== NEXUS cold-bench: ЛОКАЛЬНЫЙ пайплайн (мок-эмбеддинг, без сети) ===");
+    eprintln!("файлов: {n} (генерация {gen_s:.1} с), чанков: {chunks}");
+    eprintln!(
+        "ИНДЕКСАЦИЯ (parse+chunk+FTS5+usearch): {idx_s:.1} с → {:.0} файлов/с, {:.0} чанков/с",
+        n as f64 / idx_s,
+        chunks as f64 / idx_s
+    );
+    eprintln!("ДИСК: nexus.db {db_mb:.1} МБ, vectors.usearch {usearch_mb:.1} МБ");
+    eprintln!("ПОИСК (гибрид, 20 запросов): p50 {p50:.0} мс, p95 {p95:.0} мс, max {pmax:.0} мс");
+    eprintln!(
+        "ГРАФ: единый(топ-2000) {full_ms} мс [узлов {} рёбер {} trunc {}], локальный(2-hop) {local_ms} мс [узлов {}]",
+        full.nodes.len(),
+        full.edges.len(),
+        full.truncated,
+        local.nodes.len()
+    );
+    eprintln!("================================================================\n");
+
+    assert!(chunks as usize >= n, "каждая заметка дала ≥1 чанк");
+    assert!(
+        p95 < 5000.0,
+        "поиск p95 {p95:.0} мс — деградация на масштабе N={n}"
+    );
+}
+
 /// ЭКСПЕРИМЕНТ (карт-бланш 2026-06-11, BACKLOG «Реранкер»): LLM-реранк топ-выдачи гибрида мелкой
 /// моделью (E4B no-think) против baseline-ранжирования. Файлы топ-24 чанков → модель упорядочивает
 /// по релевантности вопросу → метрики@8 против обычного ретрива. НЕ гейт: исследование — печатает

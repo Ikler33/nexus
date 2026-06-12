@@ -17,7 +17,10 @@ import { dirname, resolve } from 'node:path';
 // LLM-сервер/SearXNG, в CI принципиально не исполняются; запуск `cargo test live_ -- --ignored`.
 // 16→17: + `live_eval_llm_rerank_experiment` (eval-гейт LLM-реранка на живых bge+E4B; прод-гейт
 // качества по-прежнему `eval_fixture_meets_baseline` в CI на замороженных векторах).
-const EXPECTED = 17;
+// 17→19: + `live_chat_memory_recall_end_to_end` (живая проверка N4: gemma вспоминает факт из
+// прошлой сессии через врезку памяти) + `bench_local_pipeline_scale` (cold-bench #19: масштаб
+// локального пайплайна на моке без сети — ловит O(N²) в индексации; запускать через NEXUS_BENCH_FILES).
+const EXPECTED = 19;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');
