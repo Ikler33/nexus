@@ -32,8 +32,13 @@ jobs:
       fail-fast: false
       # Экономия минут Actions: на PR — ubuntu+windows (macOS = ×10 минут на приватном репо!);
       # на push в main — полная матрица ×3 ОС (ловим macOS-специфику до релиза).
+      # Windows пиннится к `windows-2022`: образ `windows-latest` 2026-06-12 деградировал —
+      # тест-бинарник падал при ЗАГРУЗКЕ с `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) на ВСЕХ
+      # джобах (PR и main), хотя компиляция/линковка проходили и тот же код зелёный на Linux+macOS.
+      # Классический рассинхрон системных DLL/MSVC при выкатке нового образа раннера. Откатить на
+      # `windows-latest`, когда GitHub починит образ.
       matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest", "windows-2022"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-2022"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
