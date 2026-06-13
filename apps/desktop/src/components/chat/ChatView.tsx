@@ -7,6 +7,8 @@ import {
   FileText,
   Sparkles,
   Globe,
+  Pin,
+  X,
   ChevronRight,
   MessageSquare,
 } from 'lucide-react';
@@ -49,6 +51,8 @@ export function ChatView() {
   const stop = useChatStore((s) => s.stop);
   const center = useWorkspaceStore(activePath);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  const pinned = useChatStore((s) => s.pinned);
+  const togglePin = useChatStore((s) => s.togglePin);
 
   const [input, setInput] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
@@ -168,7 +172,48 @@ export function ChatView() {
           <Globe size={13} aria-hidden />
           {t('chat.modeWeb')}
         </button>
+        {/* P6-PIN: закрепить активную заметку в контекст ИИ («обсудить эту заметку»). */}
+        <button
+          type="button"
+          className={`${styles.webBtn} ${center && pinned.includes(center) ? styles.webOn : ''}`}
+          aria-pressed={!!center && pinned.includes(center)}
+          onClick={() => center && togglePin(center)}
+          disabled={streaming || !center}
+          title={t('chat.pinHint')}
+        >
+          <Pin size={13} aria-hidden />
+          {t('chat.pin')}
+        </button>
       </div>
+
+      {/* P6-PIN: чипы закреплённых заметок — полное содержимое в контексте ИИ. Клик по имени —
+          открыть заметку; × — открепить. */}
+      {pinned.length > 0 && (
+        <div className={styles.pinRow} aria-label={t('chat.pinnedLabel')}>
+          {pinned.map((p) => (
+            <span key={p} className={styles.pinChip}>
+              <Pin size={11} aria-hidden />
+              <button
+                type="button"
+                className={styles.pinChipName}
+                onClick={() => void openFile(p)}
+                title={p}
+              >
+                {p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/, '')}
+              </button>
+              <button
+                type="button"
+                className={styles.pinChipX}
+                onClick={() => togglePin(p)}
+                disabled={streaming}
+                aria-label={t('chat.unpin')}
+              >
+                <X size={11} aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       <form
         className={styles.composer}

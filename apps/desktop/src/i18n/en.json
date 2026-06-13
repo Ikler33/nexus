@@ -400,6 +400,10 @@
     "inserted": "Inserted into note",
     "noActiveNote": "Open a note to insert into",
     "insertNeedsEdit": "Switch to edit mode to insert",
+    "pin": "Pin",
+    "pinHint": "Pin the active note into AI context",
+    "pinnedLabel": "Pinned notes",
+    "unpin": "Unpin",
     "error": "Error: {{message}}",
     "denied": {
       "offline": "Offline mode is on",

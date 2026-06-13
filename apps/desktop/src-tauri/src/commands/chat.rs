@@ -12,8 +12,8 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{
-    build_chat_messages, build_memory_block, build_rag_messages, build_web_answer_messages,
-    injection_marker, prepend_memory_block, ChatMessage, ChatProvider,
+    build_chat_messages, build_memory_block, build_pinned_block, build_rag_messages,
+    build_web_answer_messages, injection_marker, prepend_memory_block, ChatMessage, ChatProvider,
 };
 use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
@@ -82,6 +82,28 @@ const DEFAULT_K: usize = 8;
 /// Консервативно мало — память это ФОН, а не основной контекст (не должна глушить заметки/ответ).
 const MEMORY_K: usize = 3;
 const MEMORY_SNIPPET_CHARS: usize = 280;
+/// P6-PIN: бюджет закреплённого контекста — макс. заметок и символов на заметку (защита окна модели).
+const PINNED_MAX_NOTES: usize = 5;
+const PINNED_NOTE_CHARS: usize = 4000;
+/// Не читаем в RAM закреплённый файл крупнее этого (size-guard до read_to_string).
+const PINNED_MAX_BYTES: u64 = 1_000_000;
+
+/// P6-PIN БЕЗОПАСНОСТЬ: можно ли читать путь как закреплённую заметку в контекст ИИ. Только
+/// `.md` и БЕЗ dot-компонентов (`.nexus` с секретами/local.json/БД заметок nexus.db/историей
+/// чатов/vectors, `.git`). `resolve_vault_path` отсекает побег НАРУЖУ vault, но НЕ служебный
+/// `.nexus` — он физически внутри root; без этого гарда битый/злонамеренный IPC-вызов с
+/// `pinned=[".nexus/nexus.db"]` утёк бы секреты в LLM-канал (тот же явный guard, что в
+/// delete_path/rename_path).
+///
+/// ИНВАРИАНТ: `is_pinnable` НЕ самодостаточен против traversal — `..`-сегменты он пропускает
+/// СОЗНАТЕЛЬНО, полагаясь на последующий `resolve_vault_path` (canonicalize + проверка внутри root).
+/// Звать ТОЛЬКО в паре с `resolve_vault_path`.
+fn is_pinnable(path: &str) -> bool {
+    path.to_lowercase().ends_with(".md")
+        && !std::path::Path::new(path).components().any(|c| {
+            matches!(c, std::path::Component::Normal(s) if s.to_string_lossy().starts_with('.'))
+        })
+}
 
 /// Чат со стримингом. `grounded` (по умолчанию `true`) — режим «по vault»: RAG-ретрив → источники →
 /// промпт с контекстом. `grounded=false` — **общий чат** (V4.4): БЕЗ ретрива, ответ напрямую от
@@ -100,6 +122,7 @@ pub async fn chat_rag(
     rerank: Option<bool>,
     memory: Option<bool>,
     session_id: Option<i64>,
+    pinned: Option<Vec<String>>,
 ) -> AppResult<()> {
     let grounded = grounded.unwrap_or(true);
     let web = web.unwrap_or(false);
@@ -110,9 +133,10 @@ pub async fn chat_rag(
     // переписка часть «второго мозга»). Тумблер `aiChatMemory` в настройках AI фронта.
     let memory = memory.unwrap_or(true);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
-    let (reader, vectors, chat_vectors, embedder, chat, chat_util) = {
+    let (root, reader, vectors, chat_vectors, embedder, chat, chat_util) = {
         let ctx = state.vault().await?;
         (
+            ctx.root.clone(),
             ctx.db.reader().clone(),
             ctx.vectors.clone(),
             ctx.chat_vectors.clone(),
@@ -287,6 +311,46 @@ pub async fn chat_rag(
         }
     }
 
+    // P6-PIN: закреплённые заметки — ГАРАНТИРОВАННЫЙ контекст (полное содержимое), не зависит от
+    // RAG-ретрива. Безопасное чтение (resolve_vault_path: анти-traversal, как read_file_meta),
+    // обрезка по бюджету, обёртка анти-инъекцией. Применяется в ЛЮБОМ режиме (vault/общий/web) — пин
+    // = «обсудить ЭТИ заметки». Best-effort: битый/пропавший путь молча пропускается.
+    if let Some(paths) = pinned.as_ref().filter(|p| !p.is_empty()) {
+        let mut notes: Vec<(String, String)> = Vec::new();
+        for path in paths.iter().take(PINNED_MAX_NOTES) {
+            if !is_pinnable(path) {
+                continue; // только .md-заметки, без служебных dot-путей (.nexus/.git) — см. is_pinnable
+            }
+            let Ok(abs) = crate::vault::resolve_vault_path(&root, std::path::Path::new(path))
+            else {
+                continue; // путь вне vault / битый — пропускаем (анти-traversal)
+            };
+            // Size-guard: не грузим в RAM огромный файл целиком (read_to_string читает всё ДО
+            // обрезки PINNED_NOTE_CHARS). Слишком большой → пропускаем.
+            if let Ok(meta) = tokio::fs::metadata(&abs).await {
+                if meta.len() > PINNED_MAX_BYTES {
+                    continue;
+                }
+            }
+            match tokio::fs::read_to_string(&abs).await {
+                Ok(mut text) => {
+                    if text.chars().count() > PINNED_NOTE_CHARS {
+                        text = text.chars().take(PINNED_NOTE_CHARS).collect::<String>()
+                            + "\n…(обрезано)";
+                    }
+                    notes.push((format!("Закреплённая заметка: {path}"), text));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, %path, "pin: чтение закреплённой заметки не удалось")
+                }
+            }
+        }
+        prepend_memory_block(
+            &mut messages,
+            build_pinned_block(&notes, &injection_marker()),
+        );
+    }
+
     // 3) Стриминг ответа (с отменой). Помечаем интерактивную LLM-операцию (S5): планировщик уступит
     // фоновые LLM-джобы, пока идёт чат.
     let _llm_busy = state.enter_interactive_llm();
@@ -405,4 +469,25 @@ async fn summarize_reasoning(
 pub async fn chat_cancel(state: State<'_, AppState>) -> AppResult<()> {
     state.cancel_active_chat();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_pinnable;
+
+    #[test]
+    fn pinnable_allows_md_blocks_service_paths() {
+        // Обычные .md-заметки — можно.
+        assert!(is_pinnable("Inbox.md"));
+        assert!(is_pinnable("Projects/Roadmap.md"));
+        assert!(is_pinnable("Заметки/Идея.MD")); // регистр расширения не важен
+                                                 // Служебные dot-пути (секреты/БД/история) и не-.md — НЕЛЬЗЯ (анти-эксфильтрация в LLM).
+        assert!(!is_pinnable(".nexus/local.json"));
+        assert!(!is_pinnable(".nexus/nexus.db"));
+        assert!(!is_pinnable(".nexus/history/x.md")); // .md, но dot-компонент .nexus
+        assert!(!is_pinnable(".git/config"));
+        assert!(!is_pinnable("Notes/.hidden.md")); // dot-файл
+        assert!(!is_pinnable("README.txt")); // не .md
+        assert!(!is_pinnable("image.png"));
+    }
 }
