@@ -2,6 +2,7 @@ import {
   autocompletion,
   type CompletionContext,
   type CompletionResult,
+  type CompletionSource,
 } from '@codemirror/autocomplete';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
@@ -15,6 +16,7 @@ import {
 } from '@codemirror/view';
 import type { NoteRef } from '../../lib/tauri-api';
 import { noteName } from '../../stores/vault';
+import { slashSource } from './slashCommands';
 
 // `[[Target]]`, `[[Target#H|Alias]]`, `![[Embed]]`
 const WIKILINK_RE = /(!?)\[\[([^\]\n]+?)\]\]/g;
@@ -108,26 +110,23 @@ function wikilinkClick(onOpenLink: () => ((target: string) => void) | undefined)
 
 /** Автокомплит имён заметок внутри `[[…` — асинхронный запрос топ-N к бэкенду (кросс-план #22):
  * вместо полного списка vault в памяти каждый ввод спрашивает отфильтрованный срез (бэкенд ранжирует
- * префикс-совпадения выше). `filter: false` — CM6 не пере-фильтрует уже отобранное. */
-function wikilinkAutocomplete(fetchNotes: (q: string) => Promise<NoteRef[]>): Extension {
-  return autocompletion({
-    override: [
-      async (ctx: CompletionContext): Promise<CompletionResult | null> => {
-        const line = ctx.state.doc.lineAt(ctx.pos);
-        const before = ctx.state.sliceDoc(line.from, ctx.pos);
-        const m = /\[\[([^\]\n]*)$/.exec(before);
-        if (!m) return null;
-        const from = ctx.pos - m[1].length;
-        const notes = await fetchNotes(m[1]);
-        const options = notes.map((n) => ({
-          label: noteName(n.path),
-          detail: n.title ?? n.path,
-          type: 'class',
-        }));
-        return { from, options, filter: false };
-      },
-    ],
-  });
+ * префикс-совпадения выше). `filter: false` — CM6 не пере-фильтрует уже отобранное. Чистый
+ * CompletionSource — монтируется в ЕДИНЫЙ autocompletion() рядом со slash-источником (EDIT-6). */
+function wikilinkSource(fetchNotes: (q: string) => Promise<NoteRef[]>): CompletionSource {
+  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
+    const line = ctx.state.doc.lineAt(ctx.pos);
+    const before = ctx.state.sliceDoc(line.from, ctx.pos);
+    const m = /\[\[([^\]\n]*)$/.exec(before);
+    if (!m) return null;
+    const from = ctx.pos - m[1].length;
+    const notes = await fetchNotes(m[1]);
+    const options = notes.map((n) => ({
+      label: noteName(n.path),
+      detail: n.title ?? n.path,
+      type: 'class',
+    }));
+    return { from, options, filter: false };
+  };
 }
 
 const editorTheme = EditorView.theme({
@@ -213,7 +212,9 @@ export function nexusExtensions(cb: EditorCallbacks): Extension[] {
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     decorationPlugin,
     wikilinkClick(cb.getOpenLink),
-    wikilinkAutocomplete(cb.fetchNotes),
+    // EDIT-6: ЕДИНЫЙ autocompletion() с двумя источниками — wikilink (`[[…`) и slash (`/…`). Их
+    // контексты взаимоисключающие (по regex), монтировать два autocompletion() нельзя (конфликт конфигов).
+    autocompletion({ override: [wikilinkSource(cb.fetchNotes), slashSource()] }),
     editorTheme,
     EditorView.lineWrapping,
   ];
