@@ -193,6 +193,25 @@ impl Indexer {
         let (old_chunk_ids, new_chunk_ids) = self
             .writer
             .transaction(move |tx| {
+                // EVT-1 (честная ось времени): прошлое состояние ДО апсерта — для типа события
+                // (create/modify) и words_delta. Читаем хеш+слова текущей строки (любой is_deleted).
+                let prev: Option<(String, i64)> = tx
+                    .query_row(
+                        "SELECT hash, word_count FROM files WHERE path=?1",
+                        [&rel_owned],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                // Событие пишем ТОЛЬКО при реальной смене контента (поправка критика: апсерт ниже
+                // безусловен, но force-rescan/повторная индексация неизменённого файла НЕ должны
+                // плодить фантомные modify — иначе ось времени отравлена).
+                let evt_kind: Option<&str> = match &prev {
+                    None => Some("create"),
+                    Some((old_hash, _)) if *old_hash != hash => Some("modify"),
+                    Some(_) => None,
+                };
+                let prev_words = prev.as_ref().map(|(_, w)| *w).unwrap_or(0);
+
                 let file_id: i64 = tx.query_row(
                     "INSERT INTO files \
                        (path,hash,title,created_at,updated_at,indexed_at,size_bytes,word_count,frontmatter) \
@@ -215,6 +234,16 @@ impl Indexer {
                     ],
                     |r| r.get(0),
                 )?;
+
+                // EVT-1: точка временной оси. ts = `now` (когда Nexus увидел правку), НЕ mtime.
+                if let Some(kind) = evt_kind {
+                    let words_after = parsed.word_count as i64;
+                    tx.execute(
+                        "INSERT INTO edit_events (file_id, ts, kind, words_delta, words_after) \
+                         VALUES (?1,?2,?3,?4,?5)",
+                        params![file_id, now, kind, words_after - prev_words, words_after],
+                    )?;
+                }
 
                 // Алиасы из frontmatter (V4.1): полная замена. UNIQUE(alias) глобальный →
                 // OR REPLACE (последний проиндексированный файл выигрывает спорный алиас).
@@ -340,14 +369,20 @@ impl Indexer {
     /// и чанки (+FTS через триггеры). Векторы удаляются из usearch после транзакции.
     pub async fn remove_file(&self, rel: &str) -> DbResult<()> {
         let rel = rel.to_string();
+        let now = now_secs();
         let removed_chunk_ids = self
             .writer
             .transaction(move |tx| {
-                let id: Option<i64> = tx
-                    .query_row("SELECT id FROM files WHERE path=?1", [&rel], |r| r.get(0))
+                // EVT-1: тянем word_count + is_deleted, чтобы записать точку удаления (раз) с words_delta.
+                let row: Option<(i64, i64, i64)> = tx
+                    .query_row(
+                        "SELECT id, word_count, is_deleted FROM files WHERE path=?1",
+                        [&rel],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
                     .optional()?;
                 let mut chunk_ids: Vec<u64> = Vec::new();
-                if let Some(id) = id {
+                if let Some((id, prev_words, was_deleted)) = row {
                     {
                         let mut stmt = tx.prepare("SELECT id FROM chunks WHERE file_id=?1")?;
                         chunk_ids = stmt
@@ -356,6 +391,14 @@ impl Indexer {
                             .into_iter()
                             .map(|c| c as u64)
                             .collect();
+                    }
+                    // EVT-1: событие удаления — только при ПЕРВОМ удалении (анти-дубль, ось времени).
+                    if was_deleted == 0 {
+                        tx.execute(
+                            "INSERT INTO edit_events (file_id, ts, kind, words_delta, words_after) \
+                             VALUES (?1,?2,'delete',?3,0)",
+                            params![id, now, -prev_words],
+                        )?;
                     }
                     tx.execute("UPDATE files SET is_deleted=1 WHERE id=?1", [id])?;
                     tx.execute("UPDATE links SET target_id=NULL WHERE target_id=?1", [id])?;
