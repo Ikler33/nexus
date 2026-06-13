@@ -33,6 +33,9 @@ thiserror = { workspace = true }
 notify-debouncer-full = { workspace = true }
 pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }
+# Атомарная запись заметок (SAFE-1): tmp-в-той-же-папке → fsync → rename поверх цели. Был только в
+# dev-deps (TempDir тестов) — теперь нужен и рантайму (`vault::atomic_write`).
+tempfile = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
@@ -56,7 +59,6 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 # Для интеграционных тестов git-sync (#12): создать локальный bare-remote (init_bare) и клон. Те же
 # фичи, что у обычной зависимости — Cargo унифицирует сборку (без второго билда libgit2).
 git2 = { version = "0.20", default-features = false, features = [

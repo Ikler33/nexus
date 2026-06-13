@@ -626,7 +626,11 @@ pub async fn write_file(
 ) -> AppResult<()> {
     let root = current_root(&state).await?;
     let abs = vault::resolve_vault_path_for_write(&root, Path::new(&path))?;
-    Ok(tokio::fs::write(&abs, content).await?)
+    // Атомарная запись (tmp→fsync→rename) в blocking-пуле: обрыв на середине не корраптит заметку.
+    tokio::task::spawn_blocking(move || vault::atomic_write(&abs, content.as_bytes()))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
+    Ok(())
 }
 
 /// Заметки vault (path + title) для автокомплита `[[wikilink]]`. Кросс-план #22: вместо
