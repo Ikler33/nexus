@@ -6,9 +6,12 @@ import { tauriApi } from '../../lib/tauri-api';
 import { disclosureOpen, useChatStore } from '../../stores/chat';
 import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { useToastStore } from '../../stores/toast';
+import * as activeView from '../../lib/editor/activeView';
 
 beforeEach(() => {
   useChatStore.setState({ messages: [], streaming: false, mode: 'vault', web: false });
+  useToastStore.setState({ toasts: [] });
   disclosureOpen.clear();
 });
 
@@ -159,6 +162,88 @@ describe('ChatView (Ф1-8)', () => {
     expect(screen.getByText('Офлайн-режим включён')).toBeInTheDocument();
     // Сырой текст ошибки в баннере не показывается.
     expect(screen.queryByText(/сырая строка/)).not.toBeInTheDocument();
+  });
+
+  // P6-AR: действия под ответом ИИ.
+  const assistantMsg = (content: string) => [
+    { id: 'u1' as const, role: 'user' as const, content: 'q' },
+    { id: 'a1' as const, role: 'assistant' as const, content },
+  ];
+
+  it('P6-AR: под готовым ответом есть «Копировать» и «Вставить в заметку»', () => {
+    useChatStore.setState({ messages: assistantMsg('Ответ ИИ'), streaming: false });
+    render(<ChatView />);
+    expect(screen.getByRole('button', { name: 'Копировать' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Вставить в заметку' })).toBeInTheDocument();
+  });
+
+  it('P6-AR: «Копировать» кладёт ответ в буфер обмена + тост', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    useChatStore.setState({ messages: assistantMsg('Текст ответа'), streaming: false });
+    render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Копировать' }));
+    expect(writeText).toHaveBeenCalledWith('Текст ответа');
+    await vi.waitFor(() =>
+      expect(useToastStore.getState().toasts.some((t) => t.message === 'Ответ скопирован')).toBe(true),
+    );
+  });
+
+  it('P6-AR: «Вставить» без открытой заметки (Home/News) — «откройте заметку»', () => {
+    vi.spyOn(activeView, 'getActiveEditorView').mockReturnValue(null);
+    useWorkspaceStore.getState().reset(); // нет активной вкладки
+    useChatStore.setState({ messages: assistantMsg('Текст'), streaming: false });
+    render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Вставить в заметку' }));
+    expect(
+      useToastStore.getState().toasts.some((t) => t.message === 'Откройте заметку для вставки'),
+    ).toBe(true);
+  });
+
+  it('P6-AR: «Вставить» в режиме чтения (заметка открыта, но CM6 размонтирован) — честная подсказка', () => {
+    vi.spyOn(activeView, 'getActiveEditorView').mockReturnValue(null);
+    // Заметка открыта (активная вкладка есть), но редактора нет (preview/reading).
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+    });
+    useChatStore.setState({ messages: assistantMsg('Текст'), streaming: false });
+    render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Вставить в заметку' }));
+    expect(
+      useToastStore.getState().toasts.some((t) => t.message === 'Переключитесь в режим редактирования'),
+    ).toBe(true);
+  });
+
+  it('P6-AR: «Вставить» с активным редактором — dispatch вставки у курсора + тост', () => {
+    const dispatch = vi.fn();
+    const focus = vi.fn();
+    const fakeView = {
+      state: { selection: { main: { from: 3, to: 3 } } },
+      dispatch,
+      focus,
+    } as unknown as ReturnType<typeof activeView.getActiveEditorView>;
+    vi.spyOn(activeView, 'getActiveEditorView').mockReturnValue(fakeView);
+    useChatStore.setState({ messages: assistantMsg('ВСТАВКА'), streaming: false });
+    render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Вставить в заметку' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      changes: { from: 3, to: 3, insert: 'ВСТАВКА' },
+      selection: { anchor: 3 + 'ВСТАВКА'.length },
+    });
+    expect(useToastStore.getState().toasts.some((t) => t.message === 'Вставлено в заметку')).toBe(true);
+  });
+
+  it('P6-AR: под стримящимся ответом действий нет', () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'q' },
+        { id: 'a1', role: 'assistant', content: 'частичный…', streaming: true },
+      ],
+      streaming: true,
+    });
+    render(<ChatView />);
+    expect(screen.queryByRole('button', { name: 'Копировать' })).not.toBeInTheDocument();
   });
 
   it('DP-12: стиль источников chips/footnotes переключается настройкой ragSources', () => {
