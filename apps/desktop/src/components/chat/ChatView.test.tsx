@@ -10,7 +10,7 @@ import { useToastStore } from '../../stores/toast';
 import * as activeView from '../../lib/editor/activeView';
 
 beforeEach(() => {
-  useChatStore.setState({ messages: [], streaming: false, mode: 'vault', web: false });
+  useChatStore.setState({ messages: [], streaming: false, mode: 'vault', web: false, pinned: [] });
   useToastStore.setState({ toasts: [] });
   disclosureOpen.clear();
 });
@@ -244,6 +244,15 @@ describe('ChatView (Ф1-8)', () => {
     });
     render(<ChatView />);
     expect(screen.queryByRole('button', { name: 'Копировать' })).not.toBeInTheDocument();
+  });
+
+  // P6-PIN: чипы закреплённых заметок над композером.
+  it('P6-PIN: закреплённые заметки показаны чипами; × открепляет', () => {
+    useChatStore.setState({ pinned: ['Notes/Idea.md'], streaming: false });
+    render(<ChatView />);
+    expect(screen.getByText('Idea')).toBeInTheDocument(); // имя без папки/.md
+    fireEvent.click(screen.getByRole('button', { name: 'Открепить' }));
+    expect(useChatStore.getState().pinned).toEqual([]);
   });
 
   it('DP-12: стиль источников chips/footnotes переключается настройкой ragSources', () => {

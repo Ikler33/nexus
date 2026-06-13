@@ -16,7 +16,7 @@ beforeEach(() => {
   });
   resetMockSessions();
   useChatStore.getState().hydrate(null); // сброс контекста vault + ленты
-  useChatStore.setState({ streaming: false, mode: 'vault' });
+  useChatStore.setState({ streaming: false, mode: 'vault', pinned: [] });
 });
 
 afterEach(() => {
@@ -25,6 +25,72 @@ afterEach(() => {
 });
 
 describe('chat store (Ф1-8)', () => {
+  // P6-PIN: закрепление заметок в контекст.
+  it('togglePin закрепляет/открепляет путь', () => {
+    useChatStore.getState().togglePin('A.md');
+    expect(useChatStore.getState().pinned).toEqual(['A.md']);
+    useChatStore.getState().togglePin('B.md');
+    expect(useChatStore.getState().pinned).toEqual(['A.md', 'B.md']);
+    useChatStore.getState().togglePin('A.md'); // повтор — открепляет
+    expect(useChatStore.getState().pinned).toEqual(['B.md']);
+  });
+
+  it('togglePin: кап PIN_MAX=5 (старейший вытесняется)', () => {
+    for (let i = 0; i < 6; i++) useChatStore.getState().togglePin(`N${i}.md`);
+    const p = useChatStore.getState().pinned;
+    expect(p).toHaveLength(5);
+    expect(p).not.toContain('N0.md'); // старейший вытеснен
+    expect(p[4]).toBe('N5.md');
+  });
+
+  it('togglePin/clearPins — no-op во время стрима', () => {
+    useChatStore.setState({ pinned: ['A.md'], streaming: true });
+    useChatStore.getState().togglePin('B.md');
+    useChatStore.getState().clearPins();
+    expect(useChatStore.getState().pinned).toEqual(['A.md']); // заморожено
+  });
+
+  it('send передаёт pinned в streamRag', () => {
+    const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    useChatStore.setState({ pinned: ['Pinned.md'] });
+    useChatStore.getState().send('вопрос');
+    expect(spy).toHaveBeenCalledWith(
+      'вопрос',
+      expect.any(Function),
+      expect.objectContaining({ pinned: ['Pinned.md'] }),
+    );
+    useChatStore.getState().stop();
+  });
+
+  it('hydrate (смена vault) чистит pinned — нет кросс-vault утечки', () => {
+    useChatStore.setState({ pinned: ['A.md', 'B.md'] });
+    useChatStore.getState().hydrate('/vault/B');
+    expect(useChatStore.getState().pinned).toEqual([]);
+  });
+
+  it('dropPinsUnder открепляет удалённый путь/поддерево (CURATE)', () => {
+    useChatStore.setState({ pinned: ['Notes/Idea.md', 'Notes/Sub/X.md', 'Other.md'] });
+    useChatStore.getState().dropPinsUnder('Notes');
+    expect(useChatStore.getState().pinned).toEqual(['Other.md']);
+  });
+
+  it('renamePins переписывает закреплённые пути (CURATE)', () => {
+    useChatStore.setState({ pinned: ['Old.md', 'Other.md'] });
+    useChatStore.getState().renamePins('Old.md', 'New.md');
+    expect(useChatStore.getState().pinned).toEqual(['New.md', 'Other.md']);
+  });
+
+  it('send без закреплений — pinned undefined', () => {
+    const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    useChatStore.getState().send('вопрос');
+    expect(spy).toHaveBeenCalledWith(
+      'вопрос',
+      expect.any(Function),
+      expect.objectContaining({ pinned: undefined }),
+    );
+    useChatStore.getState().stop();
+  });
+
   it('send: вопрос → user+assistant, стрим → готовый ответ с источниками', async () => {
     useChatStore.getState().send('Roadmap');
 

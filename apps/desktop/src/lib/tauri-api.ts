@@ -852,6 +852,8 @@ export const tauriApi = {
         rerank?: boolean;
         memory?: boolean;
         sessionId?: number | null;
+        /** P6-PIN: пути закреплённых заметок — их полное содержимое в гарантированный контекст. */
+        pinned?: string[];
       },
     ): (() => void) => {
       if (!isTauri())
@@ -871,6 +873,7 @@ export const tauriApi = {
         rerank: opts?.rerank,
         memory: opts?.memory,
         sessionId: opts?.sessionId,
+        pinned: opts?.pinned,
         channel,
       }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
       return () => {

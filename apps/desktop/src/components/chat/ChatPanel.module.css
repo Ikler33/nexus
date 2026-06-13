@@ -539,6 +539,59 @@
   gap: 6px;
   margin-top: 4px;
 }
+/* P6-PIN: ряд чипов закреплённых заметок над композером. */
+.pinRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px var(--space-3, 12px) 0;
+}
+.pinChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border-radius: 99px;
+  background: color-mix(in oklab, var(--color-ai) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-ai) 32%, transparent);
+  font-size: var(--text-xs);
+}
+.pinChip > svg {
+  color: var(--color-ai);
+  flex: 0 0 auto;
+}
+.pinChipName {
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.pinChipName:hover {
+  text-decoration: underline;
+}
+.pinChipX {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: 99px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.pinChipX:hover {
+  color: var(--color-text);
+  background: color-mix(in oklab, var(--color-ai) 20%, transparent);
+}
+
 /* P6-AR: ряд действий под ответом ИИ (копировать / вставить в заметку). */
 .msgActions {
   display: flex;

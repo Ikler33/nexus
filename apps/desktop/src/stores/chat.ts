@@ -64,6 +64,18 @@ interface ChatState {
   setMode: (mode: ChatMode) => void;
   /** Тоггл web-флага (нельзя во время стрима). Режим не трогает. */
   toggleWeb: () => void;
+  /** Закреплённые заметки (P6-PIN): их ПОЛНОЕ содержимое гарантированно идёт в контекст ИИ —
+   *  «обсудить эту заметку» (не зависит от RAG-ретрива). Пути относительно vault, кап PIN_MAX. */
+  pinned: string[];
+  /** Закрепить/открепить заметку по пути (no-op во время стрима; кап PIN_MAX при добавлении). */
+  togglePin: (path: string) => void;
+  /** Снять все закрепления. */
+  clearPins: () => void;
+  /** CURATE: открепить пути под удалённым (delete файла/каталога) — не держим мёртвый пин. */
+  dropPinsUnder: (path: string) => void;
+  /** CURATE: переписать закреплённые пути при rename/move (своп префикса) — иначе после
+   *  переименования на старый путь может лечь чужая заметка → неверный контекст ИИ. */
+  renamePins: (from: string, to: string) => void;
   /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
   /** Останавливает текущий стрим (если идёт). */
@@ -86,6 +98,9 @@ interface ChatState {
 
 let seq = 0;
 const nextId = () => `m${++seq}`;
+
+/** Максимум закреплённых заметок (P6-PIN) — бюджет контекста; бэкенд тоже капит. */
+const PIN_MAX = 5;
 
 export const useChatStore = create<ChatState>((set, get) => {
   let cancelFn: (() => void) | null = null;
@@ -136,6 +151,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     streaming: false,
     mode: 'vault',
     web: false,
+    pinned: [],
     sessionId: null,
 
     setMode(mode) {
@@ -147,6 +163,33 @@ export const useChatStore = create<ChatState>((set, get) => {
       const web = !get().web;
       logUi('chat:web-toggle', web ? 'on' : 'off');
       set({ web });
+    },
+    togglePin(path) {
+      if (get().streaming || !path) return; // во время стрима заморожено
+      const has = get().pinned.includes(path);
+      const pinned = has
+        ? get().pinned.filter((p) => p !== path)
+        : [...get().pinned, path].slice(-PIN_MAX); // кап: при переполнении вытесняем старейший
+      logUi('chat:pin-toggle', `${has ? 'unpin' : 'pin'} (${pinned.length})`);
+      set({ pinned });
+    },
+    clearPins() {
+      if (get().streaming) return;
+      set({ pinned: [] });
+    },
+    dropPinsUnder(path) {
+      const under = (p: string) => p === path || p.startsWith(`${path}/`);
+      const pinned = get().pinned.filter((p) => !under(p));
+      if (pinned.length !== get().pinned.length) set({ pinned });
+    },
+    renamePins(from, to) {
+      const map = (p: string) =>
+        p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p;
+      const cur = get().pinned;
+      const remapped = cur.map(map);
+      // Дедуп: rename на уже-закреплённый путь не должен плодить дубль.
+      const pinned = remapped.filter((p, i) => remapped.indexOf(p) === i);
+      if (pinned.some((p, i) => p !== cur[i]) || pinned.length !== cur.length) set({ pinned });
     },
 
     send(question, center) {
@@ -234,7 +277,8 @@ export const useChatStore = create<ChatState>((set, get) => {
 
       const mode = get().mode;
       const web = get().web;
-      logUi('chat:send', `mode=${mode} web=${web} len=${question.length}`);
+      const pinned = get().pinned;
+      logUi('chat:send', `mode=${mode} web=${web} pins=${pinned.length} len=${question.length}`);
       cancelFn = tauriApi.chat.streamRag(q, onEvent, {
         center,
         grounded: mode === 'vault',
@@ -244,6 +288,8 @@ export const useChatStore = create<ChatState>((set, get) => {
         // по sessionId — не пересказываем ассистенту его же реплики из этого диалога.
         memory: usePrefsStore.getState().aiChatMemory,
         sessionId: get().sessionId,
+        // P6-PIN: гарантированный контекст закреплённых заметок (полное содержимое).
+        pinned: pinned.length ? pinned : undefined,
       });
     },
 
@@ -275,7 +321,9 @@ export const useChatStore = create<ChatState>((set, get) => {
       // контекста — хвост финализируется в историю СТАРОГО vault, отмена уходит на бэкенд.
       if (get().streaming) get().stop();
       vaultOpen = root != null;
-      set({ messages: [], sessionId: null });
+      // pinned ЧИСТИМ при смене vault: пути относительны хранилищу — иначе кросс-vault утечка
+      // содержимого в контекст ИИ (одноимённый файл в новом vault) или мёртвые чипы.
+      set({ messages: [], sessionId: null, pinned: [] });
       if (!vaultOpen) return;
       // Продолжаем последнюю сессию (поведение прежнего localStorage-хвоста, теперь из БД).
       void tauriApi.chat.sessions

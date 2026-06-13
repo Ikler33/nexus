@@ -115,6 +115,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // Закрываем открытые буферы/вкладки удалённого пути (дин. импорт — без цикла vault↔workspace).
     const { useWorkspaceStore } = await import('./workspace');
     useWorkspaceStore.getState().dropPathsUnder(path);
+    // P6-PIN: открепляем удалённый путь из контекста чата (не держим мёртвый пин).
+    const { useChatStore } = await import('./chat');
+    useChatStore.getState().dropPinsUnder(path);
     // Обновляем детей родительского каталога (удалённый элемент исчезает из дерева).
     const dir = parentDir(path);
     const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
@@ -140,6 +143,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     }
     await tauriApi.vault.renamePath(from, to);
     useWorkspaceStore.getState().renameBufferPath(from, to);
+    // P6-PIN: переписываем закреплённые пути (иначе после rename на старый путь может лечь чужая
+    // заметка → неверный контекст ИИ).
+    const { useChatStore } = await import('./chat');
+    useChatStore.getState().renamePins(from, to);
     // Обновляем оба затронутых каталога (источник и приёмник могут отличаться при move).
     const dirs = Array.from(new Set([parentDir(from), parentDir(to)]));
     for (const d of dirs) {
