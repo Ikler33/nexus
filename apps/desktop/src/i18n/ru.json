@@ -331,6 +331,7 @@
     "placeholder": "Команда…",
     "label": "Палитра команд",
     "empty": "Нет команд",
+    "recents": "Недавние",
     "files": "Файлы",
     "content": "По содержимому",
     "commands": "Команды",
@@ -712,6 +713,7 @@
   },
   "commands": {
     "palette.open": "Палитра команд",
+    "recents.open": "Перейти к недавним…",
     "vault.open": "Открыть vault…",
     "vault.rescan": "Переиндексировать vault",
     "view.toggleSidebar": "Свернуть боковую панель",

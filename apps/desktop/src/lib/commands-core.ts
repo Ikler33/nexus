@@ -41,11 +41,20 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().openPalette(),
     }),
     commands.register({
+      // NAV-2: quick-switcher — палитра с секцией «Недавние» на пустом запросе (мускульная память ⌘O).
+      id: 'recents.open',
+      title: 'Go to recent…',
+      titleKey: 'commands.recents.open',
+      source: 'core',
+      defaultKey: 'mod+o',
+      run: () => useUIStore.getState().openPalette(),
+    }),
+    commands.register({
       id: 'vault.open',
       title: 'Open vault…',
       titleKey: 'commands.vault.open',
       source: 'core',
-      defaultKey: 'mod+o',
+      defaultKey: 'mod+shift+o', // NAV-2: уступил ⌘O quick-switcher'у (открытие vault — редкое)
       run: () => openVaultFlow(),
     }),
     commands.register({

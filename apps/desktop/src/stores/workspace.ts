@@ -42,12 +42,44 @@ const INITIAL_GROUP = 'g0';
 let groupSeq = 0;
 const nextGroupId = () => `g${++groupSeq}`;
 
+/** Список недавно открытых заметок (NAV-2, ⌘O quick-switcher): MRU, без дублей, кап 20.
+ *  Персистится в localStorage — быстрый возврат переживает перезапуск. Глобальный ключ
+ *  (приложение однохранилищное); reset (закрытие vault) чистит in-memory. */
+const RECENTS_KEY = 'nexus.recents.v1';
+const RECENTS_MAX = 20;
+
+function loadRecents(): string[] {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(RECENTS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr)
+      ? arr.filter((p): p is string => typeof p === 'string').slice(0, RECENTS_MAX)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecents(list: string[]): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list));
+  } catch {
+    /* приватный режим / квота — recents не критичны для работы */
+  }
+}
+
 interface WorkspaceState {
   buffers: Record<string, Buffer>;
   groups: EditorGroup[];
   activeGroupId: string;
+  /** Недавно открытые заметки (NAV-2): MRU-список путей для ⌘O quick-switcher. */
+  recents: string[];
 
   openFile: (path: string, groupId?: string) => Promise<void>;
+  /** Поднять путь в начало recents (дедуп, кап 20) + персист. Зовётся из openFile. */
+  pushRecent: (path: string) => void;
   openLink: (target: string) => Promise<void>;
   setActiveTab: (groupId: string, path: string) => void;
   setActiveGroup: (groupId: string) => void;
@@ -85,6 +117,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   buffers: {},
   groups: freshGroups(),
   activeGroupId: INITIAL_GROUP,
+  recents: loadRecents(),
+
+  pushRecent(path) {
+    const recents = [path, ...get().recents.filter((p) => p !== path)].slice(0, RECENTS_MAX);
+    saveRecents(recents);
+    set({ recents });
+  },
 
   async openFile(path, groupId) {
     // Открытие файла переключает main-область на редактор (Home/News — полные вьюхи, DP-1).
@@ -118,6 +157,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           : g,
       ),
     }));
+    get().pushRecent(path); // NAV-2: открытие = недавнее (для ⌘O)
   },
 
   async openLink(target) {
@@ -374,7 +414,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   reset() {
     cancelAllAutosave(); // SAFE-4: гасим отложенные автосейвы — не стреляют по выброшенным буферам
-    set({ buffers: {}, groups: freshGroups(), activeGroupId: INITIAL_GROUP, modes: {} });
+    set({ buffers: {}, groups: freshGroups(), activeGroupId: INITIAL_GROUP, modes: {}, recents: [] });
   },
 }));
 
