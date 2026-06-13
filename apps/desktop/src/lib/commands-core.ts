@@ -1,6 +1,7 @@
 import { commands, type Disposable } from './commands';
 import { openOrCreateDaily } from './daily';
 import { getActiveEditorView } from './editor/activeView';
+import { toggleWrap } from './editor/format';
 import { printActiveNote } from './print';
 import { isTauri, tauriApi, type InlineMode } from './tauri-api';
 import { useInlineStore } from '../stores/inline';
@@ -15,6 +16,12 @@ function runInlineInActiveEditor(mode: InlineMode): void {
   if (!view) return;
   view.focus();
   useInlineStore.getState().runInline(view, mode);
+}
+
+/** EDIT-1: тоггл markdown-обрамления выделения в активном редакторе. Нет редактора — no-op. */
+function formatActiveEditor(marker: string): void {
+  const view = getActiveEditorView();
+  if (view) toggleWrap(view, marker);
 }
 
 /** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
@@ -156,6 +163,24 @@ export function registerCoreCommands(): Disposable {
       titleKey: 'commands.inline.summarize',
       source: 'core',
       run: () => runInlineInActiveEditor('summarize'),
+    }),
+    commands.register({
+      // EDIT-1: жирный ⌘B (тоггл **…**). CM6 не биндит Mod-b → ловит глобальный useKeymap.
+      id: 'editor.format.bold',
+      title: 'Bold',
+      titleKey: 'commands.format.bold',
+      source: 'core',
+      defaultKey: 'mod+b',
+      run: () => formatActiveEditor('**'),
+    }),
+    commands.register({
+      // EDIT-1: курсив ⌘⇧I (тоггл *…*). ⌘I занят inline-LLM (IL-2), поэтому ⌘⇧I.
+      id: 'editor.format.italic',
+      title: 'Italic',
+      titleKey: 'commands.format.italic',
+      source: 'core',
+      defaultKey: 'mod+shift+i',
+      run: () => formatActiveEditor('*'),
     }),
     commands.register({
       id: 'editor.toggleMode',

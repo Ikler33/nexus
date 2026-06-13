@@ -758,6 +758,8 @@
     "view.contradictions": "Поиск противоречий",
     "view.news": "Новости",
     "view.home": "Home",
+    "format.bold": "Жирный",
+    "format.italic": "Курсив",
     "editor.toggleMode": "Редактор: правка / просмотр",
     "versions.open": "История версий",
     "theme.toggle": "Тема: светлая / тёмная",
