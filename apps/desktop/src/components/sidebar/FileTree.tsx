@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronRight, File as FileIcon, Folder, Star, Trash2 } from 'lucide-react';
+import { ChevronRight, File as FileIcon, Folder, Pencil, Star, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useStarredStore } from '../../stores/starred';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
@@ -23,6 +23,7 @@ export function FileTree() {
   const toggleDir = useVaultStore((s) => s.toggleDir);
   const createNote = useVaultStore((s) => s.createNote);
   const deleteFile = useVaultStore((s) => s.deleteFile);
+  const renameFile = useVaultStore((s) => s.renameFile);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const starredPaths = useStarredStore((s) => s.paths);
   const toggleStar = useStarredStore((s) => s.toggle);
@@ -32,6 +33,20 @@ export function FileTree() {
   const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(
     null,
   );
+  // Инлайн-переименование: путь редактируемой строки + текущее значение (имя без .md).
+  const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
+
+  // Применить переименование: новый путь = тот же каталог + введённое имя (+ .md для файла).
+  const commitRename = (entry: { path: string; isDir: boolean }) => {
+    const r = renaming;
+    setRenaming(null);
+    if (!r) return;
+    const newName = r.value.trim();
+    if (!newName) return;
+    const dir = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : '';
+    const newPath = `${dir ? `${dir}/` : ''}${newName}${entry.isDir ? '' : '.md'}`;
+    if (newPath !== entry.path) void renameFile(entry.path, newPath);
+  };
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
@@ -190,7 +205,23 @@ export function FileTree() {
               )}
               {entry.isDir ? <Folder size={15} aria-hidden /> : <FileIcon size={15} aria-hidden />}
               {/* DP-15 (макет sidebar.jsx): расширение .md в дереве не показываем. */}
-              <span className={styles.name}>{entry.name.replace(/\.md$/, '')}</span>
+              {renaming?.path === entry.path ? (
+                <input
+                  className={styles.renameInput}
+                  value={renaming.value}
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setRenaming({ path: entry.path, value: e.target.value })}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter') commitRename(entry);
+                    else if (e.key === 'Escape') setRenaming(null);
+                  }}
+                  onBlur={() => commitRename(entry)}
+                />
+              ) : (
+                <span className={styles.name}>{entry.name.replace(/\.md$/, '')}</span>
+              )}
               {!entry.isDir && (
                 <button
                   type="button"
@@ -218,6 +249,18 @@ export function FileTree() {
         role="menu"
         onClick={(e) => e.stopPropagation()}
       >
+        <button
+          type="button"
+          className={styles.ctxItemNeutral}
+          role="menuitem"
+          onClick={() => {
+            const target = menu;
+            setMenu(null);
+            setRenaming({ path: target.path, value: target.name });
+          }}
+        >
+          <Pencil size={14} aria-hidden /> {t('tree.rename')}
+        </button>
         <button
           type="button"
           className={styles.ctxItem}

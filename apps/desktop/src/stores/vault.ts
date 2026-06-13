@@ -27,6 +27,8 @@ interface VaultState {
   createNote: (dir?: string, opts?: { baseName?: string; content?: string }) => Promise<string>;
   /** Удаляет заметку/каталог в корзину (CURATE-1): закрывает открытые буферы пути и обновляет дерево. */
   deleteFile: (path: string) => Promise<void>;
+  /** Переименовывает/перемещает путь (CURATE-2): сохраняет грязные буферы, переносит их и дерево. */
+  renameFile: (from: string, to: string) => Promise<void>;
 }
 
 /** Родительский каталог пути ('' = корень). */
@@ -115,6 +117,25 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     const dir = parentDir(path);
     const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
     set((s) => ({ childrenByPath: { ...s.childrenByPath, [dir]: children } }));
+  },
+
+  async renameFile(from, to) {
+    if (from === to) return;
+    const { useWorkspaceStore } = await import('./workspace');
+    const { flush } = await import('./autosave');
+    // Сохраняем грязные буферы под `from` ДО переноса (иначе автосейв на старом пути воскресит файл).
+    const ws = useWorkspaceStore.getState();
+    for (const p of Object.keys(ws.buffers)) {
+      if (p === from || p.startsWith(`${from}/`)) await flush(p);
+    }
+    await tauriApi.vault.renamePath(from, to);
+    useWorkspaceStore.getState().renameBufferPath(from, to);
+    // Обновляем оба затронутых каталога (источник и приёмник могут отличаться при move).
+    const dirs = Array.from(new Set([parentDir(from), parentDir(to)]));
+    for (const d of dirs) {
+      const children = (await tauriApi.vault.listDir(d)).slice().sort(compareEntries);
+      set((s) => ({ childrenByPath: { ...s.childrenByPath, [d]: children } }));
+    }
   },
 }));
 

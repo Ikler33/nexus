@@ -700,6 +700,65 @@ pub async fn delete_path(state: State<'_, AppState>, path: String) -> AppResult<
     Ok(())
 }
 
+/// Переименовывает/перемещает заметку или каталог `from`→`to` (CURATE-2). Для файла — один
+/// `Renamed` (индексатор сохраняет file_id/беклинки, V2.2); для каталога — `Renamed` по каждому
+/// вложенному `.md` со свопом префикса пути. Анти-overwrite: занятая цель → ошибка. Текст ссылок
+/// `[[Old]]` у источников НЕ правится (беклинки целы по id; переписывание текста — CURATE-3).
+#[tauri::command]
+pub async fn rename_path(state: State<'_, AppState>, from: String, to: String) -> AppResult<()> {
+    let ctx = state.vault().await?;
+    let root = ctx.root.clone();
+    if from.trim().is_empty() || to.trim().is_empty() {
+        return Err(AppError::Msg("пустой путь".into()));
+    }
+    if from.starts_with(".nexus") || to.starts_with(".nexus") || to.starts_with(".git") {
+        return Err(AppError::Msg("нельзя трогать служебный путь".into()));
+    }
+    if from == to {
+        return Ok(());
+    }
+    let from_abs = vault::resolve_vault_path(&root, Path::new(&from))?;
+    let to_abs = vault::resolve_vault_path_for_write(&root, Path::new(&to))?;
+    if to_abs.exists() {
+        return Err(AppError::Msg("цель уже существует".into()));
+    }
+    // Карта переименований .md (rel-from → rel-to) — собрать ДО переноса.
+    let is_dir = from_abs.is_dir();
+    let (root_c, abs_c, from_c, to_c) = (root.clone(), from_abs.clone(), from.clone(), to.clone());
+    let pairs: Vec<(String, String)> = tokio::task::spawn_blocking(move || {
+        if is_dir {
+            vault::collect_md_rels(&root_c, &abs_c)
+                .into_iter()
+                .map(|rel| {
+                    let suffix = &rel[from_c.len()..]; // ведущий '/'
+                    let new_rel = format!("{to_c}{suffix}");
+                    (rel, new_rel)
+                })
+                .collect()
+        } else {
+            vec![(from_c, to_c)]
+        }
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?;
+    // Перенос (atomic rename файла/каталога в пределах vault).
+    let (from_m, to_m) = (from_abs.clone(), to_abs.clone());
+    tokio::task::spawn_blocking(move || std::fs::rename(&from_m, &to_m))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))?
+        .map_err(AppError::Io)?;
+    // Перенос записей индекса (file_id/беклинки сохраняются — indexer::rename_file).
+    if let Some(tx) = ctx.index_tx.as_ref() {
+        for (rel_from, rel_to) in &pairs {
+            let _ = tx.send(crate::watcher::VaultEvent::Renamed {
+                from: root.join(rel_from),
+                to: root.join(rel_to),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Список версий-снапшотов заметки (SAFE-5/6): время + размер, новейший первым. Путь относительный.
 #[tauri::command]
 pub async fn list_versions(

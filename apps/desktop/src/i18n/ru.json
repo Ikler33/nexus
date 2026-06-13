@@ -266,6 +266,7 @@
   "tree": {
     "label": "Файлы vault",
     "empty": "Этот vault пуст.",
+    "rename": "Переименовать",
     "delete": "Удалить в корзину",
     "deleteConfirm": "Удалить «{{name}}» в корзину? Файл можно вернуть из .nexus/.trash.",
     "newNote": "Новая заметка",

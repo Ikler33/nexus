@@ -119,6 +119,28 @@ export async function deletePath(path: string): Promise<void> {
   for (const key of Object.keys(CONTENT)) if (under(key)) delete CONTENT[key];
 }
 
+export async function renamePath(from: string, to: string): Promise<void> {
+  const swap = (p: string) =>
+    p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p;
+  // Переносим контент под новый путь (включая поддерево).
+  for (const key of Object.keys(CONTENT)) {
+    const np = swap(key);
+    if (np !== key) {
+      CONTENT[np] = CONTENT[key];
+      delete CONTENT[key];
+    }
+  }
+  // Чиним дерево: убираем элемент из старого родителя, добавляем в новый (упрощённо — для UI-тестов).
+  const fromParent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
+  const toParent = to.includes('/') ? to.slice(0, to.lastIndexOf('/')) : '';
+  const moved = (TREE[fromParent] ?? []).find((e) => e.path === from);
+  if (TREE[fromParent]) TREE[fromParent] = TREE[fromParent].filter((e) => e.path !== from);
+  if (moved) {
+    const name = to.slice(to.lastIndexOf('/') + 1);
+    (TREE[toParent] ??= []).push({ ...moved, path: to, name });
+  }
+}
+
 // История версий (SAFE-5/6): мок держит снапшоты в памяти, чтобы UI можно было гонять в браузере.
 const VERSIONS: Record<string, { ts: number; content: string }[]> = {};
 let versionSeq = 1_700_000_000_000;
