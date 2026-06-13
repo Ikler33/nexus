@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../lib/tauri-api';
+import { flushAllDirty } from './autosave';
 import { useVaultStore } from './vault';
 import { activeBuffer, activePath, useWorkspaceStore } from './workspace';
 
@@ -184,5 +185,63 @@ describe('workspace external-change guard (SAFE-3)', () => {
     expect(b.externalChange).toBe(false);
     expect(b.baseHash).toBe(diskHash);
     expect(b.doc).toBe('мои правки');
+  });
+});
+
+describe('workspace autosave + flush (SAFE-4)', () => {
+  const ws = () => useWorkspaceStore.getState();
+
+  it('updateBufferDoc планирует автосейв через паузу набора (debounce)', async () => {
+    await ws().openFile('README.md');
+    const spy = vi.spyOn(tauriApi.vault, 'writeFile');
+    vi.useFakeTimers();
+    try {
+      ws().updateBufferDoc('README.md', 'набор');
+      expect(spy).not.toHaveBeenCalled(); // пауза ещё не прошла
+      vi.advanceTimersByTime(1000);
+      expect(spy).toHaveBeenCalledWith('README.md', 'набор');
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('closeTab флашит грязный буфер ПЕРЕД GC (нет потери правок)', async () => {
+    await ws().openFile('README.md');
+    ws().updateBufferDoc('README.md', 'важная правка');
+    const spy = vi.spyOn(tauriApi.vault, 'writeFile');
+    const gid = ws().activeGroupId;
+    ws().closeTab(gid, 'README.md');
+    expect(spy).toHaveBeenCalledWith('README.md', 'важная правка');
+    spy.mockRestore();
+  });
+
+  it('flushAllDirty сохраняет все грязные буферы', async () => {
+    await ws().openFile('README.md');
+    await ws().openFile('Inbox.md');
+    ws().updateBufferDoc('README.md', 'a');
+    ws().updateBufferDoc('Inbox.md', 'b');
+    const spy = vi.spyOn(tauriApi.vault, 'writeFile');
+    await flushAllDirty();
+    expect(spy).toHaveBeenCalledWith('README.md', 'a');
+    expect(spy).toHaveBeenCalledWith('Inbox.md', 'b');
+    expect(ws().buffers['README.md'].dirty).toBe(false);
+    expect(ws().buffers['Inbox.md'].dirty).toBe(false);
+    spy.mockRestore();
+  });
+
+  it('ошибка сохранения: dirty остаётся, saveError виден, правки целы', async () => {
+    await ws().openFile('README.md');
+    ws().updateBufferDoc('README.md', 'правка');
+    const spy = vi
+      .spyOn(tauriApi.vault, 'writeFile')
+      .mockRejectedValueOnce(new Error('диск полон'));
+    await ws().saveBuffer('README.md');
+    const b = ws().buffers['README.md'];
+    expect(b.dirty).toBe(true); // не теряем правки
+    expect(b.saveError).toContain('диск полон');
+    expect(b.doc).toBe('правка');
+    expect(b.saving).toBe(false);
+    spy.mockRestore();
   });
 });

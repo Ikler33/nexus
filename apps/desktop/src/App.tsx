@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
-import { tauriApi } from './lib/tauri-api';
+import { tauriApi, isTauri } from './lib/tauri-api';
+import { flushAllDirty } from './stores/autosave';
 import { useChatStore } from './stores/chat';
 import { useContradictionsStore } from './stores/contradictions';
 import { useDigestStore } from './stores/digest';
@@ -110,6 +111,35 @@ export function App() {
       .then((fn) => {
         unlisten = fn;
       });
+    return () => unlisten();
+  }, []);
+
+  // SAFE-4: закрытие окна с несохранёнными правками → флашим ВСЁ перед закрытием (local-first, без
+  // диалога). Ошибка записи → окно НЕ закрываем (правки целы, видны в статусбаре). Только Tauri.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten = () => {};
+    let closing = false;
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      const win = getCurrentWindow();
+      void win
+        .onCloseRequested(async (event) => {
+          if (closing) return; // повторный close после успешного флаша — пропускаем
+          const dirty = Object.values(useWorkspaceStore.getState().buffers).some((b) => b.dirty);
+          if (!dirty) return; // нечего сохранять — обычное закрытие
+          event.preventDefault();
+          try {
+            await flushAllDirty();
+            closing = true;
+            await win.close();
+          } catch {
+            /* запись упала → окно не закрываем, правки целы (мандат 4) */
+          }
+        })
+        .then((fn) => {
+          unlisten = fn;
+        });
+    });
     return () => unlisten();
   }, []);
 

@@ -19,6 +19,8 @@ export interface EditorProps {
   initialDoc: string;
   onChange?: (doc: string) => void;
   onSave?: (doc: string) => void;
+  /** Потеря фокуса редактором (SAFE-4): немедленный flush несохранённых правок. */
+  onBlur?: () => void;
   onOpenLink?: (target: string) => void;
   /** Заметки по подстроке для автокомплита `[[…` (бэкенд-фильтр + лимит, #22). */
   fetchNotes?: (query: string) => Promise<NoteRef[]>;
@@ -35,13 +37,14 @@ export function Editor({
   initialDoc,
   onChange,
   onSave,
+  onBlur,
   onOpenLink,
   fetchNotes,
 }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const cb = useRef({ onChange, onSave, onOpenLink, fetchNotes });
-  cb.current = { onChange, onSave, onOpenLink, fetchNotes };
+  const cb = useRef({ onChange, onSave, onBlur, onOpenLink, fetchNotes });
+  cb.current = { onChange, onSave, onBlur, onOpenLink, fetchNotes };
   const loadedPath = useRef(path);
   const loadedDoc = useRef(initialDoc);
   loadedDoc.current = initialDoc;
@@ -79,6 +82,14 @@ export function Editor({
     const focusTracker = EditorView.domEventHandlers({
       focus: (_e, view) => {
         setActiveEditorView(view);
+        return false;
+      },
+      blur: (_e, view) => {
+        // SAFE-4: фокус ушёл из редактора → флаш. Проверяем на след. тике, что фокус реально потерян
+        // (не внутренняя перестановка внутри CM6 — тогда view.hasFocus снова true).
+        setTimeout(() => {
+          if (!view.hasFocus) cb.current.onBlur?.();
+        }, 0);
         return false;
       },
     });

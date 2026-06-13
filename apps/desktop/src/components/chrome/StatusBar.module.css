@@ -140,3 +140,9 @@
   animation: none;
   transition: width 240ms var(--ease-out, ease);
 }
+
+/* SAFE-4: ошибка сохранения активного буфера — видимая (мандат 3), цвет danger. */
+.saveErr {
+  color: var(--color-danger, oklch(0.6 0.2 25));
+  font-weight: 500;
+}
