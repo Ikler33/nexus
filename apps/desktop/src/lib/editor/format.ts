@@ -52,3 +52,42 @@ export function toggleWrap(view: EditorView, marker: string): boolean {
   view.focus();
   return true;
 }
+
+/** Один шаг тоггла таска для строки: `- [ ]`↔`- [x]`; строка без чекбокса (буллет или обычный
+ *  текст, в т.ч. пустая) → `- [ ] …`. Отступ сохраняется. */
+function transformTaskLine(line: string): string {
+  const m = /^(\s*)(?:[-*+] )?(?:\[\s*([ xX])\s*\] ?)?(.*)$/.exec(line);
+  if (!m) return line;
+  const [, indent, check, rest] = m;
+  if (check != null) {
+    const checked = check === 'x' || check === 'X';
+    return `${indent}- [${checked ? ' ' : 'x'}] ${rest}`;
+  }
+  return `${indent}- [ ] ${rest}`;
+}
+
+/**
+ * Тоггл markdown-таска на строке(ах) выделения (EDIT-2, ⌘L): `- [ ]`↔`- [x]`; строка без чекбокса
+ * (буллет/обычный текст/пустая) превращается в таск `- [ ] …`. Каждая выделенная строка
+ * обрабатывается независимо. Правка обычным dispatch (без externalSync) → редактор пометит dirty.
+ */
+export function toggleTask(view: EditorView): boolean {
+  const { state } = view;
+  const { from, to } = state.selection.main;
+  const firstLine = state.doc.lineAt(from);
+  let lastLine = state.doc.lineAt(to);
+  // Выделение, кончающееся в начале строки ниже (col 0), не должно «цеплять» эту строку:
+  // классическая ловушка построчных тогглеров — выделили 2 строки, таск появляется на 3-й.
+  if (to > from && to === lastLine.from && lastLine.number > firstLine.number) {
+    lastLine = state.doc.line(lastLine.number - 1);
+  }
+  const out: string[] = [];
+  for (let n = firstLine.number; n <= lastLine.number; n++) {
+    out.push(transformTaskLine(state.doc.line(n).text));
+  }
+  view.dispatch({
+    changes: { from: firstLine.from, to: lastLine.to, insert: out.join('\n') },
+  });
+  view.focus();
+  return true;
+}
