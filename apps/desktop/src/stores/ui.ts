@@ -67,6 +67,10 @@ interface UIState {
   conflictOpen: boolean;
   openConflict: () => void;
   closeConflict: () => void;
+  /** История версий активной заметки (SAFE-6: список снапшотов + diff + восстановление). */
+  versionsOpen: boolean;
+  openVersions: () => void;
+  closeVersions: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
   closeDigest: () => void;
@@ -147,6 +151,9 @@ export const useUIStore = create<UIState>((set) => ({
   toggleSync: () => set((s) => ({ syncOpen: !s.syncOpen })),
   openConflict: () => set({ conflictOpen: true }),
   closeConflict: () => set({ conflictOpen: false }),
+  versionsOpen: false,
+  openVersions: () => set({ versionsOpen: true }),
+  closeVersions: () => set({ versionsOpen: false }),
   closeGoals: () => set({ goalsOpen: false }),
   toggleGoals: () =>
     set((s) => {

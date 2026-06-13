@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BookOpen, Clock, Columns2, FileText, PenLine, Plus, X } from 'lucide-react';
+import { BookOpen, Clock, Columns2, FileText, History, PenLine, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { relTime } from '../../lib/time';
 import { tauriApi } from '../../lib/tauri-api';
@@ -61,6 +61,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const openFile = useWorkspaceStore((s) => s.openFile);
   const createNote = useVaultStore((s) => s.createNote);
   const reading = useUIStore((s) => s.reading);
+  const openVersions = useUIStore((s) => s.openVersions);
   const [dropTarget, setDropTarget] = useState(false);
 
   // DP-15 (макет editor.jsx): clock-чип doc-meta — mtime активного файла; перечитываем при смене
@@ -170,6 +171,16 @@ export function GroupPane({ groupId }: { groupId: string }) {
           </button>
         </div>
         <div className={styles.tabTools}>
+          {mdActive && (
+            <button
+              className={styles.split}
+              onClick={() => openVersions()}
+              title={t('versions.open')}
+              aria-label={t('versions.open')}
+            >
+              <History size={14} aria-hidden />
+            </button>
+          )}
           <button
             className={styles.split}
             onClick={() => splitRight()}
@@ -200,11 +211,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                 >
                   {t('editor.external.loadDisk')}
                 </button>
-                <button
-                  className={styles.externalBtn}
-                  disabled
-                  title={t('editor.external.compareSoon')}
-                >
+                <button className={styles.externalBtn} onClick={() => openVersions()}>
                   {t('editor.external.compare')}
                 </button>
               </div>

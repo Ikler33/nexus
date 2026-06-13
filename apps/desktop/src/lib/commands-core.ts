@@ -114,6 +114,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useWorkspaceStore.getState().splitRight(),
     }),
     commands.register({
+      id: 'versions.open',
+      title: 'Version history',
+      titleKey: 'commands.versions.open',
+      source: 'core',
+      run: () => useUIStore.getState().openVersions(),
+    }),
+    commands.register({
       id: 'view.graph',
       title: 'Local graph',
       titleKey: 'commands.view.graph',

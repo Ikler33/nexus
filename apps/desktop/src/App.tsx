@@ -39,6 +39,9 @@ const SyncPanel = lazy(() =>
 const ConflictResolver = lazy(() =>
   import('./components/sync/ConflictResolver').then((m) => ({ default: m.ConflictResolver })),
 );
+const VersionHistory = lazy(() =>
+  import('./components/editor/VersionHistory').then((m) => ({ default: m.VersionHistory })),
+);
 
 /**
  * Оболочка приложения (дизайн-система Hermes): titlebar (бренд / поиск / инструменты) + тело
@@ -53,6 +56,8 @@ export function App() {
   const syncOpen = useUIStore((s) => s.syncOpen);
   const conflictOpen = useUIStore((s) => s.conflictOpen);
   const closeConflict = useUIStore((s) => s.closeConflict);
+  const versionsOpen = useUIStore((s) => s.versionsOpen);
+  const closeVersions = useUIStore((s) => s.closeVersions);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
@@ -254,6 +259,12 @@ export function App() {
       {conflictOpen && (
         <Suspense fallback={null}>
           <ConflictResolver onClose={closeConflict} />
+        </Suspense>
+      )}
+      {/* SAFE-6: история версий активной заметки (палитра / кнопка в табах / «Сравнить» из guard-баннера). */}
+      {versionsOpen && (
+        <Suspense fallback={null}>
+          <VersionHistory onClose={closeVersions} />
         </Suspense>
       )}
       {tweaksOpen && <SettingsView />}
