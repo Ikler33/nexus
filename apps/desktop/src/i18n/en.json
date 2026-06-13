@@ -264,6 +264,21 @@
     "newNote": "New note",
     "welcomeBody": "# Welcome to Nexus\n\nThis is your first note. A few basics:\n\n- Link notes with [[wiki links]].\n- Tag with #ideas.\n- Open the local graph (Cmd/Ctrl+G) and the AI chat (Cmd/Ctrl+J).\n\nDelete this note anytime — everything stays local on your machine.\n"
   },
+  "versions": {
+    "title": "Version history",
+    "open": "Version history",
+    "close": "Close",
+    "noFile": "Open a note to see its history",
+    "onDisk": "Current on disk",
+    "unsavedHint": "compare with unsaved edits",
+    "loading": "Loading…",
+    "none": "No snapshots yet",
+    "bytes": "{{size}} B",
+    "restoreHint": "− lines removed · + lines restored",
+    "restore": "Restore",
+    "identical": "This version matches the current text",
+    "pickHint": "Pick a version on the left to see the differences"
+  },
   "editor": {
     "selectFile": "Pick a file in the tree, or press {{shortcut}}",
     "emptyGroup": "Empty group",
@@ -694,6 +709,7 @@
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
     "view.settings": "Settings",
-    "editor.toggleMode": "Editor: edit / preview"
+    "editor.toggleMode": "Editor: edit / preview",
+    "versions.open": "Version history"
   }
 }
