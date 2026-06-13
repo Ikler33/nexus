@@ -60,4 +60,19 @@ describe('CommandPalette (Ф0-8)', () => {
       expect(activePath(useWorkspaceStore.getState())).toBe('Projects/Roadmap.md'),
     );
   });
+
+  // NAV-1: запрос ищет и по ТЕЛУ заметок — секция «По содержимому» со сниппетами (searchContent).
+  it('секция «По содержимому»: запрос находит заметку по телу', async () => {
+    const { useVaultStore } = await import('../../stores/vault');
+    await useVaultStore.getState().openVault('');
+    useUIStore.setState({ paletteOpen: true });
+    render(<CommandPalette />);
+
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'Roadmap' } });
+    // Контент-поиск с debounce 250мс → findByText поллит до появления секции.
+    expect(
+      await screen.findByText(/^по содержимому$|^in content$/i),
+    ).toBeInTheDocument();
+  });
 });

@@ -194,3 +194,27 @@
   padding-top: 14px;
   padding-bottom: 14px;
 }
+
+/* NAV-1: контент-результат (заголовок + сниппет с подсветкой терминов). */
+.contentCell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.snippet {
+  font-size: var(--text-xs, 0.74rem);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mark {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
