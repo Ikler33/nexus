@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronRight, File as FileIcon, Folder, Star } from 'lucide-react';
+import { ChevronRight, File as FileIcon, Folder, Star, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useStarredStore } from '../../stores/starred';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
@@ -22,10 +22,29 @@ export function FileTree() {
   const selectedPath = useWorkspaceStore(activePath);
   const toggleDir = useVaultStore((s) => s.toggleDir);
   const createNote = useVaultStore((s) => s.createNote);
+  const deleteFile = useVaultStore((s) => s.deleteFile);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const starredPaths = useStarredStore((s) => s.paths);
   const toggleStar = useStarredStore((s) => s.toggle);
   const { t } = useTranslation();
+
+  // Контекст-меню (right-click): позиция + цель. Закрывается кликом вне и Escape.
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(null);
+    };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
   const nodes = useMemo(
     () => flattenVisible(childrenByPath, expanded, loading),
@@ -108,6 +127,7 @@ export function FileTree() {
   };
 
   return (
+    <>
     <div
       ref={parentRef}
       className={styles.tree}
@@ -147,6 +167,16 @@ export function FileTree() {
                 setActive(vItem.index);
                 activate(vItem.index);
               }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setActive(vItem.index);
+                setMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  path: entry.path,
+                  name: entry.name.replace(/\.md$/, ''),
+                });
+              }}
             >
               {entry.isDir ? (
                 <ChevronRight
@@ -181,5 +211,29 @@ export function FileTree() {
         })}
       </div>
     </div>
+    {menu && (
+      <div
+        className={styles.ctxMenu}
+        style={{ top: menu.y, left: menu.x }}
+        role="menu"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className={styles.ctxItem}
+          role="menuitem"
+          onClick={() => {
+            const target = menu;
+            setMenu(null);
+            if (window.confirm(t('tree.deleteConfirm', { name: target.name }))) {
+              void deleteFile(target.path);
+            }
+          }}
+        >
+          <Trash2 size={14} aria-hidden /> {t('tree.delete')}
+        </button>
+      </div>
+    )}
+    </>
   );
 }

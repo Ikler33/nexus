@@ -670,6 +670,36 @@ pub async fn write_file(
     Ok(hash)
 }
 
+/// Удаляет заметку/каталог в vault-локальную корзину `.nexus/.trash/` (CURATE-1) — обратимо.
+/// Снимает с индекса каждый перенесённый `.md` явным `VaultEvent::Deleted` (вотчер может не
+/// разложить rename каталога в игнор-папку на пофайловые события). Служебные пути запрещены.
+#[tauri::command]
+pub async fn delete_path(state: State<'_, AppState>, path: String) -> AppResult<()> {
+    let ctx = state.vault().await?;
+    let root = ctx.root.clone();
+    if path.trim().is_empty() || path.starts_with(".nexus") || path.starts_with(".git") {
+        return Err(AppError::Msg("нельзя удалить служебный путь".into()));
+    }
+    let abs = vault::resolve_vault_path(&root, Path::new(&path))?;
+    // Собираем rel удаляемых .md ДО переноса (после переноса каталога их уже не пройти).
+    let (root_c, abs_c) = (root.clone(), abs.clone());
+    let rels = tokio::task::spawn_blocking(move || vault::collect_md_rels(&root_c, &abs_c))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    // Перенос в корзину (atomic rename, содержимое цело).
+    let (root_m, abs_m) = (root.clone(), abs.clone());
+    tokio::task::spawn_blocking(move || vault::move_to_trash(&root_m, &abs_m))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
+    // Детерминированное снятие с индекса (remove_file идемпотентен — двойной Deleted безопасен).
+    if let Some(tx) = ctx.index_tx.as_ref() {
+        for rel in &rels {
+            let _ = tx.send(crate::watcher::VaultEvent::Deleted(root.join(rel)));
+        }
+    }
+    Ok(())
+}
+
 /// Список версий-снапшотов заметки (SAFE-5/6): время + размер, новейший первым. Путь относительный.
 #[tauri::command]
 pub async fn list_versions(

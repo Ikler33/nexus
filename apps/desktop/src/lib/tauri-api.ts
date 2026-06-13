@@ -530,6 +530,10 @@ export const tauriApi = {
         ? invoke<string>('write_file', { path, content, manual })
         : mockVault.writeFile(path, content),
 
+    /** Удаляет заметку/каталог в корзину `.nexus/.trash/` (CURATE-1) — обратимо. */
+    deletePath: (path: string) =>
+      isTauri() ? invoke<void>('delete_path', { path }) : mockVault.deletePath(path),
+
     /** Версии-снапшоты заметки (SAFE-5/6): время + размер, новейший первым. */
     listVersions: (path: string) =>
       isTauri()
