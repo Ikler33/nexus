@@ -248,6 +248,17 @@
   color: var(--color-text);
   font-weight: 600;
 }
+/* «Ещё N» / «Свернуть» — действие, не тема: пунктир + акцентный текст. */
+.chipMore {
+  background: transparent;
+  border-style: dashed;
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.chipMore:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
 .cnt {
   opacity: 0.6;
   margin-left: 4px;

@@ -76,6 +76,49 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     spy.mockRestore();
   });
 
+  // Фидбэк владельца: при избытке тем (у него было 47) облако чипов застилало экран. Свёрнуто
+  // по умолчанию (14 + «Ещё N»), клик раскрывает всё.
+  it('облако тем: при избытке свёрнуто, «Ещё N» раскрывает и сворачивает', async () => {
+    const topics = Array.from({ length: 20 }, (_, i) => `Тема ${i + 1}`);
+    const items = topics.map((tp, i) => ({
+      id: i + 1,
+      sourceId: 'hn',
+      url: `https://e.com/${i}`,
+      titleRu: `Заголовок ${i + 1}`,
+      summaryRu: 'резюме',
+      topic: tp,
+      langRu: false,
+      publishedAt: 1_700_000_000,
+      read: false,
+    }));
+    const run = {
+      runAt: 1_700_000_000,
+      digestRu: 'дайджест',
+      itemsNew: 20,
+      sourcesOk: 1,
+      sourcesTotal: 1,
+      llmFailed: 0,
+      errors: [],
+    };
+    const spy = vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items, topics, run });
+
+    render(<NewsView />);
+    await screen.findByRole('button', { name: 'Тема 1' });
+
+    // Свёрнуто: 14-я тема видна, 20-я — нет; есть кнопка «Ещё 6».
+    expect(screen.getByRole('button', { name: 'Тема 14' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Тема 20' })).not.toBeInTheDocument();
+    const more = screen.getByRole('button', { name: /Ещё 6|6 more/i });
+
+    // Раскрыть → все 20 видны + «Свернуть»; повторный клик сворачивает.
+    fireEvent.click(more);
+    expect(screen.getByRole('button', { name: 'Тема 20' })).toBeInTheDocument();
+    const less = screen.getByRole('button', { name: /Свернуть|Collapse/i });
+    fireEvent.click(less);
+    expect(screen.queryByRole('button', { name: 'Тема 20' })).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
+
   // AC-NF-11: «в заметку» зовёт API и показывает путь созданной заметки.
   it('в заметку: тост с путём News/…', async () => {
     render(<NewsView />);
