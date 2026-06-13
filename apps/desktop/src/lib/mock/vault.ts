@@ -109,6 +109,16 @@ export async function writeFile(path: string, content: string): Promise<string> 
   return mockHash(content);
 }
 
+export async function deletePath(path: string): Promise<void> {
+  // Убираем элемент из родительского каталога дерева.
+  const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+  if (TREE[parent]) TREE[parent] = TREE[parent].filter((e) => e.path !== path);
+  // Сносим контент и поддеревья (для каталога).
+  const under = (p: string) => p === path || p.startsWith(`${path}/`);
+  for (const key of Object.keys(TREE)) if (under(key)) delete TREE[key];
+  for (const key of Object.keys(CONTENT)) if (under(key)) delete CONTENT[key];
+}
+
 // История версий (SAFE-5/6): мок держит снапшоты в памяти, чтобы UI можно было гонять в браузере.
 const VERSIONS: Record<string, { ts: number; content: string }[]> = {};
 let versionSeq = 1_700_000_000_000;

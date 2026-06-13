@@ -261,6 +261,8 @@
   "tree": {
     "label": "Vault files",
     "empty": "This vault is empty.",
+    "delete": "Move to trash",
+    "deleteConfirm": "Move “{{name}}” to trash? You can restore it from .nexus/.trash.",
     "newNote": "New note",
     "welcomeBody": "# Welcome to Nexus\n\nThis is your first note. A few basics:\n\n- Link notes with [[wiki links]].\n- Tag with #ideas.\n- Open the local graph (Cmd/Ctrl+G) and the AI chat (Cmd/Ctrl+J).\n\nDelete this note anytime — everything stays local on your machine.\n"
   },

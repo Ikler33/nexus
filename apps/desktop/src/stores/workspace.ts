@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
-import { cancelAllAutosave, flush, scheduleAutosave } from './autosave';
+import { cancelAllAutosave, cancelAutosave, flush, scheduleAutosave } from './autosave';
 
 /**
  * Рабочее пространство (§4.1, Б12): группы (сплиты) и вкладки вместо одиночного `currentFile`.
@@ -70,6 +70,8 @@ interface WorkspaceState {
   /** «Оставить мои»: сдвинуть baseHash к текущему диску (следующий сейв перезапишет осознанно),
    *  снять баннер; правки и dirty сохраняются. */
   keepMine: (path: string) => Promise<void>;
+  /** Выбросить буферы/вкладки удалённого пути (файл) или поддерева (каталог) — CURATE-1. */
+  dropPathsUnder: (path: string) => void;
   reset: () => void;
 }
 
@@ -322,6 +324,31 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           }
         : {},
     );
+  },
+
+  dropPathsUnder(path) {
+    const isUnder = (p: string) => p === path || p.startsWith(`${path}/`);
+    for (const p of Object.keys(get().buffers)) {
+      if (isUnder(p)) cancelAutosave(p); // не дать автосейву воскресить удалённый файл
+    }
+    set((s) => {
+      const groups = s.groups.map((g) => {
+        const tabs = g.tabs.filter((t) => !isUnder(t));
+        const activeTab =
+          g.activeTab && isUnder(g.activeTab) ? (tabs[tabs.length - 1] ?? null) : g.activeTab;
+        return { ...g, tabs, activeTab };
+      });
+      const nonEmpty = groups.filter((g) => g.tabs.length > 0);
+      const finalGroups = nonEmpty.length ? nonEmpty : freshGroups();
+      const activeGroupId = finalGroups.some((g) => g.id === s.activeGroupId)
+        ? s.activeGroupId
+        : finalGroups[0].id;
+      const referenced = new Set(finalGroups.flatMap((g) => g.tabs));
+      const buffers = Object.fromEntries(
+        Object.entries(s.buffers).filter(([p]) => referenced.has(p)),
+      );
+      return { groups: finalGroups, activeGroupId, buffers };
+    });
   },
 
   reset() {

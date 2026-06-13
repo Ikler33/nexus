@@ -151,6 +151,55 @@ pub fn atomic_write(abs: &Path, bytes: &[u8]) -> VaultResult<()> {
     Ok(())
 }
 
+/// Переносит файл/каталог `abs` в vault-локальную корзину `.nexus/.trash/<unixms>-<basename>`
+/// (CURATE-1). `.nexus` игнорируется вотчером → перенос не порождает индексных событий на копию в
+/// корзине. rename в пределах одной ФС (корзина внутри vault) — атомарен и сохраняет содержимое;
+/// удаление обратимо (файл лежит в корзине). Системная корзина ОС — позже (owner-gated).
+pub fn move_to_trash(root: &Path, abs: &Path) -> VaultResult<()> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let basename = abs
+        .file_name()
+        .ok_or(VaultError::PathEscape)?
+        .to_string_lossy()
+        .into_owned();
+    let trash_dir = root.join(".nexus").join(".trash");
+    std::fs::create_dir_all(&trash_dir)?;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut dest = trash_dir.join(format!("{ts}-{basename}"));
+    let mut n = 1;
+    while dest.exists() {
+        dest = trash_dir.join(format!("{ts}-{n}-{basename}"));
+        n += 1;
+    }
+    std::fs::rename(abs, &dest)?;
+    Ok(())
+}
+
+/// Относительные пути всех `.md` под `abs` (рекурсивно для каталога; сам файл, если он `.md`).
+/// Для снятия с индекса при удалении: каталог содержит N заметок, каждую надо убрать из БД.
+pub fn collect_md_rels(root: &Path, abs: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_md_rels_inner(root, abs, &mut out);
+    out
+}
+
+fn collect_md_rels_inner(root: &Path, abs: &Path, out: &mut Vec<String>) {
+    if abs.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(abs) {
+            for de in rd.flatten() {
+                collect_md_rels_inner(root, &de.path(), out);
+            }
+        }
+    } else if abs.extension().is_some_and(|e| e == "md") {
+        if let Ok(rel) = abs.strip_prefix(root) {
+            out.push(to_unix(rel));
+        }
+    }
+}
+
 /// Имя vault = имя его корневого каталога.
 pub fn vault_name(root: &Path) -> String {
     root.file_name()
@@ -326,6 +375,37 @@ mod tests {
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().contains("nexus-tmp"));
         assert!(!leftover);
+    }
+
+    #[test]
+    fn trash_moves_file_preserving_content_and_collects_md() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("Notes/Sub")).unwrap();
+        fs::write(root.join("Notes/A.md"), "контент A").unwrap();
+        fs::write(root.join("Notes/Sub/B.md"), "контент B").unwrap();
+        fs::write(root.join("Notes/img.png"), "binary").unwrap();
+
+        // Один файл: collect возвращает только его rel.
+        assert_eq!(
+            collect_md_rels(root, &root.join("Notes/A.md")),
+            vec!["Notes/A.md"]
+        );
+        // Каталог: все .md рекурсивно, бинарь не попадает.
+        let mut rels = collect_md_rels(root, &root.join("Notes"));
+        rels.sort();
+        assert_eq!(rels, vec!["Notes/A.md", "Notes/Sub/B.md"]);
+
+        // Перенос файла в корзину: исчез из vault, содержимое цело в .nexus/.trash.
+        move_to_trash(root, &root.join("Notes/A.md")).unwrap();
+        assert!(!root.join("Notes/A.md").exists());
+        let trash: Vec<_> = fs::read_dir(root.join(".nexus/.trash"))
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect();
+        assert_eq!(trash.len(), 1);
+        assert!(trash[0].file_name().to_string_lossy().ends_with("-A.md"));
+        assert_eq!(fs::read_to_string(trash[0].path()).unwrap(), "контент A");
     }
 
     /// Запись: новый файл в существующем каталоге vault — ок; побег наружу — отказ.

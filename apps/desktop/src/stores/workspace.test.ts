@@ -245,3 +245,25 @@ describe('workspace autosave + flush (SAFE-4)', () => {
     spy.mockRestore();
   });
 });
+
+describe('workspace dropPathsUnder (CURATE-1)', () => {
+  const ws = () => useWorkspaceStore.getState();
+
+  it('выбрасывает буфер и вкладку удалённого файла, сосед цел', async () => {
+    await ws().openFile('README.md');
+    await ws().openFile('Inbox.md');
+    expect(ws().buffers['README.md']).toBeDefined();
+    ws().dropPathsUnder('README.md');
+    const s = ws();
+    expect(s.buffers['README.md']).toBeUndefined();
+    expect(s.groups.flatMap((g) => g.tabs)).not.toContain('README.md');
+    expect(s.buffers['Inbox.md']).toBeDefined();
+  });
+
+  it('выбрасывает все буферы поддерева удалённого каталога', async () => {
+    await ws().openFile('Projects/Roadmap.md');
+    expect(ws().buffers['Projects/Roadmap.md']).toBeDefined();
+    ws().dropPathsUnder('Projects');
+    expect(ws().buffers['Projects/Roadmap.md']).toBeUndefined();
+  });
+});

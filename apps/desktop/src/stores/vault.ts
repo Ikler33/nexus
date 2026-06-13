@@ -25,6 +25,13 @@ interface VaultState {
    * путь. Используется командой `file.new`, кнопкой сайдбара и пустым состоянием дерева (кросс-план #1).
    */
   createNote: (dir?: string, opts?: { baseName?: string; content?: string }) => Promise<string>;
+  /** Удаляет заметку/каталог в корзину (CURATE-1): закрывает открытые буферы пути и обновляет дерево. */
+  deleteFile: (path: string) => Promise<void>;
+}
+
+/** Родительский каталог пути ('' = корень). */
+function parentDir(path: string): string {
+  return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 }
 
 export const useVaultStore = create<VaultState>((set, get) => ({
@@ -97,6 +104,17 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       expanded: dir ? { ...s.expanded, [dir]: true } : s.expanded,
     }));
     return path;
+  },
+
+  async deleteFile(path) {
+    await tauriApi.vault.deletePath(path);
+    // Закрываем открытые буферы/вкладки удалённого пути (дин. импорт — без цикла vault↔workspace).
+    const { useWorkspaceStore } = await import('./workspace');
+    useWorkspaceStore.getState().dropPathsUnder(path);
+    // Обновляем детей родительского каталога (удалённый элемент исчезает из дерева).
+    const dir = parentDir(path);
+    const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
+    set((s) => ({ childrenByPath: { ...s.childrenByPath, [dir]: children } }));
   },
 }));
 
