@@ -52,6 +52,16 @@ export async function logExchange(
   return id;
 }
 
+/** P6-RGN: удалить последний обмен сессии (user+assistant) — для регенерации ответа. */
+export async function deleteLastExchange(sessionId: number | null): Promise<void> {
+  if (sessionId == null) return;
+  const list = messages.get(sessionId);
+  if (!list || list.length < 2) return;
+  if (list[list.length - 1].role === 'assistant' && list[list.length - 2].role === 'user') {
+    list.splice(list.length - 2, 2);
+  }
+}
+
 /** Тест-хук: полная очистка мока (сиды превью убираются). */
 export function __reset(): void {
   sessions.length = 0;

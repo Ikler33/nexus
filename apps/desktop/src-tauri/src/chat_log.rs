@@ -88,6 +88,34 @@ pub async fn log_exchange(
         .await
 }
 
+/// Удаляет последний обмен сессии (последние user+assistant) — для регенерации ответа (P6-RGN):
+/// перед повторным прогоном того же вопроса убираем прошлую пару, чтобы история не двоилась.
+/// Возвращает id удалённых сообщений (вызывающий чистит их из `chat_vectors`). Если хвост сессии
+/// НЕ пара (user, assistant) — ничего не трогаем (пустой Vec).
+pub async fn delete_last_exchange(writer: &WriteActor, session_id: i64) -> DbResult<Vec<i64>> {
+    writer
+        .transaction(move |tx| {
+            // Последние 2 сообщения сессии (id DESC): ожидаем [assistant, user].
+            let mut stmt = tx.prepare(
+                "SELECT id, role FROM chat_messages WHERE session_id=?1 ORDER BY id DESC LIMIT 2",
+            )?;
+            let rows: Vec<(i64, String)> = stmt
+                .query_map([session_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+            if rows.len() == 2 && rows[0].1 == "assistant" && rows[1].1 == "user" {
+                tx.execute(
+                    "DELETE FROM chat_messages WHERE id IN (?1, ?2)",
+                    params![rows[0].0, rows[1].0],
+                )?;
+                Ok(vec![rows[0].0, rows[1].0])
+            } else {
+                Ok(Vec::new())
+            }
+        })
+        .await
+}
+
 /// Итог записи обмена: id сессии (+ создана ли новая) и id двух сообщений — последние нужны
 /// RAG-индексу переписки (N4): вызывающий эмбеддит их и кладёт в `chat_vectors`.
 #[derive(Debug, Clone, Copy)]
@@ -376,6 +404,36 @@ mod tests {
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].role, "assistant");
         assert!(msgs[1].sources_json.as_deref().unwrap().contains("a.md"));
+    }
+
+    /// P6-RGN: удаление последнего обмена убирает ровно последнюю пару (user+assistant) и
+    /// возвращает их id; на сессии без пары — no-op (пустой Vec).
+    #[tokio::test]
+    async fn delete_last_exchange_removes_trailing_pair() {
+        let (_d, db) = open().await;
+        let ex1 = log_exchange(db.writer(), None, "Q1", "A1", None)
+            .await
+            .unwrap();
+        let sid = ex1.session_id;
+        let ex2 = log_exchange(db.writer(), Some(sid), "Q2", "A2", None)
+            .await
+            .unwrap();
+        assert_eq!(session_messages(db.reader(), sid).await.unwrap().len(), 4);
+
+        let removed = delete_last_exchange(db.writer(), sid).await.unwrap();
+        assert_eq!(removed.len(), 2, "удалены 2 сообщения последнего обмена");
+        assert!(removed.contains(&ex2.user_msg_id) && removed.contains(&ex2.assistant_msg_id));
+
+        let msgs = session_messages(db.reader(), sid).await.unwrap();
+        assert_eq!(msgs.len(), 2, "остался первый обмен");
+        assert_eq!(msgs[0].content, "Q1");
+        assert_eq!(msgs[1].content, "A1");
+
+        // Несуществующая сессия — no-op без паники.
+        assert!(delete_last_exchange(db.writer(), 99999)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// set_title обновляет заголовок (генерация мелкой моделью); markdown-экспорт собирает Q/A.

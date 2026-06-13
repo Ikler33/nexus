@@ -78,6 +78,9 @@ interface ChatState {
   renamePins: (from: string, to: string) => void;
   /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
+  /** P6-RGN: перегенерировать последний ответ ИИ — тот же вопрос → свежий ответ. Старая пара
+   *  убирается из ленты И из истории сессии (не двоим). No-op во время стрима / без обмена. */
+  regenerate: (center?: string) => void;
   /** Останавливает текущий стрим (если идёт). */
   stop: () => void;
   /** Очищает сессию (нельзя во время стрима — сначала `stop`). */
@@ -106,6 +109,9 @@ export const useChatStore = create<ChatState>((set, get) => {
   let cancelFn: (() => void) | null = null;
   // Открыт ли vault (ставит hydrate) — без него обмены в БД не пишем.
   let vaultOpen = false;
+  // Промис последнего персиста обмена (P6-RGN): regenerate ждёт его, чтобы sessionId уже был известен
+  // (для ПЕРВОГО обмена он присваивается асинхронно — иначе чистка БД пропустится и вопрос задвоится).
+  let lastSave: Promise<unknown> = Promise.resolve();
 
   // Персист обмена в vault-БД (решение владельца 2026-06-12: переписка — часть «второго мозга»,
   // localStorage-история v1 заменена таблицами chat_sessions/chat_messages). Вызывается на
@@ -125,10 +131,11 @@ export const useChatStore = create<ChatState>((set, get) => {
             memorySources: reply.memorySources ?? [],
           })
         : null;
-    void tauriApi.chat.sessions
+    lastSave = tauriApi.chat.sessions
       .logExchange(get().sessionId, ask.content, reply.content, sourcesJson)
       .then((sid) => set({ sessionId: sid }))
       .catch(() => {});
+    void lastSave;
   };
 
   // Троттлинг рендера токенов (AC-Б10-4 / ревью C9): копим текст в буфер и применяем одним set()
@@ -291,6 +298,39 @@ export const useChatStore = create<ChatState>((set, get) => {
         // P6-PIN: гарантированный контекст закреплённых заметок (полное содержимое).
         pinned: pinned.length ? pinned : undefined,
       });
+    },
+
+    regenerate(center) {
+      if (get().streaming) return;
+      const assistant = get().messages.at(-1);
+      const user = get().messages.at(-2);
+      if (
+        !assistant ||
+        !user ||
+        assistant.role !== 'assistant' ||
+        user.role !== 'user' ||
+        assistant.streaming
+      )
+        return;
+      const question = user.content;
+      // Асинхронно: дождаться персиста прошлого обмена (sessionId присваивается в save() асинхронно —
+      // для ПЕРВОГО обмена быстрый клик застал бы sessionId=null → чистка БД пропустилась бы и вопрос
+      // задвоился). Ошибочный ответ НЕ персистится — его не ждём и не чистим (иначе снесли бы прошлый
+      // хороший обмен). Затем подчищаем прошлую пару из истории и переспрашиваем тот же вопрос.
+      void (async () => {
+        if (!assistant.error) await lastSave;
+        // За время await лента могла измениться (новый вопрос / стрим) — перепроверяем те же объекты.
+        const m = get().messages;
+        if (get().streaming || m.at(-1) !== assistant || m.at(-2) !== user) return;
+        const sid = assistant.error ? null : get().sessionId;
+        if (sid != null) {
+          void tauriApi.chat.sessions
+            .deleteLastExchange(sid)
+            .catch(() => logUi('chat:regen-del-fail', `sid=${sid}`)); // фейл → деградация к append
+        }
+        set({ messages: m.slice(0, -2) });
+        get().send(question, center); // режим/web/пины — текущие (как у обычного send)
+      })();
     },
 
     stop() {

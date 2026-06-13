@@ -8,6 +8,7 @@ import {
   Sparkles,
   Globe,
   Pin,
+  RefreshCw,
   X,
   ChevronRight,
   MessageSquare,
@@ -49,6 +50,7 @@ export function ChatView() {
   const toggleWeb = useChatStore((s) => s.toggleWeb);
   const send = useChatStore((s) => s.send);
   const stop = useChatStore((s) => s.stop);
+  const regenerate = useChatStore((s) => s.regenerate);
   const center = useWorkspaceStore(activePath);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const pinned = useChatStore((s) => s.pinned);
@@ -135,7 +137,12 @@ export function ChatView() {
                   transform: `translateY(${vItem.start}px)`,
                 }}
               >
-                <Message message={messages[vItem.index]} onOpen={(p) => void openFile(p)} />
+                <Message
+                  message={messages[vItem.index]}
+                  onOpen={(p) => void openFile(p)}
+                  isLast={vItem.index === messages.length - 1}
+                  onRegenerate={() => regenerate(center ?? undefined)}
+                />
               </div>
             ))}
           </div>
@@ -394,7 +401,15 @@ function thinkingKey(mode: ChatMode, web: boolean): string {
  * Действия под ответом ИИ (P6-AR): «Копировать» (в буфер обмена) и «Вставить в заметку» (в активный
  * редактор у курсора — ИИ-черновик прямо в текст). Подтверждение/ошибка — тостом (TOAST-1).
  */
-function MessageActions({ content }: { content: string }) {
+function MessageActions({
+  content,
+  isLast,
+  onRegenerate,
+}: {
+  content: string;
+  isLast: boolean;
+  onRegenerate: () => void;
+}) {
   const { t } = useTranslation();
 
   const copy = () => {
@@ -438,11 +453,27 @@ function MessageActions({ content }: { content: string }) {
       <button type="button" className={styles.msgAct} onClick={insert}>
         <FilePlus2 size={13} aria-hidden /> {t('chat.insert')}
       </button>
+      {isLast && (
+        // P6-RGN: регенерация только у ПОСЛЕДНЕГО ответа (тот же вопрос → свежий ответ).
+        <button type="button" className={styles.msgAct} onClick={onRegenerate}>
+          <RefreshCw size={13} aria-hidden /> {t('chat.regenerate')}
+        </button>
+      )}
     </div>
   );
 }
 
-function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: string) => void }) {
+function Message({
+  message,
+  onOpen,
+  isLast,
+  onRegenerate,
+}: {
+  message: ChatMessage;
+  onOpen: (path: string) => void;
+  isLast: boolean;
+  onRegenerate: () => void;
+}) {
   const { t } = useTranslation();
   // Режим заморожен на время стрима (setMode блокируется) → текущий режим честен для этого сообщения.
   const mode = useChatStore((s) => s.mode);
@@ -502,7 +533,13 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
               </div>
             )
           )}
-          {!message.streaming && message.content && <MessageActions content={message.content} />}
+          {!message.streaming && message.content && (
+            <MessageActions
+              content={message.content}
+              isLast={isLast}
+              onRegenerate={onRegenerate}
+            />
+          )}
           {message.sources && message.sources.length > 0 && (
             <Disclosure
               id={`${message.id}:src`}

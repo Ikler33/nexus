@@ -80,6 +80,61 @@ describe('chat store (Ф1-8)', () => {
     expect(useChatStore.getState().pinned).toEqual(['New.md', 'Other.md']);
   });
 
+  it('regenerate: убирает последний обмен, переспрашивает, чистит историю сессии', async () => {
+    const del = vi.spyOn(tauriApi.chat.sessions, 'deleteLastExchange').mockResolvedValue();
+    const stream = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Вопрос' },
+        { id: 'a1', role: 'assistant', content: 'Старый ответ' },
+      ],
+      sessionId: 42,
+      streaming: false,
+    });
+    useChatStore.getState().regenerate(); // sync-сигнатура; работа в async-IIFE (ждёт lastSave)
+    await vi.waitFor(() => expect(del).toHaveBeenCalledWith(42)); // прошлая пара убрана из истории
+    const msgs = useChatStore.getState().messages;
+    expect(msgs).toHaveLength(2); // переспрошенный вопрос + новый ответ (не накопили)
+    expect(msgs[0]).toMatchObject({ role: 'user', content: 'Вопрос' });
+    expect(msgs[1].role).toBe('assistant');
+    expect(stream).toHaveBeenCalledWith('Вопрос', expect.any(Function), expect.any(Object));
+    useChatStore.getState().stop();
+  });
+
+  it('regenerate на ОШИБОЧНОМ ответе не зовёт deleteLastExchange (прошлый хороший обмен цел)', async () => {
+    const del = vi.spyOn(tauriApi.chat.sessions, 'deleteLastExchange').mockResolvedValue();
+    vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Вопрос' },
+        { id: 'a1', role: 'assistant', content: '', error: 'сеть упала' },
+      ],
+      sessionId: 42,
+      streaming: false,
+    });
+    useChatStore.getState().regenerate();
+    // Ошибочный обмен не персистился → не чистим БД (иначе снесли бы предыдущий хороший). Переспрос идёт.
+    await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(true));
+    expect(del).not.toHaveBeenCalled();
+    useChatStore.getState().stop();
+  });
+
+  it('regenerate — no-op во время стрима и без завершённого обмена', () => {
+    const stream = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    useChatStore.setState({ messages: [{ id: 'u1', role: 'user', content: 'q' }], streaming: false });
+    useChatStore.getState().regenerate(); // нет пары user+assistant
+    expect(stream).not.toHaveBeenCalled();
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'q' },
+        { id: 'a1', role: 'assistant', content: 'a' },
+      ],
+      streaming: true,
+    });
+    useChatStore.getState().regenerate(); // идёт стрим
+    expect(stream).not.toHaveBeenCalled();
+  });
+
   it('send без закреплений — pinned undefined', () => {
     const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
     useChatStore.getState().send('вопрос');

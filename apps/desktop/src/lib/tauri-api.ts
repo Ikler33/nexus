@@ -898,6 +898,11 @@ export const tauriApi = {
         isTauri()
           ? invoke<number>('chat_log_exchange', { sessionId, question, answer, sourcesJson })
           : mockSessions.logExchange(sessionId, question, answer, sourcesJson),
+      /** P6-RGN: удалить последний обмен сессии (перед регенерацией ответа) — чтобы не двоить историю. */
+      deleteLastExchange: (sessionId: number | null): Promise<void> =>
+        isTauri()
+          ? invoke<void>('chat_delete_last_exchange', { sessionId })
+          : mockSessions.deleteLastExchange(sessionId),
       /** «Сохранить в заметки» → относительный путь созданной заметки. */
       toNote: (id: number): Promise<string> =>
         isTauri()

@@ -111,6 +111,34 @@ pub async fn chat_log_exchange(
     Ok(sid)
 }
 
+/// Удаляет последний обмен сессии (для регенерации ответа, P6-RGN): убирает прошлую пару из БД и
+/// чистит её векторы памяти, чтобы повторный прогон того же вопроса не двоил историю. Best-effort
+/// по векторам (могли ещё не проиндексироваться). Без сессии (`None`) — no-op (нечего чистить).
+#[tauri::command]
+pub async fn chat_delete_last_exchange(
+    state: State<'_, AppState>,
+    session_id: Option<i64>,
+) -> AppResult<()> {
+    let Some(sid) = session_id else {
+        return Ok(());
+    };
+    let (writer, chat_vectors) = {
+        let ctx = state.vault().await?;
+        (ctx.db.writer().clone(), ctx.chat_vectors.clone())
+    };
+    let removed = chat_log::delete_last_exchange(&writer, sid).await?;
+    // Чистим векторы памяти удалённых сообщений (ключ usearch = id сообщения). Best-effort.
+    if let Some(vectors) = chat_vectors {
+        for id in &removed {
+            let _ = vectors.remove(*id as u64);
+        }
+        if !removed.is_empty() {
+            let _ = vectors.save();
+        }
+    }
+    Ok(())
+}
+
 /// «Сохранить в заметки»: рендерит сессию в markdown и пишет в `Chats/<дата> <заголовок>.md`
 /// (имя санитизируется; коллизия — суффиксом). Возвращает относительный путь заметки.
 #[tauri::command]
