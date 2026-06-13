@@ -13,6 +13,7 @@ import {
   useChatStore,
 } from '../../stores/chat';
 import { useUIStore } from '../../stores/ui';
+import { tauriApi } from '../../lib/tauri-api';
 import type { MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
@@ -474,6 +475,11 @@ function WebSources({ sources }: { sources: WebSource[] }) {
           target="_blank"
           rel="noopener noreferrer"
           title={s.url}
+          onClick={(e) => {
+            // Tauri-вебвью не открывает target=_blank → системный браузер через opener.
+            e.preventDefault();
+            void tauriApi.external.open(s.url).catch(() => {});
+          }}
         >
           <span className={styles.srcCardNum}>{i + 1}</span>
           <span className={styles.srcCardBody}>

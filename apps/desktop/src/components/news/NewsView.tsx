@@ -82,6 +82,8 @@ export function NewsView() {
   } = useNewsStore();
   const [showErrors, setShowErrors] = useState(false);
   const [gearOpen, setGearOpen] = useState(false);
+  // Облако тем свёрнуто по умолчанию при их избытке (фидбэк владельца: 47 чипов застилали экран).
+  const [tagsExpanded, setTagsExpanded] = useState(false);
   // Этапный прогресс прогона (фидбэк 11.06): «Опрашиваю источники 7/16» вместо немого «Собираю…».
   const [runStage, setRunStage] = useState<{ stage: string; done: number; total: number } | null>(
     null,
@@ -202,6 +204,17 @@ export function NewsView() {
     .map((tp) => ({ topic: tp, items: items.filter((it) => it.topic === tp) }))
     .filter((g) => g.items.length > 0);
   const filtersActive = topic !== null || unreadOnly;
+  // При избытке тем показываем только первые TAG_COLLAPSE_AT + кнопку «Ещё N»; активный фильтр
+  // (если он за порогом) всегда виден, чтобы выбранная тема не пропадала из ряда.
+  const TAG_COLLAPSE_AT = 14;
+  const tooManyTags = topics.length > TAG_COLLAPSE_AT;
+  const visibleTopics =
+    !tooManyTags || tagsExpanded
+      ? topics
+      : (() => {
+          const head = topics.slice(0, TAG_COLLAPSE_AT);
+          return topic && !head.includes(topic) ? [...head, topic] : head;
+        })();
   const runFailed = run !== null && run.sourcesOk === 0 && run.errors.length > 0;
 
   const card = (it: NewsItem) => (
@@ -407,7 +420,7 @@ export function NewsView() {
               {t('news.all')}
               {!filtersActive && <span className={styles.cnt}>{unreadCount}</span>}
             </button>
-            {topics.map((tp) => (
+            {visibleTopics.map((tp) => (
               <button
                 type="button"
                 key={tp}
@@ -417,6 +430,18 @@ export function NewsView() {
                 {tp}
               </button>
             ))}
+            {tooManyTags && (
+              <button
+                type="button"
+                className={`${styles.chip} ${styles.chipMore}`}
+                onClick={() => setTagsExpanded((v) => !v)}
+                aria-expanded={tagsExpanded}
+              >
+                {tagsExpanded
+                  ? t('news.tagsLess')
+                  : t('news.tagsMore', { count: topics.length - visibleTopics.length })}
+              </button>
+            )}
             <label className={styles.unreadToggle}>
               <button
                 type="button"

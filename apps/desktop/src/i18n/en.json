@@ -460,6 +460,8 @@
     "sourcesOk": "{{ok}} of {{total}} sources",
     "all": "All",
     "unreadOnly": "Unread",
+    "tagsMore": "+{{count}} more",
+    "tagsLess": "Collapse",
     "summaryMissing": "Summary unavailable — original headline shown",
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",

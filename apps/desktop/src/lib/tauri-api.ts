@@ -478,6 +478,24 @@ export const tauriApi = {
     version: () => (isTauri() ? invoke<string>('app_version') : Promise.resolve('dev')),
   },
 
+  external: {
+    /**
+     * Открывает http(s)-URL в СИСТЕМНОМ браузере (Rust-команда `open_external` через
+     * tauri-plugin-opener). В Tauri-вебвью `<a target="_blank">` не открывает браузер (строгий CSP
+     * глотает навигацию) — поэтому все внешние ссылки (NF-6 «Оригинал», web-источники чата, ссылки
+     * в превью заметок) идут СЮДА. Иные схемы (file:, javascript:) отклоняются и тут, и в Rust.
+     * Вне Tauri (браузерное превью) — `window.open`. Открытие — НЕ эгресс приложения (фетчит ОС).
+     */
+    open: (url: string): Promise<void> => {
+      if (!/^https?:\/\//i.test(url)) return Promise.reject(new Error('схема не разрешена'));
+      if (!isTauri()) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return Promise.resolve();
+      }
+      return invoke<void>('open_external', { url });
+    },
+  },
+
   vault: {
     /** Открывает vault по абсолютному пути; в браузере — мок. */
     openVault: (path: string) =>

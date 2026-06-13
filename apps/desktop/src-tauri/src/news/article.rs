@@ -21,17 +21,171 @@ const MIN_PARA_CHARS: usize = 40;
 /// Символов исходного текста на один LLM-вызов перевода (батчим абзацы).
 const TRANSLATE_CHUNK_CHARS: usize = 3_000;
 
-/// Извлекает абзацы статьи из HTML: блоки `<p>…</p>` (вложенные теги срезаются, энтити
-/// декодируются), мусор короче [`MIN_PARA_CHARS`] отбрасывается; если `<p>` нет вовсе —
-/// фолбэк на срез всех тегов с разбивкой по пустым строкам. Возвращает `(абзацы, усечено)`.
+/// Чужой UI-хром, протекающий в текст при скрапе НЕ-блоговых страниц (Show HN → github.com):
+/// async-острова GitHub («There was an error while loading…»), фидбэк-виджет, помощь по поиску,
+/// сессионные баннеры. Сверяем НОРМАЛИЗОВАННЫЙ абзац (lowercase + схлопнутые пробелы) на вхождение
+/// СТАБИЛЬНОГО ПРЕФИКСА подстрокой. Важно: `strip_tags` заменяет вложенный `<a>` на пробел, так что
+/// захваченный текст — «…this page .» (пробел перед точкой); поэтому записи БЕЗ хвостовой
+/// пунктуации, иначе `.contains` не сматчит (проверено adversarial-ревью на живой странице GitHub).
+const BOILERPLATE: &[&str] = &[
+    "there was an error while loading",
+    "we read every piece of feedback",
+    "to see all available qualifiers",
+    "use saved searches to filter your results",
+    "you signed in with another tab or window",
+    "you signed out in another tab or window",
+    "you switched accounts on another tab or window",
+    "you must be signed in to change notification settings",
+    "you can't perform that action at this time",
+];
+
+/// Нормализация абзаца для блок-листа и дедупа: lowercase + схлопывание любых пробелов в один.
+fn norm(s: &str) -> String {
+    s.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `true`, если уже нормализованный абзац содержит любой из [`BOILERPLATE`]-префиксов.
+fn is_boilerplate(norm_text: &str) -> bool {
+    BOILERPLATE.iter().any(|b| norm_text.contains(b))
+}
+
+/// Удаляет блоки `<script>/<style>/<noscript>…</script>` (содержимое — не текст статьи). У GitHub
+/// внутри `<script type=application/json>` лежит ВТОРАЯ копия README (react embeddedData) с тем же
+/// `markdown-body` — снос скриптов убирает её, чтобы поиск контейнера не сбился на JSON-дубль.
+fn strip_blocks(html: &str) -> String {
+    const BLOCKS: &[&str] = &["script", "style", "noscript"];
+    let lower = html.to_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut pos = 0usize;
+    'outer: while pos < html.len() {
+        // Ближайшее открытие любого из блочных тегов (с границей тега: `>` или пробел после имени).
+        let mut next: Option<(usize, &str)> = None;
+        for tag in BLOCKS {
+            let needle = format!("<{tag}");
+            if let Some(rel) = lower[pos..].find(&needle) {
+                let at = pos + rel;
+                let after = lower.as_bytes().get(at + needle.len()).copied();
+                if matches!(
+                    after,
+                    Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'/')
+                ) && next.map_or(true, |(p, _)| at < p)
+                {
+                    next = Some((at, tag));
+                }
+            }
+        }
+        let Some((at, tag)) = next else {
+            out.push_str(&html[pos..]);
+            break;
+        };
+        out.push_str(&html[pos..at]);
+        // Конец блока — `</tag>`; нет закрытия → отбрасываем хвост (битый HTML, не текст).
+        let close = format!("</{tag}");
+        match lower[at..].find(&close) {
+            Some(crel) => {
+                let cstart = at + crel;
+                match lower[cstart..].find('>') {
+                    Some(grel) => pos = cstart + grel + 1,
+                    None => break 'outer,
+                }
+            }
+            None => break 'outer,
+        }
+    }
+    out
+}
+
+/// Сужает HTML до основного контейнера контента: `<article>` (предпочитая GitHub-README
+/// `class="markdown-body"`), иначе `<main>`. Возвращает срез ВНУТРЕННЕГО содержимого. Нет
+/// контейнера → `None` (вызывающий берёт весь документ — поведение для простых блогов и тестов).
+/// Совпадение ищем по литералу тега `<article`/`<main` (не по голому `markdown-body`: он есть и в
+/// JSON-дубле — adversarial-ревью), закрытие — балансом вложенности того же тега.
+fn main_content_slice(html: &str) -> Option<&str> {
+    let lower = html.to_lowercase();
+    // Приоритет: article.markdown-body → первый article → main.
+    let (content_start, name) = container_open(&lower, "article", Some("markdown-body"))
+        .map(|s| (s, "article"))
+        .or_else(|| container_open(&lower, "article", None).map(|s| (s, "article")))
+        .or_else(|| container_open(&lower, "main", None).map(|s| (s, "main")))?;
+    let end = balanced_close(&lower, content_start, name)?;
+    Some(&html[content_start..end])
+}
+
+/// Находит начало ВНУТРЕННЕГО содержимого тега `<name …>` (после `>` открывающего тега). Если задан
+/// `class_hint`, берёт первый тег, в чьём открывающем теге встречается эта подстрока. Граница тега
+/// проверяется (следующий символ после имени — `>`/пробел/таб/нл), чтобы `<articlex>`/`<mainframe>`
+/// не матчились. Возвращает байт-офсет содержимого (валиден как char-граница: имена ASCII).
+fn container_open(lower: &str, name: &str, class_hint: Option<&str>) -> Option<usize> {
+    let needle = format!("<{name}");
+    let mut pos = 0usize;
+    while let Some(rel) = lower[pos..].find(&needle) {
+        let at = pos + rel;
+        let after = lower.as_bytes().get(at + needle.len()).copied();
+        if !matches!(after, Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n')) {
+            pos = at + needle.len();
+            continue;
+        }
+        let grel = lower[at..].find('>')?;
+        let open_tag = &lower[at..at + grel];
+        if class_hint.map_or(true, |h| open_tag.contains(h)) {
+            return Some(at + grel + 1);
+        }
+        pos = at + grel + 1;
+    }
+    None
+}
+
+/// Балансный поиск закрывающего `</name>` от `content_start` (depth=1, тег уже открыт): учитывает
+/// вложенные `<name …>`, чтобы не обрезать контейнер на первом внутреннем закрытии. Нет баланса →
+/// `None` (вызывающий берёт весь документ). Имена ASCII → офсеты валидны как char-границы.
+fn balanced_close(lower: &str, content_start: usize, name: &str) -> Option<usize> {
+    let open = format!("<{name}");
+    let close = format!("</{name}");
+    let mut depth = 1i32;
+    let mut pos = content_start;
+    while pos < lower.len() {
+        let next_open = lower[pos..].find(&open).map(|r| pos + r);
+        let next_close = lower[pos..].find(&close).map(|r| pos + r);
+        match (next_open, next_close) {
+            (_, None) => return None,
+            (Some(o), Some(c)) if o < c => {
+                // Реальное вложенное открытие (граница тега), а не `<articlex`.
+                let a = lower.as_bytes().get(o + open.len()).copied();
+                if matches!(a, Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n')) {
+                    depth += 1;
+                }
+                pos = o + open.len();
+            }
+            (_, Some(c)) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(c);
+                }
+                pos = c + close.len();
+            }
+        }
+    }
+    None
+}
+
+/// Извлекает абзацы статьи из HTML: сносит `<script>/<style>`, сужает до `<article>/<main>` (если
+/// есть), берёт `<p>…</p>` (вложенные теги срезаются, энтити декодируются), выкидывает мусор короче
+/// [`MIN_PARA_CHARS`], чужой UI-хром ([`is_boilerplate`]) и повторы (дедуп). Нет `<p>` — фолбэк на
+/// срез всех тегов. Возвращает `(абзацы, усечено)`.
 ///
-/// Это НЕ полноценный readability-извлекатель: для блогов реестра v1 (статичный HTML с
-/// нормальными `<p>`) этого достаточно; JS-rendered страницы отдадут мало текста — reader
-/// честно покажет, что есть, плюс ссылку на оригинал.
+/// Это НЕ полноценный readability-извлекатель, но сужение до контейнера + блок-лист + дедуп
+/// убирают хром не-блоговых страниц (напр. github.com у Show HN); для простых блогов без
+/// `<article>/<main>` поведение прежнее (весь документ). JS-rendered страницы отдадут мало текста —
+/// reader честно покажет, что есть, плюс ссылку на оригинал.
 pub fn extract_paragraphs(html: &str) -> (Vec<String>, bool) {
-    let mut paras = paragraphs_from_p_tags(html);
+    let cleaned = strip_blocks(html);
+    let scoped = main_content_slice(&cleaned).unwrap_or(&cleaned);
+    let mut paras = paragraphs_from_p_tags(scoped);
     if paras.is_empty() {
-        paras = strip_all_tags_fallback(html);
+        paras = strip_all_tags_fallback(scoped);
     }
     let mut total = 0usize;
     let mut truncated = false;
@@ -53,6 +207,7 @@ pub fn extract_paragraphs(html: &str) -> (Vec<String>, bool) {
 fn paragraphs_from_p_tags(html: &str) -> Vec<String> {
     let lower = html.to_lowercase();
     let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut pos = 0usize;
     while let Some(start_rel) = lower[pos..].find("<p") {
         let start = pos + start_rel;
@@ -72,7 +227,11 @@ fn paragraphs_from_p_tags(html: &str) -> Vec<String> {
         let content = &html[content_start..content_start + close_rel];
         let text = strip_tags(content);
         if text.chars().count() >= MIN_PARA_CHARS {
-            out.push(text);
+            let key = norm(&text);
+            // Чужой UI-хром и повторяющиеся абзацы (дубль-острова GitHub) — не текст статьи.
+            if !is_boilerplate(&key) && seen.insert(key) {
+                out.push(text);
+            }
         }
         pos = content_start + close_rel + 3;
     }
@@ -103,10 +262,15 @@ fn strip_all_tags_fallback(html: &str) -> Vec<String> {
         rest = &rest[end + 1..];
     }
     text.push_str(rest);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     decode_entities(&text)
         .split('\n')
         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|l| l.chars().count() >= MIN_PARA_CHARS)
+        .filter(|l| {
+            l.chars().count() >= MIN_PARA_CHARS
+                && !is_boilerplate(&l.to_lowercase())
+                && seen.insert(norm(l))
+        })
         .collect()
 }
 
@@ -325,6 +489,67 @@ mod tests {
         assert!(!paras.is_empty());
         let total: usize = paras.iter().map(|p| p.chars().count()).sum();
         assert!(total <= ARTICLE_CHAR_CAP);
+    }
+
+    /// Реальная разметка ошибки-острова GitHub: внутри `<p>` есть `<a>` → strip_tags даёт
+    /// «…page .» (пробел перед точкой). Блок-лист матчит ПРЕФИКС, поэтому ловит её (регресс-гард
+    /// против дефекта, найденного adversarial-ревью: полная фраза с точкой НЕ сматчилась бы).
+    const GH_ERROR_P: &str = "<p class=\"color-fg-muted\">There was an error while loading. \
+         <a href=\"#\">Please reload this page</a>.</p>";
+    const GH_FEEDBACK_P: &str =
+        "<p>We read every piece of feedback, and take your input very seriously.</p>";
+    const GH_QUALIFIERS_P: &str =
+        "<p>To see all available qualifiers, see our <a href=\"#\">documentation</a>.</p>";
+
+    /// GitHub-хром (острова ошибок, фидбэк, помощь по поиску) ВНЕ `<article class=markdown-body>` —
+    /// сужение до контейнера выкидывает его целиком, в тексте только README-абзац.
+    #[test]
+    fn github_chrome_outside_article_is_scoped_out() {
+        let html = format!(
+            "<html><body><header>{GH_FEEDBACK_P}{GH_QUALIFIERS_P}</header>\
+             {GH_ERROR_P}{GH_ERROR_P}{GH_ERROR_P}\
+             <article class=\"markdown-body entry-content\"><p>{LONG_A}</p></article>\
+             <footer>{GH_ERROR_P}</footer></body></html>"
+        );
+        let (paras, _) = extract_paragraphs(&html);
+        assert_eq!(paras, vec![LONG_A.to_string()], "{paras:?}");
+    }
+
+    /// Хром ВНУТРИ контейнера: блок-лист (на реальном «…page .») + дедуп повторов; валидный абзац
+    /// остаётся ровно один раз.
+    #[test]
+    fn boilerplate_and_dups_inside_container_dropped() {
+        let html = format!(
+            "<main>{GH_ERROR_P}{GH_ERROR_P}{GH_ERROR_P}\
+             <p>{LONG_A}</p><p>{LONG_A}</p></main>"
+        );
+        let (paras, _) = extract_paragraphs(&html);
+        assert_eq!(
+            paras,
+            vec![LONG_A.to_string()],
+            "хром снят, дубль схлопнут: {paras:?}"
+        );
+    }
+
+    /// Дубль README в `<script type=application/json>` (react embeddedData) НЕ сбивает поиск
+    /// контейнера: snipping `<script>` убирает JSON-копию, scoping берёт настоящий `<article>`.
+    #[test]
+    fn script_json_readme_dup_does_not_break_scoping() {
+        let html = format!(
+            "<html><script type=\"application/json\">{{\"richText\":\"<article class=\\\"markdown-body\\\"><p>МУСОР ИЗ JSON-дубля который не должен попасть в текст</p></article>\"}}</script>\
+             <article class=\"markdown-body\"><p>{LONG_A}</p></article></html>"
+        );
+        let (paras, _) = extract_paragraphs(&html);
+        assert_eq!(paras, vec![LONG_A.to_string()], "{paras:?}");
+    }
+
+    /// Без `<article>/<main>` (простой блог, как в остальных тестах) — поведение прежнее: весь
+    /// документ. Регресс-гард, что сужение не ломает не-контейнерные страницы.
+    #[test]
+    fn no_container_falls_back_to_whole_doc() {
+        let html = format!("<html><body><p>{LONG_A}</p><p>{LONG_B}</p></body></html>");
+        let (paras, _) = extract_paragraphs(&html);
+        assert_eq!(paras.len(), 2, "{paras:?}");
     }
 
     /// D1: RU-источник — passthrough без единого LLM-вызова.

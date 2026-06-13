@@ -7,6 +7,7 @@ pub mod contradictions;
 pub mod debug;
 pub mod digest;
 pub mod egress;
+pub mod external;
 pub mod git;
 pub mod goals;
 pub mod graph;
