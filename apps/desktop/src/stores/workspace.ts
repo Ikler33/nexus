@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
+import { cancelAllAutosave, flush, scheduleAutosave } from './autosave';
 
 /**
  * Рабочее пространство (§4.1, Б12): группы (сплиты) и вкладки вместо одиночного `currentFile`.
@@ -21,6 +22,13 @@ export interface Buffer {
   /** Файл изменился на диске, пока в буфере были несохранённые правки → баннер guard'а (SAFE-3).
    *  Чистый буфер перечитывается тихо (флаг не ставится). */
   externalChange?: boolean;
+  /** Идёт запись на диск (SAFE-4) — индикатор «Сохранение…». */
+  saving?: boolean;
+  /** Метка времени последнего успешного сохранения (SAFE-4) — индикатор «Сохранено · …». */
+  savedAt?: number;
+  /** Текст ошибки последнего сохранения (SAFE-4): запись не удалась → dirty НЕ сброшен, правки целы,
+   *  ошибка ВИДИМА (мандат 3). Тост/ретрай — в P4 (toast-система). */
+  saveError?: string;
 }
 
 /** Группа (сплит): набор вкладок + активная вкладка. */
@@ -115,6 +123,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveTab(groupId, path) {
+    // SAFE-4: флаш при уходе с вкладки покрывается blur редактора (клик по другой вкладке уводит
+    // фокус из CM6 → onBlur→flush) + автосейвом по паузе. Здесь НЕ флашим — иначе сняли бы dirty при
+    // каждом переключении (конфликт с AC-Б12-2: буфер сохраняет dirty между вкладками).
     set((s) => ({
       activeGroupId: groupId,
       groups: s.groups.map((g) => (g.id === groupId ? { ...g, activeTab: path } : g)),
@@ -126,6 +137,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   closeTab(groupId, path) {
+    // SAFE-4 (критфикс): closeTab GC-ил буфер БЕЗ записи — несохранённые правки терялись. Флашим
+    // ПЕРЕД GC. flush читает буфер сейчас (ещё есть), saveBuffer фиксирует doc строкой → запись
+    // переживёт удаление буфера.
+    void flush(path);
     set((s) => {
       const updated = s.groups.map((g) => {
         if (g.id !== groupId) return g;
@@ -198,27 +213,55 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         ? { buffers: { ...s.buffers, [path]: { ...s.buffers[path], doc, dirty: true } } }
         : {},
     );
+    scheduleAutosave(path); // SAFE-4: сохранить через паузу набора (debounce 1с)
   },
 
   async saveBuffer(path) {
     const buffer = get().buffers[path];
-    if (!buffer) return;
+    if (!buffer || !buffer.dirty) return; // нечего сохранять (чисто/нет буфера)
     // Хеш записанного — новый baseHash: эхо собственного сейва не поднимет guard внешнего
     // изменения (SAFE-3). doc на момент записи фиксируем, чтобы baseHash соответствовал ему.
     const saved = buffer.doc;
-    const hash = await tauriApi.vault.writeFile(path, saved);
-    set((s) => {
-      const b = s.buffers[path];
-      if (!b) return {};
-      // Если за время записи документ не менялся — снимаем dirty; иначе оставляем (есть новые правки).
-      const stillSame = b.doc === saved;
-      return {
-        buffers: {
-          ...s.buffers,
-          [path]: { ...b, baseHash: hash, dirty: stillSame ? false : b.dirty },
-        },
-      };
-    });
+    set((s) =>
+      s.buffers[path]
+        ? { buffers: { ...s.buffers, [path]: { ...s.buffers[path], saving: true, saveError: undefined } } }
+        : {},
+    );
+    try {
+      const hash = await tauriApi.vault.writeFile(path, saved);
+      set((s) => {
+        const b = s.buffers[path];
+        if (!b) return {};
+        // Документ не менялся за время записи — снимаем dirty; иначе оставляем (есть новые правки).
+        const stillSame = b.doc === saved;
+        return {
+          buffers: {
+            ...s.buffers,
+            [path]: {
+              ...b,
+              baseHash: hash,
+              dirty: stillSame ? false : b.dirty,
+              saving: false,
+              savedAt: Date.now(),
+              saveError: undefined,
+            },
+          },
+        };
+      });
+    } catch (e) {
+      // SAFE-4 (поправка критика): запись упала → dirty НЕ сбрасываем (правки целы), ошибку делаем
+      // ВИДИМОЙ (мандат 3). Тост/ретрай — в P4 (toast-система); пока статусбар покажет «Ошибка».
+      set((s) =>
+        s.buffers[path]
+          ? {
+              buffers: {
+                ...s.buffers,
+                [path]: { ...s.buffers[path], saving: false, saveError: String(e) },
+              },
+            }
+          : {},
+      );
+    }
   },
 
   async onExternalFileChange(path, hash) {
@@ -281,6 +324,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   reset() {
+    cancelAllAutosave(); // SAFE-4: гасим отложенные автосейвы — не стреляют по выброшенным буферам
     set({ buffers: {}, groups: freshGroups(), activeGroupId: INITIAL_GROUP, modes: {} });
   },
 }));

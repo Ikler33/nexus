@@ -532,6 +532,8 @@
     "working_one": "{{count}} task",
     "working_other": "{{count}} tasks",
     "local": "Local",
+    "saving": "Saving…",
+    "saveError": "⚠ Not saved",
     "synced": "Synced",
     "changes_one": "Changes · {{count}}",
     "changes_other": "Changes · {{count}}",

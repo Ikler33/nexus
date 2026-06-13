@@ -6,6 +6,7 @@ import { useJobsStore } from '../../stores/jobs';
 import { useSyncStore } from '../../stores/sync';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { DeadJobsModal } from './DeadJobsModal';
 import styles from './StatusBar.module.css';
 
@@ -22,6 +23,11 @@ const REFRESH_DEBOUNCE_MS = 1500;
 export function StatusBar() {
   const { t } = useTranslation();
   const info = useVaultStore((s) => s.info);
+  // SAFE-4: состояние сохранения активного буфера (видимая ошибка записи — мандат 3; «Сохранение…»).
+  const activeBuf = useWorkspaceStore((s) => {
+    const g = s.groups.find((gr) => gr.id === s.activeGroupId);
+    return g?.activeTab ? (s.buffers[g.activeTab] ?? null) : null;
+  });
   const counts = useJobsStore((s) => s.counts);
   const mergeRequired = useSyncStore((s) => s.mergeRequired);
   const conflictFiles = useSyncStore((s) => s.conflictFiles);
@@ -105,6 +111,15 @@ export function StatusBar() {
           {dirty === 0 ? t('status.synced') : t('status.changes', { count: dirty })}
         </span>
       )}
+
+      {/* SAFE-4: сохранение активного буфера. Ошибка видима всегда (мандат 3); «Сохранение…» — транзиент. */}
+      {activeBuf?.saveError ? (
+        <span className={`${styles.item} ${styles.saveErr}`} title={activeBuf.saveError}>
+          {t('status.saveError')}
+        </span>
+      ) : activeBuf?.saving ? (
+        <span className={styles.item}>{t('status.saving')}</span>
+      ) : null}
 
       {/* Индексация: реальный прогресс скана N/M (макет) → активные джобы → «✓ Проиндексировано · N». */}
       {indexProg ? (

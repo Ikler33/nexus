@@ -542,6 +542,8 @@
     "working_few": "{{count}} задачи",
     "working_many": "{{count}} задач",
     "local": "Локально",
+    "saving": "Сохранение…",
+    "saveError": "⚠ Не сохранено",
     "synced": "Синхронизировано",
     "changes_one": "Изменения · {{count}}",
     "changes_few": "Изменения · {{count}}",

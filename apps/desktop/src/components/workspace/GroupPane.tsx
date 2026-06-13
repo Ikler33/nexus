@@ -6,6 +6,7 @@ import { tauriApi } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { flush } from '../../stores/autosave';
 import { Editor } from '../editor/Editor';
 import { FileViewer } from '../editor/FileViewer';
 import { isViewable } from '../../lib/file-kind';
@@ -261,6 +262,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                   updateBufferDoc(active.path, doc);
                   void saveBuffer(active.path);
                 }}
+                onBlur={() => void flush(active.path)}
                 onOpenLink={(t) => void openLink(t)}
                 fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
               />
