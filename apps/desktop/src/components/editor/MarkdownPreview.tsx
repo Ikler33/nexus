@@ -2,6 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { isTaskLine } from '../../lib/editor/format';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi } from '../../lib/tauri-api';
 import styles from './MarkdownPreview.module.css';
@@ -21,13 +22,36 @@ function urlTransform(url: string): string {
   return !hasScheme || /^(https?:|mailto:|tel:)/i.test(url) ? url : '';
 }
 
+/** Минимальная форма hast-узла, по которой ищем состояние GFM-чекбокса (без зависимости от типов hast). */
+type HastNode = { tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
+
+/** Состояние СОБСТВЕННОГО таск-чекбокса `li` из GFM-парса: первый `<input type=checkbox>` среди
+ *  потомков, НЕ спускаясь во вложенные подсписки (`ul`/`ol`) — иначе отметка дочернего таска ложно
+ *  подменила бы родительский. Tight-список держит input прямым ребёнком, loose — внутри `<p>`. */
+function ownTaskChecked(node: HastNode | undefined): boolean {
+  if (!node) return false;
+  if (node.tagName === 'input' && node.properties?.type === 'checkbox') {
+    return Boolean(node.properties.checked);
+  }
+  for (const child of node.children ?? []) {
+    if (child.tagName === 'ul' || child.tagName === 'ol') continue; // не спускаемся в подсписок
+    if (ownTaskChecked(child)) return true;
+  }
+  return false;
+}
+
 export function MarkdownPreview({
   source,
   onOpenLink,
+  onToggleTask,
 }: {
   source: string;
   onOpenLink: (target: string) => void;
+  /** EDIT-5: клик по чекбоксу таска в превью → 1-based номер исходной строки. Не задан — чекбоксы
+   *  остаются read-only (дефолтный disabled-рендер GFM), как в любых не-редактируемых контекстах. */
+  onToggleTask?: (line: number) => void;
 }) {
+  const sourceLines = onToggleTask ? source.split('\n') : null;
   const components: Components = {
     a({ href, children }) {
       if (href && href.startsWith(WIKILINK_SCHEME)) {
@@ -70,6 +94,34 @@ export function MarkdownPreview({
       );
     },
   };
+
+  if (onToggleTask) {
+    // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,
+    // в т.ч. вложенный в `<p>` у loose-списков) — единственный чекбокс рисуем в `li`.
+    components.input = () => null;
+    components.li = ({ node, className, children }) => {
+      const cls = String(className ?? '');
+      if (!cls.includes('task-list-item')) return <li className={cls || undefined}>{children}</li>;
+      // Состояние — авторитетное из GFM-парса (а не из перепарса исходной строки): корректно для
+      // цитат/вложенности. Интерактив — только если исходная строка реально тогглится (toggleTaskAtLine);
+      // иначе (таск в цитате `> - [ ]`, узел без позиции) — честный read-only disabled, не мёртвый клик.
+      const line = node?.position?.start?.line;
+      const togglable = typeof line === 'number' && isTaskLine(sourceLines?.[line - 1] ?? '');
+      return (
+        <li className={cls}>
+          <input
+            type="checkbox"
+            className={styles.taskCheckbox}
+            checked={ownTaskChecked(node as HastNode | undefined)}
+            disabled={!togglable}
+            readOnly={!togglable}
+            onChange={togglable ? () => onToggleTask(line) : undefined}
+          />
+          {children}
+        </li>
+      );
+    };
+  }
 
   return (
     <div className={styles.preview}>

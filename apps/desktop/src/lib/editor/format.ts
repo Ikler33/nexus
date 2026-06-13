@@ -92,6 +92,31 @@ export function toggleTask(view: EditorView): boolean {
   return true;
 }
 
+/**
+ * Чистый тоггл состояния таска на 1-based строке `line` документа `doc` (EDIT-5: клик по чекбоксу
+ * в превью): `[ ]`↔`[x]`/`[X]`. Возвращает новый текст или `null`, если строка вне диапазона или
+ * не таск-пункт — защита от дрейфа номера строки между рендером превью и кликом (доку могли изменить).
+ */
+const TASK_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$/;
+
+export function toggleTaskAtLine(doc: string, line: number): string | null {
+  const lines = doc.split('\n');
+  if (line < 1 || line > lines.length) return null;
+  const m = TASK_LINE_RE.exec(lines[line - 1]);
+  if (!m) return null;
+  lines[line - 1] = m[1] + (m[2] === ' ' ? 'x' : ' ') + m[3];
+  return lines.join('\n');
+}
+
+/**
+ * Тогглится ли строка через {@link toggleTaskAtLine} (EDIT-5). Превью по этому решает: рисовать
+ * интерактивный чекбокс или отдать read-only (напр. таск в цитате `> - [ ]` — GFM-таск, но исходная
+ * строка с префиксом `>` не подпадает под TASK_LINE_RE → честный disabled, а не мёртвый «кликабельный»).
+ */
+export function isTaskLine(text: string): boolean {
+  return TASK_LINE_RE.test(text);
+}
+
 /** Похоже ли выделение на URL/почту — тогда оно идёт в адрес ссылки, а не в её текст.
  *  `\S+` (не `\S*`) — после схемы обязателен контент: голый `www.`/`tel:`/`https://` — это текст. */
 const LINK_TARGET_RE = /^(https?:\/\/|mailto:|tel:|www\.)\S+$/i;

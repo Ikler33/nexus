@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { BookOpen, Clock, Columns2, FileText, History, PenLine, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { toggleTaskAtLine } from '../../lib/editor/format';
 import { relTime } from '../../lib/time';
 import { tauriApi } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
@@ -257,7 +258,16 @@ export function GroupPane({ groupId }: { groupId: string }) {
                     })}
                   </span>
                 </div>
-                <MarkdownPreview source={active.doc} onOpenLink={(target) => void openLink(target)} />
+                <MarkdownPreview
+                  source={active.doc}
+                  onOpenLink={(target) => void openLink(target)}
+                  onToggleTask={(line) => {
+                    // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
+                    // toggleTaskAtLine вернёт null, если строка уже не таск (дрейф) — тогда no-op.
+                    const next = toggleTaskAtLine(active.doc, line);
+                    if (next != null) updateBufferDoc(active.path, next);
+                  }}
+                />
               </Suspense>
             ) : (
               <Editor

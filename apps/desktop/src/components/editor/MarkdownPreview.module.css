@@ -95,6 +95,10 @@
 .preview li:has(> input[type='checkbox'])::before {
   content: none;
 }
+/* EDIT-5: интерактивный чекбокс таска (клик → тоггл исходной строки + автосейв). */
+.taskCheckbox {
+  cursor: pointer;
+}
 
 .preview a {
   color: var(--color-link);
