@@ -18,6 +18,30 @@ async fn file_id(db: &Database, path: &str) -> i64 {
         .unwrap()
 }
 
+/// События временной оси (EVT-1) файла по порядку: (kind, words_delta, words_after).
+async fn edit_events(db: &Database, path: &str) -> Vec<(String, i64, i64)> {
+    let path = path.to_string();
+    db.reader()
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT e.kind, e.words_delta, e.words_after FROM edit_events e \
+                     JOIN files f ON f.id=e.file_id WHERE f.path=?1 ORDER BY e.id",
+            )?;
+            let rows = stmt
+                .query_map([path], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap()
+}
+
 /// Источники беклинков файла `target_id` (пути), отсортированы.
 async fn backlink_sources(db: &Database, target_id: i64) -> Vec<String> {
     db.reader()
@@ -117,6 +141,75 @@ async fn aliases_resolve_links_and_populate_table() {
     assert_eq!(
         read_aliases(&db, target_id).await,
         vec!["MyAlias".to_string(), "Second".to_string()]
+    );
+}
+
+/// EVT-1 (честная ось времени): create при первой индексации, modify при смене контента,
+/// НЕТ события на force-rescan без смены хеша (анти-фантом — поправка критика), delete при удалении
+/// (раз), корректный words_delta.
+#[tokio::test]
+async fn edit_events_create_modify_delete_no_phantom() {
+    use std::sync::atomic::Ordering;
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::create_dir_all(root.join(".nexus")).unwrap();
+    fs::write(root.join("A.md"), "один два три").unwrap();
+    let db = open(&root).await;
+    let idx = Indexer::new(&db, root.clone());
+
+    // create: первая индексация.
+    idx.index_file("A.md").await.unwrap();
+    let evs = edit_events(&db, "A.md").await;
+    assert_eq!(evs.len(), 1, "одно событие create");
+    assert_eq!(evs[0].0, "create");
+    let create_words = evs[0].2;
+    assert!(create_words > 0);
+    assert_eq!(
+        evs[0].1, create_words,
+        "create: delta = words_after (было 0)"
+    );
+
+    // modify: контент изменён → новый хеш.
+    fs::write(root.join("A.md"), "один два три четыре пять шесть").unwrap();
+    idx.force.store(true, Ordering::Relaxed);
+    idx.index_file("A.md").await.unwrap();
+    let evs = edit_events(&db, "A.md").await;
+    assert_eq!(evs.len(), 2, "добавилось событие modify");
+    assert_eq!(evs[1].0, "modify");
+    let modify_words = evs[1].2;
+    assert!(modify_words > create_words, "слов стало больше");
+    assert_eq!(
+        evs[1].1,
+        modify_words - create_words,
+        "modify: delta относительно прошлого"
+    );
+
+    // анти-фантом: force-rescan БЕЗ смены контента → НЕТ нового события.
+    idx.force.store(true, Ordering::Relaxed);
+    idx.index_file("A.md").await.unwrap();
+    assert_eq!(
+        edit_events(&db, "A.md").await.len(),
+        2,
+        "force-rescan без смены хеша не плодит фантомные события"
+    );
+
+    // delete: удаление пишет точку (раз).
+    idx.remove_file("A.md").await.unwrap();
+    let evs = edit_events(&db, "A.md").await;
+    assert_eq!(evs.len(), 3);
+    assert_eq!(evs[2].0, "delete");
+    assert_eq!(evs[2].2, 0, "после удаления слов 0");
+    assert_eq!(
+        evs[2].1, -modify_words,
+        "delete: delta = минус прошлые слова"
+    );
+
+    // анти-дубль: повторное удаление не плодит второе событие.
+    idx.remove_file("A.md").await.unwrap();
+    assert_eq!(
+        edit_events(&db, "A.md").await.len(),
+        3,
+        "повторный delete не дублируется"
     );
 }
 

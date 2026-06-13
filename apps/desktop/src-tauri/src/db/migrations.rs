@@ -104,6 +104,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/014_news_comments_url.sql"),
         rebuild_fts: false, // nullable-колонка ссылки на HN-обсуждение, производных не трогает
     },
+    Migration {
+        version: 15,
+        name: "edit_events",
+        sql: include_str!("migrations/015_edit_events.sql"),
+        rebuild_fts: false, // журнал изменений для временной оси, производных индексов не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
