@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, FileText, Sparkles, Globe, ChevronRight, MessageSquare } from 'lucide-react';
+import {
+  AlertTriangle,
+  Copy,
+  FilePlus2,
+  FileText,
+  Sparkles,
+  Globe,
+  ChevronRight,
+  MessageSquare,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,6 +22,8 @@ import {
   useChatStore,
 } from '../../stores/chat';
 import { useUIStore } from '../../stores/ui';
+import { useToastStore } from '../../stores/toast';
+import { getActiveEditorView } from '../../lib/editor/activeView';
 import { tauriApi } from '../../lib/tauri-api';
 import type { MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
@@ -334,6 +345,58 @@ function thinkingKey(mode: ChatMode, web: boolean): string {
   return web ? 'chat.thinkingWeb' : THINKING_KEY[mode];
 }
 
+/**
+ * Действия под ответом ИИ (P6-AR): «Копировать» (в буфер обмена) и «Вставить в заметку» (в активный
+ * редактор у курсора — ИИ-черновик прямо в текст). Подтверждение/ошибка — тостом (TOAST-1).
+ */
+function MessageActions({ content }: { content: string }) {
+  const { t } = useTranslation();
+
+  const copy = () => {
+    if (!navigator.clipboard) {
+      useToastStore.getState().addToast(t('chat.copyFailed'), { kind: 'error' });
+      return;
+    }
+    void navigator.clipboard
+      .writeText(content)
+      .then(() => useToastStore.getState().addToast(t('chat.copied'), { kind: 'success' }))
+      .catch(() => useToastStore.getState().addToast(t('chat.copyFailed'), { kind: 'error' }));
+  };
+
+  const insert = () => {
+    const view = getActiveEditorView();
+    if (!view) {
+      // Заметка открыта, но в режиме чтения/preview (CM6 размонтирован) → честная подсказка вместо
+      // вводящего в заблуждение «откройте заметку».
+      const hasNote = activePath(useWorkspaceStore.getState()) != null;
+      useToastStore
+        .getState()
+        .addToast(t(hasNote ? 'chat.insertNeedsEdit' : 'chat.noActiveNote'), { kind: 'error' });
+      return;
+    }
+    const sel = view.state.selection.main;
+    // Вставка у курсора (замена выделения, если есть) — это пользовательская правка → dirty/autosave
+    // через updateListener редактора (без externalSync-аннотации).
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: content },
+      selection: { anchor: sel.from + content.length },
+    });
+    view.focus();
+    useToastStore.getState().addToast(t('chat.inserted'), { kind: 'success' });
+  };
+
+  return (
+    <div className={styles.msgActions}>
+      <button type="button" className={styles.msgAct} onClick={copy}>
+        <Copy size={13} aria-hidden /> {t('chat.copy')}
+      </button>
+      <button type="button" className={styles.msgAct} onClick={insert}>
+        <FilePlus2 size={13} aria-hidden /> {t('chat.insert')}
+      </button>
+    </div>
+  );
+}
+
 function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: string) => void }) {
   const { t } = useTranslation();
   // Режим заморожен на время стрима (setMode блокируется) → текущий режим честен для этого сообщения.
@@ -394,6 +457,7 @@ function Message({ message, onOpen }: { message: ChatMessage; onOpen: (path: str
               </div>
             )
           )}
+          {!message.streaming && message.content && <MessageActions content={message.content} />}
           {message.sources && message.sources.length > 0 && (
             <Disclosure
               id={`${message.id}:src`}

@@ -539,6 +539,34 @@
   gap: 6px;
   margin-top: 4px;
 }
+/* P6-AR: ряд действий под ответом ИИ (копировать / вставить в заметку). */
+.msgActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.msgAct {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.msgAct:hover {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+.msgAct svg {
+  color: var(--color-ai);
+}
+
 .srcChip {
   display: inline-flex;
   align-items: center;
