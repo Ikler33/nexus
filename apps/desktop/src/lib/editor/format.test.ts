@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { toggleTask, toggleWrap } from './format';
+import { insertLink, toggleTask, toggleWrap } from './format';
 
 function mkView(doc: string, from: number, to = from): EditorView {
   return new EditorView({
@@ -124,6 +124,64 @@ describe('toggleTask (EDIT-2)', () => {
     const v = mkView('- [  ] дело', 7, 7);
     toggleTask(v);
     expect(v.state.doc.toString()).toBe('- [x] дело');
+    v.destroy();
+  });
+});
+
+describe('insertLink (EDIT-4)', () => {
+  it('пустое выделение → []() с курсором в тексте', () => {
+    const v = mkView('', 0, 0);
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('[]()');
+    expect(v.state.selection.main.head).toBe(1); // [|]
+    v.destroy();
+  });
+
+  it('выделен текст → [текст]() с курсором в адресе', () => {
+    const v = mkView('читай доку', 6, 10); // выделено «доку»
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('читай [доку]()');
+    expect(v.state.selection.main.head).toBe(6 + 'доку'.length + 3); // [доку](| → сразу после `](`
+    expect(v.state.sliceDoc(v.state.selection.main.head - 1, v.state.selection.main.head)).toBe('(');
+    v.destroy();
+  });
+
+  it('выделен URL → [](url) с курсором в тексте', () => {
+    const v = mkView('https://nexus.app', 0, 17);
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('[](https://nexus.app)');
+    expect(v.state.selection.main.head).toBe(1); // [|](url)
+    v.destroy();
+  });
+
+  it('выделен www-адрес тоже распознаётся как ссылка', () => {
+    const v = mkView('www.example.com', 0, 15);
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('[](www.example.com)');
+    v.destroy();
+  });
+
+  it('выделение с пробелом — не URL, идёт в текст', () => {
+    const v = mkView('два слова', 0, 9);
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('[два слова]()');
+    v.destroy();
+  });
+
+  // Регресс на находку ревью: голый префикс схемы — это текст, не адрес.
+  it('голый www. без контента — текст, не адрес', () => {
+    const v = mkView('www.', 0, 4);
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('[www.]()');
+    v.destroy();
+  });
+
+  // Регресс на находку ревью: скобки в тексте экранируются, чтобы не рвать `[…]`.
+  it('скобки в выделении экранируются в тексте ссылки', () => {
+    const v = mkView('a]b', 0, 3);
+    insertLink(v);
+    expect(v.state.doc.toString()).toBe('[a\\]b]()');
+    expect(v.state.sliceDoc(v.state.selection.main.head - 1, v.state.selection.main.head)).toBe('(');
     v.destroy();
   });
 });

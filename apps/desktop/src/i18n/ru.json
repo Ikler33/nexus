@@ -761,6 +761,7 @@
     "format.bold": "Жирный",
     "format.italic": "Курсив",
     "format.task": "Чекбокс / таск",
+    "format.link": "Вставить ссылку",
     "editor.toggleMode": "Редактор: правка / просмотр",
     "versions.open": "История версий",
     "theme.toggle": "Тема: светлая / тёмная",
