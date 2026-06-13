@@ -1,4 +1,5 @@
 import { commands, type Disposable } from './commands';
+import { openOrCreateDaily } from './daily';
 import { getActiveEditorView } from './editor/activeView';
 import { printActiveNote } from './print';
 import { isTauri, tauriApi, type InlineMode } from './tauri-api';
@@ -57,6 +58,17 @@ export function registerCoreCommands(): Disposable {
         if (!useVaultStore.getState().info) return; // нет открытого vault — некуда писать
         const path = await useVaultStore.getState().createNote();
         await useWorkspaceStore.getState().openFile(path);
+      },
+    }),
+    commands.register({
+      id: 'note.daily',
+      title: 'Daily note',
+      titleKey: 'commands.note.daily',
+      source: 'core',
+      defaultKey: 'mod+shift+d',
+      run: async () => {
+        if (!useVaultStore.getState().info) return; // нет открытого vault — некуда писать
+        await openOrCreateDaily();
       },
     }),
     commands.register({

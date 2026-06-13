@@ -707,6 +707,7 @@
     "vault.rescan": "Переиндексировать vault",
     "view.toggleSidebar": "Свернуть боковую панель",
     "file.new": "Новая заметка",
+    "note.daily": "Заметка дня",
     "file.save": "Сохранить файл",
     "file.print": "Печать / Экспорт PDF",
     "inline.continue": "ИИ: продолжить текст",
