@@ -199,7 +199,7 @@ describe('workspace autosave + flush (SAFE-4)', () => {
       ws().updateBufferDoc('README.md', 'набор');
       expect(spy).not.toHaveBeenCalled(); // пауза ещё не прошла
       vi.advanceTimersByTime(1000);
-      expect(spy).toHaveBeenCalledWith('README.md', 'набор');
+      expect(spy).toHaveBeenCalledWith('README.md', 'набор', false); // автосейв = не ручной
     } finally {
       vi.useRealTimers();
       spy.mockRestore();
@@ -212,7 +212,7 @@ describe('workspace autosave + flush (SAFE-4)', () => {
     const spy = vi.spyOn(tauriApi.vault, 'writeFile');
     const gid = ws().activeGroupId;
     ws().closeTab(gid, 'README.md');
-    expect(spy).toHaveBeenCalledWith('README.md', 'важная правка');
+    expect(spy).toHaveBeenCalledWith('README.md', 'важная правка', false);
     spy.mockRestore();
   });
 
@@ -223,8 +223,8 @@ describe('workspace autosave + flush (SAFE-4)', () => {
     ws().updateBufferDoc('Inbox.md', 'b');
     const spy = vi.spyOn(tauriApi.vault, 'writeFile');
     await flushAllDirty();
-    expect(spy).toHaveBeenCalledWith('README.md', 'a');
-    expect(spy).toHaveBeenCalledWith('Inbox.md', 'b');
+    expect(spy).toHaveBeenCalledWith('README.md', 'a', false);
+    expect(spy).toHaveBeenCalledWith('Inbox.md', 'b', false);
     expect(ws().buffers['README.md'].dirty).toBe(false);
     expect(ws().buffers['Inbox.md'].dirty).toBe(false);
     spy.mockRestore();

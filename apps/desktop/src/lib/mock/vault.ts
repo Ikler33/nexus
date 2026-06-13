@@ -109,6 +109,28 @@ export async function writeFile(path: string, content: string): Promise<string> 
   return mockHash(content);
 }
 
+// История версий (SAFE-5/6): мок держит снапшоты в памяти, чтобы UI можно было гонять в браузере.
+const VERSIONS: Record<string, { ts: number; content: string }[]> = {};
+let versionSeq = 1_700_000_000_000;
+
+export async function listVersions(path: string): Promise<{ ts: number; size: number }[]> {
+  return (VERSIONS[path] ?? [])
+    .map((v) => ({ ts: v.ts, size: v.content.length }))
+    .sort((a, b) => b.ts - a.ts);
+}
+
+export async function readVersion(path: string, ts: number): Promise<string> {
+  const v = (VERSIONS[path] ?? []).find((x) => x.ts === ts);
+  return v?.content ?? '';
+}
+
+/** Только для мок-режима/тестов: засеять снапшот версии. */
+export function __seedVersion(path: string, content: string): number {
+  const ts = versionSeq++;
+  (VERSIONS[path] ??= []).push({ ts, content });
+  return ts;
+}
+
 function lineContext(content: string, idx: number): string {
   const start = content.lastIndexOf('\n', idx) + 1;
   const end = content.indexOf('\n', idx);

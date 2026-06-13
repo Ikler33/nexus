@@ -523,11 +523,24 @@ export const tauriApi = {
         ? invoke<string | null>('file_hash', { path })
         : mockVault.fileHash(path),
 
-    /** Пишет содержимое файла vault. Возвращает хеш записанного (фронт обновляет `baseHash`). */
-    writeFile: (path: string, content: string) =>
+    /** Пишет содержимое файла vault. Возвращает хеш записанного (фронт обновляет `baseHash`).
+     *  `manual` (Ctrl-S/палитра vs автосейв) управляет троттлом снапшота истории (SAFE-5). */
+    writeFile: (path: string, content: string, manual = false) =>
       isTauri()
-        ? invoke<string>('write_file', { path, content })
+        ? invoke<string>('write_file', { path, content, manual })
         : mockVault.writeFile(path, content),
+
+    /** Версии-снапшоты заметки (SAFE-5/6): время + размер, новейший первым. */
+    listVersions: (path: string) =>
+      isTauri()
+        ? invoke<{ ts: number; size: number }[]>('list_versions', { path })
+        : mockVault.listVersions(path),
+
+    /** Содержимое версии-снапшота по `ts` (diff/восстановление, SAFE-6). */
+    readVersion: (path: string, ts: number) =>
+      isTauri()
+        ? invoke<string>('read_version', { path, ts })
+        : mockVault.readVersion(path, ts),
 
     /** Заметки vault (path + title) для автокомплита `[[wikilink]]`. #22: опциональный
      * подстрочный `query`-фильтр + `limit` — топ-N вместо всего vault (префиксы ранжируются выше). */

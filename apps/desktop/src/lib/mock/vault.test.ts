@@ -2,14 +2,32 @@ import { describe, expect, it } from 'vitest';
 
 import type { ChatStreamEvent } from '../tauri-api';
 import {
+  __seedVersion,
   fileHash,
   getFullGraph,
   getLocalGraph,
+  listVersions,
   readFileMeta,
+  readVersion,
   searchContent,
   streamChat,
   writeFile,
 } from './vault';
+
+describe('mock версии (SAFE-5/6)', () => {
+  it('listVersions сортирует по времени убыв.; readVersion отдаёт контент', async () => {
+    __seedVersion('Notes/V.md', 'старое');
+    const ts2 = __seedVersion('Notes/V.md', 'новое');
+    const list = await listVersions('Notes/V.md');
+    expect(list.length).toBe(2);
+    expect(list[0].ts).toBe(ts2); // новейший первым
+    expect(await readVersion('Notes/V.md', ts2)).toBe('новое');
+  });
+
+  it('listVersions пусто для файла без истории', async () => {
+    expect(await listVersions('Notes/Никогда.md')).toEqual([]);
+  });
+});
 
 describe('mock content-hash (SAFE-2)', () => {
   it('writeFile возвращает хеш, равный fileHash после записи', async () => {
