@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Inbox } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { appendCapture } from '../../lib/daily';
+import { useToastStore } from '../../stores/toast';
 import { useUIStore } from '../../stores/ui';
+import { useWorkspaceStore } from '../../stores/workspace';
 import styles from './QuickCapture.module.css';
 
 /**
@@ -21,7 +23,17 @@ export function QuickCapture() {
     const v = text.trim();
     close();
     setText('');
-    if (v) void appendCapture(v);
+    if (!v) return;
+    void appendCapture(v).then(() => {
+      // Подтверждение захвата (TOAST-1) + действие «Открыть Inbox».
+      useToastStore.getState().addToast(t('capture.saved'), {
+        kind: 'success',
+        action: {
+          label: t('capture.openInbox'),
+          run: () => void useWorkspaceStore.getState().openFile('Inbox.md'),
+        },
+      });
+    });
   };
 
   const cancel = () => {

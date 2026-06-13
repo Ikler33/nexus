@@ -312,7 +312,12 @@
   },
   "capture": {
     "title": "Quick capture",
-    "placeholder": "Jot a thought — Enter adds it to your Inbox…"
+    "placeholder": "Jot a thought — Enter adds it to your Inbox…",
+    "saved": "Captured to Inbox",
+    "openInbox": "Open"
+  },
+  "toast": {
+    "dismiss": "Dismiss notification"
   },
   "palette": {
     "placeholder": "Command…",
