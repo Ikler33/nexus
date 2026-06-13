@@ -311,4 +311,129 @@ describe('workspace renameBufferPath (CURATE-2)', () => {
     await ws().openFile('Inbox.md');
     expect(ws().recents[0]).toBe('Inbox.md');
   });
+
+  // NAV-3: история навигации back/forward (⌘[ / ⌘]).
+  const navPaths = () => ws().navHistory.map((e) => e.path);
+
+  it('openFile пишет историю (путь+группа); navBack/navForward ходят по ней', async () => {
+    await ws().openFile('README.md');
+    await ws().openFile('Inbox.md');
+    expect(ws().navIndex).toBe(1);
+    expect(navPaths()).toEqual(['README.md', 'Inbox.md']);
+    expect(ws().navHistory[0].groupId).toBe(ws().activeGroupId); // группа записана
+
+    await ws().navBack();
+    expect(ws().navIndex).toBe(0);
+    expect(activePath(ws())).toBe('README.md');
+
+    await ws().navForward();
+    expect(ws().navIndex).toBe(1);
+    expect(activePath(ws())).toBe('Inbox.md');
+  });
+
+  it('navBack на левом краю — no-op; новое открытие после back обрезает «вперёд»', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md');
+    await ws().navBack(); // → A, index 0
+    await ws().navBack(); // край (index 0) — no-op
+    expect(ws().navIndex).toBe(0);
+    expect(activePath(ws())).toBe('A.md');
+
+    await ws().openFile('C.md'); // новая навигация из середины — хвост [B] отброшен
+    expect(navPaths()).toEqual(['A.md', 'C.md']);
+    expect(ws().navIndex).toBe(1);
+  });
+
+  it('navForward на правом краю — no-op', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md'); // idx 1 = правый край
+    await ws().navForward();
+    expect(ws().navIndex).toBe(1);
+    expect(activePath(ws())).toBe('B.md');
+  });
+
+  it('navBack не плодит запись в истории (fromNav)', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md');
+    await ws().navBack();
+    expect(navPaths()).toEqual(['A.md', 'B.md']); // длина не выросла
+    expect(ws().navIndex).toBe(0);
+  });
+
+  it('переключение вкладки (setActiveTab) пишется в историю', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md'); // [A,B] idx1
+    ws().setActiveTab(ws().activeGroupId, 'A.md'); // клик по уже открытой вкладке A — навигация
+    expect(navPaths()).toEqual(['A.md', 'B.md', 'A.md']);
+    expect(ws().navIndex).toBe(2);
+  });
+
+  it('кап истории NAV_MAX=50 (старейшее выбрасывается)', async () => {
+    for (let i = 0; i < 55; i++) await ws().openFile(`H${i}.md`);
+    expect(ws().navHistory).toHaveLength(50);
+    expect(ws().navIndex).toBe(49);
+    expect(navPaths()[0]).toBe('H5.md'); // H0..H4 вытеснены
+    expect(navPaths()).not.toContain('H4.md');
+  });
+
+  // Пересечение с CURATE-1/2: история не должна держать мёртвые пути.
+  it('удаление пути чистит историю и сдвигает курсор (dropPathsUnder)', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md');
+    await ws().openFile('C.md'); // [A,B,C] idx2
+    ws().dropPathsUnder('B.md'); // удалили B
+    expect(navPaths()).toEqual(['A.md', 'C.md']);
+    expect(ws().navIndex).toBe(1); // курсор сдвинут на число удалённых слева-включительно
+  });
+
+  // Регресс на находку ревью: удаление записи НА курсоре с выжившими по обе стороны.
+  it('удаление активной записи держит курсор на реально активном документе', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md');
+    await ws().openFile('C.md'); // [A,B,C] idx2
+    await ws().navBack(); // → B, idx1 (B активна и в центре истории)
+    ws().dropPathsUnder('B.md'); // удаляем B — activeTab уходит на правого выжившего (C)
+    // ИНВАРИАНТ: запись под курсором == реально открытый документ.
+    expect(ws().navHistory[ws().navIndex].path).toBe(activePath(ws()));
+    expect(activePath(ws())).toBe('C.md');
+    await ws().navBack(); // и назад реально достижим A
+    expect(activePath(ws())).toBe('A.md');
+  });
+
+  it('удаление чистит и недавние (recents)', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md');
+    ws().dropPathsUnder('A.md');
+    expect(ws().recents).not.toContain('A.md');
+    expect(ws().recents).toContain('B.md');
+  });
+
+  it('переименование пути ремапит историю (renameBufferPath)', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('Old.md'); // [A,Old] idx1
+    ws().renameBufferPath('Old.md', 'New.md');
+    expect(navPaths()).toEqual(['A.md', 'New.md']);
+    expect(ws().navIndex).toBe(1); // длина/порядок сохранены
+  });
+
+  it('переименование ремапит и недавние (recents)', async () => {
+    await ws().openFile('Old.md');
+    ws().renameBufferPath('Old.md', 'New.md');
+    expect(ws().recents).toContain('New.md');
+    expect(ws().recents).not.toContain('Old.md');
+  });
+
+  it('navBack на недоступную цель (reject openFile) не рассинхронит курсор', async () => {
+    await ws().openFile('A.md');
+    await ws().openFile('B.md'); // [A,B] idx1
+    // Имитируем исчезновение файла A мимо нашего scrub: сносим буфер + reject чтения с диска.
+    useWorkspaceStore.setState((s) => ({
+      buffers: Object.fromEntries(Object.entries(s.buffers).filter(([p]) => p !== 'A.md')),
+    }));
+    const spy = vi.spyOn(tauriApi.vault, 'readFileMeta').mockRejectedValueOnce(new Error('gone'));
+    await ws().navBack();
+    expect(ws().navIndex).toBe(1); // курсор не двинулся — openFile реджектнулся, поймали
+    expect(activePath(ws())).toBe('B.md'); // активный документ прежний
+    spy.mockRestore();
+  });
 });

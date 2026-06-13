@@ -714,6 +714,8 @@
   "commands": {
     "palette.open": "Палитра команд",
     "recents.open": "Перейти к недавним…",
+    "nav.back": "Назад",
+    "nav.forward": "Вперёд",
     "vault.open": "Открыть vault…",
     "vault.rescan": "Переиндексировать vault",
     "view.toggleSidebar": "Свернуть боковую панель",

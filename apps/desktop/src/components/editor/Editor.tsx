@@ -94,12 +94,17 @@ export function Editor({
       },
     });
 
+    // NAV-3: уступаем ⌘[ / ⌘] навигации back/forward (глобальный useKeymap). Из defaultKeymap CM6
+    // это indentLess/indentMore — иначе ⌘[ в фокусе редактора и сдвигал бы отступ, и навигировал
+    // (порча текста). Отступ остаётся на Tab/Shift-Tab (indentWithTab).
+    const baseKeymap = defaultKeymap.filter((b) => b.key !== 'Mod-[' && b.key !== 'Mod-]');
+
     const view = new EditorView({
       state: EditorState.create({
         doc: loadedDoc.current,
         extensions: [
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          keymap.of([...baseKeymap, ...historyKeymap, indentWithTab]),
           saveKey,
           inlineTrigger,
           ghostField,

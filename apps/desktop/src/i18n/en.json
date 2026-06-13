@@ -701,6 +701,8 @@
   "commands": {
     "palette.open": "Command palette",
     "recents.open": "Go to recent…",
+    "nav.back": "Back",
+    "nav.forward": "Forward",
     "vault.open": "Open vault…",
     "vault.rescan": "Reindex vault",
     "view.toggleSidebar": "Toggle sidebar",

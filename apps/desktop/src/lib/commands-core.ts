@@ -50,6 +50,23 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().openPalette(),
     }),
     commands.register({
+      // NAV-3: назад по истории навигации (браузерная модель). ⌘[ освобождён от indentLess в редакторе.
+      id: 'nav.back',
+      title: 'Back',
+      titleKey: 'commands.nav.back',
+      source: 'core',
+      defaultKey: 'mod+[',
+      run: () => useWorkspaceStore.getState().navBack(),
+    }),
+    commands.register({
+      id: 'nav.forward',
+      title: 'Forward',
+      titleKey: 'commands.nav.forward',
+      source: 'core',
+      defaultKey: 'mod+]',
+      run: () => useWorkspaceStore.getState().navForward(),
+    }),
+    commands.register({
       id: 'vault.open',
       title: 'Open vault…',
       titleKey: 'commands.vault.open',
