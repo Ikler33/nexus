@@ -5,6 +5,7 @@ import {
   ExternalLink,
   FilePlus2,
   Info,
+  MessageSquare,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -142,6 +143,21 @@ export function NewsReader(props: {
             <ExternalLink size={15} aria-hidden />
             {t('news.reader.original')}
           </a>
+          {item.commentsUrl && (
+            <a
+              className={styles.readerAct}
+              href={item.commentsUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              onClick={(e) => {
+                e.preventDefault();
+                void tauriApi.external.open(item.commentsUrl!).catch(() => {});
+              }}
+            >
+              <MessageSquare size={15} aria-hidden />
+              {t('news.reader.discussion')}
+            </a>
+          )}
         </div>
       </div>
 

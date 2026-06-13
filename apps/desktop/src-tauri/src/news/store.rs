@@ -22,6 +22,8 @@ pub struct NewRow {
     pub topic: String,
     pub lang_ru: bool,
     pub published_at: i64,
+    /// Ссылка на HN-обсуждение (NF-6 хвост) — `None` для не-HN / текстовых HN-постов.
+    pub comments_url: Option<String>,
 }
 
 /// Запись ленты для UI (camelCase — контракт фронта, бриф `NEWS_FEED_BRIEF.md`).
@@ -37,6 +39,9 @@ pub struct NewsItem {
     pub lang_ru: bool,
     pub published_at: i64,
     pub read: bool,
+    /// Ссылка на обсуждение на HN (NF-6 хвост): ридер показывает кнопку «Обсуждение на HN» рядом
+    /// с «Оригинал». `None` — не-HN / текстовый HN-пост (там `url` уже == обсуждение).
+    pub comments_url: Option<String>,
 }
 
 /// Итог прогона для шапки страницы (последняя запись `news_runs`).
@@ -67,7 +72,7 @@ pub async fn insert_items(
             {
                 let mut stmt = tx.prepare(
                     "INSERT INTO news_items(source_id,url,title,title_ru,summary_ru,topic,lang_ru,\
-                     published_at,fetched_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) \
+                     published_at,fetched_at,comments_url) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) \
                      ON CONFLICT(url) DO NOTHING",
                 )?;
                 for r in &rows {
@@ -80,7 +85,8 @@ pub async fn insert_items(
                         r.topic,
                         r.lang_ru,
                         r.published_at,
-                        fetched_at
+                        fetched_at,
+                        r.comments_url
                     ])?;
                 }
             }
@@ -103,7 +109,7 @@ pub async fn list_items(
         .query(move |c| {
             let mut sql = String::from(
                 "SELECT id,source_id,url,title_ru,summary_ru,topic,lang_ru,published_at,\
-                 read_at IS NOT NULL FROM news_items WHERE hidden=0",
+                 read_at IS NOT NULL,comments_url FROM news_items WHERE hidden=0",
             );
             let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
             if let Some(t) = topic {
@@ -131,6 +137,7 @@ pub async fn list_items(
                             lang_ru: r.get(6)?,
                             published_at: r.get(7)?,
                             read: r.get(8)?,
+                            comments_url: r.get(9)?,
                         })
                     },
                 )?
@@ -201,7 +208,7 @@ pub async fn get_item(reader: &ReadPool, id: i64) -> DbResult<Option<NewsItem>> 
         .query(move |c| {
             c.query_row(
                 "SELECT id,source_id,url,title_ru,summary_ru,topic,lang_ru,published_at,\
-                 read_at IS NOT NULL FROM news_items WHERE id=?1",
+                 read_at IS NOT NULL,comments_url FROM news_items WHERE id=?1",
                 [id],
                 |r| {
                     Ok(NewsItem {
@@ -214,6 +221,7 @@ pub async fn get_item(reader: &ReadPool, id: i64) -> DbResult<Option<NewsItem>> 
                         lang_ru: r.get(6)?,
                         published_at: r.get(7)?,
                         read: r.get(8)?,
+                        comments_url: r.get(9)?,
                     })
                 },
             )
@@ -339,6 +347,7 @@ mod tests {
             topic: topic.into(),
             lang_ru: false,
             published_at: 1_750_000_000,
+            comments_url: None,
         }
     }
 

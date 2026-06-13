@@ -401,6 +401,7 @@ mod tests {
             lang_ru: false,
             published_at: 1_780_000_000, // 2026-05-28
             read: false,
+            comments_url: None,
         }
     }
 

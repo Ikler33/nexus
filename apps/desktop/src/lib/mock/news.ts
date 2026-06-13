@@ -31,6 +31,7 @@ let items: NewsItem[] = [
     langRu: false,
     publishedAt: NOW - 2 * H,
     read: false,
+    commentsUrl: null,
   },
   {
     id: 2,
@@ -43,6 +44,7 @@ let items: NewsItem[] = [
     langRu: false,
     publishedAt: NOW - 5 * H,
     read: false,
+    commentsUrl: null,
   },
   {
     id: 3,
@@ -54,6 +56,7 @@ let items: NewsItem[] = [
     langRu: true,
     publishedAt: NOW - 9 * H,
     read: true,
+    commentsUrl: null,
   },
   {
     id: 4,
@@ -66,6 +69,7 @@ let items: NewsItem[] = [
     langRu: false,
     publishedAt: NOW - 4 * H,
     read: false,
+    commentsUrl: 'https://news.ycombinator.com/item?id=40000004',
   },
   {
     id: 5,
@@ -77,6 +81,7 @@ let items: NewsItem[] = [
     langRu: false,
     publishedAt: NOW - 7 * H,
     read: false,
+    commentsUrl: null,
   },
   {
     id: 6,
@@ -88,6 +93,7 @@ let items: NewsItem[] = [
     langRu: false,
     publishedAt: NOW - 11 * H,
     read: false,
+    commentsUrl: null,
   },
 ];
 

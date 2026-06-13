@@ -118,6 +118,7 @@ pub async fn run_news_pipeline(
             topic: ev.topic,
             lang_ru,
             published_at: ev.entry.published_at,
+            comments_url: ev.entry.comments_url.clone(),
         }));
     }
 
@@ -132,6 +133,7 @@ pub async fn run_news_pipeline(
                 title: r.title.clone(),
                 published_at: r.published_at,
                 excerpt: String::new(),
+                comments_url: r.comments_url.clone(),
             },
             title_ru: r.title_ru.clone(),
             summary_ru: r.summary_ru.clone(),

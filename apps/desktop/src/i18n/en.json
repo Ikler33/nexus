@@ -475,6 +475,7 @@
       "brief": "TL;DR",
       "hide": "Hide",
       "original": "Original",
+      "discussion": "Discussion on HN",
       "translated": "AI translation",
       "loading": "Fetching and translating the article…",
       "denied": "Full text unavailable: {{message}}",
