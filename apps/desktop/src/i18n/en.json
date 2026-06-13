@@ -316,6 +316,13 @@
     "saved": "Captured to Inbox",
     "openInbox": "Open"
   },
+  "templates": {
+    "title": "New from template",
+    "loading": "Loading templates…",
+    "empty": "No templates. Create .md files in the Templates/ folder.",
+    "created": "Created from \"{{name}}\"",
+    "error": "Couldn't create from template"
+  },
   "toast": {
     "dismiss": "Dismiss notification"
   },
@@ -709,6 +716,7 @@
     "file.new": "New note",
     "note.daily": "Daily note",
     "capture.quick": "Quick capture",
+    "note.fromTemplate": "New note from template",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
     "inline.continue": "AI: continue text",
