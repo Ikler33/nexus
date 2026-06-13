@@ -120,6 +120,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(state::AppState::new())
         // E5 (срез 2 net.md): политика эгресса переживает рестарт — app-local `egress.json`
         // в OS config-dir (вне vault/git и вне keychain). Нет файла/битый → local-first-дефолты.
@@ -220,6 +221,7 @@ pub fn run() {
             commands::git::git_sync,
             commands::git::git_merge_preview,
             commands::git::git_resolve_conflicts,
+            commands::external::open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus desktop");

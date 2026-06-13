@@ -133,6 +133,11 @@ export function NewsReader(props: {
             href={item.url}
             target="_blank"
             rel="noreferrer noopener"
+            onClick={(e) => {
+              // В Tauri-вебвью target=_blank не открывает браузер → идём через opener.
+              e.preventDefault();
+              void tauriApi.external.open(item.url).catch(() => {});
+            }}
           >
             <ExternalLink size={15} aria-hidden />
             {t('news.reader.original')}

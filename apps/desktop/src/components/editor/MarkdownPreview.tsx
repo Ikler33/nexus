@@ -3,6 +3,7 @@ import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
+import { tauriApi } from '../../lib/tauri-api';
 import styles from './MarkdownPreview.module.css';
 
 /**
@@ -47,9 +48,23 @@ export function MarkdownPreview({
       if (href && href.startsWith(TAG_SCHEME)) {
         return <span className={styles.tag}>{children}</span>;
       }
-      // Внешняя/относительная ссылка: новое окно, без доступа к opener.
+      // Внешняя http(s)-ссылка: в Tauri-вебвью target=_blank мёртв → системный браузер через
+      // opener. Прочие схемы (mailto/tel) и относительные — обычный `<a>` (их opener не берёт).
+      const external = href && /^https?:\/\//i.test(href);
       return (
-        <a href={href} target="_blank" rel="noreferrer noopener">
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer noopener"
+          onClick={
+            external
+              ? (e) => {
+                  e.preventDefault();
+                  void tauriApi.external.open(href).catch(() => {});
+                }
+              : undefined
+          }
+        >
           {children}
         </a>
       );

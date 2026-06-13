@@ -17,6 +17,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# Открытие внешних http(s)-URL в СИСТЕМНОМ браузере (NF-6 «Оригинал», web-источники чата,
+# ссылки в превью заметок). В Tauri v2 `open` вынесен из shell-плагина в отдельный `opener`.
+# Дёргаем host-side из своей команды `open_external` (схема-гард http/https) → capability НЕ нужна.
+tauri-plugin-opener = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
