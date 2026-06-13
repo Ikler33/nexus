@@ -18,6 +18,9 @@ export interface Buffer {
    *  Эхо своего сейва не поднимает guard внешнего изменения; расхождение с диском = внешняя правка
    *  (SAFE-2/3). Для бинарных (картинка/PDF) буферов — пустая строка. */
   baseHash: string;
+  /** Файл изменился на диске, пока в буфере были несохранённые правки → баннер guard'а (SAFE-3).
+   *  Чистый буфер перечитывается тихо (флаг не ставится). */
+  externalChange?: boolean;
 }
 
 /** Группа (сплит): набор вкладок + активная вкладка. */
@@ -50,6 +53,14 @@ interface WorkspaceState {
   splitRight: () => void;
   updateBufferDoc: (path: string, doc: string) => void;
   saveBuffer: (path: string) => Promise<void>;
+  /** Реакция на vault:file-changed (SAFE-3): эхо своего сейва — игнор; грязный буфер — баннер;
+   *  чистый — тихий reload с диска. */
+  onExternalFileChange: (path: string, hash: string) => Promise<void>;
+  /** Перечитать буфер с диска (баннер «Загрузить с диска» или тихий reload чистого буфера). */
+  reloadFromDisk: (path: string) => Promise<void>;
+  /** «Оставить мои»: сдвинуть baseHash к текущему диску (следующий сейв перезапишет осознанно),
+   *  снять баннер; правки и dirty сохраняются. */
+  keepMine: (path: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -208,6 +219,65 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         },
       };
     });
+  },
+
+  async onExternalFileChange(path, hash) {
+    const b = get().buffers[path];
+    if (!b) return; // файл не открыт — игнор
+    if (hash === b.baseHash) return; // эхо собственного сейва (тот же контент)
+    if (b.dirty) {
+      // Грязный буфер: содержимое НЕ трогаем (не теряем правки), показываем баннер.
+      set((s) =>
+        s.buffers[path]
+          ? { buffers: { ...s.buffers, [path]: { ...s.buffers[path], externalChange: true } } }
+          : {},
+      );
+    } else {
+      // Чистый буфер: тихо перечитываем с диска (курсор сохранит Editor через externalSync).
+      try {
+        await get().reloadFromDisk(path);
+      } catch {
+        /* файл мог исчезнуть между событием и чтением — оставляем буфер как есть */
+      }
+    }
+  },
+
+  async reloadFromDisk(path) {
+    const meta = await tauriApi.vault.readFileMeta(path);
+    set((s) =>
+      s.buffers[path]
+        ? {
+            buffers: {
+              ...s.buffers,
+              [path]: {
+                ...s.buffers[path],
+                doc: meta.content,
+                baseHash: meta.hash,
+                dirty: false,
+                externalChange: false,
+              },
+            },
+          }
+        : {},
+    );
+  },
+
+  async keepMine(path) {
+    const hash = await tauriApi.vault.fileHash(path).catch(() => null);
+    set((s) =>
+      s.buffers[path]
+        ? {
+            buffers: {
+              ...s.buffers,
+              [path]: {
+                ...s.buffers[path],
+                baseHash: hash ?? s.buffers[path].baseHash,
+                externalChange: false,
+              },
+            },
+          }
+        : {},
+    );
   },
 
   reset() {

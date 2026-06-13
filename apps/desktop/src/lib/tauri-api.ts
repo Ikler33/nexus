@@ -774,6 +774,18 @@ export const tauriApi = {
     },
 
     /**
+     * Подписка на «конкретный файл на диске изменился» (`vault:file-changed {path, hash}`, SAFE-3).
+     * Фронт сверяет hash с `Buffer.baseHash`: эхо своего сейва → игнор; чистый буфер → тихий reload;
+     * грязный → баннер guard'а. Вне Tauri — no-op (мок-бэкенд не вотчит ФС).
+     */
+    onFileChanged: async (
+      cb: (p: { path: string; hash: string }) => void,
+    ): Promise<() => void> => {
+      if (!isTauri()) return () => {};
+      return listen<{ path: string; hash: string }>('vault:file-changed', (e) => cb(e.payload));
+    },
+
+    /**
      * Подписка на прогресс полного скана индексатора (`vault:index-progress`, {done,total}) —
      * статусбар «Индексация N/M» (макет app.jsx). Старт (0,total) → шаги → финиш (total,total).
      * Вне Tauri — no-op (мок не сканирует).

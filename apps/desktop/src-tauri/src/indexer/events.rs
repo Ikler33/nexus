@@ -13,6 +13,16 @@ struct IndexProgress {
     total: usize,
 }
 
+/// Payload события `vault:file-changed` (SAFE-3): относительный путь + blake3-хеш текущего диска.
+/// Фронт сверяет хеш с `Buffer.baseHash`: совпал → эхо своего сейва (игнор); расходится → тихий
+/// reload (чистый буфер) либо баннер guard'а (грязный буфер). camelCase для фронта.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileChanged {
+    path: String,
+    hash: String,
+}
+
 use super::fs::rel_of;
 use super::Indexer;
 
@@ -48,7 +58,13 @@ pub fn spawn(
             return None;
         }
     };
-    tokio::spawn(event_loop(indexer, rx, move || emit_vault_changed(&app)));
+    let changed_app = app.clone();
+    tokio::spawn(event_loop(
+        indexer,
+        rx,
+        move || emit_vault_changed(&app),
+        move |path, hash| emit_file_changed(&changed_app, path, hash),
+    ));
     Some((watcher, tx))
 }
 
@@ -59,6 +75,7 @@ pub(super) async fn event_loop(
     indexer: Indexer,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<VaultEvent>,
     notify: impl Fn() + Send + 'static,
+    on_file_changed: impl Fn(String, String) + Send + 'static,
 ) {
     if let Err(e) = indexer.scan_vault().await {
         tracing::error!(error = %e, "initial vault scan failed");
@@ -67,7 +84,19 @@ pub(super) async fn event_loop(
     while let Some(event) = rx.recv().await {
         let result = match event {
             VaultEvent::Upsert(abs) => match rel_of(&indexer.root, &abs) {
-                Some(rel) => indexer.index_file(&rel).await,
+                Some(rel) => {
+                    let r = indexer.index_file(&rel).await;
+                    // SAFE-3: per-file сигнал «файл на диске изменился» + хеш диска. ТОЛЬКО
+                    // инкрементальный путь вотчера (начальный скан/Rescan идут через scan_vault
+                    // мимо этой ветки → шторма событий нет). Эхо своего сейва глушит фронт
+                    // (hash == baseHash). Промах чтения (гонка с удалением) → без события.
+                    if r.is_ok() {
+                        if let Ok(bytes) = tokio::fs::read(&abs).await {
+                            on_file_changed(rel.clone(), crate::vault::content_hash(&bytes));
+                        }
+                    }
+                    r
+                }
                 None => Ok(()),
             },
             VaultEvent::Deleted(abs) => match rel_of(&indexer.root, &abs) {
@@ -106,4 +135,12 @@ pub(super) async fn event_loop(
 fn emit_vault_changed(app: &tauri::AppHandle) {
     use tauri::Emitter;
     let _ = app.emit("vault:changed", ());
+}
+
+/// Tauri-событие «конкретный файл на диске изменился» (SAFE-3, backend→фронт). Фронт по нему
+/// решает судьбу открытого буфера этого пути (эхо своего сейва / тихий reload / баннер guard'а).
+/// Best-effort: ошибка emit (нет окна) не критична.
+fn emit_file_changed(app: &tauri::AppHandle, path: String, hash: String) {
+    use tauri::Emitter;
+    let _ = app.emit("vault:file-changed", FileChanged { path, hash });
 }

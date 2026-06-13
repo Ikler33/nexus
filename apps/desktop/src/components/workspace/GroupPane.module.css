@@ -275,3 +275,53 @@
   color: var(--color-text-faint);
   font-family: var(--font-ui);
 }
+
+/* SAFE-3: баннер guard'а внешнего изменения — файл правился на диске поверх несохранённого буфера. */
+.externalBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in oklab, var(--color-warning) 12%, var(--color-chrome));
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+
+.externalMsg {
+  font-weight: 500;
+}
+
+.externalActions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.externalBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+
+.externalBtn:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.externalBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.externalPrimary {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}

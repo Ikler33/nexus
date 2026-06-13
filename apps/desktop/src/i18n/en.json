@@ -270,6 +270,13 @@
     "splitRight": "Split right",
     "close": "Close {{name}}",
     "unsaved": "unsaved",
+    "external": {
+      "title": "File changed on disk while you have unsaved edits",
+      "keepMine": "Keep mine",
+      "loadDisk": "Load from disk",
+      "compare": "Compare",
+      "compareSoon": "Compare arrives with version history"
+    },
     "source": "Source",
     "preview": "Preview",
     "newTab": "New note in tab",
