@@ -649,9 +649,17 @@ async fn event_loop_indexes_and_stops_when_sender_dropped() {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::watcher::VaultEvent>();
     let notified = Arc::new(AtomicUsize::new(0));
     let n2 = notified.clone();
-    let handle = tokio::spawn(events::event_loop(indexer, rx, move || {
-        n2.fetch_add(1, Ordering::SeqCst);
-    }));
+    // SAFE-3: собираем per-file события (path, hash) для проверки сигнала guard'а.
+    let changed = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let c2 = changed.clone();
+    let handle = tokio::spawn(events::event_loop(
+        indexer,
+        rx,
+        move || {
+            n2.fetch_add(1, Ordering::SeqCst);
+        },
+        move |path, hash| c2.lock().unwrap().push((path, hash)),
+    ));
 
     // Событие обрабатывается (файл попадает в индекс)...
     fs::write(root.join("new.md"), "# Новая\n\nещё текст").unwrap();
@@ -672,6 +680,15 @@ async fn event_loop_indexes_and_stops_when_sender_dropped() {
         notified.load(Ordering::SeqCst) >= 2,
         "нотификации: начальный скан + событие"
     );
+    // SAFE-3: ровно одно vault:file-changed на инкрементальный Upsert, с верным путём и хешем диска.
+    let evs = changed.lock().unwrap();
+    assert_eq!(evs.len(), 1, "одно per-file событие на Upsert");
+    assert_eq!(evs[0].0, "new.md");
+    assert_eq!(
+        evs[0].1,
+        crate::vault::content_hash("# Новая\n\nещё текст".as_bytes()),
+        "хеш события = blake3 содержимого диска"
+    );
 }
 
 /// Срез «Переиндексировать» (#37): `VaultEvent::Rescan` в петле — полный повторный обход.
@@ -691,9 +708,20 @@ async fn event_loop_rescan_picks_up_unseen_files() {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::watcher::VaultEvent>();
     let notified = Arc::new(AtomicUsize::new(0));
     let n2 = notified.clone();
-    let handle = tokio::spawn(events::event_loop(indexer, rx, move || {
-        n2.fetch_add(1, Ordering::SeqCst);
-    }));
+    // SAFE-3: Rescan идёт через scan_vault, НЕ через Upsert-ветку → per-file событий быть не должно
+    // (анти-шторм: иначе полный обход залил бы фронт сигналами на каждый файл).
+    let changed_count = Arc::new(AtomicUsize::new(0));
+    let cc2 = changed_count.clone();
+    let handle = tokio::spawn(events::event_loop(
+        indexer,
+        rx,
+        move || {
+            n2.fetch_add(1, Ordering::SeqCst);
+        },
+        move |_, _| {
+            cc2.fetch_add(1, Ordering::SeqCst);
+        },
+    ));
 
     // Файл появляется без Upsert-события (watcher «проспал» / файл писали вне приложения)…
     fs::write(root.join("ghost.md"), "# Призрак\n\nвне watcher").unwrap();
@@ -711,6 +739,11 @@ async fn event_loop_rescan_picks_up_unseen_files() {
     assert!(
         notified.load(Ordering::SeqCst) >= 2,
         "нотификации: начальный скан + rescan"
+    );
+    assert_eq!(
+        changed_count.load(Ordering::SeqCst),
+        0,
+        "Rescan не шлёт per-file событий (анти-шторм SAFE-3)"
     );
 }
 

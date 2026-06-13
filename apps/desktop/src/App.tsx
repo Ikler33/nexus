@@ -9,6 +9,7 @@ import { useGoalsStore } from './stores/goals';
 import { usePrefsStore } from './stores/prefs';
 import { useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
+import { useWorkspaceStore } from './stores/workspace';
 import { ActivityBar } from './components/chrome/ActivityBar';
 import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
@@ -96,6 +97,20 @@ export function App() {
       clearTimeout(timer);
       unlisten();
     };
+  }, []);
+
+  // SAFE-3: внешнее изменение конкретного файла (`vault:file-changed`) → судьба открытого буфера
+  // решается в сторе (эхо своего сейва / тихий reload чистого / баннер guard'а грязного).
+  useEffect(() => {
+    let unlisten = () => {};
+    void tauriApi.events
+      .onFileChanged(({ path, hash }) => {
+        void useWorkspaceStore.getState().onExternalFileChange(path, hash);
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten();
   }, []);
 
   // Готовые результаты фоновых джоб прилетают по `jobs:changed` → refetch открытой панели (без поллинга,

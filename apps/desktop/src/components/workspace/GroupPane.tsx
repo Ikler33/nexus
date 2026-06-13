@@ -54,6 +54,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const splitRight = useWorkspaceStore((s) => s.splitRight);
   const updateBufferDoc = useWorkspaceStore((s) => s.updateBufferDoc);
   const saveBuffer = useWorkspaceStore((s) => s.saveBuffer);
+  const reloadFromDisk = useWorkspaceStore((s) => s.reloadFromDisk);
+  const keepMine = useWorkspaceStore((s) => s.keepMine);
   const openLink = useWorkspaceStore((s) => s.openLink);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const createNote = useVaultStore((s) => s.createNote);
@@ -180,6 +182,33 @@ export function GroupPane({ groupId }: { groupId: string }) {
 
       {active ? (
         <>
+          {/* SAFE-3 guard: файл изменился на диске, пока в буфере были несохранённые правки. */}
+          {active.externalChange && (
+            <div className={styles.externalBanner} role="alert">
+              <span className={styles.externalMsg}>{t('editor.external.title')}</span>
+              <div className={styles.externalActions}>
+                <button
+                  className={styles.externalBtn}
+                  onClick={() => void keepMine(active.path)}
+                >
+                  {t('editor.external.keepMine')}
+                </button>
+                <button
+                  className={`${styles.externalBtn} ${styles.externalPrimary}`}
+                  onClick={() => void reloadFromDisk(active.path)}
+                >
+                  {t('editor.external.loadDisk')}
+                </button>
+                <button
+                  className={styles.externalBtn}
+                  disabled
+                  title={t('editor.external.compareSoon')}
+                >
+                  {t('editor.external.compare')}
+                </button>
+              </div>
+            </div>
+          )}
           <div className={styles.scroll}>
             {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ. */}
             {mdActive && !reading && (

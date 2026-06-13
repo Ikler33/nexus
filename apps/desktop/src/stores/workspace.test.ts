@@ -139,3 +139,50 @@ describe('workspace store (Ф0-9, Б12)', () => {
     expect(useWorkspaceStore.getState().modes[gid]).toBe('source');
   });
 });
+
+describe('workspace external-change guard (SAFE-3)', () => {
+  const ws = () => useWorkspaceStore.getState();
+
+  it('эхо своего сейва (hash === baseHash) игнорируется', async () => {
+    await ws().openFile('README.md');
+    const b0 = ws().buffers['README.md'];
+    await ws().onExternalFileChange('README.md', b0.baseHash);
+    const b1 = ws().buffers['README.md'];
+    expect(b1.externalChange).toBeFalsy();
+    expect(b1.doc).toBe(b0.doc);
+  });
+
+  it('чистый буфер + внешнее изменение → тихий reload с диска', async () => {
+    await ws().openFile('README.md');
+    const newHash = await tauriApi.vault.writeFile('README.md', '# Снаружи изменено\n');
+    await ws().onExternalFileChange('README.md', newHash);
+    const b = ws().buffers['README.md'];
+    expect(b.doc).toBe('# Снаружи изменено\n');
+    expect(b.baseHash).toBe(newHash);
+    expect(b.dirty).toBe(false);
+    expect(b.externalChange).toBeFalsy();
+  });
+
+  it('грязный буфер + внешнее изменение → баннер, правки целы', async () => {
+    await ws().openFile('README.md');
+    ws().updateBufferDoc('README.md', 'мои несохранённые правки');
+    await ws().onExternalFileChange('README.md', 'совсем-другой-хеш');
+    const b = ws().buffers['README.md'];
+    expect(b.externalChange).toBe(true);
+    expect(b.doc).toBe('мои несохранённые правки'); // не затёрты
+    expect(b.dirty).toBe(true);
+  });
+
+  it('keepMine снимает баннер и двигает baseHash к диску, правки целы', async () => {
+    await ws().openFile('README.md');
+    ws().updateBufferDoc('README.md', 'мои правки');
+    const diskHash = await tauriApi.vault.writeFile('README.md', '# Версия с диска\n');
+    await ws().onExternalFileChange('README.md', diskHash);
+    expect(ws().buffers['README.md'].externalChange).toBe(true);
+    await ws().keepMine('README.md');
+    const b = ws().buffers['README.md'];
+    expect(b.externalChange).toBe(false);
+    expect(b.baseHash).toBe(diskHash);
+    expect(b.doc).toBe('мои правки');
+  });
+});
