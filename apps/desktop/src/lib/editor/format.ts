@@ -53,6 +53,11 @@ export function toggleWrap(view: EditorView, marker: string): boolean {
   return true;
 }
 
+/** Канонический маркер незавершённого таска. Общий для тоггла (EDIT-2), вставки slash-командой
+ *  (EDIT-6) и т.п. — чтобы вставленный таск гарантированно подпадал под TASK_LINE_RE (кликабелен
+ *  в превью EDIT-5, продолжается по Enter EDIT-3). */
+export const TASK_MARKER = '- [ ] ';
+
 /** Один шаг тоггла таска для строки: `- [ ]`↔`- [x]`; строка без чекбокса (буллет или обычный
  *  текст, в т.ч. пустая) → `- [ ] …`. Отступ сохраняется. */
 function transformTaskLine(line: string): string {
@@ -63,7 +68,7 @@ function transformTaskLine(line: string): string {
     const checked = check === 'x' || check === 'X';
     return `${indent}- [${checked ? ' ' : 'x'}] ${rest}`;
   }
-  return `${indent}- [ ] ${rest}`;
+  return `${indent}${TASK_MARKER}${rest}`;
 }
 
 /**
