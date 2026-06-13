@@ -318,6 +318,10 @@
     "count_few": "{{count, number}} беклинка",
     "count_many": "{{count, number}} беклинков"
   },
+  "capture": {
+    "title": "Быстрая запись",
+    "placeholder": "Запишите мысль — Enter добавит её в Inbox…"
+  },
   "palette": {
     "placeholder": "Команда…",
     "label": "Палитра команд",
@@ -708,6 +712,7 @@
     "view.toggleSidebar": "Свернуть боковую панель",
     "file.new": "Новая заметка",
     "note.daily": "Заметка дня",
+    "capture.quick": "Быстрая запись",
     "file.save": "Сохранить файл",
     "file.print": "Печать / Экспорт PDF",
     "inline.continue": "ИИ: продолжить текст",

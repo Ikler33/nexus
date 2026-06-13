@@ -72,6 +72,17 @@ export function registerCoreCommands(): Disposable {
       },
     }),
     commands.register({
+      id: 'capture.quick',
+      title: 'Quick capture',
+      titleKey: 'commands.capture.quick',
+      source: 'core',
+      defaultKey: 'mod+shift+n',
+      run: () => {
+        if (!useVaultStore.getState().info) return;
+        useUIStore.getState().openCapture();
+      },
+    }),
+    commands.register({
       id: 'file.save',
       title: 'Save file',
       titleKey: 'commands.file.save',

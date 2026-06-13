@@ -71,6 +71,10 @@ interface UIState {
   versionsOpen: boolean;
   openVersions: () => void;
   closeVersions: () => void;
+  /** Quick-capture: мини-модалка мгновенной записи мысли в Inbox (CAP-2, ⌘⇧N). */
+  captureOpen: boolean;
+  openCapture: () => void;
+  closeCapture: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
   closeDigest: () => void;
@@ -154,6 +158,9 @@ export const useUIStore = create<UIState>((set) => ({
   versionsOpen: false,
   openVersions: () => set({ versionsOpen: true }),
   closeVersions: () => set({ versionsOpen: false }),
+  captureOpen: false,
+  openCapture: () => set({ captureOpen: true }),
+  closeCapture: () => set({ captureOpen: false }),
   closeGoals: () => set({ goalsOpen: false }),
   toggleGoals: () =>
     set((s) => {

@@ -6,6 +6,8 @@ import { useWorkspaceStore } from '../stores/workspace';
 
 /** Папка дневников (решение плана: Journal/, не Daily/). */
 const JOURNAL_DIR = 'Journal';
+/** Файл быстрого захвата мыслей (quick-capture). */
+const INBOX = 'Inbox.md';
 
 function pad(n: number): string {
   return String(n).padStart(2, '0');
@@ -43,4 +45,25 @@ export async function openOrCreateDaily(now = new Date()): Promise<string> {
   }
   await useWorkspaceStore.getState().openFile(path);
   return path;
+}
+
+/** Время HH:MM по локальному времени. */
+function timeStamp(now: Date): string {
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+/**
+ * Quick-capture: дозаписывает мысль строкой «- HH:MM текст» в конец Inbox.md (создаёт «# Inbox»,
+ * если файла нет) — мгновенный захват без открытия файла. Запись атомарна (SAFE-1); если Inbox
+ * открыт в редакторе, watcher-reload/guard (SAFE-3) подхватят изменение.
+ */
+export async function appendCapture(text: string, now = new Date()): Promise<void> {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const had = (await tauriApi.vault.fileHash(INBOX).catch(() => null)) !== null;
+  const existing = had ? await tauriApi.vault.readFile(INBOX) : '# Inbox\n';
+  const sep = existing.endsWith('\n') || existing === '' ? '' : '\n';
+  const next = `${existing}${sep}- ${timeStamp(now)} ${trimmed}\n`;
+  await tauriApi.vault.writeFile(INBOX, next, true);
+  if (!had) await useVaultStore.getState().refreshDir('');
 }

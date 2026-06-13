@@ -1,0 +1,53 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 18vh;
+  background: color-mix(in oklab, var(--color-bg) 45%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: min(560px, 92vw);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.4));
+}
+
+.ico {
+  color: var(--color-accent);
+  flex: 0 0 auto;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--color-text-faint);
+}
+
+.kbd {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 5px);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs, 0.72rem);
+}
