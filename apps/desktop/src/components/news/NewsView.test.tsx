@@ -90,6 +90,7 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
       langRu: false,
       publishedAt: 1_700_000_000,
       read: false,
+      commentsUrl: null,
     }));
     const run = {
       runAt: 1_700_000_000,
@@ -200,6 +201,24 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
       name: /вернуть в непрочитанные|mark as unread/i,
     });
     fireEvent.click(unread[unread.length - 1]);
+  });
+
+  // NF-6 хвост: у HN-айтема с внешним url (мок: item с commentsUrl) ридер показывает кнопку
+  // «Обсуждение на HN» рядом с «Оригинал», ведущую на HN-тред.
+  it('reader: при commentsUrl видна кнопка «Обсуждение на HN»', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+
+    fireEvent.click(screen.getByText('llama.cpp: офлоад KV-cache на CPU без потери скорости'));
+    const discussion = await screen.findByRole('link', {
+      name: /обсуждение на hn|discussion on hn/i,
+    });
+    expect(discussion).toHaveAttribute('href', expect.stringContaining('news.ycombinator.com'));
+    // «Оригинал» по-прежнему ведёт на сам url (github).
+    expect(screen.getByRole('link', { name: /оригинал|original/i })).toHaveAttribute(
+      'href',
+      expect.stringContaining('github'),
+    );
   });
 
   // Чипы тем — серверный фильтр: выбор темы перезапрашивает страницу и оставляет одну рубрику.

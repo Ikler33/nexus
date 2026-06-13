@@ -53,6 +53,9 @@ pub struct NewsEntry {
     pub published_at: i64,
     /// Текстовая выжимка без HTML (≤ [`EXCERPT_MAX_CHARS`]).
     pub excerpt: String,
+    /// Ссылка на ОБСУЖДЕНИЕ (HN-тред) — отдельно от `url` (у Show HN это github-репо). `None` для
+    /// не-HN и текстовых HN-постов (там `url` уже == обсуждение). Показывается в ридере.
+    pub comments_url: Option<String>,
 }
 
 /// Формат фида источника.
@@ -355,6 +358,7 @@ mod tests {
             title: title.into(),
             published_at: 1_750_000_000,
             excerpt: excerpt.into(),
+            comments_url: None,
         }
     }
 

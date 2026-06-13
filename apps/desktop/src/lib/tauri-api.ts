@@ -418,6 +418,8 @@ export interface NewsItem {
   langRu: boolean;
   publishedAt: number;
   read: boolean;
+  /** Ссылка на обсуждение на HN (если `url` — внешняя, напр. github у Show HN); иначе `null`. */
+  commentsUrl: string | null;
 }
 
 /** Итог последнего прогона ленты (зеркалит Rust `news::NewsRun`): шапка-сводка дня. */

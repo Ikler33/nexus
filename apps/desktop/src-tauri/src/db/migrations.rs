@@ -98,6 +98,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/013_links_dangling_index.sql"),
         rebuild_fts: false, // только индекс для перф-резолва ссылок, данные не трогает
     },
+    Migration {
+        version: 14,
+        name: "news_comments_url",
+        sql: include_str!("migrations/014_news_comments_url.sql"),
+        rebuild_fts: false, // nullable-колонка ссылки на HN-обсуждение, производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

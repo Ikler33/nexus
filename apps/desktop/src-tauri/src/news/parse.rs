@@ -119,6 +119,7 @@ fn parse_xml(
                             title: t,
                             published_at: parse_date(date.trim()),
                             excerpt: html_to_text(&desc, EXCERPT_MAX_CHARS),
+                            comments_url: None,
                         });
                     }
                 } else {
@@ -210,6 +211,7 @@ fn parse_hf(source_id: &str, body: &str) -> Result<Vec<NewsEntry>, NewsError> {
                 title,
                 published_at: parse_date(&date),
                 excerpt: html_to_text(&i.summary.unwrap_or_default(), EXCERPT_MAX_CHARS),
+                comments_url: None,
             })
         })
         .collect())
@@ -239,10 +241,16 @@ fn parse_hn(source_id: &str, body: &str) -> Result<Vec<NewsEntry>, NewsError> {
             if title.is_empty() {
                 return None;
             }
-            // Текстовые посты (Ask HN) без url → ссылка на обсуждение.
-            let url = match h.url.filter(|u| !u.trim().is_empty()) {
-                Some(u) => u,
-                None => format!("https://news.ycombinator.com/item?id={}", h.object_id?),
+            // url = отправленная ссылка (Show HN → github и т.п.). У текстовых постов её нет →
+            // url становится самим обсуждением. discussion — ссылка на HN-тред (нужен objectID).
+            let discussion = h
+                .object_id
+                .as_ref()
+                .map(|id| format!("https://news.ycombinator.com/item?id={id}"));
+            // comments_url показываем, только если url ОТЛИЧАЕТСЯ от обсуждения (есть внешняя ссылка).
+            let (url, comments_url) = match h.url.filter(|u| !u.trim().is_empty()) {
+                Some(u) => (u, discussion),
+                None => (discussion.clone()?, None),
             };
             Some(NewsEntry {
                 source_id: source_id.to_string(),
@@ -250,6 +258,7 @@ fn parse_hn(source_id: &str, body: &str) -> Result<Vec<NewsEntry>, NewsError> {
                 title,
                 published_at: h.created_at_i.unwrap_or(0),
                 excerpt: html_to_text(&h.story_text.unwrap_or_default(), EXCERPT_MAX_CHARS),
+                comments_url,
             })
         })
         .collect())
@@ -464,6 +473,29 @@ mod tests {
                 assert_eq!(e.source_id, id);
             }
         }
+    }
+
+    /// NF-6 хвост: у HN-айтема с внешней ссылкой (Show HN) `url` = отправленная ссылка, а
+    /// `comments_url` = HN-тред по objectID; у текстового поста (url=None) `url` САМ становится
+    /// обсуждением, `comments_url` = None (без дубль-кнопки).
+    #[test]
+    fn hn_carries_discussion_link_only_for_external_url() {
+        let entries = parse_feed(FeedKind::HnAlgolia, "hn", HN_JSON).unwrap();
+        // Show HN на внешний сайт: url внешний, comments_url ведёт на тред.
+        let show = entries
+            .iter()
+            .find(|e| e.url.contains("eatmydata.ai"))
+            .expect("Show HN с внешним url");
+        assert_eq!(
+            show.comments_url.as_deref(),
+            Some("https://news.ycombinator.com/item?id=48472867")
+        );
+        // Текстовый пост (url отсутствовал): url == обсуждение, comments_url пуст.
+        let textless = entries
+            .iter()
+            .find(|e| e.url.contains("item?id=48472158"))
+            .expect("текстовый HN-пост → url=обсуждение");
+        assert_eq!(textless.comments_url, None);
     }
 
     /// Спот-чеки специфики: кириллица Хабра цела; релиз llama.cpp ведёт на /releases/tag/;

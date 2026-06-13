@@ -90,6 +90,7 @@ async fn live_news_eval_and_daily_digest() {
             excerpt:
                 "The model improves multi-step reasoning and agentic tool use across benchmarks."
                     .into(),
+            comments_url: None,
         },
         NewsEntry {
             source_id: "smoke".into(),
@@ -98,6 +99,7 @@ async fn live_news_eval_and_daily_digest() {
             published_at: 0,
             excerpt: "Persistent memory lets the assistant recall project context across sessions."
                 .into(),
+            comments_url: None,
         },
         NewsEntry {
             source_id: "smoke".into(),
@@ -105,6 +107,7 @@ async fn live_news_eval_and_daily_digest() {
             title: "Запеканка из кабачков: простой рецепт на ужин".into(),
             published_at: 0,
             excerpt: "Кабачки, сыр и зелень — готово за полчаса.".into(),
+            comments_url: None,
         },
     ];
 
