@@ -323,6 +323,7 @@
     "placeholder": "Command…",
     "label": "Command palette",
     "empty": "No commands",
+    "recents": "Recent",
     "files": "Files",
     "content": "In content",
     "commands": "Commands",
@@ -699,6 +700,7 @@
   },
   "commands": {
     "palette.open": "Command palette",
+    "recents.open": "Go to recent…",
     "vault.open": "Open vault…",
     "vault.rescan": "Reindex vault",
     "view.toggleSidebar": "Toggle sidebar",

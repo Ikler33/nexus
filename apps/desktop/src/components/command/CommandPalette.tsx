@@ -1,5 +1,12 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { Command as CommandIcon, CornerDownLeft, FileText, Search, TextSearch } from 'lucide-react';
+import {
+  Clock,
+  Command as CommandIcon,
+  CornerDownLeft,
+  FileText,
+  Search,
+  TextSearch,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { commands, type Command, formatCombo } from '../../lib/commands';
 import { tauriApi, type NoteRef, type SearchHit } from '../../lib/tauri-api';
@@ -15,11 +22,21 @@ const CONTENT_LIMIT = 6;
 const CONTENT_MIN_CHARS = 3;
 const CONTENT_DEBOUNCE_MS = 250;
 
-/** Строка результата: файл по метаданным, заметка по содержимому или команда реестра. */
+/** Сколько недавних заметок показываем на пустом запросе (NAV-2, ⌘O). */
+const RECENTS_SHOWN = 8;
+
+/** Строка результата: недавняя заметка, файл по метаданным, заметка по содержимому или команда. */
 type Row =
+  | { kind: 'recent'; path: string }
   | { kind: 'file'; note: NoteRef }
   | { kind: 'content'; hit: SearchHit }
   | { kind: 'command'; cmd: Command };
+
+/** Заголовок строки из пути (basename без .md) — для недавних и файлов без title. */
+function pathTitle(path: string): string {
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  return base.endsWith('.md') ? base.slice(0, -3) : base;
+}
 
 function noteTitle(n: NoteRef): string {
   const base = n.path.slice(n.path.lastIndexOf('/') + 1);
@@ -68,6 +85,7 @@ export function CommandPalette() {
   const [version, setVersion] = useState(0);
   const [files, setFiles] = useState<NoteRef[]>([]);
   const [content, setContent] = useState<SearchHit[]>([]);
+  const recents = useWorkspaceStore((s) => s.recents);
 
   useEffect(() => commands.subscribe(() => setVersion((v) => v + 1)), []);
   useEffect(() => {
@@ -136,13 +154,20 @@ export function CommandPalette() {
     return needle ? all.filter((c) => label(c).toLowerCase().includes(needle)) : all;
   }, [q, version, label]);
 
+  // Недавние (NAV-2): только на пустом запросе — быстрый возврат к последним заметкам (⌘O).
+  const recentRows = useMemo(
+    () => (q ? [] : recents.slice(0, RECENTS_SHOWN)),
+    [q, recents],
+  );
+
   const rows: Row[] = useMemo(
     () => [
+      ...recentRows.map((path): Row => ({ kind: 'recent', path })),
       ...files.map((note): Row => ({ kind: 'file', note })),
       ...content.map((hit): Row => ({ kind: 'content', hit })),
       ...filteredCommands.map((cmd): Row => ({ kind: 'command', cmd })),
     ],
-    [files, content, filteredCommands],
+    [recentRows, files, content, filteredCommands],
   );
 
   if (!open) return null;
@@ -151,7 +176,8 @@ export function CommandPalette() {
     const row = rows[index];
     if (!row) return;
     close();
-    if (row.kind === 'file') void useWorkspaceStore.getState().openFile(row.note.path);
+    if (row.kind === 'recent') void useWorkspaceStore.getState().openFile(row.path);
+    else if (row.kind === 'file') void useWorkspaceStore.getState().openFile(row.note.path);
     else if (row.kind === 'content') void useWorkspaceStore.getState().openFile(row.hit.path);
     else void commands.run(row.cmd.id);
   };
@@ -178,11 +204,13 @@ export function CommandPalette() {
   };
 
   const rowKey = (row: Row) =>
-    row.kind === 'file'
-      ? `f:${row.note.path}`
-      : row.kind === 'content'
-        ? `s:${row.hit.chunkId}`
-        : `c:${row.cmd.id}`;
+    row.kind === 'recent'
+      ? `r:${row.path}`
+      : row.kind === 'file'
+        ? `f:${row.note.path}`
+        : row.kind === 'content'
+          ? `s:${row.hit.chunkId}`
+          : `c:${row.cmd.id}`;
 
   const renderRow = (row: Row, i: number) => (
     <li
@@ -195,7 +223,9 @@ export function CommandPalette() {
       onMouseEnter={() => setActive(i)}
       onClick={() => runAt(i)}
     >
-      {row.kind === 'file' ? (
+      {row.kind === 'recent' ? (
+        <Clock size={15} className={styles.itemIco} aria-hidden />
+      ) : row.kind === 'file' ? (
         <FileText size={15} className={styles.itemIco} aria-hidden />
       ) : row.kind === 'content' ? (
         <TextSearch size={15} className={styles.itemIco} aria-hidden />
@@ -209,10 +239,16 @@ export function CommandPalette() {
         </span>
       ) : (
         <span className={styles.title}>
-          {row.kind === 'file' ? noteTitle(row.note) : label(row.cmd)}
+          {row.kind === 'file'
+            ? noteTitle(row.note)
+            : row.kind === 'recent'
+              ? pathTitle(row.path)
+              : label(row.cmd)}
         </span>
       )}
-      {row.kind === 'file' ? (
+      {row.kind === 'recent' ? (
+        <span className={styles.hintPath}>{row.path}</span>
+      ) : row.kind === 'file' ? (
         <span className={styles.hintPath}>{row.note.path}</span>
       ) : row.kind === 'command' ? (
         row.cmd.defaultKey && <kbd className={styles.kbd}>{formatCombo(row.cmd.defaultKey)}</kbd>
@@ -220,9 +256,13 @@ export function CommandPalette() {
     </li>
   );
 
-  // Глобальные индексы трёх секций (общая клавиатурная навигация по всем спискам).
+  // Глобальные индексы секций (общая клавиатурная навигация по всем спискам).
+  const nRecents = recentRows.length;
   const nFiles = files.length;
   const nContent = content.length;
+  const fileStart = nRecents;
+  const contentStart = nRecents + nFiles;
+  const cmdStart = nRecents + nFiles + nContent;
 
   return (
     <div className={`${styles.overlay} ${styles[paletteStyle] ?? ''}`} onClick={close}>
@@ -256,26 +296,32 @@ export function CommandPalette() {
             <li className={styles.empty}>{t('palette.empty')}</li>
           ) : (
             <>
+              {nRecents > 0 && (
+                <li className={styles.section} aria-hidden>
+                  {t('palette.recents')}
+                </li>
+              )}
+              {rows.slice(0, nRecents).map((row, i) => renderRow(row, i))}
               {nFiles > 0 && (
                 <li className={styles.section} aria-hidden>
                   {t('palette.files')}
                 </li>
               )}
-              {rows.slice(0, nFiles).map((row, i) => renderRow(row, i))}
+              {rows.slice(fileStart, fileStart + nFiles).map((row, i) => renderRow(row, fileStart + i))}
               {nContent > 0 && (
                 <li className={styles.section} aria-hidden>
                   {t('palette.content')}
                 </li>
               )}
-              {rows.slice(nFiles, nFiles + nContent).map((row, i) => renderRow(row, nFiles + i))}
+              {rows
+                .slice(contentStart, contentStart + nContent)
+                .map((row, i) => renderRow(row, contentStart + i))}
               {filteredCommands.length > 0 && (
                 <li className={styles.section} aria-hidden>
                   {t('palette.commands')}
                 </li>
               )}
-              {rows
-                .slice(nFiles + nContent)
-                .map((row, i) => renderRow(row, nFiles + nContent + i))}
+              {rows.slice(cmdStart).map((row, i) => renderRow(row, cmdStart + i))}
             </>
           )}
         </ul>

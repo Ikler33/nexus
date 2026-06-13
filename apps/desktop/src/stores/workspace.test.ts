@@ -290,4 +290,25 @@ describe('workspace renameBufferPath (CURATE-2)', () => {
     expect(s.buffers['Projects/Roadmap.md']).toBeUndefined();
     expect(s.buffers['Plans/Roadmap.md']).toBeDefined();
   });
+
+  // NAV-2: недавние заметки для ⌘O quick-switcher.
+  it('pushRecent: MRU-порядок без дублей', () => {
+    ws().pushRecent('A.md');
+    ws().pushRecent('B.md');
+    ws().pushRecent('A.md'); // повтор — поднимается наверх, не дублируется
+    expect(ws().recents).toEqual(['A.md', 'B.md']);
+  });
+
+  it('pushRecent: кап 20 (старейшее выбрасывается)', () => {
+    for (let i = 0; i < 25; i++) ws().pushRecent(`N${i}.md`);
+    const r = ws().recents;
+    expect(r).toHaveLength(20);
+    expect(r[0]).toBe('N24.md'); // последнее открытое — первое
+    expect(r).not.toContain('N4.md'); // самые старые вытеснены
+  });
+
+  it('openFile добавляет путь в недавние', async () => {
+    await ws().openFile('Inbox.md');
+    expect(ws().recents[0]).toBe('Inbox.md');
+  });
 });
