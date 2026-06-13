@@ -60,7 +60,8 @@ interface WorkspaceState {
   toggleMode: (groupId?: string) => void;
   splitRight: () => void;
   updateBufferDoc: (path: string, doc: string) => void;
-  saveBuffer: (path: string) => Promise<void>;
+  /** Сохранить буфер. `manual` (Ctrl-S/палитра) — точка истории всегда; автосейв (false) — троттл. */
+  saveBuffer: (path: string, manual?: boolean) => Promise<void>;
   /** Реакция на vault:file-changed (SAFE-3): эхо своего сейва — игнор; грязный буфер — баннер;
    *  чистый — тихий reload с диска. */
   onExternalFileChange: (path: string, hash: string) => Promise<void>;
@@ -216,7 +217,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     scheduleAutosave(path); // SAFE-4: сохранить через паузу набора (debounce 1с)
   },
 
-  async saveBuffer(path) {
+  async saveBuffer(path, manual = false) {
     const buffer = get().buffers[path];
     if (!buffer || !buffer.dirty) return; // нечего сохранять (чисто/нет буфера)
     // Хеш записанного — новый baseHash: эхо собственного сейва не поднимет guard внешнего
@@ -228,7 +229,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         : {},
     );
     try {
-      const hash = await tauriApi.vault.writeFile(path, saved);
+      const hash = await tauriApi.vault.writeFile(path, saved, manual);
       set((s) => {
         const b = s.buffers[path];
         if (!b) return {};

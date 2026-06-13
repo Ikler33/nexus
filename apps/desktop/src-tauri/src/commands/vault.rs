@@ -642,21 +642,57 @@ pub async fn file_hash(state: State<'_, AppState>, path: String) -> AppResult<Op
 
 /// Пишет содержимое файла vault (целевой путь может ещё не существовать). Возвращает хеш
 /// записанного контента — фронт кладёт его в `Buffer.baseHash` (эхо своего сейва не поднимает
-/// guard внешнего изменения, SAFE-3).
+/// guard внешнего изменения, SAFE-3). `manual` (Ctrl-S/палитра vs автосейв) управляет троттлом
+/// снапшота истории (SAFE-5): ручной — всегда при изменении, авто — не чаще 1/90с.
 #[tauri::command]
 pub async fn write_file(
     state: State<'_, AppState>,
     path: String,
     content: String,
+    manual: Option<bool>,
 ) -> AppResult<String> {
     let root = current_root(&state).await?;
     let abs = vault::resolve_vault_path_for_write(&root, Path::new(&path))?;
     let hash = vault::content_hash(content.as_bytes());
+    let rel = path.clone();
+    let manual = manual.unwrap_or(false);
     // Атомарная запись (tmp→fsync→rename) в blocking-пуле: обрыв на середине не корраптит заметку.
-    tokio::task::spawn_blocking(move || vault::atomic_write(&abs, content.as_bytes()))
-        .await
-        .map_err(|e| AppError::Msg(e.to_string()))??;
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        vault::atomic_write(&abs, content.as_bytes())?;
+        // Снапшот истории — BEST-EFFORT: сбой не валит сам save (заметка уже атомарно на диске).
+        if let Err(e) = vault::history::snapshot(&root, &rel, &content, manual) {
+            tracing::warn!(error = %e, path = %rel, "history snapshot failed");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))??;
     Ok(hash)
+}
+
+/// Список версий-снапшотов заметки (SAFE-5/6): время + размер, новейший первым. Путь относительный.
+#[tauri::command]
+pub async fn list_versions(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<Vec<vault::history::SnapshotMeta>> {
+    let root = current_root(&state).await?;
+    Ok(
+        tokio::task::spawn_blocking(move || vault::history::list_snapshots(&root, &path))
+            .await
+            .map_err(|e| AppError::Msg(e.to_string()))??,
+    )
+}
+
+/// Содержимое версии-снапшота заметки по его `ts` (SAFE-5/6: diff/восстановление).
+#[tauri::command]
+pub async fn read_version(state: State<'_, AppState>, path: String, ts: u64) -> AppResult<String> {
+    let root = current_root(&state).await?;
+    Ok(
+        tokio::task::spawn_blocking(move || vault::history::read_snapshot(&root, &path, ts))
+            .await
+            .map_err(|e| AppError::Msg(e.to_string()))??,
+    )
 }
 
 /// Заметки vault (path + title) для автокомплита `[[wikilink]]`. Кросс-план #22: вместо

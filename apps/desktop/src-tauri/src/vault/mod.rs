@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use thiserror::Error;
 
+pub mod history;
+
 /// Ошибки работы с vault.
 #[derive(Debug, Error)]
 pub enum VaultError {

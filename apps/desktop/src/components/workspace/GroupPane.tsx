@@ -260,7 +260,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                 onChange={(doc) => updateBufferDoc(active.path, doc)}
                 onSave={(doc) => {
                   updateBufferDoc(active.path, doc);
-                  void saveBuffer(active.path);
+                  void saveBuffer(active.path, true); // Ctrl-S — ручная точка истории (SAFE-5)
                 }}
                 onBlur={() => void flush(active.path)}
                 onOpenLink={(t) => void openLink(t)}
