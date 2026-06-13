@@ -38,6 +38,13 @@ export interface EditorGroup {
   activeTab: string | null;
 }
 
+/** Запись истории навигации (NAV-3): путь + группа, в которой он был открыт (для возврата в
+ *  родную панель в мульти-пейне; группа могла схлопнуться → фолбэк на активную). */
+export interface NavEntry {
+  path: string;
+  groupId: string;
+}
+
 const INITIAL_GROUP = 'g0';
 let groupSeq = 0;
 const nextGroupId = () => `g${++groupSeq}`;
@@ -47,6 +54,9 @@ const nextGroupId = () => `g${++groupSeq}`;
  *  (приложение однохранилищное); reset (закрытие vault) чистит in-memory. */
 const RECENTS_KEY = 'nexus.recents.v1';
 const RECENTS_MAX = 20;
+
+/** Глубина истории навигации (NAV-3, back/forward ⌘[ / ⌘]). */
+const NAV_MAX = 50;
 
 function loadRecents(): string[] {
   try {
@@ -76,10 +86,21 @@ interface WorkspaceState {
   activeGroupId: string;
   /** Недавно открытые заметки (NAV-2): MRU-список путей для ⌘O quick-switcher. */
   recents: string[];
+  /** История навигации (NAV-3): посещённые документы для back/forward (браузерная модель). */
+  navHistory: NavEntry[];
+  /** Курсор в navHistory (-1 = пусто). back уменьшает, forward увеличивает. */
+  navIndex: number;
 
-  openFile: (path: string, groupId?: string) => Promise<void>;
+  /** `fromNav` — переход инициирован самим back/forward: не записываем его в историю заново. */
+  openFile: (path: string, groupId?: string, opts?: { fromNav?: boolean }) => Promise<void>;
   /** Поднять путь в начало recents (дедуп, кап 20) + персист. Зовётся из openFile. */
   pushRecent: (path: string) => void;
+  /** Внутренняя (NAV-3): записать переход (путь+группа) в историю, обрезав «вперёд»-хвост. */
+  recordNav: (path: string, groupId: string) => void;
+  /** Назад по истории навигации (⌘[). No-op на левом крае. */
+  navBack: () => Promise<void>;
+  /** Вперёд по истории навигации (⌘]). No-op на правом крае. */
+  navForward: () => Promise<void>;
   openLink: (target: string) => Promise<void>;
   setActiveTab: (groupId: string, path: string) => void;
   setActiveGroup: (groupId: string) => void;
@@ -113,11 +134,20 @@ function freshGroups(): EditorGroup[] {
   return [{ id: INITIAL_GROUP, tabs: [], activeTab: null }];
 }
 
+/** NAV-3: целевая группа для возврата записи истории — её родная группа, либо активная,
+ *  если та схлопнулась (moveTab удаляет опустевшие группы). */
+function navGroup(get: () => WorkspaceState, groupId: string): string {
+  const s = get();
+  return s.groups.some((g) => g.id === groupId) ? groupId : s.activeGroupId;
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   buffers: {},
   groups: freshGroups(),
   activeGroupId: INITIAL_GROUP,
   recents: loadRecents(),
+  navHistory: [],
+  navIndex: -1,
 
   pushRecent(path) {
     const recents = [path, ...get().recents.filter((p) => p !== path)].slice(0, RECENTS_MAX);
@@ -125,7 +155,44 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ recents });
   },
 
-  async openFile(path, groupId) {
+  recordNav(path, groupId) {
+    const { navHistory, navIndex } = get();
+    const cur = navHistory[navIndex];
+    if (cur && cur.path === path && cur.groupId === groupId) return; // та же запись — не плодим
+    const trimmed = navHistory.slice(0, navIndex + 1); // обрезаем «вперёд»-хвост (браузерная модель)
+    trimmed.push({ path, groupId });
+    const next = trimmed.slice(Math.max(0, trimmed.length - NAV_MAX)); // кап глубины
+    set({ navHistory: next, navIndex: next.length - 1 });
+  },
+
+  async navBack() {
+    const { navIndex, navHistory } = get();
+    if (navIndex <= 0) return;
+    // navIndex сдвигаем ТОЛЬКО после успешного openFile: если целевой файл удалён/переименован,
+    // openFile реджектится — курсор остаётся консистентным с реально активным документом (а не
+    // уезжает на мёртвую запись). Группу берём из записи (фолбэк на активную, если схлопнулась).
+    const e = navHistory[navIndex - 1];
+    try {
+      await get().openFile(e.path, navGroup(get, e.groupId), { fromNav: true });
+      set({ navIndex: navIndex - 1 });
+    } catch {
+      /* целевой файл недоступен — курсор не двигаем (запись подчистится при delete/rename) */
+    }
+  },
+
+  async navForward() {
+    const { navIndex, navHistory } = get();
+    if (navIndex >= navHistory.length - 1) return;
+    const e = navHistory[navIndex + 1];
+    try {
+      await get().openFile(e.path, navGroup(get, e.groupId), { fromNav: true });
+      set({ navIndex: navIndex + 1 });
+    } catch {
+      /* целевой файл недоступен — курсор не двигаем */
+    }
+  },
+
+  async openFile(path, groupId, opts) {
     // Открытие файла переключает main-область на редактор (Home/News — полные вьюхи, DP-1).
     const { useUIStore } = await import('./ui');
     useUIStore.getState().closeHome();
@@ -158,6 +225,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       ),
     }));
     get().pushRecent(path); // NAV-2: открытие = недавнее (для ⌘O)
+    if (!opts?.fromNav) get().recordNav(path, gid); // NAV-3: запись в историю (кроме back/forward)
   },
 
   async openLink(target) {
@@ -175,6 +243,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       activeGroupId: groupId,
       groups: s.groups.map((g) => (g.id === groupId ? { ...g, activeTab: path } : g)),
     }));
+    get().recordNav(path, groupId); // NAV-3: переключение вкладки — тоже навигация (для back/forward)
   },
 
   setActiveGroup(groupId) {
@@ -389,8 +458,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const buffers = Object.fromEntries(
         Object.entries(s.buffers).filter(([p]) => referenced.has(p)),
       );
-      return { groups: finalGroups, activeGroupId, buffers };
+      // NAV-3: выбрасываем удалённые пути из истории (иначе navBack упёрся бы в мёртвый путь → reject).
+      const navHistory = s.navHistory.filter((e) => !isUnder(e.path));
+      // Курсор держим на записи РЕАЛЬНО активного документа (инвариант navHistory[navIndex].path ===
+      // activePath): dropPathsUnder выбирает новый activeTab как правый-выживший, а простой кламп влево
+      // мог бы указать на другую запись. Берём вхождение активного пути, ближайшее к прежней позиции.
+      const removedUpTo = s.navHistory.slice(0, s.navIndex + 1).filter((e) => isUnder(e.path)).length;
+      const clamped = Math.max(-1, Math.min(s.navIndex - removedUpTo, navHistory.length - 1));
+      const activeNow = finalGroups.find((g) => g.id === activeGroupId)?.activeTab ?? null;
+      let navIndex = clamped;
+      if (activeNow !== null && navHistory[clamped]?.path !== activeNow) {
+        let left = -1;
+        let right = -1;
+        for (let i = 0; i < navHistory.length; i++) {
+          if (navHistory[i].path !== activeNow) continue;
+          if (i <= clamped) left = i; // последняя ≤ clamped
+          else if (right === -1) right = i; // первая > clamped
+        }
+        if (left !== -1) navIndex = left;
+        else if (right !== -1) navIndex = right;
+      }
+      const recents = s.recents.filter((p) => !isUnder(p)); // NAV-2: и из недавних тоже (нет мёртвых)
+      return { groups: finalGroups, activeGroupId, buffers, navHistory, navIndex, recents };
     });
+    saveRecents(get().recents); // персист подчищенных recents
   },
 
   renameBufferPath(from, to) {
@@ -408,13 +499,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         tabs: g.tabs.map(map),
         activeTab: g.activeTab ? map(g.activeTab) : null,
       }));
-      return { buffers, groups };
+      // NAV-3: ремапим пути в истории навигации (длина/порядок сохраняются → navIndex не трогаем),
+      // иначе back/forward на переименованную заметку ушёл бы на старый путь → reject openFile.
+      const navHistory = s.navHistory.map((e) => ({ ...e, path: map(e.path) }));
+      // NAV-2: те же пути в недавних; дедуп на случай rename на уже-недавний путь (коллизия имён).
+      const seen = new Set<string>();
+      const recents: string[] = [];
+      for (const p of s.recents.map(map)) {
+        if (!seen.has(p)) {
+          seen.add(p);
+          recents.push(p);
+        }
+      }
+      return { buffers, groups, navHistory, recents };
     });
+    saveRecents(get().recents); // персист ремапленных recents
   },
 
   reset() {
     cancelAllAutosave(); // SAFE-4: гасим отложенные автосейвы — не стреляют по выброшенным буферам
-    set({ buffers: {}, groups: freshGroups(), activeGroupId: INITIAL_GROUP, modes: {}, recents: [] });
+    set({
+      buffers: {},
+      groups: freshGroups(),
+      activeGroupId: INITIAL_GROUP,
+      modes: {},
+      recents: [],
+      navHistory: [],
+      navIndex: -1,
+    });
   },
 }));
 
