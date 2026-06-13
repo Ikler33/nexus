@@ -320,7 +320,12 @@
   },
   "capture": {
     "title": "Быстрая запись",
-    "placeholder": "Запишите мысль — Enter добавит её в Inbox…"
+    "placeholder": "Запишите мысль — Enter добавит её в Inbox…",
+    "saved": "Захвачено в Inbox",
+    "openInbox": "Открыть"
+  },
+  "toast": {
+    "dismiss": "Закрыть уведомление"
   },
   "palette": {
     "placeholder": "Команда…",

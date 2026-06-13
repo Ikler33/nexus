@@ -21,6 +21,7 @@ import { NewsView } from './components/news/NewsView';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
+import { ToastViewport } from './components/chrome/ToastViewport';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
@@ -248,6 +249,7 @@ export function App() {
 
       <CommandPalette />
       <QuickCapture />
+      <ToastViewport />
       {pluginsOpen && (
         <Suspense fallback={null}>
           <PluginsPanel />
