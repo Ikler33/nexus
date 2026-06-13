@@ -315,6 +315,7 @@
     "label": "Command palette",
     "empty": "No commands",
     "files": "Files",
+    "content": "In content",
     "commands": "Commands",
     "navigate": "navigate",
     "open": "open"

@@ -1,8 +1,8 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
-import { Command as CommandIcon, CornerDownLeft, FileText, Search } from 'lucide-react';
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { Command as CommandIcon, CornerDownLeft, FileText, Search, TextSearch } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { commands, type Command, formatCombo } from '../../lib/commands';
-import { tauriApi, type NoteRef } from '../../lib/tauri-api';
+import { tauriApi, type NoteRef, type SearchHit } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -10,13 +10,46 @@ import styles from './CommandPalette.module.css';
 
 /** Сколько файлов показываем в секции «Файлы» (DP-5, макет palette.jsx). */
 const FILE_LIMIT = 8;
+/** Сколько контент-результатов; min символов и debounce — гибрид дороже метаданных (бьёт эмбеддер). */
+const CONTENT_LIMIT = 6;
+const CONTENT_MIN_CHARS = 3;
+const CONTENT_DEBOUNCE_MS = 250;
 
-/** Строка результата: файл vault или команда реестра. */
-type Row = { kind: 'file'; note: NoteRef } | { kind: 'command'; cmd: Command };
+/** Строка результата: файл по метаданным, заметка по содержимому или команда реестра. */
+type Row =
+  | { kind: 'file'; note: NoteRef }
+  | { kind: 'content'; hit: SearchHit }
+  | { kind: 'command'; cmd: Command };
 
 function noteTitle(n: NoteRef): string {
   const base = n.path.slice(n.path.lastIndexOf('/') + 1);
   return n.title ?? (base.endsWith('.md') ? base.slice(0, -3) : base);
+}
+
+function hitTitle(h: SearchHit): string {
+  const base = h.path.slice(h.path.lastIndexOf('/') + 1);
+  return h.title ?? (base.endsWith('.md') ? base.slice(0, -3) : base);
+}
+
+/** Подсветка терминов запроса в сниппете через React-узлы `<mark>` (CSP-safe, без innerHTML). */
+function highlight(text: string, query: string): ReactNode {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+  if (!terms.length) return text;
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(${escaped.join('|')})`, 'gi');
+  const termSet = new Set(terms);
+  return text.split(re).map((part, i) =>
+    termSet.has(part.toLowerCase()) ? (
+      <mark key={i} className={styles.mark}>
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
 }
 
 /**
@@ -34,12 +67,14 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const [version, setVersion] = useState(0);
   const [files, setFiles] = useState<NoteRef[]>([]);
+  const [content, setContent] = useState<SearchHit[]>([]);
 
   useEffect(() => commands.subscribe(() => setVersion((v) => v + 1)), []);
   useEffect(() => {
     if (open) {
       setQuery('');
       setFiles([]);
+      setContent([]);
       setActive(0);
     }
   }, [open]);
@@ -68,6 +103,30 @@ export function CommandPalette() {
     };
   }, [open, q]);
 
+  // Контент-поиск по ТЕЛУ (NAV-1: закрывает «возврат сломан» — searchContent был без вызовов в UI).
+  // Дороже метаданных (бьёт эмбеддер) → выше порог символов и дольше debounce.
+  useEffect(() => {
+    if (!open || q.length < CONTENT_MIN_CHARS) {
+      setContent([]);
+      return;
+    }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      tauriApi.search
+        .searchContent(q, { limit: CONTENT_LIMIT })
+        .then((r) => {
+          if (!cancelled) setContent(r);
+        })
+        .catch(() => {
+          if (!cancelled) setContent([]);
+        });
+    }, CONTENT_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [open, q]);
+
   const label = useCallback((c: Command) => (c.titleKey ? t(c.titleKey) : c.title), [t]);
 
   const filteredCommands = useMemo(() => {
@@ -80,9 +139,10 @@ export function CommandPalette() {
   const rows: Row[] = useMemo(
     () => [
       ...files.map((note): Row => ({ kind: 'file', note })),
+      ...content.map((hit): Row => ({ kind: 'content', hit })),
       ...filteredCommands.map((cmd): Row => ({ kind: 'command', cmd })),
     ],
-    [files, filteredCommands],
+    [files, content, filteredCommands],
   );
 
   if (!open) return null;
@@ -92,6 +152,7 @@ export function CommandPalette() {
     if (!row) return;
     close();
     if (row.kind === 'file') void useWorkspaceStore.getState().openFile(row.note.path);
+    else if (row.kind === 'content') void useWorkspaceStore.getState().openFile(row.hit.path);
     else void commands.run(row.cmd.id);
   };
 
@@ -116,9 +177,16 @@ export function CommandPalette() {
     }
   };
 
+  const rowKey = (row: Row) =>
+    row.kind === 'file'
+      ? `f:${row.note.path}`
+      : row.kind === 'content'
+        ? `s:${row.hit.chunkId}`
+        : `c:${row.cmd.id}`;
+
   const renderRow = (row: Row, i: number) => (
     <li
-      key={row.kind === 'file' ? `f:${row.note.path}` : `c:${row.cmd.id}`}
+      key={rowKey(row)}
       role="option"
       aria-selected={i === active}
       data-active={i === active || undefined}
@@ -129,23 +197,32 @@ export function CommandPalette() {
     >
       {row.kind === 'file' ? (
         <FileText size={15} className={styles.itemIco} aria-hidden />
+      ) : row.kind === 'content' ? (
+        <TextSearch size={15} className={styles.itemIco} aria-hidden />
       ) : (
         <CommandIcon size={15} className={styles.itemIco} aria-hidden />
       )}
-      <span className={styles.title}>
-        {row.kind === 'file' ? noteTitle(row.note) : label(row.cmd)}
-      </span>
+      {row.kind === 'content' ? (
+        <span className={styles.contentCell}>
+          <span className={styles.title}>{hitTitle(row.hit)}</span>
+          <span className={styles.snippet}>{highlight(row.hit.snippet, q)}</span>
+        </span>
+      ) : (
+        <span className={styles.title}>
+          {row.kind === 'file' ? noteTitle(row.note) : label(row.cmd)}
+        </span>
+      )}
       {row.kind === 'file' ? (
         <span className={styles.hintPath}>{row.note.path}</span>
-      ) : (
+      ) : row.kind === 'command' ? (
         row.cmd.defaultKey && <kbd className={styles.kbd}>{formatCombo(row.cmd.defaultKey)}</kbd>
-      )}
+      ) : null}
     </li>
   );
 
-  // Глобальные индексы секций (общая клавиатурная навигация по двум спискам).
-  const fileRows = rows.filter((r) => r.kind === 'file');
-  const cmdOffset = fileRows.length;
+  // Глобальные индексы трёх секций (общая клавиатурная навигация по всем спискам).
+  const nFiles = files.length;
+  const nContent = content.length;
 
   return (
     <div className={`${styles.overlay} ${styles[paletteStyle] ?? ''}`} onClick={close}>
@@ -179,18 +256,26 @@ export function CommandPalette() {
             <li className={styles.empty}>{t('palette.empty')}</li>
           ) : (
             <>
-              {fileRows.length > 0 && (
+              {nFiles > 0 && (
                 <li className={styles.section} aria-hidden>
                   {t('palette.files')}
                 </li>
               )}
-              {fileRows.map((row, i) => renderRow(row, i))}
+              {rows.slice(0, nFiles).map((row, i) => renderRow(row, i))}
+              {nContent > 0 && (
+                <li className={styles.section} aria-hidden>
+                  {t('palette.content')}
+                </li>
+              )}
+              {rows.slice(nFiles, nFiles + nContent).map((row, i) => renderRow(row, nFiles + i))}
               {filteredCommands.length > 0 && (
                 <li className={styles.section} aria-hidden>
                   {t('palette.commands')}
                 </li>
               )}
-              {rows.slice(cmdOffset).map((row, i) => renderRow(row, cmdOffset + i))}
+              {rows
+                .slice(nFiles + nContent)
+                .map((row, i) => renderRow(row, nFiles + nContent + i))}
             </>
           )}
         </ul>
