@@ -172,6 +172,7 @@ pub fn run() {
             commands::chat_sessions::chat_sessions_list,
             commands::chat_sessions::chat_session_messages,
             commands::chat_sessions::chat_log_exchange,
+            commands::chat_sessions::chat_delete_last_exchange,
             commands::chat_sessions::chat_session_to_note,
             commands::inline::inline_complete,
             commands::inline::inline_cancel,

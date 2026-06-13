@@ -234,6 +234,28 @@ describe('ChatView (Ф1-8)', () => {
     expect(useToastStore.getState().toasts.some((t) => t.message === 'Вставлено в заметку')).toBe(true);
   });
 
+  it('P6-RGN: «Перегенерировать» есть у ПОСЛЕДНЕГО ответа, нет у предыдущих', async () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'q1' },
+        { id: 'a1', role: 'assistant', content: 'старый ответ' },
+        { id: 'u2', role: 'user', content: 'q2' },
+        { id: 'a2', role: 'assistant', content: 'последний ответ' },
+      ],
+      streaming: false,
+    });
+    render(<ChatView />);
+    // одна кнопка регенерации — у последнего ответа.
+    expect(screen.getAllByRole('button', { name: 'Перегенерировать' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Перегенерировать' }));
+    // последний обмен убран, переспрошен q2 (вопрос на месте, ответ новый/стримится) — асинхронно.
+    await vi.waitFor(() => {
+      const msgs = useChatStore.getState().messages;
+      expect(msgs[msgs.length - 2]).toMatchObject({ role: 'user', content: 'q2' });
+    });
+    useChatStore.getState().stop();
+  });
+
   it('P6-AR: под стримящимся ответом действий нет', () => {
     useChatStore.setState({
       messages: [
