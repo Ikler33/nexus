@@ -694,6 +694,7 @@
     "vault.rescan": "Reindex vault",
     "view.toggleSidebar": "Toggle sidebar",
     "file.new": "New note",
+    "note.daily": "Daily note",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
     "inline.continue": "AI: continue text",

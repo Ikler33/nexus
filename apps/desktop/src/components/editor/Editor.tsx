@@ -122,6 +122,8 @@ export function Editor({
     viewRef.current = view;
     setActiveEditorView(view);
     loadedPath.current = path;
+    // CAP-1: фокус в редактор при открытии заметки — пиши сразу, без клика (захват без трения).
+    view.focus();
 
     return () => {
       clearActiveEditorView(view);
@@ -148,6 +150,9 @@ export function Editor({
       selection: { anchor },
       annotations: externalSync.of(true),
     });
+    // CAP-1: смена файла фокусирует редактор (но НЕ watcher-reload того же файла — иначе крал бы
+    // фокус у другой панели). Курсор остаётся в начале (без скролл-прыжка на длинных заметках).
+    if (switching) view.focus();
   }, [path, initialDoc]);
 
   return <div ref={host} className={styles.editor} data-testid="editor" />;

@@ -29,6 +29,8 @@ interface VaultState {
   deleteFile: (path: string) => Promise<void>;
   /** Переименовывает/перемещает путь (CURATE-2): сохраняет грязные буферы, переносит их и дерево. */
   renameFile: (from: string, to: string) => Promise<void>;
+  /** Перечитать детей каталога ('' = корень) и опц. раскрыть его (после создания файла извне). */
+  refreshDir: (dir: string, expand?: boolean) => Promise<void>;
 }
 
 /** Родительский каталог пути ('' = корень). */
@@ -117,6 +119,14 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     const dir = parentDir(path);
     const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
     set((s) => ({ childrenByPath: { ...s.childrenByPath, [dir]: children } }));
+  },
+
+  async refreshDir(dir, expand = false) {
+    const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
+    set((s) => ({
+      childrenByPath: { ...s.childrenByPath, [dir]: children },
+      expanded: expand && dir ? { ...s.expanded, [dir]: true } : s.expanded,
+    }));
   },
 
   async renameFile(from, to) {
