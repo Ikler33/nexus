@@ -1,6 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Editor } from './Editor';
+import { getActiveEditorView } from '../../lib/editor/activeView';
+import type { Buffer } from '../../stores/workspace';
+import { useWorkspaceStore } from '../../stores/workspace';
+
+const buf = (path: string, doc: string): Buffer => ({ path, doc, dirty: false, baseHash: '' });
 
 describe('Editor (Ф0-5, контракт CM6↔React)', () => {
   it('рендерит документ и заменяет его при смене файла (без пересоздания)', async () => {
@@ -47,5 +52,48 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
     rerender(<Editor path="A.md" initialDoc="hello [[B]]" onChange={() => { changes += 1; }} />);
     await waitFor(() => expect(host.textContent).toContain('[[B]]'));
     expect(changes).toBe(0);
+  });
+
+  // NAV-4: позиция курсора сохраняется при уходе и восстанавливается при возврате.
+  it('восстанавливает позицию курсора при возврате к заметке', async () => {
+    useWorkspaceStore.getState().reset();
+    useWorkspaceStore.setState({
+      buffers: { 'A.md': buf('A.md', 'Alpha content here'), 'B.md': buf('B.md', 'Bravo content here') },
+    });
+    const { rerender } = render(<Editor path="A.md" initialDoc="Alpha content here" />);
+    const host = screen.getByTestId('editor');
+    await waitFor(() => expect(host.textContent).toContain('Alpha'));
+
+    // Ставим курсор на offset 7 в A.md.
+    const view = getActiveEditorView();
+    expect(view).not.toBeNull();
+    view!.dispatch({ selection: { anchor: 7 } });
+
+    // Уходим в B.md (сохранит курсор A=7), затем возвращаемся в A.md (восстановит).
+    rerender(<Editor path="B.md" initialDoc="Bravo content here" />);
+    await waitFor(() => expect(host.textContent).toContain('Bravo'));
+    expect(useWorkspaceStore.getState().buffers['A.md'].cursor).toBe(7);
+
+    rerender(<Editor path="A.md" initialDoc="Alpha content here" />);
+    await waitFor(() => expect(host.textContent).toContain('Alpha'));
+    expect(getActiveEditorView()!.state.selection.main.head).toBe(7);
+  });
+
+  it('кламп курсора при усохшем документе (внешняя правка укоротила файл)', async () => {
+    useWorkspaceStore.getState().reset();
+    useWorkspaceStore.setState({
+      buffers: { 'A.md': buf('A.md', 'long original text'), 'B.md': buf('B.md', 'other') },
+    });
+    const { rerender } = render(<Editor path="A.md" initialDoc="long original text" />);
+    const host = screen.getByTestId('editor');
+    await waitFor(() => expect(host.textContent).toContain('long'));
+    getActiveEditorView()!.dispatch({ selection: { anchor: 15 } }); // ближе к концу
+
+    rerender(<Editor path="B.md" initialDoc="other" />);
+    await waitFor(() => expect(host.textContent).toContain('other'));
+    // Возврат к укороченной версии A.md (len 3) — курсор клампится в пределы, без краша.
+    rerender(<Editor path="A.md" initialDoc="abc" />);
+    await waitFor(() => expect(host.textContent).toContain('abc'));
+    expect(getActiveEditorView()!.state.selection.main.head).toBe(3);
   });
 });
