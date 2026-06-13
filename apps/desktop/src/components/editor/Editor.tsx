@@ -5,6 +5,7 @@ import { EditorView, keymap } from '@codemirror/view';
 import { clearActiveEditorView, setActiveEditorView } from '../../lib/editor/activeView';
 import type { NoteRef } from '../../lib/tauri-api';
 import { useInlineStore } from '../../stores/inline';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { nexusExtensions } from './extensions';
 import { ghostField, inlineKeymap } from './inlineGhost';
 import { inlineToolbar } from './inlineToolbar';
@@ -99,9 +100,18 @@ export function Editor({
     // (порча текста). Отступ остаётся на Tab/Shift-Tab (indentWithTab).
     const baseKeymap = defaultKeymap.filter((b) => b.key !== 'Mod-[' && b.key !== 'Mod-]');
 
+    // NAV-4: при создании view (новая панель/сплит, реоткрытие открытого буфера) восстанавливаем
+    // сохранённую позицию курсора — иначе сплит той же заметки открылся бы в начале.
+    const savedCursor = useWorkspaceStore.getState().buffers[path]?.cursor;
+    const initSelection =
+      savedCursor != null
+        ? { anchor: Math.min(savedCursor, loadedDoc.current.length) }
+        : undefined;
+
     const view = new EditorView({
       state: EditorState.create({
         doc: loadedDoc.current,
+        selection: initSelection,
         extensions: [
           history(),
           keymap.of([...baseKeymap, ...historyKeymap, indentWithTab]),
@@ -129,6 +139,8 @@ export function Editor({
     loadedPath.current = path;
     // CAP-1: фокус в редактор при открытии заметки — пиши сразу, без клика (захват без трения).
     view.focus();
+    // NAV-4: проскроллить к восстановленному курсору (selection при create не скроллит сам).
+    if (initSelection) view.dispatch({ effects: EditorView.scrollIntoView(initSelection.anchor) });
 
     return () => {
       clearActiveEditorView(view);
@@ -146,17 +158,26 @@ export function Editor({
     if (!view) return;
     const switching = loadedPath.current !== path;
     if (!switching && initialDoc === view.state.doc.toString()) return;
+    // NAV-4: уходя с заметки — запоминаем позицию курсора (в старом пути), входя — восстанавливаем
+    // её (не прыгаем в начало длинной заметки). Watcher-reload того же файла (switching=false) курсор
+    // сохраняет по-старому (anchor текущего view).
+    if (switching) {
+      useWorkspaceStore
+        .getState()
+        .setBufferCursor(loadedPath.current, view.state.selection.main.head);
+    }
     loadedPath.current = path;
     const anchor = switching
-      ? 0
+      ? Math.min(useWorkspaceStore.getState().buffers[path]?.cursor ?? 0, initialDoc.length)
       : Math.min(view.state.selection.main.anchor, initialDoc.length);
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: initialDoc },
       selection: { anchor },
       annotations: externalSync.of(true),
+      scrollIntoView: switching, // NAV-4: проскроллить к восстановленному курсору при смене файла
     });
     // CAP-1: смена файла фокусирует редактор (но НЕ watcher-reload того же файла — иначе крал бы
-    // фокус у другой панели). Курсор остаётся в начале (без скролл-прыжка на длинных заметках).
+    // фокус у другой панели).
     if (switching) view.focus();
   }, [path, initialDoc]);
 

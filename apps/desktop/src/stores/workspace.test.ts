@@ -436,4 +436,24 @@ describe('workspace renameBufferPath (CURATE-2)', () => {
     expect(activePath(ws())).toBe('B.md'); // активный документ прежний
     spy.mockRestore();
   });
+
+  // NAV-4: позиция курсора запоминается на буфере (восстановление — в Editor/CM6).
+  it('setBufferCursor запоминает позицию; не трогает dirty', async () => {
+    await ws().openFile('README.md');
+    ws().setBufferCursor('README.md', 42);
+    expect(ws().buffers['README.md'].cursor).toBe(42);
+    expect(ws().buffers['README.md'].dirty).toBe(false); // не правка контента
+  });
+
+  it('setBufferCursor по несуществующему пути — no-op', () => {
+    ws().setBufferCursor('Ghost.md', 5);
+    expect(ws().buffers['Ghost.md']).toBeUndefined();
+  });
+
+  it('rename переносит курсор вместе с буфером (NAV-4 живёт с буфером)', async () => {
+    await ws().openFile('Old.md');
+    ws().setBufferCursor('Old.md', 17);
+    ws().renameBufferPath('Old.md', 'New.md');
+    expect(ws().buffers['New.md'].cursor).toBe(17);
+  });
 });

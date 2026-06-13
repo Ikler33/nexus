@@ -29,6 +29,10 @@ export interface Buffer {
   /** Текст ошибки последнего сохранения (SAFE-4): запись не удалась → dirty НЕ сброшен, правки целы,
    *  ошибка ВИДИМА (мандат 3). Тост/ретрай — в P4 (toast-система). */
   saveError?: string;
+  /** Позиция курсора (offset) на момент ухода с заметки (NAV-4) — восстанавливается при возврате,
+   *  чтобы не прыгать в начало длинной заметки. Живёт с буфером (rename переносит, close/delete
+   *  забывают — как в Obsidian). */
+  cursor?: number;
 }
 
 /** Группа (сплит): набор вкладок + активная вкладка. */
@@ -113,6 +117,8 @@ interface WorkspaceState {
   toggleMode: (groupId?: string) => void;
   splitRight: () => void;
   updateBufferDoc: (path: string, doc: string) => void;
+  /** Запомнить позицию курсора буфера (NAV-4) — редактор зовёт при уходе с заметки. */
+  setBufferCursor: (path: string, cursor: number) => void;
   /** Сохранить буфер. `manual` (Ctrl-S/палитра) — точка истории всегда; автосейв (false) — троттл. */
   saveBuffer: (path: string, manual?: boolean) => Promise<void>;
   /** Реакция на vault:file-changed (SAFE-3): эхо своего сейва — игнор; грязный буфер — баннер;
@@ -328,6 +334,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         : {},
     );
     scheduleAutosave(path); // SAFE-4: сохранить через паузу набора (debounce 1с)
+  },
+
+  setBufferCursor(path, cursor) {
+    // NAV-4: только запоминаем позицию — НЕ трогаем dirty/doc (не правка контента).
+    set((s) =>
+      s.buffers[path]
+        ? { buffers: { ...s.buffers, [path]: { ...s.buffers[path], cursor } } }
+        : {},
+    );
   },
 
   async saveBuffer(path, manual = false) {
