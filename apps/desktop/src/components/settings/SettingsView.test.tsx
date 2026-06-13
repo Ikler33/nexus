@@ -123,7 +123,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       render(<SettingsView />);
 
       // Строка «Новая заметка» (file.new) с её дефолтным хоткеем (Ctrl+N в jsdom = не-mac).
-      const row = screen.getByText(/новая заметка|new note/i).closest('li') as HTMLElement;
+      const row = screen.getByText(/^(новая заметка|new note)$/i).closest('li') as HTMLElement;
       expect(within(row).getByText(/ctrl\+n|⌘n/i)).toBeInTheDocument();
 
       // «Изменить» → захват → жмём Ctrl+Shift+N (capture-фаза window).
@@ -136,7 +136,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       expect(commands.userKeyFor('file.new')).toBe('ctrl+shift+n');
 
       // Появилась кнопка сброса → возвращает дефолт.
-      const row2 = screen.getByText(/новая заметка|new note/i).closest('li') as HTMLElement;
+      const row2 = screen.getByText(/^(новая заметка|new note)$/i).closest('li') as HTMLElement;
       fireEvent.click(within(row2).getByRole('button', { name: /сбросить|reset/i }));
       expect(commands.userKeyFor('file.new')).toBeUndefined();
     } finally {

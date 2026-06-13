@@ -39,10 +39,12 @@ const TREE: Record<string, FileEntry[]> = {
   '': [
     dir('Projects', true),
     dir('Notes', true),
+    dir('Templates', true),
     dir('Empty', false),
     file('README.md', 1200),
     file('Inbox.md', 340),
   ],
+  Templates: [file('Templates/Meeting.md', 180), file('Templates/Daily.md', 90)],
   Projects: [dir('Projects/Alpha', true), file('Projects/Roadmap.md', 800)],
   'Projects/Alpha': [
     file('Projects/Alpha/Spec.md', 2400),
@@ -70,6 +72,9 @@ const CONTENT: Record<string, string> = {
   // Сироты без ссылок — гало глобального графа в превью (как halo-точки макета graph.jsx).
   'Notes/Scratch.md': '# Scratch\n\nЧерновик без связей.\n',
   'Notes/Цитаты.md': '# Цитаты\n\nКоллекция цитат.\n',
+  // Шаблоны (CAP-3): плейсхолдеры {{date}}/{{time}}/{{title}} подставляются при создании.
+  'Templates/Meeting.md': '# {{title}}\n\nДата: {{date}} {{time}}\n\n## Повестка\n- \n\n## Решения\n- \n',
+  'Templates/Daily.md': '# {{date}}\n\n## Задачи\n- \n\n## Мысли\n- \n',
 };
 
 export async function openVault(path: string): Promise<VaultInfo> {

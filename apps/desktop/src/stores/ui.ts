@@ -75,6 +75,10 @@ interface UIState {
   captureOpen: boolean;
   openCapture: () => void;
   closeCapture: () => void;
+  /** Выбор шаблона: модалка «Новая заметка из шаблона» (CAP-3, ⌘⇧T). */
+  templatesOpen: boolean;
+  openTemplates: () => void;
+  closeTemplates: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
   closeDigest: () => void;
@@ -161,6 +165,9 @@ export const useUIStore = create<UIState>((set) => ({
   captureOpen: false,
   openCapture: () => set({ captureOpen: true }),
   closeCapture: () => set({ captureOpen: false }),
+  templatesOpen: false,
+  openTemplates: () => set({ templatesOpen: true }),
+  closeTemplates: () => set({ templatesOpen: false }),
   closeGoals: () => set({ goalsOpen: false }),
   toggleGoals: () =>
     set((s) => {

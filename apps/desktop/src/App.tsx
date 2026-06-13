@@ -21,6 +21,7 @@ import { NewsView } from './components/news/NewsView';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
+import { TemplatePicker } from './components/command/TemplatePicker';
 import { ToastViewport } from './components/chrome/ToastViewport';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
@@ -172,7 +173,15 @@ export function App() {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const s = useUIStore.getState();
-      if (s.paletteOpen || s.graphOpen || s.pluginsOpen || s.syncOpen || s.captureOpen || s.versionsOpen)
+      if (
+        s.paletteOpen ||
+        s.graphOpen ||
+        s.pluginsOpen ||
+        s.syncOpen ||
+        s.captureOpen ||
+        s.templatesOpen ||
+        s.versionsOpen
+      )
         return;
       s.closeReading();
     };
@@ -249,6 +258,7 @@ export function App() {
 
       <CommandPalette />
       <QuickCapture />
+      <TemplatePicker />
       <ToastViewport />
       {pluginsOpen && (
         <Suspense fallback={null}>

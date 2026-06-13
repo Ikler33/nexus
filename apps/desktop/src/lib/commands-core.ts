@@ -109,6 +109,17 @@ export function registerCoreCommands(): Disposable {
       },
     }),
     commands.register({
+      id: 'note.fromTemplate',
+      title: 'New note from template',
+      titleKey: 'commands.note.fromTemplate',
+      source: 'core',
+      defaultKey: 'mod+shift+t',
+      run: () => {
+        if (!useVaultStore.getState().info) return; // нет открытого vault — некуда создавать
+        useUIStore.getState().openTemplates();
+      },
+    }),
+    commands.register({
       id: 'file.save',
       title: 'Save file',
       titleKey: 'commands.file.save',
