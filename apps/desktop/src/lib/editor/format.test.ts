@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { insertLink, toggleTask, toggleWrap } from './format';
+import { insertLink, toggleTask, toggleTaskAtLine, toggleWrap } from './format';
 
 function mkView(doc: string, from: number, to = from): EditorView {
   return new EditorView({
@@ -183,5 +183,36 @@ describe('insertLink (EDIT-4)', () => {
     expect(v.state.doc.toString()).toBe('[a\\]b]()');
     expect(v.state.sliceDoc(v.state.selection.main.head - 1, v.state.selection.main.head)).toBe('(');
     v.destroy();
+  });
+});
+
+describe('toggleTaskAtLine (EDIT-5, клик в превью)', () => {
+  it('отмечает незавершённый таск на указанной строке', () => {
+    expect(toggleTaskAtLine('- [ ] дело', 1)).toBe('- [x] дело');
+  });
+
+  it('снимает отметку с завершённого (включая [X])', () => {
+    expect(toggleTaskAtLine('- [x] дело', 1)).toBe('- [ ] дело');
+    expect(toggleTaskAtLine('- [X] дело', 1)).toBe('- [ ] дело');
+  });
+
+  it('трогает только указанную строку в многострочном документе', () => {
+    const doc = 'заголовок\n- [ ] a\n- [ ] b';
+    expect(toggleTaskAtLine(doc, 3)).toBe('заголовок\n- [ ] a\n- [x] b');
+  });
+
+  it('нумерованный таск и отступ сохраняются', () => {
+    expect(toggleTaskAtLine('1. [ ] x', 1)).toBe('1. [x] x');
+    expect(toggleTaskAtLine('    - [ ] y', 1)).toBe('    - [x] y');
+  });
+
+  it('строка не таск → null (защита от дрейфа)', () => {
+    expect(toggleTaskAtLine('обычный текст', 1)).toBeNull();
+    expect(toggleTaskAtLine('- буллет без бокса', 1)).toBeNull();
+  });
+
+  it('номер строки вне диапазона → null', () => {
+    expect(toggleTaskAtLine('- [ ] a', 0)).toBeNull();
+    expect(toggleTaskAtLine('- [ ] a', 2)).toBeNull();
   });
 });
