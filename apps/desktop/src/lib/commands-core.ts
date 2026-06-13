@@ -1,7 +1,7 @@
 import { commands, type Disposable } from './commands';
 import { openOrCreateDaily } from './daily';
 import { getActiveEditorView } from './editor/activeView';
-import { toggleTask, toggleWrap } from './editor/format';
+import { insertLink, toggleTask, toggleWrap } from './editor/format';
 import { printActiveNote } from './print';
 import { isTauri, tauriApi, type InlineMode } from './tauri-api';
 import { useInlineStore } from '../stores/inline';
@@ -28,6 +28,12 @@ function formatActiveEditor(marker: string): void {
 function toggleTaskInActiveEditor(): void {
   const view = getActiveEditorView();
   if (view) toggleTask(view);
+}
+
+/** EDIT-4: вставка markdown-ссылки на выделении активного редактора. Нет редактора — no-op. */
+function insertLinkInActiveEditor(): void {
+  const view = getActiveEditorView();
+  if (view) insertLink(view);
 }
 
 /** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
@@ -187,6 +193,15 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       defaultKey: 'mod+shift+i',
       run: () => formatActiveEditor('*'),
+    }),
+    commands.register({
+      // EDIT-4: вставка ссылки ⌘K (универсальный «вставить ссылку»; Mod-k свободен в реестре и CM6).
+      id: 'editor.format.link',
+      title: 'Insert link',
+      titleKey: 'commands.format.link',
+      source: 'core',
+      defaultKey: 'mod+k',
+      run: () => insertLinkInActiveEditor(),
     }),
     commands.register({
       // EDIT-2: чекбокс/таск ⌘L (тоггл - [ ]↔- [x]; обычная строка → таск). Mod-l свободен.

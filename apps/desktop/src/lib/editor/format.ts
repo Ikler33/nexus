@@ -91,3 +91,43 @@ export function toggleTask(view: EditorView): boolean {
   view.focus();
   return true;
 }
+
+/** Похоже ли выделение на URL/почту — тогда оно идёт в адрес ссылки, а не в её текст.
+ *  `\S+` (не `\S*`) — после схемы обязателен контент: голый `www.`/`tel:`/`https://` — это текст. */
+const LINK_TARGET_RE = /^(https?:\/\/|mailto:|tel:|www\.)\S+$/i;
+
+/** Экранирует `[`/`]` в тексте ссылки, чтобы выделение со скобками не рвало `[…]`. */
+const escapeLinkText = (s: string): string => s.replace(/[[\]]/g, '\\$&');
+
+/**
+ * Вставка markdown-ссылки на основном выделении (EDIT-4, ⌘K). Три случая, курсор ставится туда,
+ * куда логично печатать дальше:
+ *  - пустое выделение → `[]()`, курсор в тексте `[|]`;
+ *  - выделение похоже на URL → `[](url)`, курсор в тексте `[|]` (адрес уже есть);
+ *  - выделен текст → `[текст]()`, курсор в адресе `(|)` (готов вставить/печатать ссылку).
+ * Правка обычным dispatch (без externalSync) → редактор пометит dirty + автосейв.
+ */
+export function insertLink(view: EditorView): boolean {
+  const { state } = view;
+  const { from, to } = state.selection.main;
+  const sel = state.sliceDoc(from, to);
+  let insert: string;
+  let caret: number; // абсолютная позиция курсора после вставки
+  if (sel === '') {
+    insert = '[]()';
+    caret = from + 1; // между скобок текста: [|]
+  } else if (LINK_TARGET_RE.test(sel.trim())) {
+    insert = `[](${sel})`;
+    caret = from + 1; // текст пуст, адрес = выделение: [|](url)
+  } else {
+    const text = escapeLinkText(sel);
+    insert = `[${text}]()`;
+    caret = from + text.length + 3; // сразу после `](`: [текст](|)
+  }
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: caret },
+  });
+  view.focus();
+  return true;
+}

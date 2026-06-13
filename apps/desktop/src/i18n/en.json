@@ -751,6 +751,7 @@
     "format.bold": "Bold",
     "format.italic": "Italic",
     "format.task": "Checkbox / task",
+    "format.link": "Insert link",
     "editor.toggleMode": "Editor: edit / preview",
     "versions.open": "Version history"
   }
