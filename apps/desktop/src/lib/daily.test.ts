@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { dailyNotePath, dateStamp, openOrCreateDaily } from './daily';
+import { appendCapture, dailyNotePath, dateStamp, openOrCreateDaily } from './daily';
+import { tauriApi } from './tauri-api';
 import { useVaultStore } from '../stores/vault';
 import { activePath, useWorkspaceStore } from '../stores/workspace';
 
@@ -36,5 +37,14 @@ describe('daily (CAP-1)', () => {
     await openOrCreateDaily(d);
     const doc = useWorkspaceStore.getState().buffers[path]?.doc ?? '';
     expect(doc).toContain('моя запись');
+  });
+
+  it('appendCapture дозаписывает мысли в Inbox строкой с временем', async () => {
+    await appendCapture('первая мысль', new Date(2026, 5, 13, 9, 5));
+    await appendCapture('вторая', new Date(2026, 5, 13, 14, 30));
+    const doc = await tauriApi.vault.readFile('Inbox.md');
+    expect(doc).toContain('- 09:05 первая мысль');
+    expect(doc).toContain('- 14:30 вторая');
+    expect(doc.indexOf('первая')).toBeLessThan(doc.indexOf('вторая')); // порядок дозаписи
   });
 });

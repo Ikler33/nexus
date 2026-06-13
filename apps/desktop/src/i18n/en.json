@@ -310,6 +310,10 @@
     "count_one": "{{count, number}} backlink",
     "count_other": "{{count, number}} backlinks"
   },
+  "capture": {
+    "title": "Quick capture",
+    "placeholder": "Jot a thought — Enter adds it to your Inbox…"
+  },
   "palette": {
     "placeholder": "Command…",
     "label": "Command palette",
@@ -695,6 +699,7 @@
     "view.toggleSidebar": "Toggle sidebar",
     "file.new": "New note",
     "note.daily": "Daily note",
+    "capture.quick": "Quick capture",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
     "inline.continue": "AI: continue text",

@@ -20,6 +20,7 @@ import { HomeView } from './components/home/HomeView';
 import { NewsView } from './components/news/NewsView';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
+import { QuickCapture } from './components/command/QuickCapture';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
@@ -170,7 +171,8 @@ export function App() {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const s = useUIStore.getState();
-      if (s.paletteOpen || s.graphOpen || s.pluginsOpen || s.syncOpen) return;
+      if (s.paletteOpen || s.graphOpen || s.pluginsOpen || s.syncOpen || s.captureOpen || s.versionsOpen)
+        return;
       s.closeReading();
     };
     window.addEventListener('keydown', onEsc);
@@ -245,6 +247,7 @@ export function App() {
       <StatusBar />
 
       <CommandPalette />
+      <QuickCapture />
       {pluginsOpen && (
         <Suspense fallback={null}>
           <PluginsPanel />
