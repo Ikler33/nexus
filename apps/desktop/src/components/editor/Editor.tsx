@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { Annotation, EditorState } from '@codemirror/state';
+import { markdownKeymap } from '@codemirror/lang-markdown';
+import { Annotation, EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { clearActiveEditorView, setActiveEditorView } from '../../lib/editor/activeView';
 import type { NoteRef } from '../../lib/tauri-api';
@@ -100,6 +101,13 @@ export function Editor({
     // (порча текста). Отступ остаётся на Tab/Shift-Tab (indentWithTab).
     const baseKeymap = defaultKeymap.filter((b) => b.key !== 'Mod-[' && b.key !== 'Mod-]');
 
+    // EDIT-3: умное продолжение списков/тасков/цитат. Штатные команды @codemirror/lang-markdown:
+    // Enter → insertNewlineContinueMarkup (продолжает `- `/`* `/`1. `/`> `, чекбокс `- [ ] ` свежим,
+    // нумерацию инкрементом; на пустом пункте — выходит из списка, убирая маркер), Backspace →
+    // deleteMarkupBackward (в начале пункта стирает маркер). Prec.high — перехват ДО defaultKeymap;
+    // на не-списочной строке команды возвращают false → обычная вставка строки / удаление символа.
+    const markupKeymap = Prec.high(keymap.of(markdownKeymap));
+
     // NAV-4: при создании view (новая панель/сплит, реоткрытие открытого буфера) восстанавливаем
     // сохранённую позицию курсора — иначе сплит той же заметки открылся бы в начале.
     const savedCursor = useWorkspaceStore.getState().buffers[path]?.cursor;
@@ -114,6 +122,7 @@ export function Editor({
         selection: initSelection,
         extensions: [
           history(),
+          markupKeymap,
           keymap.of([...baseKeymap, ...historyKeymap, indentWithTab]),
           saveKey,
           inlineTrigger,
