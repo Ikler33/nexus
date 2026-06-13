@@ -14,7 +14,7 @@ use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
 use crate::state::{AppState, VaultContext};
-use crate::vault::{self, FileEntry, NoteRef, VaultInfo};
+use crate::vault::{self, FileEntry, FileMeta, NoteRef, VaultInfo};
 use crate::vector::VectorIndex;
 
 /// Открывает vault: канонизирует папку, открывает БД в `.nexus/nexus.db`, сохраняет в state.
@@ -617,20 +617,46 @@ pub async fn read_file(state: State<'_, AppState>, path: String) -> AppResult<St
     Ok(tokio::fs::read_to_string(&abs).await?)
 }
 
-/// Пишет содержимое файла vault (целевой путь может ещё не существовать).
+/// Читает содержимое файла vault ВМЕСТЕ с хешем (`Buffer.baseHash` для детекта внешних изменений,
+/// SAFE-3). `read_file` оставлен для совместимости (вызовы, которым хеш не нужен).
+#[tauri::command]
+pub async fn read_file_meta(state: State<'_, AppState>, path: String) -> AppResult<FileMeta> {
+    let root = current_root(&state).await?;
+    let abs = vault::resolve_vault_path(&root, Path::new(&path))?;
+    let content = tokio::fs::read_to_string(&abs).await?;
+    let hash = vault::content_hash(content.as_bytes());
+    Ok(FileMeta { content, hash })
+}
+
+/// Хеш файла на диске без чтения его содержимого во фронт (дешёвая сверка `baseHash`, SAFE-3).
+/// `None`, если файла нет; traversal/абсолютный путь — ошибка (анти-traversal сохранён).
+#[tauri::command]
+pub async fn file_hash(state: State<'_, AppState>, path: String) -> AppResult<Option<String>> {
+    let root = current_root(&state).await?;
+    let abs = vault::resolve_vault_path_for_write(&root, Path::new(&path))?;
+    Ok(match tokio::fs::read(&abs).await {
+        Ok(bytes) => Some(vault::content_hash(&bytes)),
+        Err(_) => None, // файла нет → None (не ошибка)
+    })
+}
+
+/// Пишет содержимое файла vault (целевой путь может ещё не существовать). Возвращает хеш
+/// записанного контента — фронт кладёт его в `Buffer.baseHash` (эхо своего сейва не поднимает
+/// guard внешнего изменения, SAFE-3).
 #[tauri::command]
 pub async fn write_file(
     state: State<'_, AppState>,
     path: String,
     content: String,
-) -> AppResult<()> {
+) -> AppResult<String> {
     let root = current_root(&state).await?;
     let abs = vault::resolve_vault_path_for_write(&root, Path::new(&path))?;
+    let hash = vault::content_hash(content.as_bytes());
     // Атомарная запись (tmp→fsync→rename) в blocking-пуле: обрыв на середине не корраптит заметку.
     tokio::task::spawn_blocking(move || vault::atomic_write(&abs, content.as_bytes()))
         .await
         .map_err(|e| AppError::Msg(e.to_string()))??;
-    Ok(())
+    Ok(hash)
 }
 
 /// Заметки vault (path + title) для автокомплита `[[wikilink]]`. Кросс-план #22: вместо

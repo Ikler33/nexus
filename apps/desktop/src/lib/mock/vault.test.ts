@@ -1,7 +1,41 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ChatStreamEvent } from '../tauri-api';
-import { getFullGraph, getLocalGraph, searchContent, streamChat } from './vault';
+import {
+  fileHash,
+  getFullGraph,
+  getLocalGraph,
+  readFileMeta,
+  searchContent,
+  streamChat,
+  writeFile,
+} from './vault';
+
+describe('mock content-hash (SAFE-2)', () => {
+  it('writeFile возвращает хеш, равный fileHash после записи', async () => {
+    const h = await writeFile('Notes/Hash.md', '# Привет');
+    expect(h).toBeTruthy();
+    expect(await fileHash('Notes/Hash.md')).toBe(h);
+  });
+
+  it('хеш различает контент и стабилен', async () => {
+    const a = await writeFile('Notes/H1.md', 'один');
+    const b = await writeFile('Notes/H2.md', 'два');
+    expect(a).not.toBe(b);
+    expect(await writeFile('Notes/H1.md', 'один')).toBe(a);
+  });
+
+  it('fileHash несуществующего → null', async () => {
+    expect(await fileHash('Notes/НетТакого-xyz.md')).toBeNull();
+  });
+
+  it('readFileMeta отдаёт content + согласованный hash', async () => {
+    await writeFile('Notes/Meta.md', '# Мета\n\nтело');
+    const meta = await readFileMeta('Notes/Meta.md');
+    expect(meta.content).toBe('# Мета\n\nтело');
+    expect(meta.hash).toBe(await fileHash('Notes/Meta.md'));
+  });
+});
 
 describe('mock searchContent (контракт Ф1-6)', () => {
   it('пустой запрос → пусто', async () => {

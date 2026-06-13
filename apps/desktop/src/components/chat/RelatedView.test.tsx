@@ -14,7 +14,7 @@ afterEach(() => {
 describe('RelatedView (#35)', () => {
   it('рендерит похожие для активной заметки; «вставить» не убирает строку (AC-RN-6)', async () => {
     useWorkspaceStore.setState({
-      buffers: { 'A.md': { path: 'A.md', doc: '', dirty: false } },
+      buffers: { 'A.md': { path: 'A.md', doc: '', dirty: false, baseHash: '' } },
       groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
       activeGroupId: 'g0',
     });

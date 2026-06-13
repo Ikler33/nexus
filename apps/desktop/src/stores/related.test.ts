@@ -27,7 +27,7 @@ describe('related store (#35)', () => {
       { path: 'B.md', title: 'B', score: 0.9, reason: 'r' },
     ]);
     useWorkspaceStore.setState({
-      buffers: { 'A.md': { path: 'A.md', doc: 'текст', dirty: false } },
+      buffers: { 'A.md': { path: 'A.md', doc: 'текст', dirty: false, baseHash: '' } },
       groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
       activeGroupId: 'g0',
     });

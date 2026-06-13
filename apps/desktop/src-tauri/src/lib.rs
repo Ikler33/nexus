@@ -149,6 +149,8 @@ pub fn run() {
             commands::vault::open_vault,
             commands::vault::list_dir,
             commands::vault::read_file,
+            commands::vault::read_file_meta,
+            commands::vault::file_hash,
             commands::vault::write_file,
             commands::vault::list_notes,
             commands::vault::resolve_note,

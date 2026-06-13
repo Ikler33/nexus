@@ -27,7 +27,7 @@ describe('SuggestView (Ф1-9)', () => {
       { path: 'sv-B.md', title: null, score: 0.8, reason: 'почему B' },
     ]);
     useWorkspaceStore.setState({
-      buffers: { 'sv.md': { path: 'sv.md', doc: '# A', dirty: false } },
+      buffers: { 'sv.md': { path: 'sv.md', doc: '# A', dirty: false, baseHash: '' } },
       groups: [{ id: 'g0', tabs: ['sv.md'], activeTab: 'sv.md' }],
       activeGroupId: 'g0',
     });

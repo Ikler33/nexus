@@ -14,6 +14,10 @@ export interface Buffer {
   path: string;
   doc: string;
   dirty: boolean;
+  /** Хеш контента на момент последней синхронизации с диском (open / save / accept-загрузка).
+   *  Эхо своего сейва не поднимает guard внешнего изменения; расхождение с диском = внешняя правка
+   *  (SAFE-2/3). Для бинарных (картинка/PDF) буферов — пустая строка. */
+  baseHash: string;
 }
 
 /** Группа (сплит): набор вкладок + активная вкладка. */
@@ -66,9 +70,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const gid = groupId ?? get().activeGroupId;
     let buffers = get().buffers;
     if (!buffers[path]) {
-      // Бинарь (картинка/PDF) не читаем как текст — его покажет FileViewer (asset-URL).
-      const doc = isViewable(path) ? '' : await tauriApi.vault.readFile(path);
-      buffers = { ...buffers, [path]: { path, doc, dirty: false } };
+      // Текстовая заметка: контент + baseHash (отпечаток диска для guard внешних изменений, SAFE-3).
+      // Бинарь (картинка/PDF) не читаем как текст — его покажет FileViewer (asset-URL), baseHash пуст.
+      let doc = '';
+      let baseHash = '';
+      if (!isViewable(path)) {
+        const meta = await tauriApi.vault.readFileMeta(path);
+        doc = meta.content;
+        baseHash = meta.hash;
+      }
+      buffers = { ...buffers, [path]: { path, doc, dirty: false, baseHash } };
     }
     set((s) => ({
       buffers,
@@ -181,12 +192,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   async saveBuffer(path) {
     const buffer = get().buffers[path];
     if (!buffer) return;
-    await tauriApi.vault.writeFile(path, buffer.doc);
-    set((s) =>
-      s.buffers[path]
-        ? { buffers: { ...s.buffers, [path]: { ...s.buffers[path], dirty: false } } }
-        : {},
-    );
+    // Хеш записанного — новый baseHash: эхо собственного сейва не поднимет guard внешнего
+    // изменения (SAFE-3). doc на момент записи фиксируем, чтобы baseHash соответствовал ему.
+    const saved = buffer.doc;
+    const hash = await tauriApi.vault.writeFile(path, saved);
+    set((s) => {
+      const b = s.buffers[path];
+      if (!b) return {};
+      // Если за время записи документ не менялся — снимаем dirty; иначе оставляем (есть новые правки).
+      const stillSame = b.doc === saved;
+      return {
+        buffers: {
+          ...s.buffers,
+          [path]: { ...b, baseHash: hash, dirty: stillSame ? false : b.dirty },
+        },
+      };
+    });
   },
 
   reset() {

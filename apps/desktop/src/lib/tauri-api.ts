@@ -511,10 +511,22 @@ export const tauriApi = {
     readFile: (path: string) =>
       isTauri() ? invoke<string>('read_file', { path }) : mockVault.readFile(path),
 
-    /** Пишет содержимое файла vault. */
+    /** Читает контент + хеш (`baseHash` буфера для детекта внешних изменений, SAFE-3). */
+    readFileMeta: (path: string) =>
+      isTauri()
+        ? invoke<{ content: string; hash: string }>('read_file_meta', { path })
+        : mockVault.readFileMeta(path),
+
+    /** Хеш файла на диске без чтения содержимого (дешёвая сверка `baseHash`); `null`, если файла нет. */
+    fileHash: (path: string) =>
+      isTauri()
+        ? invoke<string | null>('file_hash', { path })
+        : mockVault.fileHash(path),
+
+    /** Пишет содержимое файла vault. Возвращает хеш записанного (фронт обновляет `baseHash`). */
     writeFile: (path: string, content: string) =>
       isTauri()
-        ? invoke<void>('write_file', { path, content })
+        ? invoke<string>('write_file', { path, content })
         : mockVault.writeFile(path, content),
 
     /** Заметки vault (path + title) для автокомплита `[[wikilink]]`. #22: опциональный

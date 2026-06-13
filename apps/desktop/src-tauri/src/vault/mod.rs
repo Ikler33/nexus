@@ -81,6 +81,22 @@ pub struct NoteRef {
     pub title: Option<String>,
 }
 
+/// Контент файла + его хеш (`read_file_meta`): фронт кладёт `hash` в `Buffer.baseHash` — отпечаток
+/// последней синхронизации с диском для детекта внешних изменений (SAFE-3) и дедупа истории (SAFE-5).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMeta {
+    pub content: String,
+    pub hash: String,
+}
+
+/// Хеш контента заметки (blake3 hex). Стабильный контент-адрес для детекта внешних изменений и
+/// дедупа снапшотов истории. Не криптографический контракт — просто быстрый отпечаток; mtime для
+/// этого не годится (врёт после git-clone/синка, мандат 5 плана).
+pub fn content_hash(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
 /// Канонизация пути для ЗАПИСИ: целевой файл может не существовать, поэтому канонизируем
 /// РОДИТЕЛЯ (он обязан существовать) и проверяем его принадлежность vault; имя добавляем
 /// после. Та же анти-traversal граница, что и [`resolve_vault_path`] (AC-SEC-1).
@@ -272,6 +288,13 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["note.md"]);
+    }
+
+    #[test]
+    fn content_hash_is_stable_and_distinguishes() {
+        assert_eq!(content_hash(b"# A"), content_hash(b"# A")); // стабилен
+        assert_ne!(content_hash(b"# A"), content_hash(b"# B")); // различает контент
+        assert_eq!(content_hash(b"").len(), 64); // blake3 hex = 32 байта = 64 hex-символа
     }
 
     /// Имя tmp-файла atomic_write попадает под is_ignored (вотчер его не индексирует).
