@@ -261,6 +261,7 @@
   "tree": {
     "label": "Vault files",
     "empty": "This vault is empty.",
+    "rename": "Rename",
     "delete": "Move to trash",
     "deleteConfirm": "Move “{{name}}” to trash? You can restore it from .nexus/.trash.",
     "newNote": "New note",

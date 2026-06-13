@@ -267,3 +267,27 @@ describe('workspace dropPathsUnder (CURATE-1)', () => {
     expect(ws().buffers['Projects/Roadmap.md']).toBeUndefined();
   });
 });
+
+describe('workspace renameBufferPath (CURATE-2)', () => {
+  const ws = () => useWorkspaceStore.getState();
+
+  it('переносит буфер и вкладку на новый путь файла', async () => {
+    await ws().openFile('README.md');
+    ws().updateBufferDoc('README.md', 'текст');
+    ws().renameBufferPath('README.md', 'Renamed.md');
+    const s = ws();
+    expect(s.buffers['README.md']).toBeUndefined();
+    expect(s.buffers['Renamed.md']).toBeDefined();
+    expect(s.buffers['Renamed.md'].path).toBe('Renamed.md');
+    expect(s.buffers['Renamed.md'].doc).toBe('текст'); // содержимое сохранено
+    expect(s.groups.flatMap((g) => g.tabs)).toContain('Renamed.md');
+  });
+
+  it('переносит всё поддерево при rename каталога', async () => {
+    await ws().openFile('Projects/Roadmap.md');
+    ws().renameBufferPath('Projects', 'Plans');
+    const s = ws();
+    expect(s.buffers['Projects/Roadmap.md']).toBeUndefined();
+    expect(s.buffers['Plans/Roadmap.md']).toBeDefined();
+  });
+});

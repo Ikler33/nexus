@@ -72,6 +72,8 @@ interface WorkspaceState {
   keepMine: (path: string) => Promise<void>;
   /** Выбросить буферы/вкладки удалённого пути (файл) или поддерева (каталог) — CURATE-1. */
   dropPathsUnder: (path: string) => void;
+  /** Перенести открытые буферы/вкладки при rename/move пути (своп префикса) — CURATE-2. */
+  renameBufferPath: (from: string, to: string) => void;
   reset: () => void;
 }
 
@@ -348,6 +350,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         Object.entries(s.buffers).filter(([p]) => referenced.has(p)),
       );
       return { groups: finalGroups, activeGroupId, buffers };
+    });
+  },
+
+  renameBufferPath(from, to) {
+    // Своп пути для самого файла и для всего поддерева (каталог): from/x.md → to/x.md.
+    const map = (p: string): string =>
+      p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p;
+    set((s) => {
+      const buffers: Record<string, Buffer> = {};
+      for (const [p, b] of Object.entries(s.buffers)) {
+        const np = map(p);
+        buffers[np] = np === p ? b : { ...b, path: np };
+      }
+      const groups = s.groups.map((g) => ({
+        ...g,
+        tabs: g.tabs.map(map),
+        activeTab: g.activeTab ? map(g.activeTab) : null,
+      }));
+      return { buffers, groups };
     });
   },
 

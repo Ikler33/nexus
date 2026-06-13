@@ -178,3 +178,36 @@
 .ctxItem:hover {
   background: color-mix(in oklab, var(--color-danger) 12%, transparent);
 }
+
+/* CURATE-2: нейтральный пункт меню (переименовать) + инлайн-инпут переименования. */
+.ctxItemNeutral {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctxItemNeutral:hover {
+  background: var(--color-surface-hover);
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm, 5px);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: inherit;
+}

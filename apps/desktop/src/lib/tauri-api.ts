@@ -534,6 +534,10 @@ export const tauriApi = {
     deletePath: (path: string) =>
       isTauri() ? invoke<void>('delete_path', { path }) : mockVault.deletePath(path),
 
+    /** Переименовывает/перемещает путь `from`→`to` (CURATE-2); беклинки сохраняются по id. */
+    renamePath: (from: string, to: string) =>
+      isTauri() ? invoke<void>('rename_path', { from, to }) : mockVault.renamePath(from, to),
+
     /** Версии-снапшоты заметки (SAFE-5/6): время + размер, новейший первым. */
     listVersions: (path: string) =>
       isTauri()
