@@ -98,6 +98,41 @@ pub fn resolve_vault_path_for_write(root: &Path, rel: &Path) -> VaultResult<Path
     Ok(parent_canon.join(file_name))
 }
 
+/// Атомарная запись файла: пишем во временный файл В ТОЙ ЖЕ папке, fsync, затем atomic `rename`
+/// поверх цели. Прерывание питания/процесса между записью tmp и rename НЕ оставляет усечённый
+/// целевой файл — старое содержимое цело (либо файл ещё не существовал). Заменяет прямой
+/// `fs::write`, который при обрыве на середине корраптит заметку (находка аудита, vault.rs:629).
+///
+/// Tmp-имя dot-префиксное (`.<basename>.nexus-tmp-<rand>`) → [`is_ignored`] прячет его от листинга
+/// и вотчер не индексирует (фантомный Upsert не возникает). Tmp в той же папке гарантирует rename в
+/// пределах одной ФС (на разных ФС rename вернул бы `EXDEV`). На Unix дополнительно fsync каталога —
+/// durability самого rename. Блокирующая (fsync/rename) — вызывать из `spawn_blocking`.
+pub fn atomic_write(abs: &Path, bytes: &[u8]) -> VaultResult<()> {
+    use std::io::Write;
+    let parent = abs.parent().ok_or(VaultError::PathEscape)?;
+    let basename = abs
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Префикс с `.` → is_ignored() прячет tmp от дерева/вотчера; basename — для отладки.
+    let mut tmp = tempfile::Builder::new()
+        .prefix(&format!(".{basename}.nexus-tmp-"))
+        .tempfile_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    // fsync tmp ДО rename — содержимое гарантированно на диске.
+    tmp.as_file().sync_all()?;
+    // persist = atomic rename поверх цели (overwrite на Unix и Windows). При ошибке tmp удаляется
+    // через PersistError при дропе — усечённого целевого .md не остаётся.
+    tmp.persist(abs).map_err(|e| VaultError::Io(e.error))?;
+    // Best-effort fsync каталога: durability rename (Unix). Ошибки игнорируем (не критично).
+    #[cfg(unix)]
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
 /// Имя vault = имя его корневого каталога.
 pub fn vault_name(root: &Path) -> String {
     root.file_name()
@@ -221,6 +256,51 @@ mod tests {
             resolve_vault_path(&root, Path::new("/etc/passwd")),
             Err(VaultError::PathEscape)
         ));
+    }
+
+    #[test]
+    fn atomic_write_creates_and_overwrites() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("note.md");
+        atomic_write(&target, b"# first").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "# first");
+        atomic_write(&target, b"# second longer body").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "# second longer body");
+        // После успеха в каталоге — только целевой файл, ни одного tmp-остатка.
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["note.md"]);
+    }
+
+    /// Имя tmp-файла atomic_write попадает под is_ignored (вотчер его не индексирует).
+    #[test]
+    fn atomic_write_tmp_name_is_ignored() {
+        assert!(is_ignored(".note.md.nexus-tmp-abc123"));
+        assert!(is_ignored(".note.md.nexus-tmp-"));
+        assert!(!is_ignored("note.md"));
+    }
+
+    /// Сбой rename (цель — существующий каталог) не корраптит и не оставляет tmp-мусор.
+    #[test]
+    fn atomic_write_failure_cleans_tmp_and_keeps_target_intact() {
+        let dir = TempDir::new().unwrap();
+        // Рядом — настоящая заметка, её содержимое не должно пострадать.
+        let keep = dir.path().join("keep.md");
+        fs::write(&keep, "untouched").unwrap();
+        // Цель — каталог: persist (rename файла поверх каталога) обязан упасть.
+        let busy_dir = dir.path().join("D");
+        fs::create_dir(&busy_dir).unwrap();
+        assert!(atomic_write(&busy_dir, b"x").is_err());
+        assert!(busy_dir.is_dir()); // цель цела
+        assert_eq!(fs::read_to_string(&keep).unwrap(), "untouched");
+        // Ни одного tmp-остатка в каталоге (PersistError удалил tmp при дропе).
+        let leftover = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("nexus-tmp"));
+        assert!(!leftover);
     }
 
     /// Запись: новый файл в существующем каталоге vault — ок; побег наружу — отказ.
