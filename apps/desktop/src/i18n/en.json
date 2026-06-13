@@ -750,6 +750,7 @@
     "view.settings": "Settings",
     "format.bold": "Bold",
     "format.italic": "Italic",
+    "format.task": "Checkbox / task",
     "editor.toggleMode": "Editor: edit / preview",
     "versions.open": "Version history"
   }

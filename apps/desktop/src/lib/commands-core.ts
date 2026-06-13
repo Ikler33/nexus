@@ -1,7 +1,7 @@
 import { commands, type Disposable } from './commands';
 import { openOrCreateDaily } from './daily';
 import { getActiveEditorView } from './editor/activeView';
-import { toggleWrap } from './editor/format';
+import { toggleTask, toggleWrap } from './editor/format';
 import { printActiveNote } from './print';
 import { isTauri, tauriApi, type InlineMode } from './tauri-api';
 import { useInlineStore } from '../stores/inline';
@@ -22,6 +22,12 @@ function runInlineInActiveEditor(mode: InlineMode): void {
 function formatActiveEditor(marker: string): void {
   const view = getActiveEditorView();
   if (view) toggleWrap(view, marker);
+}
+
+/** EDIT-2: тоггл таска на строке(ах) активного редактора. Нет редактора — no-op. */
+function toggleTaskInActiveEditor(): void {
+  const view = getActiveEditorView();
+  if (view) toggleTask(view);
 }
 
 /** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
@@ -181,6 +187,15 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       defaultKey: 'mod+shift+i',
       run: () => formatActiveEditor('*'),
+    }),
+    commands.register({
+      // EDIT-2: чекбокс/таск ⌘L (тоггл - [ ]↔- [x]; обычная строка → таск). Mod-l свободен.
+      id: 'editor.task.toggle',
+      title: 'Toggle task / checkbox',
+      titleKey: 'commands.format.task',
+      source: 'core',
+      defaultKey: 'mod+l',
+      run: () => toggleTaskInActiveEditor(),
     }),
     commands.register({
       id: 'editor.toggleMode',

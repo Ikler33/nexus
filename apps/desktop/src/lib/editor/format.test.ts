@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { toggleWrap } from './format';
+import { toggleTask, toggleWrap } from './format';
 
 function mkView(doc: string, from: number, to = from): EditorView {
   return new EditorView({
@@ -62,6 +62,68 @@ describe('toggleWrap (EDIT-1)', () => {
     const v = mkView('**bold text', 2, 6); // «bold», слева ** , справа пробел
     toggleWrap(v, '**');
     expect(v.state.doc.toString()).toBe('****bold** text');
+    v.destroy();
+  });
+});
+
+describe('toggleTask (EDIT-2)', () => {
+  it('обычная строка → таск', () => {
+    const v = mkView('купить молоко', 3, 3);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [ ] купить молоко');
+    v.destroy();
+  });
+
+  it('буллет → таск (нормализует маркер)', () => {
+    const v = mkView('* пункт', 2, 2);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [ ] пункт');
+    v.destroy();
+  });
+
+  it('таск незавершённый → завершённый и обратно', () => {
+    const v = mkView('- [ ] дело', 6, 6);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [x] дело');
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [ ] дело');
+    v.destroy();
+  });
+
+  it('сохраняет отступ', () => {
+    const v = mkView('    - [ ] вложенный', 12, 12);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('    - [x] вложенный');
+    v.destroy();
+  });
+
+  it('пустая строка → пустой таск', () => {
+    const v = mkView('', 0, 0);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [ ] ');
+    v.destroy();
+  });
+
+  it('мультистрочное выделение — каждая строка независимо', () => {
+    const v = mkView('a\n- [ ] b\nc', 0, 11); // всё выделено (3 строки)
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [ ] a\n- [x] b\n- [ ] c');
+    v.destroy();
+  });
+
+  // Регресс на находку ревью: выделение, кончающееся в col 0 строки ниже, не цепляет её.
+  it('выделение до начала строки ниже (col 0) не трогает лишнюю строку', () => {
+    const v = mkView('a\nb\nc', 0, 2); // выделено «a\n», курсор в начале «b»
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [ ] a\nb\nc');
+    v.destroy();
+  });
+
+  // Регресс на находку ревью: лишние пробелы в боксе нормализуются, а не дублируют чекбокс.
+  it('таск с лишними пробелами в боксе нормализуется, не дублируется', () => {
+    const v = mkView('- [  ] дело', 7, 7);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('- [x] дело');
     v.destroy();
   });
 });
