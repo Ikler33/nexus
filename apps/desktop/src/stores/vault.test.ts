@@ -60,7 +60,7 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
 
   it('createNote: уникальное имя, пишет файл, обновляет дерево (кросс-план #1)', async () => {
     useVaultStore.setState({ childrenByPath: { '': [entry('Untitled.md')] } });
-    const write = vi.spyOn(tauriApi.vault, 'writeFile').mockResolvedValue(undefined);
+    const write = vi.spyOn(tauriApi.vault, 'writeFile').mockResolvedValue('hash');
     vi.spyOn(tauriApi.vault, 'listDir').mockResolvedValue([
       entry('Untitled.md'),
       entry('Untitled 1.md'),

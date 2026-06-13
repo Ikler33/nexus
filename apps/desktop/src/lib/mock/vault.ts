@@ -84,8 +84,29 @@ export async function readFile(path: string): Promise<string> {
   return CONTENT[path] ?? `# ${basename(path)}\n\n(пустой мок-файл)\n`;
 }
 
-export async function writeFile(path: string, content: string): Promise<void> {
+/** Детерминированный контент-хеш для мока (FNV-1a, hex). Бэкенд использует blake3; моку важна лишь
+ *  стабильность и различение контента (baseHash буфера в тестах), не совпадение с blake3. */
+function mockHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+export async function readFileMeta(path: string): Promise<{ content: string; hash: string }> {
+  const content = await readFile(path);
+  return { content, hash: mockHash(content) };
+}
+
+export async function fileHash(path: string): Promise<string | null> {
+  return CONTENT[path] !== undefined ? mockHash(CONTENT[path]) : null;
+}
+
+export async function writeFile(path: string, content: string): Promise<string> {
   CONTENT[path] = content;
+  return mockHash(content);
 }
 
 function lineContext(content: string, idx: number): string {

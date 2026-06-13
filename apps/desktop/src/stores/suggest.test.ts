@@ -39,7 +39,7 @@ describe('suggest store (Ф1-9)', () => {
   it('accept дописывает [[wikilink]] в активный буфер и убирает из списка', async () => {
     vi.spyOn(tauriApi.suggest, 'forFile').mockResolvedValue(SUG);
     useWorkspaceStore.setState({
-      buffers: { 'acc.md': { path: 'acc.md', doc: '# A', dirty: false } },
+      buffers: { 'acc.md': { path: 'acc.md', doc: '# A', dirty: false, baseHash: '' } },
       groups: [{ id: 'g0', tabs: ['acc.md'], activeTab: 'acc.md' }],
       activeGroupId: 'g0',
     });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { tauriApi } from '../lib/tauri-api';
 import { useVaultStore } from './vault';
 import { activeBuffer, activePath, useWorkspaceStore } from './workspace';
 
@@ -73,6 +74,20 @@ describe('workspace store (Ф0-9, Б12)', () => {
     useWorkspaceStore.getState().updateBufferDoc('README.md', 'x');
     await useWorkspaceStore.getState().saveBuffer('README.md');
     expect(useWorkspaceStore.getState().buffers['README.md'].dirty).toBe(false);
+  });
+
+  // SAFE-2: baseHash — отпечаток диска; заполняется при open, обновляется при save (для guard SAFE-3).
+  it('openFile заполняет baseHash, saveBuffer его обновляет', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    const opened = useWorkspaceStore.getState().buffers['README.md'];
+    expect(opened.baseHash).toBeTruthy();
+
+    useWorkspaceStore.getState().updateBufferDoc('README.md', '# Изменено\n');
+    await useWorkspaceStore.getState().saveBuffer('README.md');
+    const saved = useWorkspaceStore.getState().buffers['README.md'];
+    expect(saved.dirty).toBe(false);
+    expect(saved.baseHash).not.toBe(opened.baseHash); // новый контент → новый baseHash
+    expect(saved.baseHash).toBe(await tauriApi.vault.fileHash('README.md'));
   });
 
   it('closeTab убирает вкладку и держит хотя бы одну группу', async () => {
