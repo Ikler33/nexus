@@ -435,6 +435,7 @@
     "webSources": "Источники из интернета",
     "resize": "Потянуть, чтобы изменить размер панели",
     "sourcesToggle": "Источники · {{count}}",
+    "citationOpen": "Открыть источник: {{source}}",
     "webSourcesToggle": "Источники из интернета · {{count}}",
     "memorySources": "Из прошлых разговоров",
     "memorySourcesToggle": "Из прошлых разговоров · {{count}}",

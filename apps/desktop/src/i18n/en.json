@@ -427,6 +427,7 @@
     "webSources": "Web sources",
     "resize": "Drag to resize the panel",
     "sourcesToggle": "Sources · {{count}}",
+    "citationOpen": "Open source: {{source}}",
     "webSourcesToggle": "Web sources · {{count}}",
     "memorySources": "From past conversations",
     "memorySourcesToggle": "From past conversations · {{count}}",

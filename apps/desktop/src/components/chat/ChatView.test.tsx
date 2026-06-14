@@ -74,11 +74,77 @@ describe('ChatView (Ф1-8)', () => {
     useWorkspaceStore.setState({ openFile });
 
     render(<ChatView />);
-    // Источники теперь свернуты компактной плашкой (Sonnet-style) — раскрываем.
+    // AIP-2: [1] в ответе — кликабельная цитата, открывает источник 1.
+    fireEvent.click(screen.getByRole('button', { name: /Открыть источник|Open source/ }));
+    expect(openFile).toHaveBeenCalledWith('Projects/Roadmap.md');
+    // Источники также доступны компактной плашкой (Sonnet-style) — раскрываем и кликаем карточку.
     fireEvent.click(screen.getByRole('button', { name: /Источники · 1|Sources · 1/ }));
-    expect(screen.getByText('План здесь [1]')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Roadmap')); // DP-15/DP-12: источник — title без .md
     expect(openFile).toHaveBeenCalledWith('Projects/Roadmap.md');
+  });
+
+  it('AIP-2: цитата [1] на web-источник открывает URL системным браузером', () => {
+    const open = vi.spyOn(tauriApi.external, 'open').mockResolvedValue(undefined);
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Что нового?' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: 'Согласно источнику [1] всё ок',
+          webSources: [{ title: 'Хабр', url: 'https://habr.com/x', snippet: 's' }],
+        },
+      ],
+      streaming: false,
+    });
+    render(<ChatView />);
+    fireEvent.click(screen.getByRole('button', { name: /Открыть источник|Open source/ }));
+    expect(open).toHaveBeenCalledWith('https://habr.com/x');
+  });
+
+  // Регресс на находку adversarial-ревью: ответ ИИ с GFM-чеклистом + цитатой — `[ ]` остаётся
+  // чекбоксом (remark-gfm раньше), а `[1]` становится цитатой (порядок плагинов не ломает таск-лист).
+  it('AIP-2: чеклист `- [ ] …` + цитата [1] не конфликтуют', () => {
+    const openFile = vi.fn(() => Promise.resolve());
+    useWorkspaceStore.setState({ openFile });
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'План?' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: '- [ ] купить молоко [1]',
+          sources: [
+            { chunkId: 1, path: 'Plan.md', title: null, headingPath: null, snippet: 's', score: 0.5 },
+          ],
+        },
+      ],
+      streaming: false,
+    });
+    render(<ChatView />);
+    expect(screen.getByRole('checkbox')).toBeInTheDocument(); // чеклист цел
+    fireEvent.click(screen.getByRole('button', { name: /Открыть источник|Open source/ }));
+    expect(openFile).toHaveBeenCalledWith('Plan.md'); // цитата работает
+  });
+
+  it('AIP-2: цитата с номером вне диапазона источников — обычный текст, не кнопка', () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Где?' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: 'Видно в [9]',
+          sources: [
+            { chunkId: 1, path: 'A.md', title: null, headingPath: null, snippet: 's', score: 0.5 },
+          ],
+        },
+      ],
+      streaming: false,
+    });
+    render(<ChatView />);
+    expect(screen.queryByRole('button', { name: /Открыть источник|Open source/ })).toBeNull();
+    expect(screen.getByText(/Видно в/)).toBeInTheDocument();
   });
 
   it('Enter отправляет вопрос', async () => {
