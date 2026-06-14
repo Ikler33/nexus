@@ -140,8 +140,9 @@ pub async fn open_vault(
         registry.insert(crate::contradictions::KIND_CONTRA.to_string(), handler);
     }
     // «Stale radar» (H4) — слой 2: LLM-обогащение топ-N устаревших заметок (причина/действие/подсказка).
-    // Судья-подобный примитив → утилитарная `chat_util`. Manual-only (концепт: слой 1 on-open, слой 2
-    // вручную): без recurring/on-change/seed — джобу ставит только команда `refresh_stale_radar`.
+    // Судья-подобный примитив → утилитарная `chat_util`. AIP-хвост: теперь ПРОАКТИВЕН (recurring раз/сутки
+    // + сид-if-needs_enrichment на открытии, ниже), как open_questions; команда `refresh_stale_radar` —
+    // ручной триггер сверх того.
     if let Some(util) = &chat_util {
         let handler: Arc<dyn crate::scheduler::JobHandler> =
             Arc::new(crate::home::stale::StaleRadarHandler::new(
@@ -262,6 +263,12 @@ pub async fn open_vault(
             DAY_SECS,
         );
     }
+    // Stale radar (H4) — AIP-хвост: слой 2 теперь ПРОАКТИВЕН (раз/сутки, scheduled-only, как
+    // open_questions; добавлено после снятия on_change — правка делает заметку МЕНЕЕ устаревшей, спешить
+    // с переобогащением незачем). Per-note кэш делает повторный прогон дешёвым (пропуск валидного).
+    if chat_util.is_some() {
+        recurring.insert(crate::home::stale::KIND_STALE.to_string(), DAY_SECS);
+    }
     // Лента (D3): раз/сутки, НЕ on-change (сетевая, от правок vault не зависит); при выключенной
     // фиче прогон — дешёвый no-op хендлера.
     if news_active {
@@ -348,6 +355,17 @@ pub async fn open_vault(
                 .await;
             }
         }
+    }
+    // Stale radar (H4) — AIP-хвост: проактивный сид на открытии. Гейт `needs_enrichment` (НЕ H2
+    // `is_overdue` — stale не виджет `home_widgets`): обогащаем, только если среди топ-устаревших есть
+    // НЕобогащённые/протухшие. Иначе при свежем кэше открытие не дёргало бы LLM зря.
+    if chat_util.is_some()
+        && crate::home::stale::needs_enrichment(db.reader(), crate::scheduler::now_secs())
+            .await
+            .unwrap_or(false)
+    {
+        let _ =
+            crate::scheduler::enqueue(db.writer(), crate::home::stale::KIND_STALE, "", 0, 2).await;
     }
     // Лента (D3 «при первом открытии за день»): сид run-if-overdue — фича включена и последний
     // прогон старше суток (или прогонов не было).

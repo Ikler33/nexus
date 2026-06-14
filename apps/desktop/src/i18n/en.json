@@ -255,6 +255,8 @@
       "delete": "delete"
     },
     "staleEmpty": "Radar is clear — the vault is fresh.",
+    "staleEnriching": "enriching…",
+    "staleDiscussPrompt": "Help me decide what to do with the note “{{name}}” — {{count}} days untouched: update, archive, split, or delete?",
     "oqTitle": "Open questions",
     "oqEmpty": "No questions yet — hit “refresh” and the model will find open threads in recent notes.",
     "driftTitle": "Focus drift",
