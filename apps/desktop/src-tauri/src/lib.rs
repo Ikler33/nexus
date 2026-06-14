@@ -164,6 +164,7 @@ pub fn run() {
             commands::attachments::read_attachment,
             commands::vault::resolve_note,
             commands::vault::list_tags,
+            commands::vault::notes_by_tag,
             commands::vault::rescan_vault,
             commands::vault::notes_count,
             commands::vault::file_mtime,

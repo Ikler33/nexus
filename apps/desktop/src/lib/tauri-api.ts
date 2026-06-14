@@ -578,6 +578,10 @@ export const tauriApi = {
     listTags: (): Promise<TagCount[]> =>
       isTauri() ? invoke<TagCount[]>('list_tags') : mockTags.listTags(),
 
+    /** Заметки с ТОЧНЫМ тегом (клик по тегу → exact-фильтр, не зашумлённый substring-поиск). */
+    notesByTag: (tag: string): Promise<NoteRef[]> =>
+      isTauri() ? invoke<NoteRef[]>('notes_by_tag', { tag }) : mockTags.notesByTag(tag),
+
     /** Ручной реиндекс vault (quick action «Переиндексировать», макет home.jsx): фоновый
      * полный обход; по завершении бэкенд шлёт `vault:changed`. В браузере — no-op. */
     rescan: (): Promise<void> => (isTauri() ? invoke<void>('rescan_vault') : Promise.resolve()),

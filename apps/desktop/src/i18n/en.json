@@ -188,6 +188,11 @@
     "resultsLabel": "Search results",
     "searchHint": "Searches titles, paths and tags. FTS is instant · semantic search lives in the palette (⌘K).",
     "tagsEmpty": "No tags yet — add a #tag to a note.",
+    "tagFilterClear": "Clear tag filter",
+    "tagFilterCount_one": "{{count}} note",
+    "tagFilterCount_other": "{{count}} notes",
+    "tagFilterCountCapped": "{{count}}+ notes",
+    "tagNoResults": "No notes with this tag.",
     "starredEmpty": "Nothing starred yet — hover a file in the tree and hit the star."
   },
   "home": {

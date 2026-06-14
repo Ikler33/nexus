@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tauriApi } from '../../lib/tauri-api';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Sidebar } from './Sidebar';
@@ -8,6 +9,7 @@ beforeEach(() => {
   useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe('Sidebar (Ф0-7 / DP-2)', () => {
   it('панель «Файлы» по умолчанию — дерево; rail «Поиск» → ввод → результаты', async () => {
@@ -43,15 +45,47 @@ describe('Sidebar (Ф0-7 / DP-2)', () => {
     expect(await screen.findByText('Ничего не найдено')).toBeInTheDocument();
   });
 
-  // DP-2: панель «Теги» из list_tags; клик по тегу = поиск по нему.
-  it('панель «Теги»: список с количеством; клик по тегу запускает поиск', async () => {
+  // Клик по тегу = ТОЧНЫЙ фильтр (notesByTag), а не зашумлённый substring-поиск (searchVault).
+  it('клик по тегу → exact-фильтр (notesByTag, не searchVault) + чип тега', async () => {
+    const notesByTag = vi.spyOn(tauriApi.vault, 'notesByTag');
+    const searchVault = vi.spyOn(tauriApi.search, 'searchVault');
     await useVaultStore.getState().openVault('');
     render(<Sidebar />);
     fireEvent.click(screen.getByRole('tab', { name: /теги|tags/i }));
-    const tag = await screen.findByRole('button', { name: /planning/ });
-    fireEvent.click(tag);
-    // Переключились в поиск с query=planning → результат по тегу.
+    fireEvent.click(await screen.findByRole('button', { name: /planning/ }));
+
     expect(await screen.findByText('Projects/Roadmap.md')).toBeInTheDocument();
+    expect(notesByTag).toHaveBeenCalledWith('planning');
+    expect(searchVault).not.toHaveBeenCalled(); // точный фильтр, НЕ substring-поиск
+    // Чип активного тега со снятием (×).
+    expect(screen.getByRole('button', { name: /снять фильтр|clear tag/i })).toBeInTheDocument();
+  });
+
+  it('снятие чипа тега (×) → выход из тег-режима (подсказка поиска)', async () => {
+    await useVaultStore.getState().openVault('');
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole('tab', { name: /теги|tags/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /planning/ }));
+    await screen.findByText('Projects/Roadmap.md');
+    fireEvent.click(screen.getByRole('button', { name: /снять фильтр|clear tag/i }));
+    // Тег снят → пустой поиск → подсказка, чипа нет.
+    expect(await screen.findByText(/поиск по заголовкам|searches titles/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /снять фильтр|clear tag/i })).not.toBeInTheDocument();
+  });
+
+  it('ввод текста при активном теге → выход в обычный поиск ДРУГОЙ заметки (без stale-лика)', async () => {
+    const searchVault = vi.spyOn(tauriApi.search, 'searchVault');
+    await useVaultStore.getState().openVault('');
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole('tab', { name: /теги|tags/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /planning/ }));
+    await screen.findByText('Projects/Roadmap.md'); // тег-результат (#planning)
+    // Печатаем запрос ДРУГОЙ заметки (Idea НЕ в #planning) — дискриминирует текст-путь от stale тега.
+    fireEvent.change(screen.getByLabelText('Поиск по vault'), { target: { value: 'Idea' } });
+    expect(await screen.findByText('Notes/Idea.md')).toBeInTheDocument(); // результат именно текст-поиска
+    expect(screen.queryByText('Projects/Roadmap.md')).not.toBeInTheDocument(); // тег-результат снят, не залип
+    expect(searchVault).toHaveBeenCalledWith('Idea');
+    expect(screen.queryByRole('button', { name: /снять фильтр|clear tag/i })).not.toBeInTheDocument();
   });
 
   // DP-2: «Избранное» — пустое состояние с подсказкой.
