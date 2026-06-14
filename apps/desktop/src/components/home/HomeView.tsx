@@ -95,6 +95,7 @@ export function HomeView() {
     load,
     reloadWidget,
     refreshWidget,
+    syncGenerating,
   } = useHomeStore();
   const [ai, setAi] = useState<AiConfigDto | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -115,6 +116,18 @@ export function HomeView() {
       });
     return () => unlisten();
   }, [reloadWidget]);
+
+  // AIP-5: пока открыт Home — на каждое изменение очереди подтягиваем «генерируется» из активных джоб,
+  // чтобы проактивно засеянная карточка показывала «генерирю…», а не «нажми обновить».
+  useEffect(() => {
+    let unlisten = () => {};
+    void tauriApi.events
+      .onJobsChanged(() => void syncGenerating())
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten();
+  }, [syncGenerating]);
 
   const openNote = (path: string) => {
     void useWorkspaceStore.getState().openFile(path);

@@ -222,13 +222,13 @@ impl JobHandler for WidgetHandler {
                 Ok(())
             }
             Err(e) => {
-                // Помечаем кэш ошибкой (прежний контент остаётся); уведомляем фронт только если строка
-                // реально была (иначе показывать нечего). Err пробрасываем → планировщик ретраит/умертвляет
-                // джобу (видимо, S7).
-                let affected = mark_error(&self.writer, &self.key).await.unwrap_or(0);
-                if affected > 0 {
-                    self.sink.widget_updated(&self.key);
-                }
+                // Помечаем кэш ошибкой (прежний контент остаётся, если был). Уведомляем фронт ВСЕГДА —
+                // даже если строки ещё не было (первая генерация упала): иначе карточка, засеянная
+                // проактивно (AIP-5) ИЛИ обновлённая вручную, навечно залипнет в «генерирю…» (флаг
+                // `generating` снимается только по `home:widget-updated` → reloadWidget). reloadWidget
+                // перечитает (пусто) и погасит спиннер. Err пробрасываем → планировщик ретраит/умертвляет.
+                let _ = mark_error(&self.writer, &self.key).await;
+                self.sink.widget_updated(&self.key);
                 Err(e)
             }
         }
@@ -478,10 +478,11 @@ mod tests {
         );
     }
 
-    /// Ошибка генерации без прежнего кэша: строки нет → не помечаем, событие НЕ шлём (показывать нечего),
-    /// но Err всё равно проброшен (планировщик увидит провал).
+    /// Ошибка генерации без прежнего кэша: строки нет (показывать нечего), НО событие ВСЁ РАВНО шлём
+    /// (AIP-5): иначе проактивно засеянный виджет при первом провале LLM залипнет в «генерирю…» —
+    /// фронт снимает флаг `generating` только по `home:widget-updated` → reloadWidget. Err проброшен.
     #[tokio::test]
-    async fn error_without_prior_cache_is_silent_but_fails() {
+    async fn error_without_prior_cache_notifies_to_clear_spinner() {
         let (_d, db) = open_db().await;
         set_vault_mtime(&db, 500).await;
         let sink = Arc::new(RecordingSink::default());
@@ -494,10 +495,14 @@ mod tests {
         .handle(&dummy_job(&widget_kind("daily_brief")))
         .await;
         assert_eq!(err, Err("boom".into()));
-        assert!(get(db.reader(), "daily_brief").await.unwrap().is_none());
         assert!(
-            sink.seen.lock().unwrap().is_empty(),
-            "нет строки → нет события"
+            get(db.reader(), "daily_brief").await.unwrap().is_none(),
+            "кэш не создан (строки не было)"
+        );
+        assert_eq!(
+            sink.seen.lock().unwrap().as_slice(),
+            ["daily_brief"],
+            "событие послано даже без строки — чтобы фронт снял спиннер (AIP-5)"
         );
     }
 
