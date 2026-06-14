@@ -58,8 +58,9 @@ async fn all_note_paths(reader: &ReadPool) -> DbResult<Vec<String>> {
         .await
 }
 
-/// Сниппет заметки (первый чанк, нормализованные пробелы, до `SNIPPET_CHARS`).
-async fn note_snippet(reader: &ReadPool, path: &str) -> DbResult<String> {
+/// Сниппет заметки (первый чанк, нормализованные пробелы, до `SNIPPET_CHARS`). `pub(crate)` —
+/// переиспользуется `relation_reasons` (AIP-10), чтобы кэш связей жил в ТОМ ЖЕ хэш-домене.
+pub(crate) async fn note_snippet(reader: &ReadPool, path: &str) -> DbResult<String> {
     let path = path.to_string();
     let raw: Option<String> = reader
         .query(move |c| {
@@ -183,7 +184,8 @@ async fn store_all(writer: &WriteActor, items: Vec<Contradiction>) -> DbResult<(
 }
 
 /// Хэш сниппета (вход судьи) — ключ кэша CT-3: изменился сниппет → хэш другой → пере-судим.
-fn hash_snippet(s: &str) -> i64 {
+/// `pub(crate)` — переиспользуется `relation_reasons` (AIP-10): тот же хэш-домен, что у судьи.
+pub(crate) fn hash_snippet(s: &str) -> i64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
     h.finish() as i64

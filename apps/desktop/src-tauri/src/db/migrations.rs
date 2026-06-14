@@ -110,6 +110,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/015_edit_events.sql"),
         rebuild_fts: false, // журнал изменений для временной оси, производных индексов не трогает
     },
+    Migration {
+        version: 16,
+        name: "relation_reasons",
+        sql: include_str!("migrations/016_relation_reasons.sql"),
+        rebuild_fts: false, // новая таблица-кэш LLM-объяснений связей, производных не инвалидирует
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

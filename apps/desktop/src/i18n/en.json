@@ -143,7 +143,9 @@
       "rerank": "Source reranking (LLM)",
       "rerankDesc": "The fast model reorders retrieved fragments before answering: sharper citations, +~2 s per question. Golden-set: nDCG 0.88 → 1.00.",
       "chatMemory": "Conversation memory",
-      "chatMemoryDesc": "Mix relevant snippets from past conversations into the answer's context (your \"second brain\"). Separate index — does not affect note search."
+      "chatMemoryDesc": "Mix relevant snippets from past conversations into the answer's context (your \"second brain\"). Separate index — does not affect note search.",
+      "explainRelations": "Explain relations",
+      "explainRelationsDesc": "In Related/Similar, show a short LLM explanation of how the notes relate instead of the raw snippet (lazy, cached). Without a utility model — falls back to the snippet."
     },
     "egress": {
       "title": "Network (egress)",

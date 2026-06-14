@@ -380,6 +380,8 @@ function AiSection() {
   const setAiRerank = usePrefsStore((s) => s.setAiRerank);
   const aiChatMemory = usePrefsStore((s) => s.aiChatMemory);
   const setAiChatMemory = usePrefsStore((s) => s.setAiChatMemory);
+  const aiExplainRelations = usePrefsStore((s) => s.aiExplainRelations);
+  const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
   const [chatUrl, setChatUrl] = useState('');
   const [chatModel, setChatModel] = useState('');
   const [embUrl, setEmbUrl] = useState('');
@@ -503,6 +505,15 @@ function AiSection() {
         desc={t('settings.aiSec.chatMemoryDesc')}
         value={aiChatMemory}
         onChange={setAiChatMemory}
+      />
+
+      {/* AIP-10: LLM-«причина связи» в «Связях»/«Похожих» (лениво, кэш). Без утилитарной модели —
+          фолбэк на сниппет. */}
+      <EgressRow
+        label={t('settings.aiSec.explainRelations')}
+        desc={t('settings.aiSec.explainRelationsDesc')}
+        value={aiExplainRelations}
+        onChange={setAiExplainRelations}
       />
 
       <EgressBlock />

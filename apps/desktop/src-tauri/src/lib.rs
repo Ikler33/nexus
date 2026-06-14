@@ -45,6 +45,8 @@ pub mod parser;
 pub mod plugin;
 /// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
 pub mod redact;
+/// LLM-объяснения связи пары заметок (AIP-10): кэш `relation_reasons`, переиспользует примитивы `contradictions`.
+pub mod relation_reasons;
 /// Планировщик фоновых задач (ADR-007): очередь `jobs` (слой данных — slice 1).
 pub mod scheduler;
 /// Поиск по метаданным (title/path/tags) — Ф0.
@@ -194,6 +196,7 @@ pub fn run() {
             commands::news::news_summarize,
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
+            commands::suggest::explain_relation,
             commands::goals::list_goals,
             commands::home::get_home_data,
             commands::home::get_home_activity,

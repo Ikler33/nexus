@@ -674,6 +674,12 @@ export const tauriApi = {
       isTauri()
         ? invoke<LinkSuggestion[]>('get_related_notes', { path, limit })
         : mockVault.getRelatedNotes(path, limit),
+
+    /** AIP-10: короткое LLM-объяснение связи пары заметок (вместо сырого сниппета; кэш на бэке).
+     *  Пустая строка = нет утилитарной модели / ошибка / нет контента → фронт показывает сниппет.
+     *  Вне Tauri — '' (естественный фолбэк на сниппет). */
+    explainRelation: (pathA: string, pathB: string): Promise<string> =>
+      isTauri() ? invoke<string>('explain_relation', { pathA, pathB }) : Promise.resolve(''),
   },
 
   goals: {
