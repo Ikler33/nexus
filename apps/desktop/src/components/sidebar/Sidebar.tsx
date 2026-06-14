@@ -52,6 +52,7 @@ export function Sidebar() {
   const openFile = useWorkspaceStore((s) => s.openFile);
   const createNote = useVaultStore((s) => s.createNote);
   const vaultOpen = useVaultStore((s) => s.info != null);
+  const vaultRoot = useVaultStore((s) => s.info?.root ?? null);
   const homeOpen = useUIStore((s) => s.homeOpen);
   const openHome = useUIStore((s) => s.openHome);
   const starred = useStarredStore((s) => s.paths);
@@ -107,6 +108,13 @@ export function Sidebar() {
       .then(setTags)
       .catch(() => setTags([]));
   }, [panel, vaultOpen]);
+
+  // Смена vault → сбрасываем активный тег-фильтр и выдачу: тег/результаты из прошлого хранилища в
+  // новом недействительны (одноимённый тег мог бы дать пустую/чужую выдачу). На первом открытии — no-op.
+  useEffect(() => {
+    setTagFilter(null);
+    setResults([]);
+  }, [vaultRoot]);
 
   const rail: { id: Panel; icon: typeof Files; label: string }[] = [
     { id: 'files', icon: Files, label: t('sidebar.files') },

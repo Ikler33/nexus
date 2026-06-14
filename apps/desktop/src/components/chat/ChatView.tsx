@@ -98,8 +98,17 @@ export function ChatView() {
   // AIP-3: предзаполнение композера из стора (мост «Разобрать с ИИ» с Home-инсайтов). Потребляем
   // ОДИН раз: заносим в поле, фокусируемся, сбрасываем draft (иначе ре-применится при ре-маунте/
   // смене вкладок и затрёт то, что пользователь успел напечатать).
+  const consumedDraft = useRef<string | null>(null);
   useEffect(() => {
-    if (!draft) return;
+    if (!draft) {
+      consumedDraft.current = null; // draft очищен → новый идентичный prefill снова разрешён
+      return;
+    }
+    // Ref-гард: под dev-StrictMode эффект бежит дважды на mount с тем же `draft` ДО того, как
+    // setDraft('') долетит до стора → без гарда prefill дописывался бы дважды. Гард пропускает
+    // повтор того же значения; сбрасывается, когда draft становится пустым (ветка выше).
+    if (consumedDraft.current === draft) return;
+    consumedDraft.current = draft;
     // Если пользователь уже что-то набрал — НЕ затираем (дописываем с новой строки): мост не должен
     // молча терять ввод. На практике композер обычно пуст (Home закрывает чат → ChatView ремаунтится).
     setInput((prev) => (prev.trim() ? `${prev}\n${draft}` : draft));

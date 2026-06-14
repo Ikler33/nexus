@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../../lib/tauri-api';
 import { useVaultStore } from '../../stores/vault';
@@ -76,6 +76,21 @@ describe('Sidebar (Ф0-7 / DP-2)', () => {
     expect(searchVault).not.toHaveBeenCalled(); // точный фильтр, НЕ substring-поиск
     // Чип активного тега со снятием (×).
     expect(screen.getByRole('button', { name: /снять фильтр|clear tag/i })).toBeInTheDocument();
+  });
+
+  it('смена vault → активный тег-фильтр сбрасывается (тег прошлого хранилища недействителен)', async () => {
+    await useVaultStore.getState().openVault('');
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole('tab', { name: /теги|tags/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /planning/ }));
+    await screen.findByText('Projects/Roadmap.md');
+    expect(screen.getByRole('button', { name: /снять фильтр|clear tag/i })).toBeInTheDocument();
+
+    // Смена vault (root меняется) → эффект сбрасывает tagFilter (чип снятия исчезает).
+    act(() => useVaultStore.setState({ info: { root: '/другой-vault', name: 'другой' } }));
+    expect(
+      screen.queryByRole('button', { name: /снять фильтр|clear tag/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('снятие чипа тега (×) → выход из тег-режима (подсказка поиска)', async () => {

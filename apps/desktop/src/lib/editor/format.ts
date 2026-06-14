@@ -312,6 +312,10 @@ const LINK_TARGET_RE = /^(https?:\/\/|mailto:|tel:|www\.)\S+$/i;
 /** Экранирует `[`/`]` в тексте ссылки, чтобы выделение со скобками не рвало `[…]`. */
 const escapeLinkText = (s: string): string => s.replace(/[[\]]/g, '\\$&');
 
+/** Экранирует `(`/`)` в адресе: в `(…)`-назначении CommonMark скобки должны быть сбалансированы или
+ *  экранированы — иначе URL вида `…/Foo_(bar)` рвёт `[](…)`. */
+const escapeLinkUrl = (s: string): string => s.replace(/[()]/g, '\\$&');
+
 /**
  * Вставка markdown-ссылки на основном выделении (EDIT-4, ⌘K). Три случая, курсор ставится туда,
  * куда логично печатать дальше:
@@ -330,7 +334,7 @@ export function insertLink(view: EditorView): boolean {
     insert = '[]()';
     caret = from + 1; // между скобок текста: [|]
   } else if (LINK_TARGET_RE.test(sel.trim())) {
-    insert = `[](${sel})`;
+    insert = `[](${escapeLinkUrl(sel)})`;
     caret = from + 1; // текст пуст, адрес = выделение: [|](url)
   } else {
     const text = escapeLinkText(sel);
