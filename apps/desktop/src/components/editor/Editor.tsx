@@ -8,6 +8,7 @@ import type { NoteRef } from '../../lib/tauri-api';
 import { useInlineStore } from '../../stores/inline';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { nexusExtensions } from './extensions';
+import { imagePaste } from '../../lib/editor/imagePaste';
 import { ghostField, inlineKeymap } from './inlineGhost';
 import { inlineToolbar } from './inlineToolbar';
 import styles from './Editor.module.css';
@@ -130,6 +131,7 @@ export function Editor({
           inlineKeymap({ onResolve: () => useInlineStore.getState().cancelInline() }),
           inlineToolbar,
           focusTracker,
+          imagePaste(),
           ...nexusExtensions({
             fetchNotes: (q) => cb.current.fetchNotes?.(q) ?? Promise.resolve([]),
             getOpenLink: () => cb.current.onOpenLink,

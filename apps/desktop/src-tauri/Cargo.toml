@@ -33,6 +33,9 @@ thiserror = { workspace = true }
 notify-debouncer-full = { workspace = true }
 pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }
+# Картинки в заметках (IMG-1): декод/энкод base64 для записи вложения и data:-URL превью. Уже в
+# Cargo.lock транзитивно (0.22) — прямой зависимостью не тянет скачивание.
+base64 = "0.22"
 # Атомарная запись заметок (SAFE-1): tmp-в-той-же-папке → fsync → rename поверх цели. Был только в
 # dev-deps (TempDir тестов) — теперь нужен и рантайму (`vault::atomic_write`).
 tempfile = { workspace = true }
