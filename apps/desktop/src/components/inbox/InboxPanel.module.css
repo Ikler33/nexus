@@ -1,0 +1,132 @@
+/* Панель «Входящие» (INBOX-1): GTD-разбор Inbox.md. По образцу TasksPanel. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: var(--space-4);
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(540px, 94vw);
+  max-height: min(660px, 86vh);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  overflow: hidden;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.spacer {
+  flex: 1;
+}
+.iconBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.iconBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+}
+.row:hover {
+  background: var(--color-surface-hover);
+}
+.time {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+.text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.actBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.actBtn:hover {
+  color: var(--color-accent);
+  background: var(--color-surface-hover);
+}
+.danger:hover {
+  color: var(--color-danger);
+}
+.empty {
+  padding: var(--space-5);
+  color: var(--color-text-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+.thinking {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-7) var(--space-4);
+}
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-5) var(--space-4);
+}
+.emptyIco {
+  color: var(--color-text-faint);
+}

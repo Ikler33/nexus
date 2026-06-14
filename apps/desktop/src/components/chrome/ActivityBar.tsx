@@ -1,5 +1,14 @@
 import type { ReactNode } from 'react';
-import { FileText, GitBranch, Home, ListChecks, Newspaper, Settings, Share2 } from 'lucide-react';
+import {
+  FileText,
+  GitBranch,
+  Home,
+  Inbox,
+  ListChecks,
+  Newspaper,
+  Settings,
+  Share2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import styles from './ActivityBar.module.css';
@@ -16,11 +25,13 @@ export function ActivityBar() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const graphOpen = useUIStore((s) => s.graphOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
+  const inboxOpen = useUIStore((s) => s.inboxOpen);
   const openHome = useUIStore((s) => s.openHome);
   const openNews = useUIStore((s) => s.openNews);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const toggleGraph = useUIStore((s) => s.toggleGraph);
   const toggleTasks = useUIStore((s) => s.toggleTasks);
+  const toggleInbox = useUIStore((s) => s.toggleInbox);
   const toggleSync = useUIStore((s) => s.toggleSync);
   const openSettings = useUIStore((s) => s.openSettings);
 
@@ -64,6 +75,12 @@ export function ActivityBar() {
           t('commands.view.tasks'),
           toggleTasks,
           tasksOpen,
+        )}
+        {btn(
+          <Inbox size={19} aria-hidden />,
+          t('commands.view.inbox'),
+          toggleInbox,
+          inboxOpen,
         )}
       </div>
       <div className={styles.spacer} />

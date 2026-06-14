@@ -29,6 +29,8 @@ interface UIState {
   goalsOpen: boolean;
   /** Открыта ли панель «Задачи» (TASK-1 — сводка всех `- [ ]` vault). */
   tasksOpen: boolean;
+  /** Открыта ли панель «Входящие» (INBOX-1 — GTD-разбор Inbox.md). */
+  inboxOpen: boolean;
   /** Открыта ли панель «Дайджест изменений» (#35, ADR-007 slice 4). */
   digestOpen: boolean;
   /** Открыта ли панель «Поиск противоречий» (#vision). */
@@ -85,6 +87,8 @@ interface UIState {
   toggleGoals: () => void;
   closeTasks: () => void;
   toggleTasks: () => void;
+  closeInbox: () => void;
+  toggleInbox: () => void;
   closeDigest: () => void;
   toggleDigest: () => void;
   closeContradictions: () => void;
@@ -119,6 +123,7 @@ export const useUIStore = create<UIState>((set) => ({
   conflictOpen: false,
   goalsOpen: false,
   tasksOpen: false,
+  inboxOpen: false,
   digestOpen: false,
   contradictionsOpen: false,
   newsOpen: false,
@@ -184,6 +189,12 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => {
       logUi('tasks:toggle', s.tasksOpen ? 'close' : 'open');
       return { tasksOpen: !s.tasksOpen };
+    }),
+  closeInbox: () => set({ inboxOpen: false }),
+  toggleInbox: () =>
+    set((s) => {
+      logUi('inbox:toggle', s.inboxOpen ? 'close' : 'open');
+      return { inboxOpen: !s.inboxOpen };
     }),
   closeDigest: () => set({ digestOpen: false }),
   toggleDigest: () =>
