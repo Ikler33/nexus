@@ -43,6 +43,16 @@ export interface NoteRef {
   title: string | null;
 }
 
+/** Задача из заметки (TASK-1, дашборд) — зеркало Rust `commands::tasks::TaskItem`. */
+export interface TaskItem {
+  path: string;
+  /** 1-based номер строки задачи. */
+  line: number;
+  checked: boolean;
+  text: string;
+  title: string | null;
+}
+
 /** Тег с количеством заметок (зеркалит Rust `tags::TagCount`, DP-2 — панель «Теги»). */
 export interface TagCount {
   name: string;
@@ -589,6 +599,11 @@ export const tauriApi = {
       const picked = await openDialog({ directory: true, multiple: false });
       return typeof picked === 'string' ? picked : null;
     },
+  },
+
+  tasks: {
+    /** Все markdown-задачи vault (TASK-1, дашборд) — скан на лету. Вне Tauri — пусто. */
+    listTasks: () => (isTauri() ? invoke<TaskItem[]>('list_tasks') : Promise.resolve([] as TaskItem[])),
   },
 
   graph: {

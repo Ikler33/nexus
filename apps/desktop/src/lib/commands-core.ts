@@ -244,6 +244,18 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleGraph(),
     }),
     commands.register({
+      // TASK-1: панель «Задачи» (сводка всех `- [ ]` vault). Mod-Shift-K свободен.
+      id: 'view.tasks',
+      title: 'Tasks',
+      titleKey: 'commands.view.tasks',
+      source: 'core',
+      defaultKey: 'mod+shift+k',
+      run: () => {
+        if (!useVaultStore.getState().info) return; // нет vault — нечего сканировать
+        useUIStore.getState().toggleTasks();
+      },
+    }),
+    commands.register({
       id: 'view.chat',
       title: 'AI chat',
       titleKey: 'commands.view.chat',

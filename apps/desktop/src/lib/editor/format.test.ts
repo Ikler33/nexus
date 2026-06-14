@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { insertLink, toggleTask, toggleTaskAtLine, toggleWrap } from './format';
+import { insertLink, parseTasks, toggleTask, toggleTaskAtLine, toggleWrap } from './format';
 
 function mkView(doc: string, from: number, to = from): EditorView {
   return new EditorView({
@@ -214,5 +214,44 @@ describe('toggleTaskAtLine (EDIT-5, клик в превью)', () => {
   it('номер строки вне диапазона → null', () => {
     expect(toggleTaskAtLine('- [ ] a', 0)).toBeNull();
     expect(toggleTaskAtLine('- [ ] a', 2)).toBeNull();
+  });
+
+  // Регресс на находку ревью: CRLF-строка тогглится и СОХРАНЯЕТ \r (не плодит смешанные переводы).
+  it('CRLF: тоггл сохраняет перевод строки', () => {
+    expect(toggleTaskAtLine('- [ ] a\r\n- [x] b\r', 1)).toBe('- [x] a\r\n- [x] b\r');
+  });
+});
+
+describe('parseTasks (TASK-1, дашборд)', () => {
+  it('извлекает задачи с 1-based номерами строк, состоянием и текстом', () => {
+    const doc = 'купить молоко\n- [ ] позвонить\n- [x] оплатить';
+    expect(parseTasks(doc)).toEqual([
+      { line: 2, checked: false, text: 'позвонить' },
+      { line: 3, checked: true, text: 'оплатить' },
+    ]);
+  });
+
+  it('маркеры */+, нумерованные, отступ, [X]', () => {
+    expect(parseTasks('* [ ] a')).toEqual([{ line: 1, checked: false, text: 'a' }]);
+    expect(parseTasks('+ [X] b')).toEqual([{ line: 1, checked: true, text: 'b' }]);
+    expect(parseTasks('1. [ ] c')).toEqual([{ line: 1, checked: false, text: 'c' }]);
+    expect(parseTasks('42) [ ] d')).toEqual([{ line: 1, checked: false, text: 'd' }]);
+    expect(parseTasks('    - [x] e')).toEqual([{ line: 1, checked: true, text: 'e' }]);
+  });
+
+  it('не-задачи игнорируются (буллет, текст, пустая, таск в цитате)', () => {
+    expect(parseTasks('- буллет\nобычный текст\n\n> - [ ] в цитате')).toEqual([]);
+  });
+
+  it('пустой документ → []', () => {
+    expect(parseTasks('')).toEqual([]);
+  });
+
+  // Регресс на находку ревью: CRLF-файлы (Windows). Rust .lines() срезает \r — фронт обязан совпасть.
+  it('CRLF: задачи распознаются, текст без \\r', () => {
+    expect(parseTasks('- [ ] a\r\n- [x] b\r')).toEqual([
+      { line: 1, checked: false, text: 'a' },
+      { line: 2, checked: true, text: 'b' },
+    ]);
   });
 });

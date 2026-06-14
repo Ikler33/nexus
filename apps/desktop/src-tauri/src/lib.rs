@@ -157,6 +157,7 @@ pub fn run() {
             commands::vault::list_versions,
             commands::vault::read_version,
             commands::vault::list_notes,
+            commands::tasks::list_tasks,
             commands::vault::resolve_note,
             commands::vault::list_tags,
             commands::vault::rescan_vault,

@@ -758,6 +758,7 @@
     "view.contradictions": "Поиск противоречий",
     "view.news": "Новости",
     "view.home": "Home",
+    "view.tasks": "Задачи",
     "format.bold": "Жирный",
     "format.italic": "Курсив",
     "format.task": "Чекбокс / таск",
@@ -781,5 +782,16 @@
     "callout": "Выноска (callout)",
     "hr": "Разделитель",
     "template": "Из шаблона…"
+  },
+  "tasks": {
+    "title": "Задачи",
+    "loading": "Собираю задачи…",
+    "empty": "Задач пока нет. Добавьте «- [ ] …» в заметку или вставьте через «/».",
+    "emptyOpen": "Открытых задач нет — всё выполнено 🎉",
+    "filterOpen": "Открытые",
+    "filterAll": "Все",
+    "refresh": "Обновить",
+    "close": "Закрыть",
+    "untitled": "(без текста)"
   }
 }

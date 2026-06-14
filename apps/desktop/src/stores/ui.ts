@@ -27,6 +27,8 @@ interface UIState {
   syncOpen: boolean;
   /** Открыта ли панель «Цели» (#35, vision). */
   goalsOpen: boolean;
+  /** Открыта ли панель «Задачи» (TASK-1 — сводка всех `- [ ]` vault). */
+  tasksOpen: boolean;
   /** Открыта ли панель «Дайджест изменений» (#35, ADR-007 slice 4). */
   digestOpen: boolean;
   /** Открыта ли панель «Поиск противоречий» (#vision). */
@@ -81,6 +83,8 @@ interface UIState {
   closeTemplates: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
+  closeTasks: () => void;
+  toggleTasks: () => void;
   closeDigest: () => void;
   toggleDigest: () => void;
   closeContradictions: () => void;
@@ -114,6 +118,7 @@ export const useUIStore = create<UIState>((set) => ({
   syncOpen: false,
   conflictOpen: false,
   goalsOpen: false,
+  tasksOpen: false,
   digestOpen: false,
   contradictionsOpen: false,
   newsOpen: false,
@@ -173,6 +178,12 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => {
       logUi('goals:toggle', s.goalsOpen ? 'close' : 'open');
       return { goalsOpen: !s.goalsOpen };
+    }),
+  closeTasks: () => set({ tasksOpen: false }),
+  toggleTasks: () =>
+    set((s) => {
+      logUi('tasks:toggle', s.tasksOpen ? 'close' : 'open');
+      return { tasksOpen: !s.tasksOpen };
     }),
   closeDigest: () => set({ digestOpen: false }),
   toggleDigest: () =>
