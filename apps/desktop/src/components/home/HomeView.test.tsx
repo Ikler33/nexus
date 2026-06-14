@@ -2,11 +2,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeView } from './HomeView';
+import { useChatStore } from '../../stores/chat';
 import { useHomeStore } from '../../stores/home';
 import { useUIStore } from '../../stores/ui';
 
 function resetStores() {
-  useUIStore.setState({ homeOpen: true, newsOpen: false });
+  useUIStore.setState({ homeOpen: true, newsOpen: false, chatOpen: false });
+  useChatStore.setState({ draft: '', pinned: [], mode: 'general', streaming: false });
   useHomeStore.setState({
     data: null,
     activity: null,
@@ -51,6 +53,29 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
     const row = await screen.findByRole('button', { name: /Embeddings/ });
     fireEvent.click(row);
     await vi.waitFor(() => expect(useUIStore.getState().homeOpen).toBe(false));
+  });
+
+  // AIP-6: «Разобрать с ИИ» на открытом вопросе → открыть чат(vault) с prefill вопроса + пином заметки.
+  it('«Разобрать с ИИ» на вопросе → чат(vault) с prefill + пин заметки', async () => {
+    render(<HomeView />);
+    await screen.findByText(/чанк-перекрытие/); // дождались загрузки открытых вопросов
+    const discuss = screen.getAllByRole('button', { name: /Разобрать с ИИ|Discuss with AI/ });
+    fireEvent.click(discuss[0]); // первый — у открытого вопроса
+    const chat = useChatStore.getState();
+    expect(chat.draft).toMatch(/чанк-перекрытие/); // композер предзаполнен текстом вопроса
+    expect(chat.mode).toBe('vault'); // режим «по заметкам»
+    expect(chat.pinned).toContain('Research/RAG Pipeline.md'); // заметка-источник закреплена
+    expect(useUIStore.getState().chatOpen).toBe(true); // чат открыт
+  });
+
+  // AIP-6: CTA «Разобрать с ИИ» под дрейфом → prefill с шаблоном расхождения (без пина).
+  it('«Разобрать с ИИ» на дрейфе → prefill шаблоном (без пина)', async () => {
+    render(<HomeView />);
+    await screen.findByText(/смещение фокуса|focus drift/i);
+    const discuss = screen.getAllByRole('button', { name: /Разобрать с ИИ|Discuss with AI/ });
+    fireEvent.click(discuss[discuss.length - 1]); // последний — CTA дрейфа (после вопросов)
+    expect(useChatStore.getState().draft).toMatch(/вернуть фокус/); // шаблон drift
+    expect(useChatStore.getState().pinned).toHaveLength(0); // у дрейфа нет одной заметки-источника
   });
 
   // «Обновить» на AI-карте ставит фоновую генерацию: thinking-оверлей до прихода результата.

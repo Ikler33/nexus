@@ -9,6 +9,7 @@ import {
   Folder,
   HelpCircle,
   LayoutGrid,
+  MessageSquare,
   Newspaper,
   PenLine,
   Plus,
@@ -25,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { renderBold } from '../../lib/render';
 import { relTime } from '../../lib/time';
 import { isTauri, tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
+import { useChatStore } from '../../stores/chat';
 import { useHomeStore } from '../../stores/home';
 import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
@@ -117,6 +119,19 @@ export function HomeView() {
   const openNote = (path: string) => {
     void useWorkspaceStore.getState().openFile(path);
     closeHome();
+  };
+
+  // AIP-6: «Разобрать с ИИ» — открыть чат с ГОТОВЫМ (правимым) вопросом + закреплённой заметкой-
+  // источником (если есть). Режим vault (по заметкам); НИЧЕГО не отправляется без подтверждения
+  // пользователя (только prefill композера, см. AIP-3). Инсайт → действие, а не просто уведомление.
+  const discussInsight = (prefill: string, pin?: string) => {
+    const ui = useUIStore.getState();
+    const chat = useChatStore.getState();
+    ui.openChat();
+    ui.setAiTab('chat');
+    chat.setMode('vault');
+    if (pin && !chat.pinned.includes(pin)) chat.togglePin(pin);
+    chat.setDraft(prefill);
   };
 
   const newNote = async () => {
@@ -660,15 +675,21 @@ export function HomeView() {
               'open_questions',
             )}
             <div className={styles.oqList}>
-              {questions.map((q) => (
-                <button
-                  type="button"
-                  key={q.question}
-                  className={styles.oq}
-                  onClick={() => openNote(q.path)}
-                >
-                  {q.question}
-                </button>
+              {questions.map((q, i) => (
+                <div key={`${q.path}-${i}`} className={styles.oqRow}>
+                  <button type="button" className={styles.oq} onClick={() => openNote(q.path)}>
+                    {q.question}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.discuss}
+                    onClick={() => discussInsight(q.question, q.path)}
+                    title={t('home.discussWithAi')}
+                    aria-label={t('home.discussWithAi')}
+                  >
+                    <MessageSquare size={13} aria-hidden />
+                  </button>
+                </div>
               ))}
               {questions.length === 0 && (
                 <div className={styles.cardEmpty}>{t('home.oqEmpty')}</div>
@@ -688,7 +709,17 @@ export function HomeView() {
               'context_drift',
             )}
             {drift ? (
-              <div className={styles.driftText}>{renderBold(drift)}</div>
+              <>
+                <div className={styles.driftText}>{renderBold(drift)}</div>
+                <button
+                  type="button"
+                  className={styles.discussCta}
+                  onClick={() => discussInsight(t('home.discussDriftPrompt', { drift }))}
+                >
+                  <MessageSquare size={13} aria-hidden />
+                  {t('home.discussWithAi')}
+                </button>
+              </>
             ) : (
               <div className={styles.cardEmpty}>{t('home.driftEmpty')}</div>
             )}

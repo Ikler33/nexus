@@ -853,6 +853,75 @@
   border-left-color: var(--color-ai);
 }
 
+/* AIP-6: ряд открытого вопроса = текст (open-note) + кнопка «Разобрать с ИИ». */
+.oqRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.oqRow .oq {
+  flex: 1;
+  min-width: 0;
+}
+/* Иконка-кнопка «Разобрать с ИИ» — приглушена, проявляется при наведении на ряд / фокусе. */
+.discuss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    background var(--motion-fast) var(--ease-standard);
+}
+.oqRow:hover .discuss,
+.discuss:focus-visible {
+  opacity: 1;
+}
+.discuss:hover {
+  color: var(--color-ai);
+  background: var(--color-surface-hover);
+}
+.discuss:focus-visible {
+  outline: 2px solid var(--color-ai);
+  outline-offset: 1px;
+}
+
+/* AIP-6: CTA «Разобрать с ИИ» под текстом дрейфа. */
+.discussCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 6px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-ai);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
+}
+.discussCta:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-ai);
+}
+.discussCta:focus-visible {
+  outline: 2px solid var(--color-ai);
+  outline-offset: 1px;
+}
+
 /* ── смещение фокуса ── */
 .driftText {
   font-family: var(--font-serif);

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatView } from './ChatView';
@@ -145,6 +145,22 @@ describe('ChatView (Ф1-8)', () => {
     render(<ChatView />);
     expect(screen.queryByRole('button', { name: /Открыть источник|Open source/ })).toBeNull();
     expect(screen.getByText(/Видно в/)).toBeInTheDocument();
+  });
+
+  it('AIP-3: draft предзаполняет композер и сбрасывается (мост «Разобрать с ИИ»)', () => {
+    useChatStore.setState({ draft: 'Разбери этот вопрос' });
+    render(<ChatView />);
+    const ta = screen.getByPlaceholderText(/Спросите о заметках/) as HTMLTextAreaElement;
+    expect(ta.value).toBe('Разбери этот вопрос');
+    expect(useChatStore.getState().draft).toBe(''); // потреблён один раз
+  });
+
+  it('AIP-3: draft НЕ затирает уже набранный текст (дописывает с новой строки)', () => {
+    render(<ChatView />);
+    const ta = screen.getByPlaceholderText(/Спросите о заметках/) as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'мой черновик' } });
+    act(() => useChatStore.getState().setDraft('вопрос инсайта'));
+    expect(ta.value).toBe('мой черновик\nвопрос инсайта'); // данные пользователя не потеряны
   });
 
   it('Enter отправляет вопрос', async () => {

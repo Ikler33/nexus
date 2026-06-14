@@ -57,10 +57,25 @@ export function ChatView() {
   const openFile = useWorkspaceStore((s) => s.openFile);
   const pinned = useChatStore((s) => s.pinned);
   const togglePin = useChatStore((s) => s.togglePin);
+  const draft = useChatStore((s) => s.draft);
+  const setDraft = useChatStore((s) => s.setDraft);
 
   const [input, setInput] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const atBottom = useRef(true);
+
+  // AIP-3: предзаполнение композера из стора (мост «Разобрать с ИИ» с Home-инсайтов). Потребляем
+  // ОДИН раз: заносим в поле, фокусируемся, сбрасываем draft (иначе ре-применится при ре-маунте/
+  // смене вкладок и затрёт то, что пользователь успел напечатать).
+  useEffect(() => {
+    if (!draft) return;
+    // Если пользователь уже что-то набрал — НЕ затираем (дописываем с новой строки): мост не должен
+    // молча терять ввод. На практике композер обычно пуст (Home закрывает чат → ChatView ремаунтится).
+    setInput((prev) => (prev.trim() ? `${prev}\n${draft}` : draft));
+    setDraft('');
+    textareaRef.current?.focus();
+  }, [draft, setDraft]);
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -232,6 +247,7 @@ export function ChatView() {
         }}
       >
         <textarea
+          ref={textareaRef}
           className={styles.input}
           value={input}
           onChange={(e) => setInput(e.target.value)}
