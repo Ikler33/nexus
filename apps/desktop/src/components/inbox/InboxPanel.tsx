@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { FilePlus, Inbox, ListChecks, RefreshCw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { discard, loadInbox, toNote, toTask } from '../../lib/inbox/actions';
 import type { InboxItem } from '../../lib/inbox/parse';
 import { useUIStore } from '../../stores/ui';
@@ -18,6 +19,7 @@ import styles from './InboxPanel.module.css';
 export function InboxPanel() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeInbox);
+  const trapRef = useFocusTrap<HTMLDivElement>(close);
   const hasVault = useVaultStore((s) => s.info != null);
   const [items, setItems] = useState<InboxItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +55,8 @@ export function InboxPanel() {
   return (
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.panel}
         role="dialog"
         aria-modal="true"

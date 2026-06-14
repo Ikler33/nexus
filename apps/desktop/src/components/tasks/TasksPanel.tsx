@@ -3,6 +3,7 @@ import { ListChecks, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { dateStamp } from '../../lib/daily';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { getActiveEditorView } from '../../lib/editor/activeView';
 import { bucketOf, parseTaskMeta } from '../../lib/editor/format';
 import { collectTasks } from '../../lib/tasks/collect';
@@ -36,6 +37,7 @@ function lineToOffset(doc: string, line: number): number {
 export function TasksPanel() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeTasks);
+  const trapRef = useFocusTrap<HTMLDivElement>(close);
   const hasVault = useVaultStore((s) => s.info != null);
   const [items, setItems] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -141,6 +143,8 @@ export function TasksPanel() {
   return (
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.panel}
         role="dialog"
         aria-modal="true"
