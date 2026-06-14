@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { FileText, Files, Hash, Home, Plus, Search, Star, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { tauriApi, type NoteRef, type TagCount } from '../../lib/tauri-api';
+import { highlightTerms } from '../../lib/highlight';
+import { tauriApi, type NoteRef, type SearchHit, type TagCount } from '../../lib/tauri-api';
 import { useStarredStore } from '../../stores/starred';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
@@ -11,10 +12,25 @@ import styles from './Sidebar.module.css';
 
 /** Панели сайдбара (DP-2, макет `sidebar.jsx`): icon-rail переключает содержимое. */
 type Panel = 'files' | 'search' | 'tags' | 'starred';
+/** Режим текстового поиска: «Заголовки» (метаданные path/title/tags) или «Везде» (гибрид по ТЕЛУ). */
+type SearchMode = 'titles' | 'content';
+/** Нормализованная строка результата: метаданные ИЛИ контент-хит (со сниппетом). `key` уникален
+ *  (chunkId у контента — один файл может дать несколько чанков). */
+type Hit = { key: string; path: string; title: string | null; snippet?: string };
 
 /** Потолок выдачи тег-фильтра — ЗЕРКАЛО `tags::notes_by_tag` LIMIT (бэкенд). При упоре в него счётчик
  *  чипа показывает «N+» (честно, без молчаливого усечения). */
 const TAG_FILTER_LIMIT = 200;
+/** Сколько контент-результатов в сайдбаре (гибрид дороже метаданных — бьёт эмбеддер). */
+const CONTENT_LIMIT = 20;
+
+const noteToHit = (n: NoteRef): Hit => ({ key: n.path, path: n.path, title: n.title });
+const searchHitToHit = (h: SearchHit): Hit => ({
+  key: `c${h.chunkId}`,
+  path: h.path,
+  title: h.title,
+  snippet: h.snippet,
+});
 
 /**
  * Сайдбар (DP-2): icon-rail (файлы / поиск / теги / избранное) + side-nav (Home, новая заметка)
@@ -25,11 +41,14 @@ export function Sidebar() {
   const { t } = useTranslation();
   const [panel, setPanel] = useState<Panel>('files');
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<NoteRef[]>([]);
+  const [results, setResults] = useState<Hit[]>([]);
   const [tags, setTags] = useState<TagCount[]>([]);
   /** Активный ТОЧНЫЙ фильтр по тегу (клик по тегу): exact-match вместо зашумлённого substring-поиска.
    *  Взаимоисключим с текстовым `query` — ввод текста выходит из тег-режима, × снимает фильтр. */
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  /** Режим текстового поиска (по умолчанию «Заголовки» — быстрый FTS; «Везде» — гибрид по телу со
+   *  сниппетами). Сохраняется между поисками/панелями/vault'ами НАМЕРЕННО (выбор пользователя). */
+  const [mode, setMode] = useState<SearchMode>('titles');
   const openFile = useWorkspaceStore((s) => s.openFile);
   const createNote = useVaultStore((s) => s.createNote);
   const vaultOpen = useVaultStore((s) => s.info != null);
@@ -38,20 +57,21 @@ export function Sidebar() {
   const starred = useStarredStore((s) => s.paths);
   const q = query.trim();
 
-  // Один эффект на оба режима поиск-панели: тег-фильтр (exact, приоритет) ИЛИ текстовый поиск (substring).
+  // Один эффект на режимы поиск-панели: тег-фильтр (exact, приоритет) ИЛИ текст — «Заголовки»
+  // (метаданные, мгновенно) / «Везде» (гибрид по телу со сниппетами, debounce).
   useEffect(() => {
     if (panel !== 'search') {
       setResults([]);
       return;
     }
     let cancelled = false;
-    const set = (r: NoteRef[]) => {
+    const set = (r: Hit[]) => {
       if (!cancelled) setResults(r);
     };
     if (tagFilter) {
       tauriApi.vault
         .notesByTag(tagFilter)
-        .then(set)
+        .then((r) => set(r.map(noteToHit)))
         .catch(() => set([]));
       return () => {
         cancelled = true;
@@ -62,16 +82,23 @@ export function Sidebar() {
       return;
     }
     const id = setTimeout(() => {
-      tauriApi.search
-        .searchVault(q)
-        .then(set)
-        .catch(() => set([]));
+      if (mode === 'content') {
+        tauriApi.search
+          .searchContent(q, { limit: CONTENT_LIMIT })
+          .then((r) => set(r.map(searchHitToHit)))
+          .catch(() => set([]));
+      } else {
+        tauriApi.search
+          .searchVault(q)
+          .then((r) => set(r.map(noteToHit)))
+          .catch(() => set([]));
+      }
     }, 150);
     return () => {
       cancelled = true;
       clearTimeout(id);
     };
-  }, [panel, q, tagFilter]);
+  }, [panel, q, tagFilter, mode]);
 
   useEffect(() => {
     if (panel !== 'tags' || !vaultOpen) return;
@@ -93,6 +120,13 @@ export function Sidebar() {
     setQuery('');
     setResults([]); // не держать прошлый срез на экране, пока грузится notesByTag (асинхронно)
     setTagFilter(name); // ТОЧНЫЙ фильтр, не текстовый поиск по имени тега
+  };
+  // Смена режима поиска: гасим прошлые результаты СРАЗУ (иначе титульный срез мелькал бы как контентный
+  // на время debounce, и наоборот — тот же принцип, что у тег→текст).
+  const setSearchMode = (m: SearchMode) => {
+    if (m === mode) return;
+    setMode(m);
+    setResults([]);
   };
   // Ввод текста в поиск выходит из тег-режима (взаимоисключимо).
   const onSearchInput = (v: string) => {
@@ -190,6 +224,29 @@ export function Sidebar() {
               </button>
             )}
           </div>
+          {/* Режим текстового поиска: «Заголовки» (метаданные) / «Везде» (по телу). Не показываем в
+              тег-режиме (там всегда точный список заметок). radiogroup (выбор источника поиска), НЕ
+              tablist — иначе в панели было бы два конкурирующих tablist (icon-rail + этот). */}
+          {!tagFilter && (
+            <div
+              className={styles.searchModes}
+              role="radiogroup"
+              aria-label={t('sidebar.searchModeLabel')}
+            >
+              {(['titles', 'content'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === m}
+                  className={`${styles.searchModeBtn} ${mode === m ? styles.searchModeOn : ''}`}
+                  onClick={() => setSearchMode(m)}
+                >
+                  {t(m === 'titles' ? 'sidebar.searchTitles' : 'sidebar.searchEverywhere')}
+                </button>
+              ))}
+            </div>
+          )}
           {tagFilter && (
             <div className={styles.tagFilter}>
               <span className={styles.tagFilterChip}>
@@ -198,7 +255,10 @@ export function Sidebar() {
                 <button
                   type="button"
                   className={styles.tagFilterClear}
-                  onClick={() => setTagFilter(null)}
+                  onClick={() => {
+                    setTagFilter(null);
+                    setResults([]); // явный сброс (как searchByTag/onSearchInput/setSearchMode) — не опираемся на !q-гейт
+                  }}
                   aria-label={t('sidebar.tagFilterClear')}
                 >
                   <X size={12} aria-hidden />
@@ -219,10 +279,16 @@ export function Sidebar() {
                 </li>
               ) : (
                 results.map((r) => (
-                  <li key={r.path}>
+                  <li key={r.key}>
                     <button className={styles.result} onClick={() => void openFile(r.path)}>
                       <span className={styles.resultName}>{noteBase(r.path)}</span>
-                      <span className={styles.resultPath}>{r.path}</span>
+                      {r.snippet !== undefined ? (
+                        <span className={styles.resultSnippet}>
+                          {highlightTerms(r.snippet, q, styles.mark)}
+                        </span>
+                      ) : (
+                        <span className={styles.resultPath}>{r.path}</span>
+                      )}
                     </button>
                   </li>
                 ))
