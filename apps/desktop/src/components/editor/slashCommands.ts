@@ -85,6 +85,9 @@ export const SLASH_ITEMS: SlashItem[] = [
   { id: 'date', labelKey: 'slash.date', apply: inlineText(() => dateStamp(new Date())) },
   // TASK-2: дедлайн задачи — маркер 📅 + сегодня (распознаётся parseTaskMeta в дашборде задач).
   { id: 'due', labelKey: 'slash.due', apply: inlineText(() => `📅 ${dateStamp(new Date())} `) },
+  // RECUR-1: повтор задачи — маркер 🔁 + интервал; при отметке порождается новая копия с продвинутым
+  // дедлайном (parseRecurrence + toggleTaskAtLine). Курсор за словом «weekly» — легко заменить.
+  { id: 'recur', labelKey: 'slash.recur', apply: inlineText(() => '🔁 weekly ') },
   { id: 'link', labelKey: 'slash.link', apply: inlineText(() => '[]()', 1) },
   { id: 'callout', labelKey: 'slash.callout', apply: blockPrefix('> [!note] ') },
   { id: 'hr', labelKey: 'slash.hr', apply: blockPrefix('---') },

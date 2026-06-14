@@ -108,12 +108,29 @@ export function toggleTask(view: EditorView): boolean {
 // хвостовой `\r` в group3 → тоггл сохраняет перевод строки, а parseTasks обрезает его через `.trim()`.
 const TASK_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\][^\n]*)$/;
 
-export function toggleTaskAtLine(doc: string, line: number): string | null {
+export function toggleTaskAtLine(doc: string, line: number, today?: string): string | null {
   const lines = doc.split('\n');
   if (line < 1 || line > lines.length) return null;
-  const m = TASK_LINE_RE.exec(lines[line - 1]);
+  const cur = lines[line - 1];
+  const m = TASK_LINE_RE.exec(cur);
   if (!m) return null;
-  lines[line - 1] = m[1] + (m[2] === ' ' ? 'x' : ' ') + m[3];
+  const checking = m[2] === ' '; // unchecked → checked
+  const toggled = m[1] + (checking ? 'x' : ' ') + m[3];
+  // RECUR-1: завершение повторяющейся задачи (🔁) — текущая помечается done (исторический след с её
+  // дедлайном), а НОВАЯ открытая копия с продвинутым дедлайном вставляется ВЫШЕ. Только при отметке
+  // (unchecked→checked); снятие галки или не-рекуррентный таск — простой флип (как было). `today` —
+  // база для повторов без дедлайна (инъекция для тестов; по умолчанию — сегодня).
+  if (checking) {
+    const recur = parseRecurrence(cur);
+    if (recur) {
+      const base = parseTaskMeta(cur).due ?? today ?? fmtDate(new Date());
+      const next = withDue(cur, addInterval(base, recur)); // копия cur ([ ]) с новым дедлайном
+      lines[line - 1] = toggled;
+      lines.splice(line - 1, 0, next);
+      return lines.join('\n');
+    }
+  }
+  lines[line - 1] = toggled;
   return lines.join('\n');
 }
 
@@ -199,6 +216,81 @@ export function parseTaskMeta(text: string): TaskMeta {
 function addDays(stamp: string, n: number): string {
   const [y, m, d] = stamp.split('-').map(Number);
   return fmtDate(new Date(y, m - 1, d + n));
+}
+
+/** Единица повторения задачи (RECUR-1). */
+type RecurUnit = 'day' | 'week' | 'month' | 'year';
+/** Распознанный повтор: кратность `n` (≥1) × единица. */
+export interface Recurrence {
+  n: number;
+  unit: RecurUnit;
+}
+/** Повтор `🔁` в тексте задачи: `daily`/`weekly`/`monthly`/`yearly` или `every N day|week|month|year(s)`
+ *  (англ. ключевые слова — как в Obsidian Tasks; регистронезависимо, пробел после 🔁 необязателен). */
+const RECUR_RE = /🔁\s*(?:every\s+(\d+)\s+(day|week|month|year)s?|(daily|weekly|monthly|yearly))/i;
+const RECUR_WORD: Record<string, RecurUnit> = {
+  daily: 'day',
+  weekly: 'week',
+  monthly: 'month',
+  yearly: 'year',
+};
+
+/** Верхняя граница кратности повтора: отсекает абсурд (`every 99999999 months`), который переполнил бы
+ *  Date и дал бы `NaN-NaN-NaN` в файле. 10000 покрывает любой реальный интервал, оставаясь в диапазоне Date. */
+const MAX_RECUR_N = 10_000;
+
+/** Извлекает повтор из текста задачи (RECUR-1) или `null`, если 🔁-маркера нет. */
+export function parseRecurrence(text: string): Recurrence | null {
+  const m = RECUR_RE.exec(text);
+  if (!m) return null;
+  if (m[1]) {
+    const n = Math.min(MAX_RECUR_N, Math.max(1, Number(m[1])));
+    return { n, unit: m[2].toLowerCase() as RecurUnit };
+  }
+  return { n: 1, unit: RECUR_WORD[m[3].toLowerCase()] };
+}
+
+/** Устанавливает абсолютный индекс месяца `targetMonth` (0-based от эпохи Date, допускает >11/<0 —
+ *  переезд в годы), КЛЕМПЯ день до последнего дня целевого месяца: Jan 31 +1мес → Feb 28 (не Mar 3),
+ *  Feb 29 +1год → Feb 28. Как в Obsidian Tasks — серия не «перескакивает» переполнившийся месяц. */
+function setMonthClamped(dt: Date, targetMonth: number): void {
+  const day = dt.getDate();
+  dt.setDate(1); // иначе setMonth переполнил бы день и «переехал» вперёд
+  dt.setMonth(targetMonth);
+  const lastDay = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+  dt.setDate(Math.min(day, lastDay));
+}
+
+/** Продвигает ISO-дату `stamp` на интервал `recur` (через Date — корректно для месяцев/лет/високосных).
+ *  При невалидном результате (теоретическое переполнение) возвращает `stamp` без сдвига — лучше не
+ *  продвинуть, чем записать в файл битую дату. */
+function addInterval(stamp: string, recur: Recurrence): string {
+  const [y, m, d] = stamp.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  switch (recur.unit) {
+    case 'day':
+      dt.setDate(dt.getDate() + recur.n);
+      break;
+    case 'week':
+      dt.setDate(dt.getDate() + 7 * recur.n);
+      break;
+    case 'month':
+      setMonthClamped(dt, dt.getMonth() + recur.n);
+      break;
+    case 'year':
+      setMonthClamped(dt, dt.getMonth() + 12 * recur.n);
+      break;
+  }
+  return Number.isNaN(dt.getTime()) ? stamp : fmtDate(dt);
+}
+
+/** Возвращает строку задачи с дедлайном `newDue`: заменяет дату в существующем токене дедлайна
+ *  (📅/@due(/due:) — сохраняя форму) либо дописывает `📅 newDue` (перед хвостовым `\r`, если есть). */
+function withDue(line: string, newDue: string): string {
+  if (DUE_RE.test(line)) {
+    return line.replace(DUE_RE, (full) => full.replace(/\d{4}-\d{1,2}-\d{1,2}/, newDue));
+  }
+  return line.replace(/(\r?)$/, ` 📅 ${newDue}$1`);
 }
 
 /** Временной бакет задачи по дедлайну относительно `today` (обе — нормализ. 'YYYY-MM-DD', сравнение

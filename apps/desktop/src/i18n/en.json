@@ -767,6 +767,7 @@
     "table": "Table",
     "date": "Date",
     "due": "Deadline (📅)",
+    "recur": "Repeat (🔁)",
     "link": "Link",
     "callout": "Callout",
     "hr": "Divider",

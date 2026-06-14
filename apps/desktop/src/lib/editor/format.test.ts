@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bucketOf,
   insertLink,
+  parseRecurrence,
   parseTaskMeta,
   parseTasks,
   toggleTask,
@@ -227,6 +228,87 @@ describe('toggleTaskAtLine (EDIT-5, клик в превью)', () => {
   // Регресс на находку ревью: CRLF-строка тогглится и СОХРАНЯЕТ \r (не плодит смешанные переводы).
   it('CRLF: тоггл сохраняет перевод строки', () => {
     expect(toggleTaskAtLine('- [ ] a\r\n- [x] b\r', 1)).toBe('- [x] a\r\n- [x] b\r');
+  });
+});
+
+describe('parseRecurrence (RECUR-1)', () => {
+  it('ключевые слова daily/weekly/monthly/yearly', () => {
+    expect(parseRecurrence('дело 🔁 daily')).toEqual({ n: 1, unit: 'day' });
+    expect(parseRecurrence('дело 🔁 weekly')).toEqual({ n: 1, unit: 'week' });
+    expect(parseRecurrence('дело 🔁 monthly')).toEqual({ n: 1, unit: 'month' });
+    expect(parseRecurrence('дело 🔁 yearly')).toEqual({ n: 1, unit: 'year' });
+  });
+
+  it('форма «every N unit(s)» + регистронезависимость + пробел после 🔁 необязателен', () => {
+    expect(parseRecurrence('🔁 every 2 weeks')).toEqual({ n: 2, unit: 'week' });
+    expect(parseRecurrence('🔁 EVERY 3 Days')).toEqual({ n: 3, unit: 'day' });
+    expect(parseRecurrence('🔁every 1 month')).toEqual({ n: 1, unit: 'month' });
+  });
+
+  it('без 🔁 или с неизвестным интервалом → null', () => {
+    expect(parseRecurrence('обычная задача')).toBeNull();
+    expect(parseRecurrence('🔁 непонятно')).toBeNull();
+    expect(parseRecurrence('weekly без эмодзи')).toBeNull();
+  });
+});
+
+describe('toggleTaskAtLine: рекуррентность (RECUR-1)', () => {
+  it('завершение повтора с дедлайном → done + новая открытая копия с продвинутым дедлайном ВЫШЕ', () => {
+    const out = toggleTaskAtLine('- [ ] полить 🔁 weekly 📅 2026-06-14', 1);
+    expect(out).toBe('- [ ] полить 🔁 weekly 📅 2026-06-21\n- [x] полить 🔁 weekly 📅 2026-06-14');
+  });
+
+  it('месячный/годовой интервалы продвигают дедлайн, КЛЕМПЯ день до конца месяца (не перескок)', () => {
+    // Jan 31 + 1 месяц → 28 фев (а НЕ 3 мар — серия не перепрыгивает февраль).
+    expect(toggleTaskAtLine('- [ ] x 🔁 monthly 📅 2026-01-31', 1)).toBe(
+      '- [ ] x 🔁 monthly 📅 2026-02-28\n- [x] x 🔁 monthly 📅 2026-01-31',
+    );
+    // Feb 29 (високосный) + 1 год → 28 фев следующего (а НЕ 1 мар).
+    expect(toggleTaskAtLine('- [ ] x 🔁 yearly 📅 2024-02-29', 1)).toBe(
+      '- [ ] x 🔁 yearly 📅 2025-02-28\n- [x] x 🔁 yearly 📅 2024-02-29',
+    );
+  });
+
+  it('месяц с достаточным числом дней не клемпится (15-е остаётся 15-м)', () => {
+    expect(toggleTaskAtLine('- [ ] x 🔁 monthly 📅 2026-01-15', 1)).toBe(
+      '- [ ] x 🔁 monthly 📅 2026-02-15\n- [x] x 🔁 monthly 📅 2026-01-15',
+    );
+  });
+
+  it('абсурдный интервал клемпится (n≤10000) — без NaN-NaN-NaN в файле', () => {
+    const out = toggleTaskAtLine('- [ ] x 🔁 every 99999999 months 📅 2026-01-15', 1);
+    expect(out).not.toContain('NaN');
+    expect(out?.split('\n')[0]).toMatch(/📅 \d{4}-\d{2}-\d{2}$/); // валидная дата у новой копии
+  });
+
+  it('повтор БЕЗ дедлайна → новый дедлайн = today + интервал (today инъецируется)', () => {
+    expect(toggleTaskAtLine('- [ ] стендап 🔁 daily', 1, '2026-06-14')).toBe(
+      '- [ ] стендап 🔁 daily 📅 2026-06-15\n- [x] стендап 🔁 daily',
+    );
+  });
+
+  it('снятие галки с завершённого повтора → простой флип (новой копии нет)', () => {
+    expect(toggleTaskAtLine('- [x] полить 🔁 weekly 📅 2026-06-14', 1)).toBe(
+      '- [ ] полить 🔁 weekly 📅 2026-06-14',
+    );
+  });
+
+  it('не-рекуррентный таск → простой флип (регресс: рекуррентность не задевает обычные)', () => {
+    expect(toggleTaskAtLine('- [ ] обычное дело 📅 2026-06-14', 1)).toBe(
+      '- [x] обычное дело 📅 2026-06-14',
+    );
+  });
+
+  it('форма @due(...) сохраняется при продвижении', () => {
+    expect(toggleTaskAtLine('- [ ] x 🔁 daily @due(2026-06-14)', 1)).toBe(
+      '- [ ] x 🔁 daily @due(2026-06-15)\n- [x] x 🔁 daily @due(2026-06-14)',
+    );
+  });
+
+  it('CRLF: новый дедлайн дописывается ПЕРЕД \\r', () => {
+    expect(toggleTaskAtLine('- [ ] x 🔁 daily\r', 1, '2026-06-14')).toBe(
+      '- [ ] x 🔁 daily 📅 2026-06-15\r\n- [x] x 🔁 daily\r',
+    );
   });
 });
 
