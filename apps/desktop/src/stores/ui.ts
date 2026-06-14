@@ -178,23 +178,28 @@ export const useUIStore = create<UIState>((set) => ({
   templatesOpen: false,
   openTemplates: () => set({ templatesOpen: true }),
   closeTemplates: () => set({ templatesOpen: false }),
+  // Модальные оверлеи goals/tasks/inbox взаимоисключаемы: открытие одного закрывает остальные —
+  // иначе два focus-trap-диалога стекаются (клавиатурный капкан между ними, P9-ревью #5).
   closeGoals: () => set({ goalsOpen: false }),
   toggleGoals: () =>
     set((s) => {
-      logUi('goals:toggle', s.goalsOpen ? 'close' : 'open');
-      return { goalsOpen: !s.goalsOpen };
+      const open = !s.goalsOpen;
+      logUi('goals:toggle', open ? 'open' : 'close');
+      return open ? { goalsOpen: true, tasksOpen: false, inboxOpen: false } : { goalsOpen: false };
     }),
   closeTasks: () => set({ tasksOpen: false }),
   toggleTasks: () =>
     set((s) => {
-      logUi('tasks:toggle', s.tasksOpen ? 'close' : 'open');
-      return { tasksOpen: !s.tasksOpen };
+      const open = !s.tasksOpen;
+      logUi('tasks:toggle', open ? 'open' : 'close');
+      return open ? { tasksOpen: true, goalsOpen: false, inboxOpen: false } : { tasksOpen: false };
     }),
   closeInbox: () => set({ inboxOpen: false }),
   toggleInbox: () =>
     set((s) => {
-      logUi('inbox:toggle', s.inboxOpen ? 'close' : 'open');
-      return { inboxOpen: !s.inboxOpen };
+      const open = !s.inboxOpen;
+      logUi('inbox:toggle', open ? 'open' : 'close');
+      return open ? { inboxOpen: true, goalsOpen: false, tasksOpen: false } : { inboxOpen: false };
     }),
   closeDigest: () => set({ digestOpen: false }),
   toggleDigest: () =>

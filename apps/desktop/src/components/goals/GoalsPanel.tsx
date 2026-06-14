@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { RefreshCw, Target, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useGoalsStore } from '../../stores/goals';
 import { BrandThinking } from '../chrome/BrandThinking';
 import { useUIStore } from '../../stores/ui';
@@ -16,6 +17,7 @@ import styles from './GoalsPanel.module.css';
 export function GoalsPanel() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeGoals);
+  const trapRef = useFocusTrap<HTMLDivElement>(close);
   const items = useGoalsStore((s) => s.items);
   const loading = useGoalsStore((s) => s.loading);
   const load = useGoalsStore((s) => s.load);
@@ -33,6 +35,8 @@ export function GoalsPanel() {
   return (
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.panel}
         role="dialog"
         aria-modal="true"
