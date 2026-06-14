@@ -184,6 +184,7 @@ pub fn run() {
             commands::news::get_news,
             commands::news::news_mark_read,
             commands::news::news_to_note,
+            commands::news::news_related,
             commands::news::refresh_news,
             commands::news::get_news_config,
             commands::news::set_news_config,

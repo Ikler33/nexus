@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import { logUi } from '../../lib/debug-log';
 import { tauriApi, type NewsArticle, type NewsItem } from '../../lib/tauri-api';
+import { RelatedNotesSection } from './RelatedNotesSection';
 import styles from './NewsView.module.css';
 
 /** Состояние загрузки статьи (поверх DTO бэкенда). */
@@ -209,6 +210,8 @@ export function NewsReader(props: {
         )}
 
         {item.summaryRu && <div className={styles.readerLede}>{item.summaryRu}</div>}
+
+        <RelatedNotesSection itemId={item.id} />
 
         {article === 'loading' && (
           <div className={styles.readerLoading}>

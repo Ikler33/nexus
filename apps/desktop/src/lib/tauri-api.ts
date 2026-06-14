@@ -1097,6 +1097,13 @@ export const tauriApi = {
     /** «Сократить» (NF-6): 3–6 RU-тезисов по тексту статьи. */
     summarize: (id: number): Promise<string[]> =>
       isTauri() ? invoke<string[]>('news_summarize', { id }) : mockNews.summarize(id),
+
+    /** FLOW: заметки vault, релевантные новости (RAG по заголовку+резюме). Заметка, созданная из
+     *  этой же новости (frontmatter `source`==url), отфильтрована. Пусто, если RAG/индекс недоступны. */
+    related: (id: number, limit?: number): Promise<LinkSuggestion[]> =>
+      isTauri()
+        ? invoke<LinkSuggestion[]>('news_related', { id, limit })
+        : mockNews.related(id, limit),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).

@@ -547,6 +547,10 @@
       "allowing": "Allowing…",
       "allowHint": "Only this host becomes trusted. Remove it from the feed's ⚙ menu."
     },
+    "related": {
+      "title": "Related notes",
+      "openFailed": "Couldn't open the note — it may have been moved or deleted."
+    },
     "gathering": "Gathering news…",
     "emptyTitle": "No fresh news",
     "emptySub": "Auto-run happens once a day while the vault is open. You can refresh manually.",

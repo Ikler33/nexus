@@ -3,7 +3,15 @@
  * семантикой, что бэкенд-команды NF-3 (страница/прочитано/в заметку/конфиг). Контент
  * зеркалит мок дизайн-прототипа (`news.jsx` хендоффа) — превью сверяется с макетом 1:1.
  */
-import type { NewsArticle, NewsConfig, NewsItem, NewsPage, NewsRun, NewsSource } from '../tauri-api';
+import type {
+  LinkSuggestion,
+  NewsArticle,
+  NewsConfig,
+  NewsItem,
+  NewsPage,
+  NewsRun,
+  NewsSource,
+} from '../tauri-api';
 
 const NOW = Math.floor(Date.now() / 1000);
 const H = 3600;
@@ -239,4 +247,37 @@ export async function summarize(id: number): Promise<string[]> {
   await new Promise((r) => setTimeout(r, 900)); // эмуляция LLM
   const it = items.find((x) => x.id === id);
   return SUMMARIES[id] ?? (it?.summaryRu ? [it.summaryRu] : []);
+}
+
+/** Связанные заметки vault (FLOW): мок отдаёт пару карточек для известных новостей, пусто — иначе.
+ *  Пути указывают на РЕАЛЬНЫЕ заметки demo-vault (см. mock/vault.ts) — клик в превью открывает
+ *  настоящий контент, а не плейсхолдер, чтобы дизайн-приёмка FLOW была честной. */
+const RELATED: Record<number, LinkSuggestion[]> = {
+  1: [
+    {
+      path: 'Projects/Roadmap.md',
+      title: 'Roadmap',
+      score: 0.031,
+      reason: '…план проекта Alpha и приоритеты ближайших итераций…',
+    },
+    {
+      path: 'Projects/Alpha/Spec.md',
+      title: 'Alpha Spec',
+      score: 0.021,
+      reason: '…спецификация модуля и связи с дорожной картой…',
+    },
+  ],
+  2: [
+    {
+      path: 'Notes/Idea.md',
+      title: 'Idea',
+      score: 0.027,
+      reason: '…идея с тегом #idea и ссылкой на протокол встречи…',
+    },
+  ],
+};
+
+export async function related(id: number, limit?: number): Promise<LinkSuggestion[]> {
+  await new Promise((r) => setTimeout(r, 400)); // эмуляция RAG-поиска
+  return (RELATED[id] ?? []).slice(0, limit ?? 6);
 }
