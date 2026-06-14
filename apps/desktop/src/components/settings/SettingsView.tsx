@@ -15,7 +15,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { changeLocale } from '../../i18n/setup';
-import { commands, eventToCombo, formatCombo } from '../../lib/commands';
+import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import type { EgressState, WebSearchConfig } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
@@ -831,6 +831,7 @@ function HotkeysSection() {
                   <kbd
                     className={`${styles.hkKey} ${conflict ? styles.hkConflict : ''}`}
                     title={conflict ? t('settings.hk.conflict') : undefined}
+                    aria-label={key ? spellCombo(key) : undefined}
                   >
                     {key ? formatCombo(key) : '—'}
                   </kbd>

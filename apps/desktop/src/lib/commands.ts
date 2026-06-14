@@ -77,6 +77,25 @@ export function formatCombo(combo: string): string {
     .join(mac ? '' : '+');
 }
 
+/** Произносимая метка сочетания для скринридера: ⌘⇧P читается как «Cmd Shift P» (не «⌘⇧P»). */
+const SPELL: Record<string, string> = {
+  mod: 'Mod',
+  meta: 'Cmd',
+  cmd: 'Cmd',
+  command: 'Cmd',
+  ctrl: 'Ctrl',
+  control: 'Ctrl',
+  shift: 'Shift',
+  alt: 'Alt',
+  option: 'Alt',
+};
+export function spellCombo(combo: string): string {
+  return combo
+    .split('+')
+    .map((p) => SPELL[p.trim().toLowerCase()] ?? p.trim().toUpperCase())
+    .join(' ');
+}
+
 /** Ключ localStorage для пользовательского ремапа хоткеев (combo → id). */
 const HOTKEYS_KEY = 'nexus.hotkeys.v1';
 

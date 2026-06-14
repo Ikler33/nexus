@@ -8,7 +8,7 @@ import {
   TextSearch,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { commands, type Command, formatCombo } from '../../lib/commands';
+import { commands, type Command, formatCombo, spellCombo } from '../../lib/commands';
 import { highlightTerms } from '../../lib/highlight';
 import { tauriApi, type NoteRef, type SearchHit } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
@@ -231,7 +231,11 @@ export function CommandPalette() {
       ) : row.kind === 'file' ? (
         <span className={styles.hintPath}>{row.note.path}</span>
       ) : row.kind === 'command' ? (
-        row.cmd.defaultKey && <kbd className={styles.kbd}>{formatCombo(row.cmd.defaultKey)}</kbd>
+        row.cmd.defaultKey && (
+          <kbd className={styles.kbd} aria-label={spellCombo(row.cmd.defaultKey)}>
+            {formatCombo(row.cmd.defaultKey)}
+          </kbd>
+        )
       ) : null}
     </li>
   );

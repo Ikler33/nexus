@@ -1,5 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { commands, eventToCombo, normalizeCombo } from './commands';
+import { commands, eventToCombo, normalizeCombo, spellCombo } from './commands';
+
+describe('spellCombo (a11y: произносимая метка хоткея)', () => {
+  it('разворачивает модификаторы в слова для скринридера', () => {
+    expect(spellCombo('mod+shift+p')).toBe('Mod Shift P');
+    expect(spellCombo('meta+/')).toBe('Cmd /');
+    expect(spellCombo('ctrl+alt+k')).toBe('Ctrl Alt K');
+  });
+});
 
 // jsdom под node 25 не отдаёт рабочий localStorage (нативный экспериментальный global мешает),
 // а реестр хоткеев в него персистит. In-memory localStorage для теста персиста (стартует пустым).

@@ -170,6 +170,15 @@ describe('insertLink (EDIT-4)', () => {
     v.destroy();
   });
 
+  it('скобки в URL экранируются — не рвут `[](…)` (бэклог-нит EDIT-4)', () => {
+    const url = 'https://en.wikipedia.org/wiki/Foo_(bar)';
+    const v = mkView(url, 0, url.length);
+    insertLink(v);
+    // `(`/`)` в адресе → `\(`/`\)`: CommonMark разрешает экранированные скобки в `(…)`-назначении.
+    expect(v.state.doc.toString()).toBe('[](https://en.wikipedia.org/wiki/Foo_\\(bar\\))');
+    v.destroy();
+  });
+
   it('выделение с пробелом — не URL, идёт в текст', () => {
     const v = mkView('два слова', 0, 9);
     insertLink(v);

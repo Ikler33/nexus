@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -154,6 +155,19 @@ describe('ChatView (Ф1-8)', () => {
     const ta = screen.getByPlaceholderText(/Спросите о заметках/) as HTMLTextAreaElement;
     expect(ta.value).toBe('Разбери этот вопрос');
     expect(useChatStore.getState().draft).toBe(''); // потреблён один раз
+  });
+
+  it('AIP-3: под StrictMode draft потребляется ОДИН раз (ref-гард, не дублируется)', () => {
+    // StrictMode дважды прогоняет mount-эффект с тем же draft ДО того, как setDraft('') долетит до
+    // стора → без ref-гарда prefill дописался бы дважды («инсайт\nинсайт»).
+    useChatStore.setState({ draft: 'инсайт' });
+    render(
+      <StrictMode>
+        <ChatView />
+      </StrictMode>,
+    );
+    const ta = screen.getByPlaceholderText(/Спросите о заметках/) as HTMLTextAreaElement;
+    expect(ta.value).toBe('инсайт');
   });
 
   it('AIP-3: draft НЕ затирает уже набранный текст (дописывает с новой строки)', () => {

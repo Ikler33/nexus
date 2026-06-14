@@ -2,29 +2,10 @@ import { Keyboard, X } from 'lucide-react';
 import { type TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
-import { commands, formatCombo } from '../../lib/commands';
+import { commands, formatCombo, spellCombo } from '../../lib/commands';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useUIStore } from '../../stores/ui';
 import styles from './HotkeysCheatsheet.module.css';
-
-/** Произносимая метка сочетания для скринридера: ⌘⇧P читается как «Command Shift P» (не «⌘⇧P»). */
-const SPELL: Record<string, string> = {
-  mod: 'Mod',
-  meta: 'Cmd',
-  cmd: 'Cmd',
-  command: 'Cmd',
-  ctrl: 'Ctrl',
-  control: 'Ctrl',
-  shift: 'Shift',
-  alt: 'Alt',
-  option: 'Alt',
-};
-function spellCombo(combo: string): string {
-  return combo
-    .split('+')
-    .map((p) => SPELL[p.trim().toLowerCase()] ?? p.trim().toUpperCase())
-    .join(' ');
-}
 
 /**
  * POLISH «шпаргалка хоткеев» (⌘/): overlay-карта всех горячих клавиш. Источник истины —
