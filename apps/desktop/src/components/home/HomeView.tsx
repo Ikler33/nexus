@@ -655,26 +655,47 @@ export function HomeView() {
                 <Clock size={15} aria-hidden />
                 {t('home.staleTitle')}
               </div>
+              {generating.stale_radar && (
+                <span className={styles.staleEnriching}>{t('home.staleEnriching')}</span>
+              )}
             </div>
             <div className={styles.hList}>
               {stale.slice(0, 5).map((s) => (
-                <button
-                  type="button"
-                  key={s.path}
-                  className={styles.staleRow}
-                  onClick={() => openNote(s.path)}
-                >
-                  <i
-                    className={`${styles.staleDot} ${s.severity === 'red' ? styles.hot : styles.warm}`}
-                  />
-                  <span className={styles.staleName}>{noteName(s.title, s.path)}</span>
-                  <span className={styles.staleDays}>
-                    {t('home.staleDays', { count: s.ageDays })}
-                  </span>
-                  {s.action && (
-                    <span className={styles.staleDo}>{t(`home.staleDo.${s.action}`)}</span>
-                  )}
-                </button>
+                <div key={s.path} className={styles.staleRow}>
+                  <button
+                    type="button"
+                    className={styles.staleMain}
+                    onClick={() => openNote(s.path)}
+                  >
+                    <i
+                      className={`${styles.staleDot} ${s.severity === 'red' ? styles.hot : styles.warm}`}
+                    />
+                    <span className={styles.staleName}>{noteName(s.title, s.path)}</span>
+                    <span className={styles.staleDays}>
+                      {t('home.staleDays', { count: s.ageDays })}
+                    </span>
+                    {s.action && (
+                      <span className={styles.staleDo}>{t(`home.staleDo.${s.action}`)}</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.discuss}
+                    onClick={() =>
+                      discussInsight(
+                        t('home.staleDiscussPrompt', {
+                          name: noteName(s.title, s.path),
+                          count: s.ageDays,
+                        }),
+                        s.path,
+                      )
+                    }
+                    title={t('home.discussWithAi')}
+                    aria-label={t('home.discussWithAi')}
+                  >
+                    <MessageSquare size={13} aria-hidden />
+                  </button>
+                </div>
               ))}
               {stale.length === 0 && (
                 <div className={styles.cardEmpty}>{t('home.staleEmpty')}</div>

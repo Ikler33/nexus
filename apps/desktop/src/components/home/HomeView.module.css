@@ -765,21 +765,28 @@
 }
 
 /* ── stale radar ── */
+/* AIP-хвост: ряд = заметка (open-note) + кнопка «Разобрать с ИИ» (как oqRow). */
 .staleRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 -8px;
+}
+.staleMain {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 11px;
   padding: 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  margin: 0 -8px;
   border: none;
   background: none;
   text-align: left;
-  width: 100%;
   transition: background var(--dur-1) var(--ease-out);
 }
-.staleRow:hover {
+.staleMain:hover {
   background: var(--color-surface-hover);
 }
 .staleDot {
@@ -821,8 +828,19 @@
   opacity: 0;
   transition: opacity var(--motion-fast) var(--ease-standard);
 }
-.staleRow:hover .staleDo {
+.staleMain:hover .staleDo {
   opacity: 1;
+}
+/* Кнопка «Разобрать с ИИ» в ряду stale — проявляется при наведении на ряд / фокусе (как .discuss). */
+.staleRow:hover .discuss {
+  opacity: 1;
+}
+/* Тонкий индикатор «обогащаю…» в шапке карточки (проактивный слой 2 на открытии). */
+.staleEnriching {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--color-ai);
+  opacity: 0.8;
 }
 
 /* ── открытые вопросы ── */

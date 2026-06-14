@@ -76,10 +76,20 @@ export const useHomeStore = create<HomeState>((set, get) => ({
   syncGenerating: async () => {
     try {
       const jobs = await tauriApi.scheduler.activeJobs();
+      const nowSec = Date.now() / 1000;
       const active: Record<string, boolean> = {};
       for (const j of jobs) {
+        // Будущие recurring-джобы (runAt в будущем) НЕ «генерируются сейчас»: после прогона хендлер
+        // переармливает future-pending джобу, и без этого фильтра она переустанавливала бы флаг сразу
+        // после снятия → спиннер залипал бы (класс бага #63 «ready vs future», adversarial-ревью;
+        // лечит сразу и open_questions/context_drift, и stale). Считаем только running/готовые.
+        if (j.state !== 'running' && j.runAt > nowSec) continue;
         if (j.kind.startsWith(WIDGET_KIND_PREFIX)) {
           active[j.kind.slice(WIDGET_KIND_PREFIX.length)] = true;
+        } else if (j.kind === 'stale_radar') {
+          // Stale radar — отдельный kind (не `home_widget:*`), но тот же индикатор «обогащаю…»
+          // (AIP-хвост: слой 2 теперь сидится проактивно на открытии).
+          active.stale_radar = true;
         }
       }
       if (Object.keys(active).length) {

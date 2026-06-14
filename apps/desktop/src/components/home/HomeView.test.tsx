@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeView } from './HomeView';
@@ -58,14 +58,28 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
   // AIP-6: «Разобрать с ИИ» на открытом вопросе → открыть чат(vault) с prefill вопроса + пином заметки.
   it('«Разобрать с ИИ» на вопросе → чат(vault) с prefill + пин заметки', async () => {
     render(<HomeView />);
-    await screen.findByText(/чанк-перекрытие/); // дождались загрузки открытых вопросов
-    const discuss = screen.getAllByRole('button', { name: /Разобрать с ИИ|Discuss with AI/ });
-    fireEvent.click(discuss[0]); // первый — у открытого вопроса
+    const oq = await screen.findByText(/чанк-перекрытие/); // дождались загрузки открытых вопросов
+    // Кнопка discuss именно этого вопроса (у stale-заметок теперь тоже есть discuss — AIP-хвост).
+    const row = oq.closest('[class*="oqRow"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /Разобрать с ИИ|Discuss with AI/ }));
     const chat = useChatStore.getState();
     expect(chat.draft).toMatch(/чанк-перекрытие/); // композер предзаполнен текстом вопроса
     expect(chat.mode).toBe('vault'); // режим «по заметкам»
     expect(chat.pinned).toContain('Research/RAG Pipeline.md'); // заметка-источник закреплена
     expect(useUIStore.getState().chatOpen).toBe(true); // чат открыт
+  });
+
+  // AIP-хвост: «Разобрать с ИИ» на stale-заметке → чат(vault) с prefill-промптом + пином заметки.
+  it('«Разобрать с ИИ» на stale-заметке → чат(vault) + пин устаревшей заметки', async () => {
+    render(<HomeView />);
+    const note = await screen.findByText('Roadmap Q1'); // первая stale-заметка мока
+    const row = note.closest('[class*="staleRow"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /Разобрать с ИИ|Discuss with AI/ }));
+    const chat = useChatStore.getState();
+    expect(chat.mode).toBe('vault');
+    expect(chat.draft).toMatch(/Roadmap Q1/); // промпт упоминает заметку
+    expect(chat.pinned).toContain('Projects/Roadmap Q1.md'); // устаревшая заметка закреплена
+    expect(useUIStore.getState().chatOpen).toBe(true);
   });
 
   // AIP-6: CTA «Разобрать с ИИ» под дрейфом → prefill с шаблоном расхождения (без пина).

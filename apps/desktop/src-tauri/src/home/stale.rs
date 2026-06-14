@@ -382,6 +382,35 @@ pub async fn scan(reader: &ReadPool, now: i64) -> DbResult<Vec<StaleNote>> {
         .collect())
 }
 
+/// Есть ли среди топ-устаревших заметок такие, что ещё НЕ обогащены И ОБОГАЩАЕМЫ (есть сниппет)?
+/// Гейт проактивного сида на открытии vault (AIP-хвост): не гоняем LLM, если всё уже свежо обогащено
+/// (per-note кэш валиден). НЕ через `home_widgets`/`is_overdue` (stale — не виджет, свой kind).
+/// ВАЖНО (adversarial-ревью): для некэшированной заметки проверяем НЕпустоту сниппета — `enrich()`
+/// пропускает пустой сниппет (нет чанков, напр. RAG выключен) БЕЗ записи кэша, такие НИКОГДА не
+/// закэшируются; считать их «нужна генерация» = впустую дёргать LLM на каждом открытии (no-op шторм).
+pub async fn needs_enrichment(reader: &ReadPool, now: i64) -> DbResult<bool> {
+    let rows = scored_rows(reader, now).await?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    let cache = load_cache(reader).await?;
+    for r in rows.into_iter().take(ENRICH_TOP_N) {
+        let cached_valid = cache
+            .get(&r.path)
+            .map(|c| c.is_valid(r.updated_at, now))
+            .unwrap_or(false);
+        if cached_valid {
+            continue; // уже свежо обогащена
+        }
+        // Некэшированная — но обогащаема ли (есть контент-сниппет)? Пустой сниппет enrich пропускает
+        // без кэша → не триггерим на ней (иначе вечный re-seed). Снимаем снипет только для НЕкэшированных.
+        if !note_snippet(reader, &r.path).await?.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Сниппет заметки (первый чанк, нормализованные пробелы, до `SNIPPET_CHARS`) — вход LLM-обогащения.
 async fn note_snippet(reader: &ReadPool, path: &str) -> DbResult<String> {
     let path = path.to_string();
@@ -490,16 +519,10 @@ impl StaleRadarHandler {
             sink,
         }
     }
-}
 
-#[async_trait]
-impl JobHandler for StaleRadarHandler {
-    /// Тяжёлый фоновый LLM-проход: уступает интерактивному чату/inline (S5 backpressure).
-    fn defer_under_interactive(&self) -> bool {
-        true
-    }
-
-    async fn handle(&self, _job: &Job) -> Result<(), String> {
+    /// LLM-обогащение топ-N (с пропуском валидного кэша). Выделено из `handle`, чтобы событие
+    /// `widget_updated` слалось В ЛЮБОМ исходе (см. `handle`).
+    async fn enrich(&self) -> Result<(), String> {
         let now = now_secs();
         let rows = scored_rows(&self.reader, now)
             .await
@@ -543,9 +566,24 @@ impl JobHandler for StaleRadarHandler {
                 .map_err(|e| e.to_string())?;
             }
         }
-        // Готово — фронт перечитывает радар (и снимает индикатор «обогащаю…»), даже если новых данных нет.
-        self.sink.widget_updated(KEY_STALE_RADAR);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl JobHandler for StaleRadarHandler {
+    /// Тяжёлый фоновый LLM-проход: уступает интерактивному чату/inline (S5 backpressure).
+    fn defer_under_interactive(&self) -> bool {
+        true
+    }
+
+    async fn handle(&self, _job: &Job) -> Result<(), String> {
+        let result = self.enrich().await;
+        // Фронт ВСЕГДА перечитывает радар (снимает индикатор «обогащаю…»), даже при ОШИБКЕ LLM —
+        // иначе при проактивном прогоне (AIP-хвост) карточка залипла бы в «обогащаю…» (флаг снимается
+        // только по `home:widget-updated`). Урок AIP-5 #218 (там WidgetHandler шлёт событие всегда).
+        self.sink.widget_updated(KEY_STALE_RADAR);
+        result
     }
 }
 
@@ -831,6 +869,100 @@ mod tests {
             calls.load(Ordering::SeqCst),
             first,
             "кэш → без повторного LLM"
+        );
+    }
+
+    struct ErroringEnricher;
+    #[async_trait]
+    impl ChatProvider for ErroringEnricher {
+        async fn stream_chat(
+            &self,
+            _m: &[ChatMessage],
+            _on: &mut (dyn FnMut(String) + Send),
+            _c: &Arc<AtomicBool>,
+        ) -> AiResult<String> {
+            Err(crate::ai::AiError::Http("boom".into()))
+        }
+        fn model_id(&self) -> &str {
+            "erroring"
+        }
+    }
+
+    /// AIP-хвост: ошибка LLM при обогащении → handle возвращает Err, НО событие widget_updated слётся
+    /// всё равно (иначе при проактивном прогоне карточка залипнет в «обогащаю…»). Урок AIP-5 #218.
+    #[tokio::test]
+    async fn error_still_notifies_to_clear_spinner() {
+        let (_d, db) = db_with_stale_note().await;
+        let sink = Arc::new(RecSink::default());
+        let h = StaleRadarHandler::new(
+            db.reader().clone(),
+            Arc::new(ErroringEnricher),
+            db.writer().clone(),
+            sink.clone(),
+        );
+        let res = h.handle(&dummy_job()).await;
+        assert!(
+            res.is_err(),
+            "ошибка LLM пробрасывается (планировщик ретраит)"
+        );
+        assert_eq!(
+            sink.0.lock().unwrap().as_slice(),
+            [KEY_STALE_RADAR],
+            "событие слётся даже при ошибке — карточка не залипнет в «обогащаю…»"
+        );
+    }
+
+    /// Гейт проактивного сида (`needs_enrichment`): есть НЕобогащённая устаревшая → нужна генерация;
+    /// после обогащения свежий кэш → не нужна; пустой vault (нет устаревших) → не нужна.
+    #[tokio::test]
+    async fn needs_enrichment_gates_on_uncached() {
+        let (_d, db) = db_with_stale_note().await;
+        let now = now_secs();
+        assert!(
+            needs_enrichment(db.reader(), now).await.unwrap(),
+            "без кэша слоя 2 → нужна генерация"
+        );
+
+        let h = StaleRadarHandler::new(
+            db.reader().clone(),
+            Arc::new(FakeEnricher(
+                r#"{"reason":"r","action":"update","hint":"h"}"#,
+            )),
+            db.writer().clone(),
+            Arc::new(RecSink::default()),
+        );
+        h.handle(&dummy_job()).await.unwrap();
+        assert!(
+            !needs_enrichment(db.reader(), now_secs()).await.unwrap(),
+            "обогащено и свежо → генерация не нужна"
+        );
+
+        let dir = TempDir::new().unwrap();
+        let empty = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        assert!(
+            !needs_enrichment(empty.reader(), now_secs()).await.unwrap(),
+            "нет устаревших заметок → генерация не нужна"
+        );
+    }
+
+    /// Adversarial-ревью: устаревшая заметка БЕЗ чанков (пустой сниппет, напр. RAG выключен) попадает в
+    /// радар (слой 1), но enrich её пропустит без кэша → `needs_enrichment` НЕ должна её считать (иначе
+    /// проактивный сид/recurring впустую дёргал бы LLM на каждом открытии — no-op шторм).
+    #[tokio::test]
+    async fn needs_enrichment_false_for_empty_snippet_note() {
+        let (_d, db) = db().await;
+        let now = 200 * SECS_PER_DAY;
+        // put_note НЕ создаёт чанк → сниппет пуст; древняя orphan-draft → red в радаре.
+        put_note(&db, "Old.md", 0, &[("status", "draft")]).await;
+        assert!(
+            !scan(db.reader(), now).await.unwrap().is_empty(),
+            "заметка в радаре (слой 1)"
+        );
+        assert!(
+            !needs_enrichment(db.reader(), now).await.unwrap(),
+            "пустой сниппет (нечего обогащать) → генерация не нужна"
         );
     }
 }
