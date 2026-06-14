@@ -26,6 +26,7 @@ import { ToastViewport } from './components/chrome/ToastViewport';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
+import { TasksPanel } from './components/tasks/TasksPanel';
 import { DigestPanel } from './components/digest/DigestPanel';
 import { ContradictionsPanel } from './components/contradictions/ContradictionsPanel';
 import { InlineAria } from './components/editor/InlineAria';
@@ -62,6 +63,7 @@ export function App() {
   const versionsOpen = useUIStore((s) => s.versionsOpen);
   const closeVersions = useUIStore((s) => s.closeVersions);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
+  const tasksOpen = useUIStore((s) => s.tasksOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
   const newsOpen = useUIStore((s) => s.newsOpen);
@@ -284,6 +286,7 @@ export function App() {
       )}
       {tweaksOpen && <SettingsView />}
       {goalsOpen && <GoalsPanel />}
+      {tasksOpen && <TasksPanel />}
       {digestOpen && <DigestPanel />}
       {contradictionsOpen && <ContradictionsPanel />}
     </div>

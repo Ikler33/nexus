@@ -745,6 +745,7 @@
     "view.contradictions": "Contradiction finder",
     "view.news": "News feed",
     "view.home": "Home",
+    "view.tasks": "Tasks",
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
     "view.settings": "Settings",
@@ -768,5 +769,16 @@
     "callout": "Callout",
     "hr": "Divider",
     "template": "From template…"
+  },
+  "tasks": {
+    "title": "Tasks",
+    "loading": "Collecting tasks…",
+    "empty": "No tasks yet. Add “- [ ] …” to a note or insert via “/”.",
+    "emptyOpen": "No open tasks — all done 🎉",
+    "filterOpen": "Open",
+    "filterAll": "All",
+    "refresh": "Refresh",
+    "close": "Close",
+    "untitled": "(no text)"
   }
 }

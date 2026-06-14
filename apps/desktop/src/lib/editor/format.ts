@@ -102,7 +102,11 @@ export function toggleTask(view: EditorView): boolean {
  * в превью): `[ ]`↔`[x]`/`[X]`. Возвращает новый текст или `null`, если строка вне диапазона или
  * не таск-пункт — защита от дрейфа номера строки между рендером превью и кликом (доку могли изменить).
  */
-const TASK_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$/;
+// group3 = `\][^\n]*` (а не `\].*`): `.` не матчит `\r`, поэтому `$` без флага `m` не достаёт конца
+// CRLF-строки → задачи в файлах с Windows-переводами строк выпадали из дашборда и не тогглились
+// из буфера (Rust-скан через `.lines()` срезает `\r` и расходился с фронтом). `[^\n]*` вбирает
+// хвостовой `\r` в group3 → тоггл сохраняет перевод строки, а parseTasks обрезает его через `.trim()`.
+const TASK_LINE_RE = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\][^\n]*)$/;
 
 export function toggleTaskAtLine(doc: string, line: number): string | null {
   const lines = doc.split('\n');
@@ -120,6 +124,28 @@ export function toggleTaskAtLine(doc: string, line: number): string | null {
  */
 export function isTaskLine(text: string): boolean {
   return TASK_LINE_RE.test(text);
+}
+
+/** Одна задача из текста заметки (TASK-1): 1-based номер строки, текст после `]`, состояние. */
+export interface Task {
+  line: number;
+  text: string;
+  checked: boolean;
+}
+
+/**
+ * Извлекает все markdown-задачи из текста заметки (TASK-1, дашборд). Переиспользует тот же
+ * TASK_LINE_RE, что toggleTaskAtLine/isTaskLine, — фронтовое зеркало бэкенд-парсера parse_task_line
+ * (src-tauri/src/commands/tasks.rs). Нужна для наложения грязных буферов поверх дискового списка.
+ */
+export function parseTasks(doc: string): Task[] {
+  const out: Task[] = [];
+  const lines = doc.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = TASK_LINE_RE.exec(lines[i]);
+    if (m) out.push({ line: i + 1, checked: m[2] !== ' ', text: m[3].replace(/^\]\s?/, '').trim() });
+  }
+  return out;
 }
 
 /** Похоже ли выделение на URL/почту — тогда оно идёт в адрес ссылки, а не в её текст.

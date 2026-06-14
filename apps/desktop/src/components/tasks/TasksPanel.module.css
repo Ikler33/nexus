@@ -1,0 +1,197 @@
+/* Панель «Задачи» (TASK-1): модалка-сводка всех markdown-задач vault. По образцу GoalsPanel. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: var(--space-4);
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 94vw);
+  max-height: min(680px, 86vh);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  overflow: hidden;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.spacer {
+  flex: 1;
+}
+.filter {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-right: var(--space-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.filterBtn,
+.filterActive {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.filterBtn:hover {
+  color: var(--color-text);
+}
+.filterActive {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font-weight: 600;
+}
+.iconBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.iconBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+.body {
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  border: none;
+  background: none;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.groupHead:hover {
+  color: var(--color-link);
+  background: var(--color-surface-hover);
+}
+.groupTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-faint);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  border-radius: var(--radius-md);
+}
+.row:hover {
+  background: var(--color-surface-hover);
+}
+.checkbox {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.taskText,
+.taskTextDone {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskText:hover,
+.taskTextDone:hover {
+  color: var(--color-link);
+}
+.taskTextDone {
+  color: var(--color-text-faint);
+  text-decoration: line-through;
+}
+.empty {
+  padding: var(--space-5);
+  color: var(--color-text-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+.thinking {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-7) var(--space-4);
+}
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-5) var(--space-4);
+}
+.emptyIco {
+  color: var(--color-text-faint);
+}
