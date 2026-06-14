@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Clock,
   Command as CommandIcon,
@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { commands, type Command, formatCombo } from '../../lib/commands';
+import { highlightTerms } from '../../lib/highlight';
 import { tauriApi, type NoteRef, type SearchHit } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
@@ -46,27 +47,6 @@ function noteTitle(n: NoteRef): string {
 function hitTitle(h: SearchHit): string {
   const base = h.path.slice(h.path.lastIndexOf('/') + 1);
   return h.title ?? (base.endsWith('.md') ? base.slice(0, -3) : base);
-}
-
-/** Подсветка терминов запроса в сниппете через React-узлы `<mark>` (CSP-safe, без innerHTML). */
-function highlight(text: string, query: string): ReactNode {
-  const terms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((t) => t.length >= 2);
-  if (!terms.length) return text;
-  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const re = new RegExp(`(${escaped.join('|')})`, 'gi');
-  const termSet = new Set(terms);
-  return text.split(re).map((part, i) =>
-    termSet.has(part.toLowerCase()) ? (
-      <mark key={i} className={styles.mark}>
-        {part}
-      </mark>
-    ) : (
-      part
-    ),
-  );
 }
 
 /**
@@ -235,7 +215,7 @@ export function CommandPalette() {
       {row.kind === 'content' ? (
         <span className={styles.contentCell}>
           <span className={styles.title}>{hitTitle(row.hit)}</span>
-          <span className={styles.snippet}>{highlight(row.hit.snippet, q)}</span>
+          <span className={styles.snippet}>{highlightTerms(row.hit.snippet, q, styles.mark)}</span>
         </span>
       ) : (
         <span className={styles.title}>

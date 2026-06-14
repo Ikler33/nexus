@@ -37,6 +37,23 @@ describe('Sidebar (Ф0-7 / DP-2)', () => {
     expect(await screen.findByText('Projects/Roadmap.md')).toBeInTheDocument();
   });
 
+  // Режим «Везде» → контент-поиск по телу (searchContent) со сниппетом и подсветкой <mark>.
+  it('режим «Везде» → searchContent со сниппетом и подсветкой', async () => {
+    const searchContent = vi.spyOn(tauriApi.search, 'searchContent');
+    const searchVault = vi.spyOn(tauriApi.search, 'searchVault');
+    await useVaultStore.getState().openVault('');
+    const { container } = render(<Sidebar />);
+    fireEvent.click(screen.getByRole('tab', { name: /поиск|search/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /везде|everywhere/i })); // сегмент режима (radiogroup)
+    fireEvent.change(screen.getByLabelText('Поиск по vault'), { target: { value: 'roadmap' } });
+
+    await vi.waitFor(() => expect(searchContent).toHaveBeenCalled());
+    expect(searchContent.mock.calls[0][0]).toBe('roadmap');
+    expect(searchVault).not.toHaveBeenCalled(); // режим content → НЕ метаданные
+    // Сниппет тела с подсветкой совпадения (<mark>), а не путь.
+    await vi.waitFor(() => expect(container.querySelector('mark')).toBeTruthy());
+  });
+
   it('нет совпадений → пустое состояние', async () => {
     await useVaultStore.getState().openVault('');
     render(<Sidebar />);
