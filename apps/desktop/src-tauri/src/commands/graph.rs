@@ -3,7 +3,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::graph::{self, BacklinkEntry, FullGraph, GraphData};
+use crate::graph::{self, BacklinkEntry, FullGraph, GraphData, MentionEntry};
 use crate::state::AppState;
 
 /// Беклинки файла (источник истины — SQLite, запрос по idx_links_target).
@@ -14,6 +14,16 @@ pub async fn get_backlinks(
 ) -> AppResult<Vec<BacklinkEntry>> {
     let reader = state.vault().await?.db.reader().clone();
     Ok(graph::get_backlinks(&reader, path).await?)
+}
+
+/// UNLINK-1: незалинкованные упоминания заголовка файла (FTS-фраза по телу), без уже-линкующих.
+#[tauri::command]
+pub async fn get_unlinked_mentions(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<Vec<MentionEntry>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(graph::unlinked_mentions(&reader, path).await?)
 }
 
 /// Локальный N-hop граф вокруг файла (ADR-004).

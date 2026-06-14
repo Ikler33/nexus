@@ -339,6 +339,12 @@
     "count_few": "{{count, number}} заголовка",
     "count_many": "{{count, number}} заголовков"
   },
+  "mentions": {
+    "title": "Упоминания без ссылки",
+    "count_one": "{{count, number}} упоминание без ссылки",
+    "count_few": "{{count, number}} упоминания без ссылки",
+    "count_many": "{{count, number}} упоминаний без ссылки"
+  },
   "capture": {
     "title": "Быстрая запись",
     "placeholder": "Запишите мысль — Enter добавит её в Inbox…",

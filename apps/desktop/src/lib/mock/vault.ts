@@ -1,5 +1,6 @@
 import type {
   BacklinkEntry,
+  MentionEntry,
   ChatStreamEvent,
   Contradiction,
   Digest,
@@ -195,6 +196,32 @@ export async function getBacklinks(path: string): Promise<BacklinkEntry[]> {
     }
   }
   return out.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
+}
+
+export async function getUnlinkedMentions(path: string): Promise<MentionEntry[]> {
+  const noExt = path.endsWith('.md') ? path.slice(0, -3) : path;
+  // Ключи как на бэке: имя файла (basename) + H1-заголовок заметки. Гард короткого ключа (шум).
+  const stem = basename(noExt);
+  const h1 = (CONTENT[path]?.match(/^#\s+(.+)$/m)?.[1] ?? '').trim();
+  const keys = [stem, h1].filter((k) => k.length >= 3).map((k) => k.toLowerCase());
+  if (keys.length === 0) return [];
+  const linkers = new Set((await getBacklinks(path)).map((b) => b.sourcePath));
+  const out: MentionEntry[] = [];
+  for (const [src, content] of Object.entries(CONTENT)) {
+    if (src === path || linkers.has(src)) continue;
+    const lc = content.toLowerCase();
+    const hit = keys.find((k) => lc.includes(k));
+    if (hit === undefined) continue;
+    const idx = lc.indexOf(hit);
+    const start = Math.max(0, idx - 20);
+    const end = Math.min(content.length, idx + hit.length + 30);
+    out.push({
+      sourcePath: src,
+      sourceTitle: null,
+      snippet: `…${content.slice(start, end).replace(/\n/g, ' ').trim()}…`,
+    });
+  }
+  return out.slice(0, 30);
 }
 
 export async function searchVault(query: string): Promise<NoteRef[]> {
