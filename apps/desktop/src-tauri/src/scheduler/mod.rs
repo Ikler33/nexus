@@ -760,6 +760,13 @@ impl JobHandler for GcHandler {
         if stale > 0 {
             tracing::info!(stale, "gc: вычищен contradiction_cache по мёртвым путям");
         }
+        // AIP-10: кэш объяснений связей — тот же приём (выметаем пары с удалённой/переименованной заметкой).
+        let stale_rel = crate::relation_reasons::gc_stale_cache(&self.writer)
+            .await
+            .map_err(|e| e.to_string())?;
+        if stale_rel > 0 {
+            tracing::info!(stale_rel, "gc: вычищен relation_reasons по мёртвым путям");
+        }
         Ok(())
     }
 }

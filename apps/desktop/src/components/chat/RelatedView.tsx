@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useRelatedStore, visibleRelated } from '../../stores/related';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
+import { useRelationExplanations } from './useRelationExplanations';
 import styles from './RelatedView.module.css';
 
 /**
@@ -21,6 +22,9 @@ export function RelatedView() {
   const load = useRelatedStore((s) => s.load);
   const insertLink = useRelatedStore((s) => s.insertLink);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  // Объяснения только для ВИДИМЫХ по порогу карточек (не генерим LLM на скрытые) — AIP-10.
+  const items = visibleRelated(all, threshold);
+  const explanations = useRelationExplanations(path, items);
 
   useEffect(() => {
     void load(path);
@@ -29,8 +33,6 @@ export function RelatedView() {
   if (!path) {
     return <p className={styles.empty}>{t('related.noFile')}</p>;
   }
-
-  const items = visibleRelated(all, threshold);
 
   return (
     <div className={styles.wrap}>
@@ -54,25 +56,28 @@ export function RelatedView() {
         <p className={styles.empty}>{t('related.empty')}</p>
       ) : (
         <ul className={styles.list} aria-label={t('related.title')}>
-          {items.map((s) => (
-            <li key={s.path} className={styles.card}>
-              <div className={styles.head}>
-                <button
-                  type="button"
-                  className={styles.title}
-                  title={s.path}
-                  onClick={() => void openFile(s.path)}
-                >
-                  {s.title ?? s.path}
+          {items.map((s) => {
+            const reason = explanations[s.path] || s.reason; // готово объяснение → оно; иначе сниппет
+            return (
+              <li key={s.path} className={styles.card}>
+                <div className={styles.head}>
+                  <button
+                    type="button"
+                    className={styles.title}
+                    title={s.path}
+                    onClick={() => void openFile(s.path)}
+                  >
+                    {s.title ?? s.path}
+                  </button>
+                  <span className={styles.score}>{Math.round(s.score * 100)}%</span>
+                </div>
+                {reason && <p className={styles.reason}>{reason}</p>}
+                <button type="button" className={styles.insert} onClick={() => insertLink(s.path)}>
+                  {t('related.insert')}
                 </button>
-                <span className={styles.score}>{Math.round(s.score * 100)}%</span>
-              </div>
-              {s.reason && <p className={styles.reason}>{s.reason}</p>}
-              <button type="button" className={styles.insert} onClick={() => insertLink(s.path)}>
-                {t('related.insert')}
-              </button>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
