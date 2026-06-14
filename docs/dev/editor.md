@@ -31,9 +31,14 @@
   заменяет в `text`-узлах на `link` с URL `nexus-wikilink:<encoded>` / `nexus-tag:<encoded>` (внутрь
   `code`/`inlineCode` НЕ лезет). `MarkdownPreview` ловит их в `components.a` по префиксу href: wikilink →
   кликабельная навигация (`onOpenLink`, цель `decodeURIComponent`), tag → чип-`span`.
-- **Отложено** (строгий CSP запрещает inline-стили, на которых держатся): KaTeX-математика, Mermaid-
-  диаграммы (BACKLOG). Vault-локальные картинки — нужен asset-протокол. Глобальная команда/хоткей
-  переключения (Ctrl+E) — потребует подъёма режима в стор (сейчас кнопка на пане).
+- **Математика** `$$…$$` (#4) — `remark-math` (`singleDollarTextMath:false` — одиночный `$` отдан под
+  валюту, иначе суммы `$5…$10` ломались бы) + `rehype-katex` с `output:'mathml'`: чистый нативный `<math>`
+  БЕЗ inline-стилей и без шрифтов KaTeX → строгий CSP не трогаем. `lib/markdown/rehypeKatexCsp.ts` снимает
+  единственный инлайн-`style`, что KaTeX даёт на битом LaTeX (`.katex-error`) и `\fcolorbox`. Рендер —
+  нативный MathML вебвью (macOS WebKit — из коробки; бандл math-шрифта для Win/Linux — BACKLOG).
+- **Vault-картинки** (IMG-1) — `attachments/` + `![](…)` через data-URL (CSP уже разрешал `img-src data:`).
+- **Отложено**: Mermaid-диаграммы (inline-стили под CSP). Глобальная команда/хоткей переключения
+  (Ctrl+E) — потребует подъёма режима в стор (сейчас кнопка на пане).
 
 ## Данные (vault store + команды)
 - Команды Rust: `read_file` / `write_file` (write-safe `resolve_vault_path_for_write`), `list_notes`.
