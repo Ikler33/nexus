@@ -419,6 +419,8 @@
     "pinHint": "Pin the active note into AI context",
     "pinnedLabel": "Pinned notes",
     "unpin": "Unpin",
+    "suggestLabel": "Related notes for context",
+    "suggestAdd": "Add to context:",
     "error": "Error: {{message}}",
     "denied": {
       "offline": "Offline mode is on",

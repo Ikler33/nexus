@@ -17,6 +17,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useWorkspaceStore.getState().reset(); // без утечки активного файла между тестами
 });
 
 describe('ChatView (Ф1-8)', () => {
@@ -280,6 +281,72 @@ describe('ChatView (Ф1-8)', () => {
     expect(
       useToastStore.getState().toasts.some((t) => t.message === 'Откройте заметку для вставки'),
     ).toBe(true);
+  });
+
+  // AIP-11: при открытой заметке в режиме vault — чипы-кандидаты в контекст (suggest.related), клик пинит.
+  it('AIP-11: связанные с открытой заметкой → чипы в контекст; клик пинит', async () => {
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+    });
+    vi.spyOn(tauriApi.suggest, 'related').mockResolvedValue([
+      { path: 'Notes/Related.md', title: 'Related', score: 0.9, reason: 'про то же' },
+    ]);
+    render(<ChatView />);
+
+    expect(await screen.findByText(/в контекст|add to context/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Related/ }));
+    expect(useChatStore.getState().pinned).toContain('Notes/Related.md');
+    // Запинено → больше не предлагается (ряд кандидатов исчезает).
+    await vi.waitFor(() =>
+      expect(screen.queryByText(/в контекст|add to context/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  // AIP-11: в режиме «общий» (не vault) саджесты не запрашиваются и не показываются.
+  it('AIP-11: режим general → саджесты не показываются', async () => {
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+    });
+    useChatStore.setState({ mode: 'general' });
+    const related = vi.spyOn(tauriApi.suggest, 'related');
+    render(<ChatView />);
+    expect(screen.queryByText(/в контекст|add to context/i)).not.toBeInTheDocument();
+    expect(related).not.toHaveBeenCalled();
+  });
+
+  // AIP-11 degrade: нет векторов/индекса (related реджектится) → ряд скрыт, без падения.
+  it('AIP-11: ошибка related → ряд кандидатов скрыт (без краша)', async () => {
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+    });
+    const related = vi.spyOn(tauriApi.suggest, 'related').mockRejectedValue(new Error('no vectors'));
+    render(<ChatView />);
+    await vi.waitFor(() => expect(related).toHaveBeenCalled());
+    expect(screen.queryByText(/в контекст|add to context/i)).not.toBeInTheDocument();
+  });
+
+  // AIP-11: активный файл (его пинит «Прикрепить») и уже-закреплённые исключены из кандидатов.
+  it('AIP-11: сам активный файл и закреплённые исключены из кандидатов', async () => {
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+    });
+    useChatStore.setState({ pinned: ['Notes/Pinned.md'] });
+    vi.spyOn(tauriApi.suggest, 'related').mockResolvedValue([
+      { path: 'A.md', title: 'A', score: 0.99, reason: 'self' }, // = активный файл → исключён
+      { path: 'Notes/Pinned.md', title: 'Pinned', score: 0.9, reason: 'r' }, // уже закреплён → исключён
+      { path: 'Notes/Fresh.md', title: 'Fresh', score: 0.8, reason: 'r' }, // только этот — кандидат
+    ]);
+    const { container } = render(<ChatView />);
+
+    expect(await screen.findByRole('button', { name: /Fresh/ })).toBeInTheDocument();
+    // среди кандидат-чипов (suggestChip) ровно один — Fresh; A (=активный) и Pinned (закреплён) отфильтрованы.
+    const candidateChips = Array.from(container.querySelectorAll('[class*="suggestChip"]'));
+    expect(candidateChips).toHaveLength(1);
+    expect(candidateChips[0].textContent).toContain('Fresh');
   });
 
   it('P6-AR: «Вставить» в режиме чтения (заметка открыта, но CM6 размонтирован) — честная подсказка', () => {

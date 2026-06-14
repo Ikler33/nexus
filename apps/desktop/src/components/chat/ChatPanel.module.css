@@ -592,6 +592,54 @@
   background: color-mix(in oklab, var(--color-ai) 20%, transparent);
 }
 
+/* AIP-11: ряд чипов-кандидатов в контекст (связанные с открытой заметкой). Приглушённый dashed-стиль —
+   ещё НЕ закреплены (в отличие от .pinChip), клик пинит. */
+.suggestRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--space-3, 12px) 0;
+}
+.suggestHint {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+.suggestChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 160px;
+  padding: 2px 8px 2px 5px;
+  border-radius: 99px;
+  border: 1px dashed var(--color-border-strong);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    background var(--motion-fast) ease;
+}
+.suggestChip > svg {
+  flex: 0 0 auto;
+  color: var(--color-ai);
+}
+.suggestChip:hover {
+  color: var(--color-text);
+  border-color: color-mix(in oklab, var(--color-ai) 40%, transparent);
+  background: color-mix(in oklab, var(--color-ai) 10%, transparent);
+}
+.suggestChip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* P6-AR: ряд действий под ответом ИИ (копировать / вставить в заметку). */
 .msgActions {
   display: flex;

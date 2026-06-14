@@ -8,6 +8,7 @@ import {
   Sparkles,
   Globe,
   Pin,
+  Plus,
   RefreshCw,
   X,
   ChevronRight,
@@ -30,7 +31,7 @@ import { useUIStore } from '../../stores/ui';
 import { useToastStore } from '../../stores/toast';
 import { getActiveEditorView } from '../../lib/editor/activeView';
 import { tauriApi } from '../../lib/tauri-api';
-import type { MemoryHit, WebSource } from '../../lib/tauri-api';
+import type { LinkSuggestion, MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
@@ -64,6 +65,34 @@ export function ChatView() {
   const feedRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const atBottom = useRef(true);
+
+  // AIP-11: проактивный мост редактор→чат — заметки, семантически близкие к ОТКРЫТОЙ заметке,
+  // как чипы-кандидаты в контекст (клик пинит, без ручного поиска). Лениво по активному файлу;
+  // только в режиме vault (контекст-RAG). Нет векторов/индекса → пусто (чипы скрыты).
+  const [suggestions, setSuggestions] = useState<LinkSuggestion[]>([]);
+  useEffect(() => {
+    if (mode !== 'vault' || !center) {
+      setSuggestions([]);
+      return;
+    }
+    let alive = true;
+    setSuggestions([]); // гасим срез прошлого файла СРАЗУ — иначе он мелькнёт под новым center до резолва
+    tauriApi.suggest
+      .related(center, 6)
+      .then((r) => {
+        if (alive) setSuggestions(r);
+      })
+      .catch(() => {
+        if (alive) setSuggestions([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [mode, center]);
+  // Видимые кандидаты: не сам активный файл (его пинит кнопка «Прикрепить») и не уже-закреплённые.
+  const suggestVisible = suggestions
+    .filter((s) => s.path !== center && !pinned.includes(s.path))
+    .slice(0, 4);
 
   // AIP-3: предзаполнение композера из стора (мост «Разобрать с ИИ» с Home-инсайтов). Потребляем
   // ОДИН раз: заносим в поле, фокусируемся, сбрасываем draft (иначе ре-применится при ре-маунте/
@@ -235,6 +264,26 @@ export function ChatView() {
                 <X size={11} aria-hidden />
               </button>
             </span>
+          ))}
+        </div>
+      )}
+
+      {/* AIP-11: чипы-кандидаты в контекст — заметки, близкие к открытой. Клик пинит (мост без поиска). */}
+      {mode === 'vault' && suggestVisible.length > 0 && (
+        <div className={styles.suggestRow} aria-label={t('chat.suggestLabel')}>
+          <span className={styles.suggestHint}>{t('chat.suggestAdd')}</span>
+          {suggestVisible.map((s) => (
+            <button
+              key={s.path}
+              type="button"
+              className={styles.suggestChip}
+              onClick={() => togglePin(s.path)}
+              disabled={streaming}
+              title={s.path}
+            >
+              <Plus size={11} aria-hidden />
+              {s.path.slice(s.path.lastIndexOf('/') + 1).replace(/\.md$/, '')}
+            </button>
           ))}
         </div>
       )}
