@@ -35,6 +35,7 @@ import type { LinkSuggestion, MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
+import { StartingQuestions } from './StartingQuestions';
 import styles from './ChatPanel.module.css';
 
 /**
@@ -154,18 +155,8 @@ export function ChatView() {
             </div>
             <div className={styles.emptyTitle}>{t('chat.emptyTitle')}</div>
             <p className={styles.empty}>{t('chat.empty')}</p>
-            <div className={styles.suggestPills}>
-              {pills.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  className={styles.suggestPill}
-                  onClick={() => ask(p)}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
+            {/* AIP-SQ: при открытой заметке — контекстные вопросы по ней (LLM), иначе статические подсказки. */}
+            <StartingQuestions center={center ?? null} staticPills={pills} onAsk={ask} />
           </div>
         ) : (
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>

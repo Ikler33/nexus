@@ -684,6 +684,12 @@ export const tauriApi = {
      *  Вне Tauri — '' (естественный фолбэк на сниппет). */
     explainRelation: (pathA: string, pathB: string): Promise<string> =>
       isTauri() ? invoke<string>('explain_relation', { pathA, pathB }) : Promise.resolve(''),
+
+    /** AIP-SQ: до 3 коротких стартовых вопросов по активной заметке `center` для пустого чата.
+     *  Пустой список = нет утилитарной модели / нет контента / ошибка LLM → фронт показывает
+     *  статические подсказки. Вне Tauri — [] (естественный фолбэк на статику). */
+    startingQuestions: (center?: string): Promise<string[]> =>
+      isTauri() ? invoke<string[]>('get_starting_questions', { center }) : Promise.resolve([]),
   },
 
   goals: {
