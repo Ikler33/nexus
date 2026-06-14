@@ -14,6 +14,7 @@ import { Editor } from '../editor/Editor';
 import { FileViewer } from '../editor/FileViewer';
 import { isViewable } from '../../lib/file-kind';
 import { BacklinksBar } from '../editor/BacklinksBar';
+import { MentionsBar } from '../editor/MentionsBar';
 import { OutlineBar } from '../editor/OutlineBar';
 import styles from './GroupPane.module.css';
 
@@ -314,6 +315,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
           {/* EDIT-7: оглавление — в любом режиме (полезно особенно при чтении); скрыто, если заголовков нет. */}
           {mdActive && <OutlineBar doc={active.doc} onJump={jumpToHeading} />}
           {!isViewable(active.path) && !reading && <BacklinksBar path={active.path} />}
+          {/* UNLINK-1: незалинкованные упоминания заголовка — скрыты, если их нет. */}
+          {!isViewable(active.path) && !reading && <MentionsBar path={active.path} />}
         </>
       ) : (
         <p className={styles.empty}>{t('editor.emptyGroup')}</p>

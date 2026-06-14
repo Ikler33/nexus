@@ -171,6 +171,7 @@ pub fn run() {
             commands::vault::notes_count,
             commands::vault::file_mtime,
             commands::graph::get_backlinks,
+            commands::graph::get_unlinked_mentions,
             commands::graph::get_local_graph,
             commands::graph::get_full_graph,
             commands::search::search_vault,

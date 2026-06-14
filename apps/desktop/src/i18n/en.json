@@ -329,6 +329,11 @@
     "count_one": "{{count, number}} heading",
     "count_other": "{{count, number}} headings"
   },
+  "mentions": {
+    "title": "Unlinked mentions",
+    "count_one": "{{count, number}} unlinked mention",
+    "count_other": "{{count, number}} unlinked mentions"
+  },
   "capture": {
     "title": "Quick capture",
     "placeholder": "Jot a thought — Enter adds it to your Inbox…",

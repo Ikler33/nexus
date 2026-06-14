@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
 use crate::db::{DbResult, ReadPool};
@@ -64,6 +64,136 @@ pub async fn get_backlinks(reader: &ReadPool, path: String) -> DbResult<Vec<Back
                         source_title: r.get(1)?,
                         context: r.get(2)?,
                         line_number: r.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+}
+
+/// Незалинкованное упоминание (UNLINK-1): заметка, чей ТЕКСТ содержит заголовок открытой, но без
+/// явной `[[ссылки]]` — кандидат «связать», всплывание забытой связи (как «Unlinked mentions» Obsidian).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionEntry {
+    pub source_path: String,
+    pub source_title: Option<String>,
+    pub snippet: String,
+}
+
+/// Минимум значимых букв/цифр в ключе упоминания — короткие/общие имена («ИИ», «Go») дают шум.
+const MIN_KEY_CHARS: usize = 3;
+/// Сколько упоминаний (файлов) максимум вернуть.
+const MENTIONS_LIMIT: usize = 30;
+
+/// Имя файла без папок и `.md` — основной ключ упоминания (как резолвятся `[[ссылки]]`/Obsidian).
+fn basename_stem(path: &str) -> &str {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .trim_end_matches(".md")
+}
+
+/// Строит ФРАЗОВЫЙ FTS5-MATCH из ключа: токены (по не-буквенно-цифровым границам, юникод сохраняется)
+/// подряд в ОДНИХ кавычках → точное совпадение фразы (а не OR-токены, как `fts_query` поиска — иначе
+/// «RAG» ИЛИ «Pipeline» ловило бы пол-vault). `None` — нет токенов / слишком короткий ключ (шум).
+fn key_phrase(key: &str) -> Option<String> {
+    let toks: Vec<&str> = key
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if toks.is_empty() {
+        return None;
+    }
+    let total: usize = toks.iter().map(|t| t.chars().count()).sum();
+    if total < MIN_KEY_CHARS {
+        return None;
+    }
+    let inner = toks
+        .iter()
+        .map(|t| t.replace('"', "\"\""))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!("\"{inner}\"")) // фраза: токены подряд
+}
+
+/// Короткий сниппет из тела чанка для показа в списке упоминаний: схлопывает пробелы, режет до 140
+/// символов (по `chars`, UTF-8-safe), добавляет «…» при усечении.
+fn make_snippet(content: &str) -> String {
+    let flat = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = flat.chars().take(140).collect();
+    if flat.chars().count() > 140 {
+        format!("{cut}…")
+    } else {
+        cut
+    }
+}
+
+/// Незалинкованные упоминания файла `path` по телу других заметок: текст содержит ИМЯ заметки
+/// (basename, как резолвятся `[[ссылки]]`) ИЛИ её заголовок (H1/frontmatter `files.title`, как в прозе)
+/// как ФРАЗУ, но без явной ссылки. Исключает сам файл, удалённые и уже-линкующих (`links`). Дедуп по
+/// файлу — В SQL (оконная функция), чтобы LIMIT считал ФАЙЛЫ, а не чанки (иначе одна заметка, повторяющая
+/// фразу в N чанках, вытеснила бы остальных). Сниппет — из наиболее релевантного чанка файла. Короткий
+/// ключ / нет чанков → пусто.
+pub async fn unlinked_mentions(reader: &ReadPool, path: String) -> DbResult<Vec<MentionEntry>> {
+    reader
+        .query(move |c| {
+            // id + заголовок (может отсутствовать — тогда ключ только из имени файла).
+            let target: Option<(i64, Option<String>)> = c
+                .query_row(
+                    "SELECT id, title FROM files WHERE path = ?1 AND is_deleted = 0",
+                    [&path],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let Some((id, title)) = target else {
+                return Ok(Vec::new());
+            };
+            // Ключи: имя файла (всегда) + заголовок (если есть и отличается). Дедуп фраз.
+            let mut phrases: Vec<String> = Vec::new();
+            for key in [Some(basename_stem(&path)), title.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(p) = key_phrase(key) {
+                    if !phrases.contains(&p) {
+                        phrases.push(p);
+                    }
+                }
+            }
+            if phrases.is_empty() {
+                return Ok(Vec::new()); // имя и заголовок слишком короткие → шум, не ищем
+            }
+            let match_q = phrases.join(" OR ");
+
+            // Дедуп по файлу В SQL: ROW_NUMBER по f.id (лучший по rank чанк = rn 1), затем LIMIT по
+            // ФАЙЛАМ (иначе одна заметка, повторяющая фразу в N чанках, вытеснила бы остальных).
+            // ORDER BY rank внешний — самые релевантные файлы первыми. Сниппет режем из тела чанка в
+            // Rust: FTS5 `snippet()` внутри подзапроса с оконной функцией теряет контекст и пуст.
+            let mut stmt = c.prepare(
+                "SELECT path, title, content FROM ( \
+                   SELECT f.path AS path, f.title AS title, ch.content AS content, \
+                          fts_chunks.rank AS rk, \
+                          ROW_NUMBER() OVER (PARTITION BY f.id ORDER BY fts_chunks.rank) AS rn \
+                   FROM fts_chunks \
+                   JOIN chunks ch ON ch.id = fts_chunks.rowid \
+                   JOIN files f ON f.id = ch.file_id \
+                   WHERE fts_chunks MATCH ?1 \
+                     AND f.is_deleted = 0 \
+                     AND f.id != ?2 \
+                     AND f.id NOT IN (SELECT source_id FROM links WHERE target_id = ?2) \
+                 ) \
+                 WHERE rn = 1 \
+                 ORDER BY rk \
+                 LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(params![match_q, id, MENTIONS_LIMIT as i64], |r| {
+                    Ok(MentionEntry {
+                        source_path: r.get(0)?,
+                        source_title: r.get(1)?,
+                        snippet: make_snippet(&r.get::<_, String>(2)?),
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -337,6 +467,96 @@ mod tests {
         // У файла без входящих ссылок беклинков нет.
         let none = get_backlinks(db.reader(), "C.md".into()).await.unwrap();
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn key_phrase_builds_adjacent_phrase_and_guards_short() {
+        assert_eq!(
+            key_phrase("RAG Pipeline").as_deref(),
+            Some("\"RAG Pipeline\"")
+        );
+        assert_eq!(
+            key_phrase("local-first").as_deref(),
+            Some("\"local first\"")
+        );
+        assert_eq!(key_phrase("Go").as_deref(), None); // короткий → шум, не ищем
+        assert_eq!(key_phrase("  ").as_deref(), None);
+        // Пунктуация (вкл. кавычки) — разделитель токенов, в фразу попадают только токены.
+        assert_eq!(key_phrase("a\"b cd").as_deref(), Some("\"a b cd\""));
+        assert_eq!(basename_stem("Projects/RAG Pipeline.md"), "RAG Pipeline");
+    }
+
+    /// UNLINK-1: упоминания по ИМЕНИ файла И по H1-заголовку (разные ключи), исключая уже-линкующих
+    /// и сам файл; несколько упоминателей переживают LIMIT (дедуп по файлу в SQL, а не по чанкам).
+    /// RAG-индексатор (`with_rag`) ОБЯЗАТЕЛЕН — только он создаёт чанки/`fts_chunks` (грабля AIP-10).
+    #[tokio::test]
+    async fn unlinked_mentions_by_name_and_heading_excluding_linkers() {
+        use crate::ai::{EmbeddingProvider, MockEmbedder};
+        use crate::vector::VectorIndex;
+        use std::sync::Arc;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        // Имя файла «Pipeline», но H1-заголовок «RAG Pipeline» — разные ключи (mustFix #2).
+        fs::write(root.join("Pipeline.md"), "# RAG Pipeline\n\nописание\n").unwrap();
+        fs::write(root.join("ByHeading.md"), "Читал про RAG Pipeline вчера.\n").unwrap();
+        fs::write(root.join("ByName.md"), "Смотри Pipeline для деталей.\n").unwrap();
+        fs::write(
+            root.join("Linked.md"),
+            "см [[Pipeline]] — RAG Pipeline там.\n",
+        )
+        .unwrap();
+        fs::write(root.join("Other.md"), "# Other\n\nсовсем про другое\n").unwrap();
+
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let vectors =
+            Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 16).unwrap());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbedder { dim: 16 });
+        let idx = Indexer::with_rag(&db, root.clone(), embedder, vectors, true);
+        for f in [
+            "Pipeline.md",
+            "ByHeading.md",
+            "ByName.md",
+            "Linked.md",
+            "Other.md",
+        ] {
+            idx.index_file(f).await.unwrap();
+        }
+
+        let m = unlinked_mentions(db.reader(), "Pipeline.md".into())
+            .await
+            .unwrap();
+        let paths: Vec<_> = m.iter().map(|e| e.source_path.as_str()).collect();
+        assert!(
+            paths.contains(&"ByHeading.md"),
+            "упоминает H1 → есть: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"ByName.md"),
+            "упоминает имя файла → есть: {paths:?}"
+        );
+        assert!(!paths.contains(&"Linked.md"), "уже ссылается → исключён");
+        assert!(!paths.contains(&"Pipeline.md"), "сам файл → исключён");
+        assert!(!paths.contains(&"Other.md"), "не упоминает → нет");
+        assert!(m.iter().all(|e| !e.snippet.is_empty()), "сниппет у каждого");
+    }
+
+    #[tokio::test]
+    async fn unlinked_mentions_short_title_is_empty() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(root.join("Go.md"), "# Go\n").unwrap();
+        fs::write(root.join("Other.md"), "пишу про Go каждый день\n").unwrap();
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let idx = Indexer::new(&db, root.clone());
+        for f in ["Go.md", "Other.md"] {
+            idx.index_file(f).await.unwrap();
+        }
+        // Короткий заголовок «Go» → title_phrase=None → пусто (без шума на пол-vault).
+        assert!(unlinked_mentions(db.reader(), "Go.md".into())
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// AC-DOD-Ф0 (граф): локальный N-hop из SQLite расширяется с глубиной.

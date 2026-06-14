@@ -1,0 +1,79 @@
+/* UNLINK-1: незалинкованные упоминания. Зеркалит BacklinksBar (нижний сворачиваемый бар пейна). */
+.bar {
+  flex: none;
+  max-height: 30%;
+  overflow: auto;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  padding: var(--space-2) var(--space-3);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.twist {
+  transition: transform var(--motion-fast) var(--ease-standard);
+  flex-shrink: 0;
+}
+.twist[data-open] {
+  transform: rotate(90deg);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.item:hover {
+  background: var(--color-surface);
+}
+
+.item:focus-visible {
+  outline: 2px solid var(--color-accent);
+}
+
+.itemPath {
+  font-size: var(--text-sm);
+  color: var(--color-link);
+}
+
+.itemContext {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

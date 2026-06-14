@@ -309,6 +309,13 @@ export interface BacklinkEntry {
   lineNumber: number | null;
 }
 
+/** Незалинкованное упоминание (зеркалит Rust `graph::MentionEntry`). */
+export interface MentionEntry {
+  sourcePath: string;
+  sourceTitle: string | null;
+  snippet: string;
+}
+
 /** Узел/ребро/данные локального графа (зеркалит Rust `graph::*`). */
 export interface GraphNode {
   id: number;
@@ -628,6 +635,12 @@ export const tauriApi = {
       isTauri()
         ? invoke<BacklinkEntry[]>('get_backlinks', { path })
         : mockVault.getBacklinks(path),
+
+    /** UNLINK-1: незалинкованные упоминания заголовка файла (FTS-фраза по телу, без уже-линкующих). */
+    unlinkedMentions: (path: string) =>
+      isTauri()
+        ? invoke<MentionEntry[]>('get_unlinked_mentions', { path })
+        : mockVault.getUnlinkedMentions(path),
 
     /** Локальный N-hop граф вокруг файла (ADR-004). */
     getLocalGraph: (center: string, hops: number) =>
