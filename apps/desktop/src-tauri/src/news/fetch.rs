@@ -174,7 +174,14 @@ mod tests {
     /// (169.254.169.254) адрес, отклоняется ДО коннекта — резолвер вызван, сокета нет.
     #[tokio::test]
     async fn dns_guard_rejects_private_and_metadata_resolution() {
-        for bad in ["192.168.1.10", "169.254.169.254", "127.0.0.1"] {
+        // IPv4-mapped IPv6 (::ffff:…) тоже отклоняются — иначе обход гарда через v6-форму (аудит 2026-06).
+        for bad in [
+            "192.168.1.10",
+            "169.254.169.254",
+            "127.0.0.1",
+            "::ffff:192.168.1.10",
+            "::ffff:169.254.169.254",
+        ] {
             let resolver = Arc::new(FixedResolver {
                 ips: vec![bad.parse().unwrap()],
                 calls: AtomicUsize::new(0),

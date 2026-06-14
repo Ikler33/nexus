@@ -140,8 +140,10 @@ pub async fn plugin_invoke(
     if method == "net.fetch" {
         let url = path.as_deref().ok_or("нет аргумента path (url)")?;
         let host = net_host.ok_or("некорректный URL")?;
-        if crate::plugin::is_private_host(&host) {
-            return Err(format!("SSRF: приватный/loopback хост запрещён: {host}").into());
+        // IP-литерал-хост: metadata/приватный отсекаем ДО сети. Для доменов is_private_host=false —
+        // их ловит DNS-гард в dispatch_net (резолв→проверка→пин, анти-rebinding).
+        if crate::plugin::blocks_cloud_metadata(&host) || crate::plugin::is_private_host(&host) {
+            return Err(format!("SSRF: приватный/metadata-хост запрещён: {host}").into());
         }
         return dispatch_net(url).await.map_err(AppError::Msg);
     }
@@ -152,15 +154,51 @@ pub async fn plugin_invoke(
         .map_err(AppError::Msg)
 }
 
-/// `net.fetch`: GET по уже авторизованному (allowlist) + SSRF-проверенному URL. Без следования
-/// редиректам (анти-redirect-SSRF) и с таймаутом. Возвращает `{status, body}`.
+/// SSRF-гард плагин-egress: КАЖДЫЙ зарезолвленный IP обязан быть публичным и не-metadata — иначе
+/// домен отклоняется ДО коннекта (анти-DNS-rebinding). Пустой резолв — тоже отказ (нечего пинить).
+/// Чистая функция — тестируется напрямую (находка аудита 2026-06: plugin net.fetch не пинил IP).
+fn guard_fetch_ips(ips: &[std::net::IpAddr]) -> Result<(), String> {
+    if ips.is_empty() {
+        return Err("dns: пустой резолв".into());
+    }
+    for ip in ips {
+        let s = ip.to_string();
+        if crate::plugin::blocks_cloud_metadata(&s) || crate::plugin::is_private_host(&s) {
+            // Адрес не включаем (политика приватности ошибок).
+            return Err("SSRF: хост резолвится в приватный/metadata адрес".into());
+        }
+    }
+    Ok(())
+}
+
+/// `net.fetch`: GET по авторизованному (allowlist) + SSRF-проверенному URL. DNS-гард: резолв хоста →
+/// проверка ВСЕХ IP (metadata/приватный) → ПИН проверенного IP в клиент (`resolve_to_addrs`), чтобы
+/// между проверкой и коннектом DNS не «перепрыгнул» внутрь сети (rebinding). Без редиректов
+/// (анти-redirect-SSRF) и с таймаутом. Возвращает `{status, body}`.
 async fn dispatch_net(url: &str) -> Result<serde_json::Value, String> {
-    // egress-lint: allow — PLUGIN-эгресс со СВОЕЙ политикой (broker net-allowlist + is_private_host
-    // в dispatch_plugin + таймаут 15с), НЕ core-путь; миграция на net::GuardedClient — отдельный
-    // срез вне фундамента (ADR-005-ext, исключение (б) AC-EGR-1).
+    let parsed = reqwest::Url::parse(url).map_err(|_| "некорректный URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("net.fetch: разрешены только http/https".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL без хоста".to_string())?
+        .to_string();
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    // Резолв → гард → пин (зеркало news::GuardedNewsFetcher::fetch / check_resolved_ips).
+    let ips: Vec<std::net::IpAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| format!("dns: {e}"))?
+        .map(|sa| sa.ip())
+        .collect();
+    guard_fetch_ips(&ips)?;
+    let pinned = std::net::SocketAddr::new(ips[0], port);
+    // egress-lint: allow — PLUGIN-эгресс со СВОЕЙ политикой (broker net-allowlist + SSRF/DNS-гард +
+    // таймаут 15с), НЕ core-путь; миграция на net::GuardedClient — отдельный срез (ADR-005-ext, искл.(б)).
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(15))
+        .resolve_to_addrs(&host, &[pinned])
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
@@ -257,7 +295,38 @@ async fn dispatch_vault(
 mod tests {
     use super::*;
     use crate::plugin::{Permissions, PluginBroker};
+    use std::net::IpAddr;
     use tempfile::TempDir;
+
+    /// SSRF-гард plugin-egress: приватные/metadata IP в резолве (вкл. IPv4-mapped) отклоняются;
+    /// пустой резолв — отказ; публичные — проходят (находка аудита 2026-06).
+    #[test]
+    fn guard_fetch_ips_rejects_private_metadata_and_mapped() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.0.31",
+            "169.254.169.254",
+            "::1",
+            "::ffff:192.168.0.1", // IPv4-mapped приватный — обходил гард до фикса
+            "::ffff:169.254.169.254", // IPv4-mapped metadata
+            "64:ff9b::a9fe:a9fe", // NAT64 → metadata (security-ревью 2026-06)
+            "2002:c0a8:1f::",     // 6to4 → 192.168.0.31
+            "::a9fe:a9fe",        // IPv4-compatible → metadata
+            "100.64.0.1",         // CGNAT 100.64.0.0/10
+        ] {
+            let a: IpAddr = ip.parse().unwrap();
+            assert!(guard_fetch_ips(&[a]).is_err(), "{ip} должен отклоняться");
+        }
+        assert!(guard_fetch_ips(&[]).is_err(), "пустой резолв — отказ");
+        // Публичные проходят; смешанный набор с одним приватным — отказ (ВСЕ обязаны быть публичны).
+        assert!(guard_fetch_ips(&["93.184.216.34".parse().unwrap()]).is_ok());
+        assert!(guard_fetch_ips(&[
+            "93.184.216.34".parse().unwrap(),
+            "192.168.1.5".parse().unwrap(),
+        ])
+        .is_err());
+    }
 
     fn vault() -> TempDir {
         let d = TempDir::new().unwrap();
