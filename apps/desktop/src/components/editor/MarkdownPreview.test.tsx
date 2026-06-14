@@ -1,7 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { tauriApi } from '../../lib/tauri-api';
 import { MarkdownPreview } from './MarkdownPreview';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('MarkdownPreview (#20)', () => {
   it('рендерит markdown: заголовок, жирный, список', () => {
@@ -92,5 +95,23 @@ describe('MarkdownPreview (#20)', () => {
     expect(boxes).toHaveLength(2);
     expect(boxes[0]).not.toBeChecked(); // родитель НЕ отмечен
     expect(boxes[1]).toBeChecked(); // ребёнок отмечен
+  });
+
+  it('IMG-1: vault-картинка грузится как data:-URL через read_attachment', async () => {
+    const read = vi
+      .spyOn(tauriApi.attachments, 'read')
+      .mockResolvedValue('data:image/png;base64,AAAA');
+    render(<MarkdownPreview source={'![кот](attachments/cat.png)'} onOpenLink={() => {}} />);
+    const img = await screen.findByRole('img', { name: 'кот' });
+    expect(read).toHaveBeenCalledWith('attachments/cat.png');
+    await waitFor(() => expect(img).toHaveAttribute('src', 'data:image/png;base64,AAAA'));
+  });
+
+  it('IMG-1: внешний URL картинки НЕ идёт через read_attachment', async () => {
+    const read = vi.spyOn(tauriApi.attachments, 'read');
+    render(<MarkdownPreview source={'![ext](https://example.com/x.png)'} onOpenLink={() => {}} />);
+    const img = await screen.findByRole('img', { name: 'ext' });
+    expect(img).toHaveAttribute('src', 'https://example.com/x.png');
+    expect(read).not.toHaveBeenCalled();
   });
 });

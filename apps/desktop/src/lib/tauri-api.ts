@@ -606,6 +606,18 @@ export const tauriApi = {
     listTasks: () => (isTauri() ? invoke<TaskItem[]>('list_tasks') : Promise.resolve([] as TaskItem[])),
   },
 
+  attachments: {
+    /** Пишет картинку в `attachments/<name>` из base64 (IMG-1). Возвращает относительный путь `![](…)`. */
+    write: (name: string, dataBase64: string) =>
+      isTauri()
+        ? invoke<string>('write_attachment', { name, dataBase64 })
+        : Promise.resolve(`attachments/${name}`),
+
+    /** Читает вложение-картинку как `data:`-URL для превью (IMG-1). Вне Tauri — пусто. */
+    read: (path: string) =>
+      isTauri() ? invoke<string>('read_attachment', { path }) : Promise.resolve(''),
+  },
+
   graph: {
     /** Беклинки файла (источник истины — SQLite, ADR-004). */
     getBacklinks: (path: string) =>

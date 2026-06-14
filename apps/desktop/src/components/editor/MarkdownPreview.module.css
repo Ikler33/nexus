@@ -100,6 +100,15 @@
   cursor: pointer;
 }
 
+/* IMG-1: картинка-вложение в превью. */
+.image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  display: block;
+  margin: var(--space-3) 0;
+}
+
 .preview a {
   color: var(--color-link);
   text-decoration: none;

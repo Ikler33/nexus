@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -40,6 +41,30 @@ function ownTaskChecked(node: HastNode | undefined): boolean {
   return false;
 }
 
+/**
+ * Картинка-вложение в превью (IMG-1). Vault-относительный путь (`attachments/…`) грузится как
+ * `data:`-URL через `read_attachment` (CSP разрешает `data:`, asset-протокол не нужен); внешние
+ * `http(s):`/`data:` остаются как есть. `alt` прокидывается из markdown — без нарушений CSP.
+ */
+function VaultImage({ src, alt }: { src?: string; alt?: string }) {
+  const external = !src || /^(https?:|data:)/i.test(src);
+  const [resolved, setResolved] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!src || external) return;
+    let alive = true;
+    void tauriApi.attachments
+      .read(src)
+      .then((url) => {
+        if (alive && url) setResolved(url);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [src, external]);
+  return <img className={styles.image} src={external ? src : resolved} alt={alt ?? ''} loading="lazy" />;
+}
+
 export function MarkdownPreview({
   source,
   onOpenLink,
@@ -53,6 +78,15 @@ export function MarkdownPreview({
 }) {
   const sourceLines = onToggleTask ? source.split('\n') : null;
   const components: Components = {
+    // IMG-1: картинки-вложения через VaultImage (vault-путь → data:-URL).
+    img({ src, alt }) {
+      return (
+        <VaultImage
+          src={typeof src === 'string' ? src : undefined}
+          alt={typeof alt === 'string' ? alt : undefined}
+        />
+      );
+    },
     a({ href, children }) {
       if (href && href.startsWith(WIKILINK_SCHEME)) {
         const target = decodeURIComponent(href.slice(WIKILINK_SCHEME.length));
