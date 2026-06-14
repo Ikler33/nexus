@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   AlertTriangle,
@@ -14,8 +14,10 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
+import { CITE_SCHEME, remarkCitations } from '../../lib/markdown/remarkCitations';
 
 import {
   disclosureOpen,
@@ -463,6 +465,53 @@ function MessageActions({
   );
 }
 
+/** URL-transform ответа ИИ: сохраняет схему цитат `nexus-cite:`, остальное — штатная санитизация. */
+const citeUrlTransform = (url: string): string =>
+  url.startsWith(CITE_SCHEME) ? url : defaultUrlTransform(url);
+
+/**
+ * Кликабельная цитата-сноска `[n]` (AIP-2): открывает источник n этого сообщения — web-URL (системный
+ * браузер) или заметку RAG (в редакторе). Memory-источники НЕ нумеруются [n] (бэкенд build_memory_block:
+ * «не нумеруй их как [n]»), поэтому цитата ведёт только на web/заметку. Номер вне диапазона источников →
+ * обычный текст `[n]` (LLM иногда ссылается на несуществующий — не делаем мёртвую кнопку).
+ */
+function Citation({
+  n,
+  message,
+  onOpen,
+}: {
+  n: number;
+  message: ChatMessage;
+  onOpen: (path: string) => void;
+}) {
+  const { t } = useTranslation();
+  const web = message.webSources;
+  const rag = message.sources;
+  let onClick: (() => void) | null = null;
+  let label = '';
+  if (web && n >= 1 && n <= web.length) {
+    const s = web[n - 1];
+    label = s.title || s.url;
+    onClick = () => void tauriApi.external.open(s.url).catch(() => {});
+  } else if (rag && n >= 1 && n <= rag.length) {
+    const s = rag[n - 1];
+    label = s.title ?? s.path;
+    onClick = () => onOpen(s.path);
+  }
+  if (!onClick) return <>[{n}]</>;
+  return (
+    <button
+      type="button"
+      className={styles.cite}
+      onClick={onClick}
+      title={t('chat.citationOpen', { source: label })}
+      aria-label={t('chat.citationOpen', { source: label })}
+    >
+      [{n}]
+    </button>
+  );
+}
+
 function Message({
   message,
   onOpen,
@@ -478,6 +527,19 @@ function Message({
   // Режим заморожен на время стрима (setMode блокируется) → текущий режим честен для этого сообщения.
   const mode = useChatStore((s) => s.mode);
   const webFlag = useChatStore((s) => s.web);
+  // AIP-2: цитаты `[n]` (remarkCitations → схема nexus-cite:) рендерятся кликабельной кнопкой,
+  // открывающей источник n этого сообщения; прочие ссылки — как раньше. Мемо по message/onOpen.
+  const mdComponents = useMemo<Components>(
+    () => ({
+      a({ href, children }) {
+        if (typeof href === 'string' && href.startsWith(CITE_SCHEME)) {
+          return <Citation n={Number(href.slice(CITE_SCHEME.length))} message={message} onOpen={onOpen} />;
+        }
+        return <a href={href}>{children}</a>;
+      },
+    }),
+    [message, onOpen],
+  );
   if (message.role === 'user') {
     return <div className={styles.user}>{message.content}</div>;
   }
@@ -515,8 +577,15 @@ function Message({
                 </>
               ) : (
                 // LLM отвечает в markdown (фидбэк 11.06: «## выглядят не очень») → рендерим.
+                // AIP-2: + remarkCitations (клик по [n] → источник). Только финальный рендер, не стрим.
                 <div className={styles.md}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkCitations]}
+                    urlTransform={citeUrlTransform}
+                    components={mdComponents}
+                  >
+                    {message.content}
+                  </ReactMarkdown>
                 </div>
               )}
             </div>
