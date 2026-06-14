@@ -256,7 +256,9 @@
     "oqTitle": "Open questions",
     "oqEmpty": "No questions yet — hit “refresh” and the model will find open threads in recent notes.",
     "driftTitle": "Focus drift",
-    "driftEmpty": "No analysis yet — hit “refresh” and the model will compare your current focus with your goals."
+    "driftEmpty": "No analysis yet — hit “refresh” and the model will compare your current focus with your goals.",
+    "discussWithAi": "Discuss with AI",
+    "discussDriftPrompt": "How do I refocus on my goals? Here's the current drift: {{drift}}"
   },
   "tree": {
     "label": "Vault files",

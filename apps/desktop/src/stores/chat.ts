@@ -60,10 +60,15 @@ interface ChatState {
   mode: ChatMode;
   /** Web-флаг ПОВЕРХ режима: разрешить модели интернет-поиск (web-агент решает сам, нужен ли). */
   web: boolean;
+  /** AIP-3: текст-предзаполнение композера (мост «Разобрать с ИИ» с Home-инсайтов). ChatView
+   *  потребляет его один раз (заносит в поле ввода + фокус) и сбрасывает в ''. */
+  draft: string;
   /** Переключает режим (нельзя во время стрима). */
   setMode: (mode: ChatMode) => void;
   /** Тоггл web-флага (нельзя во время стрима). Режим не трогает. */
   toggleWeb: () => void;
+  /** AIP-3: задать предзаполнение композера (или '' для сброса после потребления). */
+  setDraft: (text: string) => void;
   /** Закреплённые заметки (P6-PIN): их ПОЛНОЕ содержимое гарантированно идёт в контекст ИИ —
    *  «обсудить эту заметку» (не зависит от RAG-ретрива). Пути относительно vault, кап PIN_MAX. */
   pinned: string[];
@@ -158,12 +163,16 @@ export const useChatStore = create<ChatState>((set, get) => {
     streaming: false,
     mode: 'vault',
     web: false,
+    draft: '',
     pinned: [],
     sessionId: null,
 
     setMode(mode) {
       if (get().streaming) return; // не переключаем режим на лету
       set({ mode });
+    },
+    setDraft(text) {
+      set({ draft: text });
     },
     toggleWeb() {
       if (get().streaming) return; // во время стрима флаг заморожен (как режим)
