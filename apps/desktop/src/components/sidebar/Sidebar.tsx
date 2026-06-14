@@ -12,6 +12,10 @@ import styles from './Sidebar.module.css';
 /** Панели сайдбара (DP-2, макет `sidebar.jsx`): icon-rail переключает содержимое. */
 type Panel = 'files' | 'search' | 'tags' | 'starred';
 
+/** Потолок выдачи тег-фильтра — ЗЕРКАЛО `tags::notes_by_tag` LIMIT (бэкенд). При упоре в него счётчик
+ *  чипа показывает «N+» (честно, без молчаливого усечения). */
+const TAG_FILTER_LIMIT = 200;
+
 /**
  * Сайдбар (DP-2): icon-rail (файлы / поиск / теги / избранное) + side-nav (Home, новая заметка)
  * + активная панель. Файлы — виртуализированное дерево (Ф0-3); поиск — title/path/tags с
@@ -23,6 +27,9 @@ export function Sidebar() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NoteRef[]>([]);
   const [tags, setTags] = useState<TagCount[]>([]);
+  /** Активный ТОЧНЫЙ фильтр по тегу (клик по тегу): exact-match вместо зашумлённого substring-поиска.
+   *  Взаимоисключим с текстовым `query` — ввод текста выходит из тег-режима, × снимает фильтр. */
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const openFile = useWorkspaceStore((s) => s.openFile);
   const createNote = useVaultStore((s) => s.createNote);
   const vaultOpen = useVaultStore((s) => s.info != null);
@@ -31,27 +38,40 @@ export function Sidebar() {
   const starred = useStarredStore((s) => s.paths);
   const q = query.trim();
 
+  // Один эффект на оба режима поиск-панели: тег-фильтр (exact, приоритет) ИЛИ текстовый поиск (substring).
   useEffect(() => {
-    if (panel !== 'search' || !q) {
+    if (panel !== 'search') {
       setResults([]);
       return;
     }
     let cancelled = false;
+    const set = (r: NoteRef[]) => {
+      if (!cancelled) setResults(r);
+    };
+    if (tagFilter) {
+      tauriApi.vault
+        .notesByTag(tagFilter)
+        .then(set)
+        .catch(() => set([]));
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!q) {
+      setResults([]);
+      return;
+    }
     const id = setTimeout(() => {
       tauriApi.search
         .searchVault(q)
-        .then((r) => {
-          if (!cancelled) setResults(r);
-        })
-        .catch(() => {
-          if (!cancelled) setResults([]);
-        });
+        .then(set)
+        .catch(() => set([]));
     }, 150);
     return () => {
       cancelled = true;
       clearTimeout(id);
     };
-  }, [panel, q]);
+  }, [panel, q, tagFilter]);
 
   useEffect(() => {
     if (panel !== 'tags' || !vaultOpen) return;
@@ -70,7 +90,19 @@ export function Sidebar() {
 
   const searchByTag = (name: string) => {
     setPanel('search');
-    setQuery(name);
+    setQuery('');
+    setResults([]); // не держать прошлый срез на экране, пока грузится notesByTag (асинхронно)
+    setTagFilter(name); // ТОЧНЫЙ фильтр, не текстовый поиск по имени тега
+  };
+  // Ввод текста в поиск выходит из тег-режима (взаимоисключимо).
+  const onSearchInput = (v: string) => {
+    setQuery(v);
+    // Выход из тег-режима: гасим тег-результаты СРАЗУ, иначе они мелькали бы под новым запросом на
+    // время debounce (adversarial-ревью). Пустой ввод (стёрли всё) тег НЕ снимает.
+    if (v && tagFilter) {
+      setTagFilter(null);
+      setResults([]);
+    }
   };
 
   return (
@@ -143,7 +175,7 @@ export function Sidebar() {
               className={styles.searchInput}
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => onSearchInput(e.target.value)}
               placeholder={t('sidebar.searchPlaceholder')}
               aria-label={t('sidebar.searchLabel')}
               autoFocus
@@ -158,10 +190,33 @@ export function Sidebar() {
               </button>
             )}
           </div>
-          {q ? (
+          {tagFilter && (
+            <div className={styles.tagFilter}>
+              <span className={styles.tagFilterChip}>
+                <Hash size={12} aria-hidden />
+                {tagFilter}
+                <button
+                  type="button"
+                  className={styles.tagFilterClear}
+                  onClick={() => setTagFilter(null)}
+                  aria-label={t('sidebar.tagFilterClear')}
+                >
+                  <X size={12} aria-hidden />
+                </button>
+              </span>
+              <span className={styles.tagFilterCount}>
+                {results.length >= TAG_FILTER_LIMIT
+                  ? t('sidebar.tagFilterCountCapped', { count: TAG_FILTER_LIMIT })
+                  : t('sidebar.tagFilterCount', { count: results.length })}
+              </span>
+            </div>
+          )}
+          {q || tagFilter ? (
             <ul className={styles.results} aria-label={t('sidebar.resultsLabel')}>
               {results.length === 0 ? (
-                <li className={styles.empty}>{t('sidebar.noResults')}</li>
+                <li className={styles.empty}>
+                  {tagFilter ? t('sidebar.tagNoResults') : t('sidebar.noResults')}
+                </li>
               ) : (
                 results.map((r) => (
                   <li key={r.path}>

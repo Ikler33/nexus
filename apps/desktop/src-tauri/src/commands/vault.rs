@@ -906,6 +906,16 @@ pub async fn list_tags(state: State<'_, AppState>) -> AppResult<Vec<crate::tags:
     Ok(crate::tags::list_tags(&reader).await?)
 }
 
+/// Заметки с ТОЧНЫМ тегом — клик по тегу в сайдбаре (exact-фильтр вместо зашумлённого substring-поиска).
+#[tauri::command]
+pub async fn notes_by_tag(
+    state: State<'_, AppState>,
+    tag: String,
+) -> AppResult<Vec<crate::vault::NoteRef>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(crate::tags::notes_by_tag(&reader, &tag).await?)
+}
+
 /// Число живых заметок индекса — статусбар «Проиндексировано · N» (DP-14, макет app.jsx).
 #[tauri::command]
 pub async fn notes_count(state: State<'_, AppState>) -> AppResult<i64> {
