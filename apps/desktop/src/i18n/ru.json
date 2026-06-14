@@ -333,6 +333,12 @@
     "count_few": "{{count, number}} беклинка",
     "count_many": "{{count, number}} беклинков"
   },
+  "outline": {
+    "title": "Оглавление",
+    "count_one": "{{count, number}} заголовок",
+    "count_few": "{{count, number}} заголовка",
+    "count_many": "{{count, number}} заголовков"
+  },
   "capture": {
     "title": "Быстрая запись",
     "placeholder": "Запишите мысль — Enter добавит её в Inbox…",
