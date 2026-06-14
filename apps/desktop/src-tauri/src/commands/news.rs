@@ -10,10 +10,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::ai::ChatProvider;
+use crate::db::{DbResult, ReadPool};
 use crate::error::{AppError, AppResult};
 use crate::net::EgressFeature;
 use crate::news::{self, NewsConfig, NewsItem, NewsRun};
+use crate::search::{self, SearchOptions};
 use crate::state::AppState;
+use crate::suggest::LinkSuggestion;
 
 /// Размер страницы ленты (карточек за запрос) — без безлимитных выгрузок (урок #22).
 const PAGE_SIZE: i64 = 50;
@@ -328,6 +331,119 @@ fn config_path(app: &AppHandle) -> AppResult<std::path::PathBuf> {
 
 /// Тестируемое ядро «в заметку»: пишет файл в `News/` vault'а (анти-traversal через
 /// `resolve_vault_path_for_write`), уникализирует имя суффиксом.
+/// Потолок символов резюме в поисковом запросе (заголовок несёт тему; длинный summary размывает
+/// центроид эмбеддинга и тянет FTS-ветку в шум). Обрезаем по СИМВОЛАМ (не байтам — кириллица).
+const RELATED_QUERY_SUMMARY_CHARS: usize = 512;
+/// Сколько связанных заметок по умолчанию (компактная секция ридера).
+const RELATED_LIMIT_DEFAULT: usize = 6;
+/// Запас перед постфильтром (self-note, floor, дедуп по файлу).
+const RELATED_OVERFETCH: usize = 4;
+/// Мягкий RRF-floor (search RRF_K=60): отсекает только хвост ниже ~rank-12 в одном списке. score из
+/// hybrid_search — RRF (≈макс 0.0328), НЕ косинус, поэтому абсолютный 0.30 обнулил бы выдачу.
+const RELATED_RRF_FLOOR: f32 = 0.012;
+
+/// Поисковый запрос «связанных заметок» из новости: заголовок целиком + начало резюме.
+fn build_related_query(title_ru: &str, summary_ru: &str) -> String {
+    let summary: String = summary_ru
+        .trim()
+        .chars()
+        .take(RELATED_QUERY_SUMMARY_CHARS)
+        .collect();
+    format!("{} {}", title_ru.trim(), summary.trim())
+        .trim()
+        .to_string()
+}
+
+/// Пути заметок, созданных ИЗ ЭТОЙ новости (frontmatter `source == url`, см. make_news_note) — чтобы не
+/// показывать «связанной» саму себя (её контент = title+summary новости → сходство ~1.0). Таблица
+/// `frontmatter_fields` индексируется (indexer), фильтр надёжный (не эвристик по пути/заголовку).
+async fn news_self_note_paths(
+    reader: &ReadPool,
+    url: &str,
+) -> DbResult<std::collections::HashSet<String>> {
+    let url = url.to_string();
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT f.path FROM frontmatter_fields ff JOIN files f ON f.id=ff.file_id \
+                 WHERE ff.key='source' AND ff.value=?1 AND f.is_deleted=0",
+            )?;
+            let rows = stmt.query_map([url], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<std::collections::HashSet<String>>>()
+        })
+        .await
+}
+
+/// FLOW: «Связанные заметки» к новости — семантический поиск по vault (hybrid_search по тексту
+/// заголовок+резюме). Вторичный discovery-аффорданс в ридере: лениво, без кэша. НЕТ векторного индекса
+/// → пусто (секция скрыта). Контент новости (перевод недоверенного фида) идёт ТОЛЬКО в embed_query/
+/// FTS-токены (НЕ в LLM-промпт) — prompt-injection невозможна, FTS токенизирует+экранирует.
+/// EGRESS: запрос эмбеддится тем же guarded-каналом [`EgressFeature::Embed`], что и поиск/чат-RAG —
+/// при УДАЛЁННОМ эмбеддере (прод bge:8083) текст новости уходит на embed-хост по сети; это покрыто
+/// существующей политикой эгресса (офлайн-тумблер режет, audit пишет), отдельного opt-in нет by
+/// design. НОВОГО egress-surface не добавляет — иной встроенный host/feature тут не появляется.
+#[tauri::command]
+pub async fn news_related(
+    state: State<'_, AppState>,
+    id: i64,
+    limit: Option<usize>,
+) -> AppResult<Vec<LinkSuggestion>> {
+    let (reader, vectors, embedder) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.reader().clone(),
+            ctx.vectors.clone(),
+            ctx.ai.embedder.clone(),
+        )
+    };
+    // Валидируем запись ДО degrade-на-vectors — иначе невалидный id давал бы Err с RAG и Ok([]) без
+    // (несогласованность, пойманная adversarial-ревью): теперь not-found = Err независимо от индекса.
+    let item = news::get_item(&reader, id)
+        .await?
+        .ok_or_else(|| AppError::Msg(format!("запись ленты не найдена: {id}")))?;
+    let Some(vectors) = vectors else {
+        return Ok(Vec::new()); // нет RAG-индекса → секция скрыта (вторичный аффорданс)
+    };
+    let limit = limit.unwrap_or(RELATED_LIMIT_DEFAULT).min(20);
+    Ok(related_notes(&reader, vectors.as_ref(), embedder.as_deref(), &item, limit).await?)
+}
+
+/// Ядро `news_related` без `State` — тестируемо напрямую. Запрос из новости → hybrid_search →
+/// RRF-floor + self-note-фильтр + дедуп по файлу. `vectors` обязателен (degrade на None — в команде).
+async fn related_notes(
+    reader: &ReadPool,
+    vectors: &crate::vector::VectorIndex,
+    embedder: Option<&dyn crate::ai::EmbeddingProvider>,
+    item: &NewsItem,
+    limit: usize,
+) -> DbResult<Vec<LinkSuggestion>> {
+    let query = build_related_query(&item.title_ru, &item.summary_ru);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let opts = SearchOptions {
+        limit: limit * RELATED_OVERFETCH, // запас под self/floor/дедуп-по-файлу
+        filter: None,
+        center: None, // новость не файл в графе — граф-ранг неприменим
+    };
+    let hits = search::hybrid_search(reader, Some(vectors), embedder, query, opts).await?;
+    let self_paths = news_self_note_paths(reader, &item.url).await?;
+    let mut seen = std::collections::HashSet::new();
+    Ok(hits
+        .into_iter()
+        .filter(|h| h.score >= RELATED_RRF_FLOOR) // хвост по RRF-floor
+        .filter(|h| !self_paths.contains(&h.path)) // не показываем заметку-из-этой-новости
+        .filter(|h| seen.insert(h.path.clone())) // одна карточка на файл (max score — он сверху)
+        .take(limit)
+        .map(|h| LinkSuggestion {
+            path: h.path,
+            title: h.title,
+            score: h.score, // сырой RRF; фронт его НЕ показывает (% на RRF бессмысленны)
+            reason: h.snippet,
+        })
+        .collect())
+}
+
 fn make_news_note(root: &std::path::Path, item: &NewsItem) -> Result<String, String> {
     std::fs::create_dir_all(root.join("News")).map_err(|e| e.to_string())?;
     let date = unix_to_date(item.published_at.max(0));
@@ -438,5 +554,101 @@ mod tests {
         assert_eq!(unix_to_date(1_780_000_000), "2026-05-28");
         assert_eq!(note_slug("///"), "Новость");
         assert_eq!(note_slug(&"д".repeat(100)).chars().count(), 60);
+    }
+
+    #[test]
+    fn build_related_query_concats_and_truncates_by_chars() {
+        assert_eq!(
+            build_related_query("Заголовок", "Резюме."),
+            "Заголовок Резюме."
+        );
+        assert_eq!(build_related_query("  T  ", "  S  "), "T S");
+        assert_eq!(build_related_query("", ""), "");
+        // Обрезка резюме по СИМВОЛАМ (не байтам) — кириллица не рвётся, UTF-8 валиден.
+        let long = "я".repeat(600);
+        let q = build_related_query("T", &long);
+        assert!(q.chars().count() <= 2 + RELATED_QUERY_SUMMARY_CHARS); // "T " + ≤512
+        assert!(std::str::from_utf8(q.as_bytes()).is_ok());
+    }
+
+    /// FLOW: related_notes отдаёт релевантную заметку и ОТФИЛЬТРОВЫВАЕТ заметку-из-этой-новости
+    /// (frontmatter source==url) — иначе новость «связана сама с собой» (контент почти 1.0).
+    #[tokio::test]
+    async fn related_notes_ranks_relevant_and_filters_self_note() {
+        use crate::ai::{EmbeddingProvider, MockEmbedder};
+        use crate::db::Database;
+        use crate::indexer::Indexer;
+        use crate::vector::VectorIndex;
+
+        let dir = TempDir::new().unwrap();
+        // canonicalize — иначе на macOS TempDir под симлинком /var→/private/var, и make_news_note
+        // (resolve_vault_path_for_write) сочтёт путь traversal'ом (как makes_unique_note_with_frontmatter).
+        let root = dir.path().canonicalize().unwrap();
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let vectors =
+            Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 16).unwrap());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbedder { dim: 16 });
+        let idx = Indexer::with_rag(&db, root.clone(), embedder.clone(), vectors.clone(), true);
+
+        // Релевантная (общие слова с новостью) и нерелевантная заметки.
+        std::fs::write(
+            root.join("rag.md"),
+            "Модели и эмбеддинги в RAG-пайплайне важны для семантического поиска.",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("bread.md"),
+            "Рецепт хлеба на закваске с изюмом и мёдом по бабушкиному совету.",
+        )
+        .unwrap();
+        idx.index_file("rag.md").await.unwrap();
+        idx.index_file("bread.md").await.unwrap();
+
+        let mut it = item("Новые модели и эмбеддинги для RAG");
+        it.summary_ru = "Обзор RAG-пайплайнов и эмбеддингов современных моделей.".into();
+
+        // Заметка, созданная ИЗ этой новости (frontmatter source == it.url) — должна быть отфильтрована.
+        let self_rel = make_news_note(&root, &it).unwrap();
+        idx.index_file(&self_rel).await.unwrap();
+
+        let out = related_notes(
+            db.reader(),
+            vectors.as_ref(),
+            Some(embedder.as_ref()),
+            &it,
+            5,
+        )
+        .await
+        .unwrap();
+        let paths: Vec<&str> = out.iter().map(|s| s.path.as_str()).collect();
+        assert!(
+            paths.contains(&"rag.md"),
+            "релевантная заметка в выдаче: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("News/")),
+            "заметка-из-этой-новости (source==url) отфильтрована: {paths:?}"
+        );
+    }
+
+    /// Пустой запрос (нет заголовка и резюме) → пусто без обращения к поиску.
+    #[tokio::test]
+    async fn related_notes_empty_query_is_empty() {
+        use crate::ai::MockEmbedder;
+        use crate::db::Database;
+        use crate::vector::VectorIndex;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let vectors =
+            Arc::new(VectorIndex::open(root.join(".nexus").join("vectors.usearch"), 16).unwrap());
+        let embedder = MockEmbedder { dim: 16 };
+        let mut it = item("");
+        it.summary_ru = "".into();
+        let out = related_notes(db.reader(), vectors.as_ref(), Some(&embedder), &it, 5)
+            .await
+            .unwrap();
+        assert!(out.is_empty());
     }
 }
