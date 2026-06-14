@@ -746,6 +746,7 @@
     "view.news": "News feed",
     "view.home": "Home",
     "view.tasks": "Tasks",
+    "view.inbox": "Inbox",
     "theme.toggle": "Toggle theme (light/dark)",
     "view.reading": "Reading mode",
     "view.settings": "Settings",
@@ -789,5 +790,15 @@
     "bucket.week": "This week",
     "bucket.later": "Later",
     "bucket.none": "No date"
+  },
+  "inbox": {
+    "title": "Inbox",
+    "loading": "Opening inbox…",
+    "empty": "Inbox is empty. Capture thoughts with ⌘⇧N — they show up here to process.",
+    "refresh": "Refresh",
+    "close": "Close",
+    "toTask": "To task (in daily note)",
+    "toNote": "To new note",
+    "discard": "Delete"
   }
 }

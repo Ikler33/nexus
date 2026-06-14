@@ -256,6 +256,17 @@ export function registerCoreCommands(): Disposable {
       },
     }),
     commands.register({
+      // INBOX-1: панель «Входящие» (GTD-разбор Inbox.md). Без хоткея — ActivityBar/палитра.
+      id: 'view.inbox',
+      title: 'Inbox',
+      titleKey: 'commands.view.inbox',
+      source: 'core',
+      run: () => {
+        if (!useVaultStore.getState().info) return;
+        useUIStore.getState().toggleInbox();
+      },
+    }),
+    commands.register({
       id: 'view.chat',
       title: 'AI chat',
       titleKey: 'commands.view.chat',

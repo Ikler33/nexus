@@ -5,9 +5,9 @@ import { useVaultStore } from '../stores/vault';
 import { useWorkspaceStore } from '../stores/workspace';
 
 /** Папка дневников (решение плана: Journal/, не Daily/). */
-const JOURNAL_DIR = 'Journal';
-/** Файл быстрого захвата мыслей (quick-capture). */
-const INBOX = 'Inbox.md';
+export const JOURNAL_DIR = 'Journal';
+/** Файл быстрого захвата мыслей (quick-capture); вход для Inbox-triage (INBOX-1). */
+export const INBOX = 'Inbox.md';
 
 function pad(n: number): string {
   return String(n).padStart(2, '0');
