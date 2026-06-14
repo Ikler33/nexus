@@ -83,6 +83,8 @@ export const SLASH_ITEMS: SlashItem[] = [
     apply: snippetApply('| ${col1} | ${col2} |\n| --- | --- |\n| ${} | ${} |'),
   },
   { id: 'date', labelKey: 'slash.date', apply: inlineText(() => dateStamp(new Date())) },
+  // TASK-2: дедлайн задачи — маркер 📅 + сегодня (распознаётся parseTaskMeta в дашборде задач).
+  { id: 'due', labelKey: 'slash.due', apply: inlineText(() => `📅 ${dateStamp(new Date())} `) },
   { id: 'link', labelKey: 'slash.link', apply: inlineText(() => '[]()', 1) },
   { id: 'callout', labelKey: 'slash.callout', apply: blockPrefix('> [!note] ') },
   { id: 'hr', labelKey: 'slash.hr', apply: blockPrefix('---') },

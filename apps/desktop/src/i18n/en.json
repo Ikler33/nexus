@@ -765,6 +765,7 @@
     "task": "Task / checkbox",
     "table": "Table",
     "date": "Date",
+    "due": "Deadline (📅)",
     "link": "Link",
     "callout": "Callout",
     "hr": "Divider",
@@ -779,6 +780,14 @@
     "filterAll": "All",
     "refresh": "Refresh",
     "close": "Close",
-    "untitled": "(no text)"
+    "untitled": "(no text)",
+    "groupBy": "Group by",
+    "groupByDate": "By date",
+    "groupByFile": "By file",
+    "bucket.overdue": "Overdue",
+    "bucket.today": "Today",
+    "bucket.week": "This week",
+    "bucket.later": "Later",
+    "bucket.none": "No date"
   }
 }

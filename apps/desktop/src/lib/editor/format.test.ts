@@ -1,7 +1,15 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import { insertLink, parseTasks, toggleTask, toggleTaskAtLine, toggleWrap } from './format';
+import {
+  bucketOf,
+  insertLink,
+  parseTaskMeta,
+  parseTasks,
+  toggleTask,
+  toggleTaskAtLine,
+  toggleWrap,
+} from './format';
 
 function mkView(doc: string, from: number, to = from): EditorView {
   return new EditorView({
@@ -253,5 +261,67 @@ describe('parseTasks (TASK-1, дашборд)', () => {
       { line: 1, checked: false, text: 'a' },
       { line: 2, checked: true, text: 'b' },
     ]);
+  });
+});
+
+describe('parseTaskMeta (TASK-2)', () => {
+  it('дедлайн в трёх формах → одинаковый нормализованный due', () => {
+    expect(parseTaskMeta('купить 📅 2026-06-20')).toEqual({ due: '2026-06-20' });
+    expect(parseTaskMeta('купить @due(2026-06-20)')).toEqual({ due: '2026-06-20' });
+    expect(parseTaskMeta('купить due:2026-06-20')).toEqual({ due: '2026-06-20' });
+  });
+
+  it('недополненные числа нормализуются (zero-pad)', () => {
+    expect(parseTaskMeta('due:2026-6-9')).toEqual({ due: '2026-06-09' });
+  });
+
+  it('невалидные календарные даты отбраковываются', () => {
+    expect(parseTaskMeta('due:2026-13-40')).toEqual({});
+    expect(parseTaskMeta('due:2026-02-30')).toEqual({});
+  });
+
+  it('приоритеты: эмодзи и !pN', () => {
+    expect(parseTaskMeta('срочно ⏫')).toEqual({ priority: 1 });
+    expect(parseTaskMeta('средне 🔼')).toEqual({ priority: 2 });
+    expect(parseTaskMeta('низко 🔽')).toEqual({ priority: 3 });
+    expect(parseTaskMeta('дело !p1')).toEqual({ priority: 1 });
+    expect(parseTaskMeta('дело !P3')).toEqual({ priority: 3 });
+  });
+
+  it('!pN не ложно срабатывает на словах (!important, top1)', () => {
+    expect(parseTaskMeta('сделать !important и top1')).toEqual({});
+  });
+
+  it('дата + приоритет в одной строке', () => {
+    expect(parseTaskMeta('отчёт 📅 2026-07-01 ⏫')).toEqual({ due: '2026-07-01', priority: 1 });
+  });
+
+  it('текст без меты → пустой объект', () => {
+    expect(parseTaskMeta('просто задача')).toEqual({});
+  });
+
+  it('`due:` с границей слова — `overdue:...` не ложный дедлайн', () => {
+    expect(parseTaskMeta('overdue:2026-06-20 хвост')).toEqual({});
+    expect(parseTaskMeta('дело due:2026-06-20')).toEqual({ due: '2026-06-20' });
+  });
+});
+
+describe('bucketOf (TASK-2)', () => {
+  const today = '2026-06-14';
+  it('распределяет по бакетам относительно today', () => {
+    expect(bucketOf('2026-06-10', today)).toBe('overdue');
+    expect(bucketOf('2026-06-14', today)).toBe('today');
+    expect(bucketOf('2026-06-18', today)).toBe('week');
+    expect(bucketOf('2026-07-01', today)).toBe('later');
+    expect(bucketOf(undefined, today)).toBe('none');
+  });
+
+  it('граница недели включительно: ровно +7 → week, +8 → later', () => {
+    expect(bucketOf('2026-06-21', today)).toBe('week'); // +7
+    expect(bucketOf('2026-06-22', today)).toBe('later'); // +8
+  });
+
+  it('перенос через конец месяца корректен', () => {
+    expect(bucketOf('2026-07-04', '2026-06-30')).toBe('week'); // +4 через границу месяца
   });
 });
