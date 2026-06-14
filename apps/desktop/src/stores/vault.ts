@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { tauriApi, type FileEntry, type VaultInfo } from '../lib/tauri-api';
 import { compareEntries } from '../i18n/format';
+import { clearStartingQuestionsCache } from '../components/chat/startingQuestionsCache';
 
 /** Узел плоского (развёрнутого) представления дерева для виртуализации. */
 export interface FlatNode {
@@ -49,6 +50,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   // vault не растёт с числом файлов.
   async openVault(path) {
     const info = await tauriApi.vault.openVault(path);
+    clearStartingQuestionsCache(); // новый vault → старые вопросы по чужим путям недействительны
     const root = await tauriApi.vault.listDir('');
     set({
       info,

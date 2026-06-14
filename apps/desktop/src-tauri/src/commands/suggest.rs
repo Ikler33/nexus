@@ -67,3 +67,21 @@ pub async fn explain_relation(
     };
     Ok(crate::relation_reasons::explain_relation(&reader, &chat, &writer, path_a, path_b).await?)
 }
+
+/// AIP-SQ: до 3 коротких стартовых вопросов по активной заметке `center` для ПУСТОГО чата (снимает
+/// «проблему чистого листа»). Нет утилитарной модели / нет заметки / пустой контент / ошибка LLM →
+/// ПУСТОЙ список (НЕ ошибка) — фронт показывает статические подсказки, без toast. Кэш — на фронте.
+#[tauri::command]
+pub async fn get_starting_questions(
+    state: State<'_, AppState>,
+    center: Option<String>,
+) -> AppResult<Vec<String>> {
+    let (reader, chat) = {
+        let ctx = state.vault().await?;
+        (ctx.db.reader().clone(), ctx.ai.chat_util.clone())
+    };
+    Ok(
+        crate::starting_questions::starting_questions(&reader, chat.as_ref(), center.as_deref())
+            .await?,
+    )
+}

@@ -51,6 +51,8 @@ pub mod relation_reasons;
 pub mod scheduler;
 /// Поиск по метаданным (title/path/tags) — Ф0.
 pub mod search;
+/// AIP-SQ: контекстные стартовые вопросы для пустого чата (по активной заметке, best-effort).
+pub mod starting_questions;
 /// Глобальное состояние (managed state).
 pub mod state;
 /// Предложения связей (режим 1 max-sim) — §6.
@@ -199,6 +201,7 @@ pub fn run() {
             commands::suggest::get_link_suggestions,
             commands::suggest::get_related_notes,
             commands::suggest::explain_relation,
+            commands::suggest::get_starting_questions,
             commands::goals::list_goals,
             commands::home::get_home_data,
             commands::home::get_home_activity,
