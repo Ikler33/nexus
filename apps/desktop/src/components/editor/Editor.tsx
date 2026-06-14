@@ -100,7 +100,10 @@ export function Editor({
     // NAV-3: уступаем ⌘[ / ⌘] навигации back/forward (глобальный useKeymap). Из defaultKeymap CM6
     // это indentLess/indentMore — иначе ⌘[ в фокусе редактора и сдвигал бы отступ, и навигировал
     // (порча текста). Отступ остаётся на Tab/Shift-Tab (indentWithTab).
-    const baseKeymap = defaultKeymap.filter((b) => b.key !== 'Mod-[' && b.key !== 'Mod-]');
+    // POLISH: ⌘/ уступаем шпаргатке хоткеев (toggleComment CM6 иначе сработал бы И открыл бы её).
+    const baseKeymap = defaultKeymap.filter(
+      (b) => b.key !== 'Mod-[' && b.key !== 'Mod-]' && b.key !== 'Mod-/',
+    );
 
     // EDIT-3: умное продолжение списков/тасков/цитат. Штатные команды @codemirror/lang-markdown:
     // Enter → insertNewlineContinueMarkup (продолжает `- `/`* `/`1. `/`> `, чекбокс `- [ ] ` свежим,

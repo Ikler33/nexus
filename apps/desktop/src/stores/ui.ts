@@ -83,6 +83,11 @@ interface UIState {
   templatesOpen: boolean;
   openTemplates: () => void;
   closeTemplates: () => void;
+  /** Шпаргалка горячих клавиш (POLISH, ⌘/): overlay со списком сочетаний из реестра команд. */
+  cheatsheetOpen: boolean;
+  openCheatsheet: () => void;
+  closeCheatsheet: () => void;
+  toggleCheatsheet: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
   closeTasks: () => void;
@@ -113,6 +118,19 @@ interface UIState {
   setAiTab: (tab: AiTab) => void;
 }
 
+/**
+ * Top-оверлеи с focus-trap/верхним z (палитра, шпаргалка, Goals/Tasks/Inbox): открытие ОДНОГО гасит
+ * остальные. Иначе два focus-trap-диалога стекаются и дают клавиатурный капкан (урок P9-ревью #5 +
+ * adversarial-ревью шпаргатки: ⌘/ поверх открытой панели). Спред этой константы в open-ветках.
+ */
+const TRAP_OVERLAYS_CLOSED = {
+  paletteOpen: false,
+  goalsOpen: false,
+  tasksOpen: false,
+  inboxOpen: false,
+  cheatsheetOpen: false,
+} as const;
+
 /** Глобальное UI-состояние оболочки (Command Palette, граф, RAG-чат и пр.). */
 export const useUIStore = create<UIState>((set) => ({
   paletteOpen: false,
@@ -136,9 +154,10 @@ export const useUIStore = create<UIState>((set) => ({
   sidebarOpen: true,
   reading: false,
   aiTab: 'chat',
-  openPalette: () => set({ paletteOpen: true }),
+  openPalette: () => set({ ...TRAP_OVERLAYS_CLOSED, paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),
-  togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
+  togglePalette: () =>
+    set((s) => (s.paletteOpen ? { paletteOpen: false } : { ...TRAP_OVERLAYS_CLOSED, paletteOpen: true })),
   openGraph: () => set({ graphOpen: true }),
   closeGraph: () => set({ graphOpen: false }),
   toggleGraph: () =>
@@ -178,6 +197,15 @@ export const useUIStore = create<UIState>((set) => ({
   templatesOpen: false,
   openTemplates: () => set({ templatesOpen: true }),
   closeTemplates: () => set({ templatesOpen: false }),
+  cheatsheetOpen: false,
+  openCheatsheet: () => set({ ...TRAP_OVERLAYS_CLOSED, cheatsheetOpen: true }),
+  closeCheatsheet: () => set({ cheatsheetOpen: false }),
+  toggleCheatsheet: () =>
+    set((s) => {
+      const open = !s.cheatsheetOpen;
+      logUi('cheatsheet:toggle', open ? 'open' : 'close');
+      return open ? { ...TRAP_OVERLAYS_CLOSED, cheatsheetOpen: true } : { cheatsheetOpen: false };
+    }),
   // Модальные оверлеи goals/tasks/inbox взаимоисключаемы: открытие одного закрывает остальные —
   // иначе два focus-trap-диалога стекаются (клавиатурный капкан между ними, P9-ревью #5).
   closeGoals: () => set({ goalsOpen: false }),
@@ -185,21 +213,21 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => {
       const open = !s.goalsOpen;
       logUi('goals:toggle', open ? 'open' : 'close');
-      return open ? { goalsOpen: true, tasksOpen: false, inboxOpen: false } : { goalsOpen: false };
+      return open ? { ...TRAP_OVERLAYS_CLOSED, goalsOpen: true } : { goalsOpen: false };
     }),
   closeTasks: () => set({ tasksOpen: false }),
   toggleTasks: () =>
     set((s) => {
       const open = !s.tasksOpen;
       logUi('tasks:toggle', open ? 'open' : 'close');
-      return open ? { tasksOpen: true, goalsOpen: false, inboxOpen: false } : { tasksOpen: false };
+      return open ? { ...TRAP_OVERLAYS_CLOSED, tasksOpen: true } : { tasksOpen: false };
     }),
   closeInbox: () => set({ inboxOpen: false }),
   toggleInbox: () =>
     set((s) => {
       const open = !s.inboxOpen;
       logUi('inbox:toggle', open ? 'open' : 'close');
-      return open ? { inboxOpen: true, goalsOpen: false, tasksOpen: false } : { inboxOpen: false };
+      return open ? { ...TRAP_OVERLAYS_CLOSED, inboxOpen: true } : { inboxOpen: false };
     }),
   closeDigest: () => set({ digestOpen: false }),
   toggleDigest: () =>

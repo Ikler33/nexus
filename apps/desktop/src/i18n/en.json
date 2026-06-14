@@ -764,7 +764,21 @@
     "format.task": "Checkbox / task",
     "format.link": "Insert link",
     "editor.toggleMode": "Editor: edit / preview",
-    "versions.open": "Version history"
+    "versions.open": "Version history",
+    "help.cheatsheet": "Keyboard shortcuts"
+  },
+  "help": {
+    "cheatsheet": {
+      "title": "Keyboard shortcuts",
+      "close": "Close",
+      "groups": {
+        "navigation": "Navigation",
+        "notes": "Notes & capture",
+        "editor": "Editor",
+        "view": "View & appearance"
+      },
+      "foot": "Remap shortcuts in Settings → Hotkeys."
+    }
   },
   "slash": {
     "h1": "Heading 1",

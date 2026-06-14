@@ -376,6 +376,16 @@ export function registerCoreCommands(): Disposable {
       defaultKey: 'mod+,',
       run: () => useUIStore.getState().openSettings(),
     }),
+    commands.register({
+      id: 'help.cheatsheet',
+      title: 'Keyboard shortcuts',
+      titleKey: 'commands.help.cheatsheet',
+      source: 'core',
+      // ⌘/ — конвенция «показать сочетания» (Slack/Linear/GitHub); `Mod-/` вырезан из keymap
+      // редактора (как nav ⌘[/⌘]), чтобы глобально открывал шпаргалку, а не toggleComment CM6.
+      defaultKey: 'mod+/',
+      run: () => useUIStore.getState().toggleCheatsheet(),
+    }),
   ];
   return { dispose: () => disposers.forEach((d) => d.dispose()) };
 }

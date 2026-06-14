@@ -22,6 +22,7 @@ import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
 import { TemplatePicker } from './components/command/TemplatePicker';
+import { HotkeysCheatsheet } from './components/command/HotkeysCheatsheet';
 import { ToastViewport } from './components/chrome/ToastViewport';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
@@ -184,7 +185,8 @@ export function App() {
         s.syncOpen ||
         s.captureOpen ||
         s.templatesOpen ||
-        s.versionsOpen
+        s.versionsOpen ||
+        s.cheatsheetOpen
       )
         return;
       s.closeReading();
@@ -263,6 +265,7 @@ export function App() {
       <CommandPalette />
       <QuickCapture />
       <TemplatePicker />
+      <HotkeysCheatsheet />
       <ToastViewport />
       {pluginsOpen && (
         <Suspense fallback={null}>
