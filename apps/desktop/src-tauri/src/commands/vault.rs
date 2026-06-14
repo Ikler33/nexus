@@ -253,6 +253,15 @@ pub async fn open_vault(
             DAY_SECS,
         );
     }
+    // Open questions (H5) — AIP-5: проактивно раз/сутки (как context drift), scheduled-only (НЕ on-change,
+    // добавлено после снятия on_change). Раньше — manual-only; теперь генерируется само, чтобы карточка
+    // не висела пустой с «нажми обновить». Хендлер на `chat_util`, поэтому и гейт по нему.
+    if chat_util.is_some() {
+        recurring.insert(
+            crate::home::widgets::widget_kind(crate::home::insights::KEY_OPEN_QUESTIONS),
+            DAY_SECS,
+        );
+    }
     // Лента (D3): раз/сутки, НЕ on-change (сетевая, от правок vault не зависит); при выключенной
     // фиче прогон — дешёвый no-op хендлера.
     if news_active {
@@ -309,25 +318,35 @@ pub async fn open_vault(
     {
         let _ = crate::scheduler::enqueue(db.writer(), crate::digest::KIND_DIGEST, "", 0, 2).await;
     }
-    // Context drift (H5) — run-if-overdue на открытии (как дайджест), через H2 `is_overdue` (нет кэша
-    // ИЛИ vault менялся с прошлой генерации). Open questions — manual-only, без сида.
-    if chat.is_some() {
-        let key = crate::home::insights::KEY_CONTEXT_DRIFT;
+    // Context drift + open questions (H5) — run-if-overdue на открытии (как дайджест), через H2
+    // `is_overdue` (нет кэша ИЛИ vault менялся с прошлой генерации). AIP-5: open_questions теперь тоже
+    // сидится проактивно (раньше был manual-only). drift — на `chat_fast`/`chat`, open_questions — на
+    // `chat_util`; mtime считаем один раз на оба.
+    {
         let mtime = crate::scheduler::max_file_mtime(db.reader())
             .await
             .unwrap_or(0);
-        if crate::home::widgets::is_overdue(db.reader(), key, mtime)
-            .await
-            .unwrap_or(false)
-        {
-            let _ = crate::scheduler::enqueue(
-                db.writer(),
-                &crate::home::widgets::widget_kind(key),
-                "",
-                0,
-                2,
-            )
-            .await;
+        let mut seeds: Vec<&str> = Vec::new();
+        if chat.is_some() {
+            seeds.push(crate::home::insights::KEY_CONTEXT_DRIFT);
+        }
+        if chat_util.is_some() {
+            seeds.push(crate::home::insights::KEY_OPEN_QUESTIONS);
+        }
+        for key in seeds {
+            if crate::home::widgets::is_overdue(db.reader(), key, mtime)
+                .await
+                .unwrap_or(false)
+            {
+                let _ = crate::scheduler::enqueue(
+                    db.writer(),
+                    &crate::home::widgets::widget_kind(key),
+                    "",
+                    0,
+                    2,
+                )
+                .await;
+            }
         }
     }
     // Лента (D3 «при первом открытии за день»): сид run-if-overdue — фича включена и последний

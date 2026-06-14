@@ -12,6 +12,10 @@ import {
 /** Сколько узлов берём в мини-граф карточки (визуальная виньетка, не полноценный граф). */
 const MINI_GRAPH_NODES = 48;
 
+/** Префикс kind LLM-виджетов в планировщике (зеркалит Rust `home::widgets::KIND_PREFIX`): по нему
+ *  активную джобу `home_widget:open_questions` сопоставляем ключу виджета `open_questions` (AIP-5). */
+const WIDGET_KIND_PREFIX = 'home_widget:';
+
 /**
  * Состояние HOME-дашборда (DP-1, макет `home.jsx`): статика H1 (stats/recent/goals) +
  * активность H6 + LLM-виджеты H3/H5 (brief/questions/drift из кэша; refresh — фоновая джоба,
@@ -33,6 +37,10 @@ interface HomeState {
   /** Перечитать один виджет (по событию `home:widget-updated`). */
   reloadWidget: (key: string) => Promise<void>;
   refreshWidget: (key: string) => Promise<void>;
+  /** AIP-5: подтянуть «генерируется» из активных джоб планировщика (`home_widget:*`) — чтобы карточка,
+   *  которую планировщик сидит проактивно на открытии vault, показывала «генерирю…», а не «нажми
+   *  обновить». Только ДОБАВЛЯЕТ флаги (снятие — по `home:widget-updated` → reloadWidget). */
+  syncGenerating: () => Promise<void>;
 }
 
 export const useHomeStore = create<HomeState>((set, get) => ({
@@ -59,8 +67,26 @@ export const useHomeStore = create<HomeState>((set, get) => ({
         tauriApi.graph.getFullGraph(MINI_GRAPH_NODES),
       ]);
       set({ data, activity, brief, questions, drift, stale, graph, loading: false, error: null });
+      void get().syncGenerating(); // карточки, что планировщик сидит на открытии, → «генерирю…»
     } catch (e) {
       set({ loading: false, error: String(e) });
+    }
+  },
+
+  syncGenerating: async () => {
+    try {
+      const jobs = await tauriApi.scheduler.activeJobs();
+      const active: Record<string, boolean> = {};
+      for (const j of jobs) {
+        if (j.kind.startsWith(WIDGET_KIND_PREFIX)) {
+          active[j.kind.slice(WIDGET_KIND_PREFIX.length)] = true;
+        }
+      }
+      if (Object.keys(active).length) {
+        set((s) => ({ generating: { ...s.generating, ...active } }));
+      }
+    } catch {
+      // вне Tauri / планировщик недоступен — no-op (генерирующихся джоб нет)
     }
   },
 
