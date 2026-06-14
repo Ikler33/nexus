@@ -15,6 +15,12 @@ describe('MarkdownPreview (#20)', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 
+  it('EDIT-7: заголовки несут data-outline-line (исходная строка) для перехода из оглавления', () => {
+    render(<MarkdownPreview source={'# One\n\nтекст\n\n## Two'} onOpenLink={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'One' })).toHaveAttribute('data-outline-line', '1');
+    expect(screen.getByRole('heading', { name: 'Two' })).toHaveAttribute('data-outline-line', '5');
+  });
+
   it('GFM таблицы/таск-листы', () => {
     const src = '| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n- [ ] todo';
     render(<MarkdownPreview source={src} onOpenLink={() => {}} />);

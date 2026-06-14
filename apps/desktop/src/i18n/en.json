@@ -324,6 +324,11 @@
     "count_one": "{{count, number}} backlink",
     "count_other": "{{count, number}} backlinks"
   },
+  "outline": {
+    "title": "Outline",
+    "count_one": "{{count, number}} heading",
+    "count_other": "{{count, number}} headings"
+  },
   "capture": {
     "title": "Quick capture",
     "placeholder": "Jot a thought — Enter adds it to your Inbox…",

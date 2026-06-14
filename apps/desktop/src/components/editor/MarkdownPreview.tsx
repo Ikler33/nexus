@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { createElement, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
@@ -134,6 +134,22 @@ export function MarkdownPreview({
       );
     },
   };
+
+  // EDIT-7: помечаем заголовки исходной строкой (`data-outline-line`) — панель Outline скроллит к
+  // ним в режиме чтения/превью (в source-режиме переход идёт через CM6). `node.position.start.line` —
+  // тот же источник позиции, что у тасков (EDIT-5); атрибут невидимый, рендер заголовков не меняет.
+  const headingWithLine =
+    (tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'): Components['h1'] =>
+    ({ node, children }) => {
+      const line = node?.position?.start?.line;
+      return createElement(tag, typeof line === 'number' ? { 'data-outline-line': line } : {}, children);
+    };
+  components.h1 = headingWithLine('h1');
+  components.h2 = headingWithLine('h2');
+  components.h3 = headingWithLine('h3');
+  components.h4 = headingWithLine('h4');
+  components.h5 = headingWithLine('h5');
+  components.h6 = headingWithLine('h6');
 
   if (onToggleTask) {
     // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,

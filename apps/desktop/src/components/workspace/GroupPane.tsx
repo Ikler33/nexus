@@ -1,7 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { BookOpen, Clock, Columns2, FileText, History, PenLine, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { EditorView } from '@codemirror/view';
 import { toggleTaskAtLine } from '../../lib/editor/format';
+import { getActiveEditorView } from '../../lib/editor/activeView';
 import { relTime } from '../../lib/time';
 import { tauriApi } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
@@ -12,6 +14,7 @@ import { Editor } from '../editor/Editor';
 import { FileViewer } from '../editor/FileViewer';
 import { isViewable } from '../../lib/file-kind';
 import { BacklinksBar } from '../editor/BacklinksBar';
+import { OutlineBar } from '../editor/OutlineBar';
 import styles from './GroupPane.module.css';
 
 // Preview грузится лениво (react-markdown+micromark ~160KB) — нужен только при включении режима «Просмотр».
@@ -64,6 +67,9 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const reading = useUIStore((s) => s.reading);
   const openVersions = useUIStore((s) => s.openVersions);
   const [dropTarget, setDropTarget] = useState(false);
+  // EDIT-7: ссылка на скролл-контейнер пейна — в режиме чтения/превью оглавление скроллит к заголовку
+  // по `data-outline-line` (CM6 в source-режиме скроллит сам). Реф своего пейна → корректно при сплитах.
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // DP-15 (макет editor.jsx): clock-чип doc-meta — mtime активного файла; перечитываем при смене
   // вкладки и переключении в превью (после правок mtime обновился сохранением).
@@ -91,6 +97,26 @@ export function GroupPane({ groupId }: { groupId: string }) {
   if (!group) return null;
   const active = group.activeTab ? buffers[group.activeTab] : null;
   const mdActive = active != null && !isViewable(active.path) && isMarkdown(active.path);
+
+  // EDIT-7: переход к заголовку из оглавления. Превью/чтение — скролл к элементу `data-outline-line`
+  // в СВОЁМ скролл-контейнере (надёжно при сплитах). Source — через активный CM6-редактор: курсор на
+  // начало строки + scrollIntoView + фокус (паттерн P6-AR/NAV-4). ОГРАНИЧЕНИЕ (репо-широкое, backlog):
+  // getActiveEditorView = последний в фокусе → при ДВУХ source-сплитах клик в оглавлении пейна B уведёт
+  // в редактор A; одно-пейновый случай (типичный) корректен, потери данных нет (как в commands-core/TasksPanel).
+  const jumpToHeading = (line: number) => {
+    if (mode === 'preview' || reading) {
+      scrollRef.current
+        ?.querySelector<HTMLElement>(`[data-outline-line="${line}"]`)
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
+    const view = getActiveEditorView();
+    if (!view) return;
+    const lineNo = Math.min(Math.max(1, line), view.state.doc.lines);
+    const pos = view.state.doc.line(lineNo).from;
+    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start' }) });
+    view.focus();
+  };
 
   return (
     <section
@@ -218,7 +244,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
               </div>
             </div>
           )}
-          <div className={styles.scroll}>
+          <div className={styles.scroll} ref={scrollRef}>
             {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ. */}
             {mdActive && !reading && (
               <button
@@ -285,6 +311,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
               />
             )}
           </div>
+          {/* EDIT-7: оглавление — в любом режиме (полезно особенно при чтении); скрыто, если заголовков нет. */}
+          {mdActive && <OutlineBar doc={active.doc} onJump={jumpToHeading} />}
           {!isViewable(active.path) && !reading && <BacklinksBar path={active.path} />}
         </>
       ) : (
