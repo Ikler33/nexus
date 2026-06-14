@@ -88,6 +88,8 @@ export const SLASH_ITEMS: SlashItem[] = [
   // RECUR-1: повтор задачи — маркер 🔁 + интервал; при отметке порождается новая копия с продвинутым
   // дедлайном (parseRecurrence + toggleTaskAtLine). Курсор за словом «weekly» — легко заменить.
   { id: 'recur', labelKey: 'slash.recur', apply: inlineText(() => '🔁 weekly ') },
+  // #4: формула KaTeX — `$$|$$` (двойной $ — одиночный отдан под валюту). Курсор между $$.
+  { id: 'math', labelKey: 'slash.math', apply: inlineText(() => '$$$$', 2) },
   { id: 'link', labelKey: 'slash.link', apply: inlineText(() => '[]()', 1) },
   { id: 'callout', labelKey: 'slash.callout', apply: blockPrefix('> [!note] ') },
   { id: 'hr', labelKey: 'slash.hr', apply: blockPrefix('---') },

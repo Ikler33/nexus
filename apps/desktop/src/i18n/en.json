@@ -768,6 +768,7 @@
     "date": "Date",
     "due": "Deadline (📅)",
     "recur": "Repeat (🔁)",
+    "math": "Formula ($$…$$)",
     "link": "Link",
     "callout": "Callout",
     "hr": "Divider",

@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 
 import { isTaskLine } from '../../lib/editor/format';
+import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi } from '../../lib/tauri-api';
 import styles from './MarkdownPreview.module.css';
@@ -12,8 +15,11 @@ import styles from './MarkdownPreview.module.css';
  * Read-only рендер markdown (#20, по образцу Obsidian «Reading view»). CSP-безопасен: react-markdown
  * НЕ рендерит сырой HTML (rehype-raw не подключён) → без `dangerouslySetInnerHTML`/inline-обработчиков;
  * `urlTransform` режет `javascript:`/`data:`. GFM (таблицы/таск-листы/~~strike~~) + Nexus `[[wikilink]]`
- * (клик → навигация) и `#tag` (чип). Математика (KaTeX)/диаграммы (Mermaid) ОТЛОЖЕНЫ — требуют inline-
- * стилей, запрещённых строгим CSP (см. docs/dev/editor.md, BACKLOG). Live-preview (inline-правки) — пост-v1.
+ * (клик → навигация) и `#tag` (чип). Математика `$$…$$` (#4, инлайн и блок) — через remark-math +
+ * rehype-katex с `output:'mathml'`: чистый нативный `<math>` БЕЗ inline-стилей и без шрифтов KaTeX → CSP
+ * не трогаем (`rehypeKatexCsp` снимает инлайн-`style`, что KaTeX даёт на ошибках/`\fcolorbox`). Одиночный
+ * `$` НЕ математика (`singleDollarTextMath:false`) — иначе суммы `$5…$10` в заметках о деньгах ломались бы.
+ * Диаграммы (Mermaid) отложены. Live-preview (inline-правки) — пост-v1.
  */
 
 /** Разрешает кастомные nexus-схемы и безопасные (http/https/mailto/tel/относительные); прочие → ''. */
@@ -160,7 +166,8 @@ export function MarkdownPreview({
   return (
     <div className={styles.preview}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkNexus]}
+        remarkPlugins={[remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+        rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
         urlTransform={urlTransform}
         components={components}
       >

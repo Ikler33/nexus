@@ -109,6 +109,21 @@
   margin: var(--space-3) 0;
 }
 
+/* Формулы (#4): нативный MathML (output:'mathml'). Системный math-шрифт (generic `math` → на macOS
+   WebKit есть STIX; бандл math-шрифта для Win WebView2 / Linux WebKitGTK — в BACKLOG). */
+.preview :global(.katex) {
+  font-size: 1.05em;
+}
+.preview math {
+  font-family: math;
+}
+/* Ошибка парса LaTeX: цвет задаём КЛАССОМ — rehypeKatexCsp снял инлайн-style ради строгого CSP. */
+.preview :global(.katex-error) {
+  color: var(--color-danger);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
 .preview a {
   color: var(--color-link);
   text-decoration: none;
