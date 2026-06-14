@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { dateStamp } from '../../lib/daily';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { getActiveEditorView } from '../../lib/editor/activeView';
-import { bucketOf, parseTaskMeta } from '../../lib/editor/format';
+import { bucketOf, parseRecurrence, parseTaskMeta } from '../../lib/editor/format';
 import { collectTasks } from '../../lib/tasks/collect';
 import { toggleTaskInPlace } from '../../lib/tasks/toggle';
 import type { TaskItem } from '../../lib/tauri-api';
@@ -59,16 +59,22 @@ export function TasksPanel() {
 
   const onToggle = async (item: TaskItem) => {
     const ok = await toggleTaskInPlace(item.path, item.line);
-    if (ok) {
-      // Оптимистично инвертируем (открытый фильтр → выполненная задача исчезнет из списка).
-      setItems((prev) =>
-        prev.map((x) =>
-          x.path === item.path && x.line === item.line ? { ...x, checked: !x.checked } : x,
-        ),
-      );
-    } else {
+    if (!ok) {
       void reload(); // строка уже не таск (дрейф между загрузкой и кликом) — перезагрузить
+      return;
     }
+    // RECUR-1: завершение повторяющейся задачи (🔁) порождает новую открытую копию с продвинутым
+    // дедлайном — оптимистик-флип её не покажет, поэтому перезагружаем список целиком.
+    if (!item.checked && parseRecurrence(item.text)) {
+      void reload();
+      return;
+    }
+    // Оптимистично инвертируем (открытый фильтр → выполненная задача исчезнет из списка).
+    setItems((prev) =>
+      prev.map((x) =>
+        x.path === item.path && x.line === item.line ? { ...x, checked: !x.checked } : x,
+      ),
+    );
   };
 
   const openTaskLocation = (path: string, line: number) => {
