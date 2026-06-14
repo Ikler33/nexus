@@ -148,6 +148,71 @@ export function parseTasks(doc: string): Task[] {
   return out;
 }
 
+/** Мета задачи (TASK-2): дедлайн и приоритет, распознанные из ТЕКСТА задачи. Парсятся ОТДЕЛЬНО от
+ *  TASK_LINE_RE (не зеркалятся в Rust) — поэтому диск и буфер обрабатываются единообразно в панели. */
+export interface TaskMeta {
+  /** Нормализованный дедлайн 'YYYY-MM-DD' (или отсутствует). */
+  due?: string;
+  /** Приоритет 1 (высший) … 3 (низший). */
+  priority?: 1 | 2 | 3;
+}
+
+/** Дедлайн в трёх формах: `📅 2026-06-20`, `@due(2026-06-20)`, `due:2026-06-20`. `\b` перед `due:`,
+ *  чтобы `overdue:2026-06-20` не ловилось как дедлайн. */
+const DUE_RE = /(?:📅\s*|@due\(|\bdue:)(\d{4})-(\d{1,2})-(\d{1,2})\)?/;
+/** Приоритет текстом: `!p1`..`!p3` (граница `\b`, чтобы `!important`/`top1` не ловились). */
+const PRIO_RE = /!p([123])\b/i;
+const PRIO_EMOJI: Record<string, 1 | 2 | 3> = { '⏫': 1, '🔼': 2, '🔽': 3 };
+
+/** 'YYYY-MM-DD' из Date по локальному времени (zero-pad — нужен для лексикографики бакетов). */
+function fmtDate(dt: Date): string {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+/** Валидирует Y-M-D через round-trip Date (отсекает 2026-13-40 и 2026-02-30) → нормализ. строка/undefined. */
+function normalizeDate(y: number, m: number, d: number): string | undefined {
+  if (m < 1 || m > 12 || d < 1 || d > 31) return undefined;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return undefined;
+  return fmtDate(dt);
+}
+
+/** Извлекает дедлайн+приоритет из текста задачи (TASK-2). Эмодзи-приоритет приоритетнее `!pN`. */
+export function parseTaskMeta(text: string): TaskMeta {
+  const meta: TaskMeta = {};
+  const dm = DUE_RE.exec(text);
+  if (dm) meta.due = normalizeDate(Number(dm[1]), Number(dm[2]), Number(dm[3]));
+  for (const [emoji, p] of Object.entries(PRIO_EMOJI)) {
+    if (text.includes(emoji)) {
+      meta.priority = p;
+      break;
+    }
+  }
+  if (meta.priority == null) {
+    const pm = PRIO_RE.exec(text);
+    if (pm) meta.priority = Number(pm[1]) as 1 | 2 | 3;
+  }
+  return meta;
+}
+
+/** Прибавляет `n` дней к ISO-дате (через Date — корректно для месяцев/лет/високосных). */
+function addDays(stamp: string, n: number): string {
+  const [y, m, d] = stamp.split('-').map(Number);
+  return fmtDate(new Date(y, m - 1, d + n));
+}
+
+/** Временной бакет задачи по дедлайну относительно `today` (обе — нормализ. 'YYYY-MM-DD', сравнение
+ *  лексикографическое = хронологическое). Граница недели включительно (+7 дней). Без даты → 'none'. */
+export function bucketOf(
+  due: string | undefined,
+  today: string,
+): 'overdue' | 'today' | 'week' | 'later' | 'none' {
+  if (!due) return 'none';
+  if (due < today) return 'overdue';
+  if (due === today) return 'today';
+  return due <= addDays(today, 7) ? 'week' : 'later';
+}
+
 /** Похоже ли выделение на URL/почту — тогда оно идёт в адрес ссылки, а не в её текст.
  *  `\S+` (не `\S*`) — после схемы обязателен контент: голый `www.`/`tel:`/`https://` — это текст. */
 const LINK_TARGET_RE = /^(https?:\/\/|mailto:|tel:|www\.)\S+$/i;

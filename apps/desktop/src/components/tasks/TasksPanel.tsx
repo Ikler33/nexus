@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { ListChecks, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { dateStamp } from '../../lib/daily';
 import { getActiveEditorView } from '../../lib/editor/activeView';
+import { bucketOf, parseTaskMeta } from '../../lib/editor/format';
 import { collectTasks } from '../../lib/tasks/collect';
 import { toggleTaskInPlace } from '../../lib/tasks/toggle';
 import type { TaskItem } from '../../lib/tauri-api';
@@ -13,6 +15,9 @@ import { BrandThinking } from '../chrome/BrandThinking';
 import styles from './TasksPanel.module.css';
 
 type Filter = 'open' | 'all';
+type GroupMode = 'date' | 'file';
+/** Порядок временных бакетов в режиме группировки по дате (TASK-2). */
+const BUCKETS = ['overdue', 'today', 'week', 'later', 'none'] as const;
 
 /** Смещение начала 1-based строки `line` в тексте `doc` (для прыжка курсора + scrollIntoView). */
 function lineToOffset(doc: string, line: number): number {
@@ -35,6 +40,7 @@ export function TasksPanel() {
   const [items, setItems] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>('open');
+  const [groupMode, setGroupMode] = useState<GroupMode>('date');
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -83,17 +89,53 @@ export function TasksPanel() {
   };
 
   const visible = filter === 'open' ? items.filter((x) => !x.checked) : items;
-  // Группировка по файлу с сохранением порядка появления.
-  const groups: { path: string; title: string; tasks: TaskItem[] }[] = [];
-  const byPath = new Map<string, number>();
-  for (const task of visible) {
-    let idx = byPath.get(task.path);
-    if (idx == null) {
-      idx = groups.length;
-      byPath.set(task.path, idx);
-      groups.push({ path: task.path, title: task.title ?? noteName(task.path), tasks: [] });
+  // TASK-2: к каждой задаче прикрепляем мету (дедлайн/приоритет) и временной бакет (от сегодня).
+  const today = dateStamp(new Date());
+  const rows = visible.map((task) => {
+    const meta = parseTaskMeta(task.text);
+    return { task, meta, bucket: bucketOf(meta.due, today) };
+  });
+  type Row = (typeof rows)[number];
+  interface Group {
+    id: string;
+    title: string;
+    nav?: { path: string; line: number }; // клик по заголовку файла → навигация; у бакетов нет
+    rows: Row[];
+  }
+
+  let groups: Group[] = [];
+  if (groupMode === 'file') {
+    const byPath = new Map<string, Group>();
+    for (const r of rows) {
+      let g = byPath.get(r.task.path);
+      if (!g) {
+        g = {
+          id: r.task.path,
+          title: r.task.title ?? noteName(r.task.path),
+          nav: { path: r.task.path, line: r.task.line },
+          rows: [],
+        };
+        byPath.set(r.task.path, g);
+        groups.push(g);
+      }
+      g.rows.push(r);
     }
-    groups[idx].tasks.push(task);
+  } else {
+    const byBucket = new Map<string, Group>(
+      BUCKETS.map((b) => [b, { id: b, title: t(`tasks.bucket.${b}`), rows: [] }]),
+    );
+    for (const r of rows) byBucket.get(r.bucket)!.rows.push(r);
+    // Внутри бакета: ближайший дедлайн выше, затем по приоритету (1 выше). Сентинел '9999-99-99'
+    // для строк без даты — он надёжно сортируется в конец под localeCompare (ICU), в отличие от
+    // пунктуации; на практике в одном бакете датированные и без-даты не смешиваются (защита-впрок).
+    for (const g of byBucket.values()) {
+      g.rows.sort(
+        (a, z) =>
+          (a.meta.due ?? '9999-99-99').localeCompare(z.meta.due ?? '9999-99-99') ||
+          (a.meta.priority ?? 4) - (z.meta.priority ?? 4),
+      );
+    }
+    groups = BUCKETS.map((b) => byBucket.get(b)!).filter((g) => g.rows.length > 0);
   }
 
   return (
@@ -123,6 +165,22 @@ export function TasksPanel() {
               aria-pressed={filter === 'all'}
             >
               {t('tasks.filterAll')}
+            </button>
+          </div>
+          <div className={styles.filter} role="group" aria-label={t('tasks.groupBy')}>
+            <button
+              className={groupMode === 'date' ? styles.filterActive : styles.filterBtn}
+              onClick={() => setGroupMode('date')}
+              aria-pressed={groupMode === 'date'}
+            >
+              {t('tasks.groupByDate')}
+            </button>
+            <button
+              className={groupMode === 'file' ? styles.filterActive : styles.filterBtn}
+              onClick={() => setGroupMode('file')}
+              aria-pressed={groupMode === 'file'}
+            >
+              {t('tasks.groupByFile')}
             </button>
           </div>
           <button
@@ -158,18 +216,25 @@ export function TasksPanel() {
         ) : (
           <div className={styles.body}>
             {groups.map((g) => (
-              <section key={g.path} className={styles.group}>
-                <button
-                  type="button"
-                  className={styles.groupHead}
-                  title={g.path}
-                  onClick={() => openTaskLocation(g.path, g.tasks[0].line)}
-                >
-                  <span className={styles.groupTitle}>{g.title}</span>
-                  <span className={styles.count}>{g.tasks.length}</span>
-                </button>
+              <section key={g.id} className={styles.group}>
+                {g.nav ? (
+                  <button
+                    type="button"
+                    className={styles.groupHead}
+                    title={g.id}
+                    onClick={() => g.nav && openTaskLocation(g.nav.path, g.nav.line)}
+                  >
+                    <span className={styles.groupTitle}>{g.title}</span>
+                    <span className={styles.count}>{g.rows.length}</span>
+                  </button>
+                ) : (
+                  <div className={styles.bucketHead}>
+                    <span className={styles.groupTitle}>{g.title}</span>
+                    <span className={styles.count}>{g.rows.length}</span>
+                  </div>
+                )}
                 <ul className={styles.list}>
-                  {g.tasks.map((task) => (
+                  {g.rows.map(({ task, meta, bucket }) => (
                     <li key={`${task.path}:${task.line}`} className={styles.row}>
                       <input
                         type="checkbox"
@@ -185,6 +250,25 @@ export function TasksPanel() {
                       >
                         {task.text || t('tasks.untitled')}
                       </button>
+                      {meta.priority && (
+                        <span className={`${styles.prio} ${styles[`prio${meta.priority}`]}`}>
+                          P{meta.priority}
+                        </span>
+                      )}
+                      {meta.due && (
+                        <span
+                          className={
+                            bucket === 'overdue' ? `${styles.dueBadge} ${styles.dueOverdue}` : styles.dueBadge
+                          }
+                        >
+                          {meta.due}
+                        </span>
+                      )}
+                      {groupMode === 'date' && (
+                        <span className={styles.fileHint} title={task.path}>
+                          {task.title ?? noteName(task.path)}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>

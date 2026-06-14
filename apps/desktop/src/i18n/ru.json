@@ -778,6 +778,7 @@
     "task": "Задача / чекбокс",
     "table": "Таблица",
     "date": "Дата",
+    "due": "Дедлайн (📅)",
     "link": "Ссылка",
     "callout": "Выноска (callout)",
     "hr": "Разделитель",
@@ -792,6 +793,14 @@
     "filterAll": "Все",
     "refresh": "Обновить",
     "close": "Закрыть",
-    "untitled": "(без текста)"
+    "untitled": "(без текста)",
+    "groupBy": "Группировка",
+    "groupByDate": "По дате",
+    "groupByFile": "По файлу",
+    "bucket.overdue": "Просрочено",
+    "bucket.today": "Сегодня",
+    "bucket.week": "На неделе",
+    "bucket.later": "Позже",
+    "bucket.none": "Без даты"
   }
 }
