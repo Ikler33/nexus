@@ -57,6 +57,7 @@ pub async fn get_backlinks(reader: &ReadPool, path: String) -> DbResult<Vec<Back
                  FROM links l JOIN files f ON f.id = l.source_id \
                  WHERE l.target_id = (SELECT id FROM files WHERE path = ?1 AND is_deleted = 0) \
                    AND f.is_deleted = 0 \
+                   AND l.source_id != l.target_id \
                  ORDER BY f.path, l.line_number",
             )?;
             let rows = stmt
@@ -345,7 +346,7 @@ pub async fn get_local_graph(reader: &ReadPool, center: String, hops: u32) -> Db
             )?;
             let edges: Vec<GraphEdge> = raw_edges
                 .into_iter()
-                .filter(|(_, t)| ids.contains(t))
+                .filter(|(s, t)| s != t && ids.contains(t)) // self-loop (s==t) бессмыслен в графе (аудит)
                 .map(|(source, target)| GraphEdge { source, target })
                 .collect();
 
@@ -383,9 +384,9 @@ pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGra
                  FROM files f \
                  LEFT JOIN ( \
                      SELECT id, COUNT(*) AS deg FROM ( \
-                         SELECT source_id AS id FROM links WHERE target_id IS NOT NULL \
+                         SELECT source_id AS id FROM links WHERE target_id IS NOT NULL AND source_id != target_id \
                          UNION ALL \
-                         SELECT target_id AS id FROM links WHERE target_id IS NOT NULL \
+                         SELECT target_id AS id FROM links WHERE target_id IS NOT NULL AND source_id != target_id \
                      ) GROUP BY id \
                  ) d ON d.id = f.id \
                  WHERE f.is_deleted = 0 \
@@ -421,7 +422,7 @@ pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGra
             )?;
             let edges: Vec<GraphEdge> = raw_edges
                 .into_iter()
-                .filter(|(_, t)| ids.contains(t))
+                .filter(|(s, t)| s != t && ids.contains(t)) // self-loop (s==t) бессмыслен в графе (аудит)
                 .map(|(source, target)| GraphEdge { source, target })
                 .collect();
 
@@ -715,5 +716,64 @@ mod tests {
             .unwrap();
         assert_eq!(full.nodes.len() as i64, N + 1);
         assert_eq!(full.edges.len() as i64, N);
+    }
+
+    /// Аудит: self-link (`[[A]]` в A.md) не показывается как беклинк самой A и не даёт self-loop ребра
+    /// в графе (бессмысленно в knowledge-graph; раздувало беклинки/степень).
+    #[tokio::test]
+    async fn self_link_excluded_from_backlinks_and_edges() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        db.writer()
+            .transaction(|tx| {
+                for (id, p) in [(1, "A.md"), (2, "B.md")] {
+                    tx.execute(
+                        "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                         VALUES (?1,?2,'h',0,0,0,0)",
+                        rusqlite::params![id, p],
+                    )?;
+                }
+                // A ссылается на СЕБЯ (self-loop) и на B.
+                tx.execute(
+                    "INSERT INTO links (source_id,target_id,target_raw,link_type) VALUES (1,1,'A','wikilink')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO links (source_id,target_id,target_raw,link_type) VALUES (1,2,'B','wikilink')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Беклинки A: self-link исключён → пусто.
+        assert!(
+            get_backlinks(db.reader(), "A.md".into())
+                .await
+                .unwrap()
+                .is_empty(),
+            "self-backlink не показывается"
+        );
+        // Беклинки B: A ссылается → одна запись.
+        assert_eq!(
+            get_backlinks(db.reader(), "B.md".into())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        // Граф: ни одного self-loop ребра, ребро A→B на месте.
+        let g = get_full_graph(db.reader(), 10).await.unwrap();
+        assert!(
+            g.edges.iter().all(|e| e.source != e.target),
+            "self-loop рёбер нет"
+        );
+        assert!(
+            g.edges.iter().any(|e| e.source == 1 && e.target == 2),
+            "ребро A→B на месте"
+        );
     }
 }
