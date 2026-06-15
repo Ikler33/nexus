@@ -407,7 +407,10 @@
     "orphanResult": "Возможная связь:",
     "orphanNone": "Подходящих связей не нашлось.",
     "groupTags": "Группировка по тегам",
-    "showOrphans": "Показывать изоляты"
+    "showOrphans": "Показывать изоляты",
+    "search": "Поиск по графу",
+    "searchPlaceholder": "Найти узел…",
+    "searchClear": "Очистить поиск"
   },
   "chat": {
     "title": "AI-панель",
