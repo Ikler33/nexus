@@ -120,6 +120,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // P6-PIN: открепляем удалённый путь из контекста чата (не держим мёртвый пин).
     const { useChatStore } = await import('./chat');
     useChatStore.getState().dropPinsUnder(path);
+    // Снимаем звёзды с удалённого пути и детей — иначе осиротевшие записи в Starred (находка аудита).
+    const { useStarredStore } = await import('./starred');
+    useStarredStore.getState().dropStarsUnder(path);
     // Обновляем детей родительского каталога (удалённый элемент исчезает из дерева).
     const dir = parentDir(path);
     const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
@@ -149,6 +152,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // заметка → неверный контекст ИИ).
     const { useChatStore } = await import('./chat');
     useChatStore.getState().renamePins(from, to);
+    // Переносим звёзды (точный путь + дети) — иначе звезда осиротевает на старом пути (находка аудита).
+    const { useStarredStore } = await import('./starred');
+    useStarredStore.getState().rename(from, to);
     // Обновляем оба затронутых каталога (источник и приёмник могут отличаться при move).
     const dirs = Array.from(new Set([parentDir(from), parentDir(to)]));
     for (const d of dirs) {
