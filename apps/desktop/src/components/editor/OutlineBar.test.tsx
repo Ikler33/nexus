@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OutlineBar } from './OutlineBar';
 
@@ -22,6 +22,16 @@ describe('OutlineBar (EDIT-7)', () => {
     render(<OutlineBar doc={DOC} onJump={() => {}} />);
     expect(screen.getByRole('button', { name: 'Intro' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { expanded: true })); // твист
+    expect(screen.queryByRole('button', { name: 'Intro' })).toBeNull();
+  });
+
+  // audit B11: парсинг заголовков отложен (useDeferredValue) — корректность сохраняется: смена doc
+  // в итоге отражается в оглавлении (deferred-значение дофлушивается).
+  it('обновление doc отражается в оглавлении (отложенный парсинг корректен)', async () => {
+    const { rerender } = render(<OutlineBar doc={DOC} onJump={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Intro' })).toBeInTheDocument();
+    rerender(<OutlineBar doc={'# Renamed\n## Other'} onJump={() => {}} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Renamed' })).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Intro' })).toBeNull();
   });
 });

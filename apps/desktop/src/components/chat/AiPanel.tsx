@@ -199,24 +199,41 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
   // размер живёт в prefs (персист) и применяется грид-переменной App. Overlay не ресайзим.
   const setW = usePrefsStore((s) => s.setAiPanelW);
   const setH = usePrefsStore((s) => s.setAiPanelH);
+  // Контроллер активного драга: один abort() снимает оба window-слушателя (через signal). Нужен,
+  // чтобы размонтирование панели ВО ВРЕМЯ перетаскивания не оставило висячие mousemove/mouseup на
+  // window (onUp тогда не сработал бы) — утечка слушателей со stale-замыканием (находка аудита B11).
+  const resizeAbort = useRef<AbortController | null>(null);
   const startResize = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
+      resizeAbort.current?.abort(); // подстраховка от незавершённого предыдущего драга
+      const ctrl = new AbortController();
+      resizeAbort.current = ctrl;
       const horizontal = variant === 'side';
       const onMove = (ev: MouseEvent) => {
         if (horizontal) setW(window.innerWidth - ev.clientX);
         else setH(window.innerHeight - ev.clientY);
       };
       const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
+        ctrl.abort();
+        resizeAbort.current = null;
         document.body.style.cursor = '';
       };
       document.body.style.cursor = horizontal ? 'col-resize' : 'row-resize';
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      window.addEventListener('mousemove', onMove, { signal: ctrl.signal });
+      window.addEventListener('mouseup', onUp, { signal: ctrl.signal });
     },
     [variant, setW, setH],
+  );
+  // Размонтирование во время драга — снимаем слушатели и возвращаем курсор.
+  useEffect(
+    () => () => {
+      if (resizeAbort.current) {
+        resizeAbort.current.abort();
+        document.body.style.cursor = '';
+      }
+    },
+    [],
   );
 
   return (
