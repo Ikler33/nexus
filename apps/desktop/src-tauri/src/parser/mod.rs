@@ -185,14 +185,20 @@ fn scan_wiki_and_tags(
 
         if bytes[i] == b'#' && !in_code(i) && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
             let start = i + 1;
+            // PROP-1: сканируем по СИМВОЛАМ (Unicode), а не байтам — иначе кириллица режется на
+            // первом не-ASCII байте. Конец тега = первый недопустимый символ.
             let mut j = start;
-            while j < body.len() && is_tag_char(bytes[j]) {
-                j += 1;
+            for (off, c) in body[start..].char_indices() {
+                if is_tag_char(c) {
+                    j = start + off + c.len_utf8();
+                } else {
+                    break;
+                }
             }
             let tag = &body[start..j];
             // Тег должен содержать хотя бы одну букву (отсекает `#123` и заголовки `# H`).
-            if tag.bytes().any(|c| c.is_ascii_alphabetic()) {
-                tags.insert(tag.to_ascii_lowercase());
+            if tag.chars().any(char::is_alphabetic) {
+                tags.insert(tag.to_lowercase());
                 i = j;
                 continue;
             }
@@ -330,8 +336,9 @@ fn frontmatter_tags(fm: &str) -> Vec<String> {
 fn push_tag(out: &mut Vec<String>, raw: &str) {
     let v = raw.trim().trim_matches(['"', '\'']).trim();
     let v = v.strip_prefix('#').unwrap_or(v);
-    if !v.is_empty() && v.bytes().all(is_tag_char) && v.bytes().any(|c| c.is_ascii_alphabetic()) {
-        let v = v.to_ascii_lowercase();
+    // PROP-1: char-based (Unicode) — кириллические frontmatter-теги тоже валидны.
+    if !v.is_empty() && v.chars().all(is_tag_char) && v.chars().any(char::is_alphabetic) {
+        let v = v.to_lowercase();
         if !out.contains(&v) {
             out.push(v);
         }
@@ -394,8 +401,10 @@ fn is_internal_link(dest: &str) -> bool {
         && !dest.starts_with("tel:")
 }
 
-fn is_tag_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'/'
+/// Допустимый символ тега. PROP-1: Unicode-буквы/цифры (кириллица и пр.), а не только ASCII —
+/// `#тег` для русскоязычного vault теперь валиден (Obsidian допускает Unicode-теги).
+fn is_tag_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '/')
 }
 
 fn count_newlines(s: &str, upto: usize) -> usize {
@@ -509,10 +518,10 @@ mod tests {
     /// с нормализацией инлайн-тегов тела (lowercase, ASCII-набор, срез `#`).
     #[test]
     fn frontmatter_tags_inline_block_scalar_merge_with_body() {
-        // Инлайн-список: кавычки/`#`/регистр нормализуются; мусор (`123`, юникод вне набора) — мимо.
+        // Инлайн-список: кавычки/`#`/регистр нормализуются; `123` (без буквы) — мимо; кириллица — ОК (PROP-1).
         assert_eq!(
             parse("---\ntags: [Goal, \"#project\", 123, 'тег']\n---\nbody\n").tags,
-            vec!["goal".to_string(), "project".to_string()]
+            vec!["goal".to_string(), "project".to_string(), "тег".to_string()]
         );
         // Блочный список + слияние с тегами тела (дедуп, сортировка BTreeSet).
         assert_eq!(
@@ -525,6 +534,28 @@ mod tests {
             vec!["solo".to_string()]
         );
         assert_eq!(parse("b #only\n").tags, vec!["only".to_string()]);
+    }
+
+    /// PROP-1: Unicode/кириллица-теги — инлайн `#тег`, регистр, вложенность, frontmatter, ASCII не сломан.
+    #[test]
+    fn unicode_cyrillic_tags() {
+        // Инлайн кириллица + lowercase + вложенный; граница на пробеле/пунктуации.
+        assert_eq!(
+            parse("текст #Идея и #проект/важное, конец\n").tags,
+            vec!["идея".to_string(), "проект/важное".to_string()]
+        );
+        // `#123` без буквы — мимо; смешанный латиница+кириллица — ок.
+        assert_eq!(parse("#123 #v2тест\n").tags, vec!["v2тест".to_string()]);
+        // Frontmatter-список с кириллицей.
+        assert_eq!(
+            parse("---\ntags: [Проект, идея]\n---\nтело\n").tags,
+            vec!["идея".to_string(), "проект".to_string()]
+        );
+        // ASCII-путь не сломан.
+        assert_eq!(
+            parse("body #alpha #Beta-1\n").tags,
+            vec!["alpha".to_string(), "beta-1".to_string()]
+        );
     }
 
     #[test]
