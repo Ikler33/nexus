@@ -104,4 +104,32 @@ describe('GraphView render-smoke (кросс-план #23)', () => {
       expect(document.querySelectorAll('.g-node.faded').length).toBe(0);
     });
   });
+
+  it('GRAPH-6: режим «Сообщества» красит узлы кластер-цветом (oklch у всех, не только тегированных)', async () => {
+    vi.spyOn(tauriApi.graph, 'getFullGraph').mockResolvedValue({
+      nodes: [
+        { id: 1, path: 'A.md', title: 'A', tags: ['demo'] },
+        { id: 2, path: 'B.md', title: 'B', tags: [] }, // без тегов: в tag-режиме fill пуст
+      ],
+      edges: [{ source: 1, target: 2 }],
+      totalFiles: 2,
+      truncated: false,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    render(<GraphView />);
+    fireEvent.click(screen.getByText(/весь vault|whole vault/i));
+    await waitFor(() => expect(document.querySelectorAll('.g-dot').length).toBe(2));
+
+    // tag-режим: у B (без тегов) fill пуст (CSS-фолбэк).
+    const tagFills = [...document.querySelectorAll('.g-dot')].map((d) => d.getAttribute('style') ?? '');
+    expect(tagFills.some((s) => s === '' || !s.includes('oklch'))).toBe(true);
+
+    // Переключаем «Цвет: Сообщества» — оба узла должны получить кластер-цвет oklch.
+    fireEvent.click(screen.getByRole('button', { name: /^Сообщества$|^Communities$/ }));
+    await waitFor(() => {
+      const fills = [...document.querySelectorAll('.g-dot')].map((d) => d.getAttribute('style') ?? '');
+      expect(fills.every((s) => s.includes('oklch('))).toBe(true);
+    });
+  });
 });

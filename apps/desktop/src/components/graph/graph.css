@@ -120,6 +120,14 @@
   font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
+
+/* GRAPH-6: сегмент режима цвета (Теги | Сообщества) в баре — иконка-палитра + .seg-контрол. */
+.graph-colorby {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-faint);
+}
 .graph-depth input[type='range'] {
   width: 80px;
   accent-color: var(--color-accent);
