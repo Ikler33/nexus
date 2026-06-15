@@ -39,6 +39,7 @@ import {
   RADIAL_STRENGTH,
   topTags,
   VELOCITY_DECAY,
+  WARMUP_TICKS,
   type EdgeIds,
   type GraphLink,
   type GraphNodeDatum,
@@ -194,9 +195,10 @@ function makeRnd(seed: number): () => number {
  * Граф ссылок (ADR-004) на **d3-force**, вид и физика — по макету `graph.jsx`: компактные
  * «созвездия» (короткие пружины, мягкая гравитация), сироты глобального графа — гало мелких
  * точек на кольце (radial-сила + жёсткий кламп полосы), связанные узлы не покидают ядро
- * (coreMax-кламп), сим никогда не замерзает полностью («дыхание» alphaTarget). Лейблы — только
- * у активной/hover-ноды и на среднем зуме (как Obsidian). Drag через `fx/fy`, рендер — SVG.
- * Чистые помощники — `graph-sim.ts` (юнит-тесты).
+ * (coreMax-кламп). GRAPH-2: укладка предрасчитывается headless (warmup) → граф открывается уже
+ * собранным, затем остывает до ПОЛНОЙ остановки (Obsidian, без вечного «дыхания»); косметика
+ * активной ноты — CSS, идёт независимо. Лейблы — только у активной/hover-ноды и на среднем зуме
+ * (как Obsidian). Drag через `fx/fy`, рендер — SVG. Чистые помощники — `graph-sim.ts` (юнит-тесты).
  */
 export default function GraphView() {
   const { t } = useTranslation();
@@ -225,6 +227,9 @@ export default function GraphView() {
   const stageRef = useRef<HTMLDivElement>(null);
   // ссылки на силы — чтобы менять их вживую из слайдеров без пересоздания сим (позиции сохраняются)
   const settingsRef = useRef(settings);
+  // GRAPH-2: ловим, КОГДА live-эффект сработал от смены НАСТРОЕК (а не графа) — реогрев только тогда,
+  // иначе reheat после warmup main-эффекта расколол бы уже собранную раскладку.
+  const prevSettingsRef = useRef(settings);
   const chargeRef = useRef<ForceManyBody<GraphNodeDatum> | null>(null);
   const linkRef = useRef<ForceLink<GraphNodeDatum, GraphLink> | null>(null);
   const gravXRef = useRef<ForceX<GraphNodeDatum> | null>(null);
@@ -364,11 +369,11 @@ export default function GraphView() {
         n.vy = (n.vy ?? 0) + (c.y / c.n - (n.y ?? 0)) * 0.03 * alpha;
       }
     };
-    // Рендер-троттл «дыхания»: первые ~1.6с (укладка) и во время drag рендерим каждый тик,
-    // дальше сим жив на alphaTarget, но React-рендер — каждый 3-й тик (~20fps вместо 60:
-    // на 600 узлах экономит CPU втрое, микро-движение глазом неотличимо).
-    const startedAt = performance.now();
-    let tickN = 0;
+    // GRAPH-2: warmup до первого кадра + остывание до ПОЛНОЙ остановки. `warming` гасит React-рендер
+    // на голбых тиках предрасчёта (узлы клампятся, но не дёргаем стейт). После warmup — короткое живое
+    // дотыхание (alphaTarget 0): граф замирает, как в Obsidian (без вечного «дыхания»/CPU-churn). Косметика
+    // активной ноты (halo/ripple/flow) — CSS-анимации, идут независимо от тиков, замораживание их не трогает.
+    let warming = true;
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
       .velocityDecay(VELOCITY_DECAY)
       .force('charge', charge)
@@ -386,9 +391,7 @@ export default function GraphView() {
           if (n.fx != null) continue; // перетаскиваемую не дёргаем
           clampNodePosition(n, cx, cy, stage.w, stage.h, isFull);
         }
-        tickN += 1;
-        const breathing = performance.now() - startedAt > 1600 && dragRef.current == null;
-        if (breathing && tickN % 3 !== 0) return;
+        if (warming) return; // голый предрасчёт — без React-рендера
         tick((v) => v + 1);
       });
     chargeRef.current = charge;
@@ -397,22 +400,32 @@ export default function GraphView() {
     gravYRef.current = gravY;
     radialRef.current = radial;
     collideRef.current = collide;
-    // «Дыхание» макета: alphaTarget чуть выше нуля — граф никогда не замерзает полностью.
-    sim.alpha(1).alphaTarget(0.02).restart();
+    // Предрасчёт укладки ГОЛОВЛЕСС (без авто-таймера и без рендеров) → первый кадр уже собран. Число
+    // тиков капится по размеру графа (бюджет ~работа = тики×узлы): на больших vault полный warmup —
+    // синхронный блок до первого кадра, поэтому ограничиваем (≥30 тиков всё равно прилично собирают).
+    sim.stop();
+    const warmupTicks = Math.max(30, Math.min(WARMUP_TICKS, Math.round(20000 / Math.max(graph.nodes.length, 1))));
+    for (let i = 0; i < warmupTicks; i++) sim.tick();
+    warming = false;
     simRef.current = sim;
-    // По остыванию раскладки — авто-fit камеры (v2c) и снятие лоадера.
-    const timer = setTimeout(() => {
-      setLoading(false);
-      setCam(fitCamera(sim.nodes(), stage));
-    }, 700);
+    // Граф уже собран: убираем лоадер и кадрируем камеру сразу (не ждём фиктивные 700мс).
+    setLoading(false);
+    setCam(fitCamera(sim.nodes(), stage));
+    tick((v) => v + 1);
+    // Короткое живое дотыхание до полной остановки (alphaTarget 0): микро-доводка после warmup, потом стоп.
+    sim.alpha(0.06).alphaTarget(0).restart();
     return () => {
-      clearTimeout(timer);
       sim.stop();
     };
   }, [graph]);
 
   // ── живое применение настроек физики: мутируем силы существующей сим (позиции сохраняются) ──
   useEffect(() => {
+    // Признак реальной смены настроек считаем ДО ранних выходов и синхронизируем `prevSettingsRef`
+    // ВСЕГДА — иначе слайдер, сдвинутый пока сим ещё нет, оставил бы ref устаревшим → на следующей
+    // загрузке графа сработал бы ложный реогрев и расколол бы уже собранный warmup (находка ревью).
+    const settingsChanged = prevSettingsRef.current !== settings;
+    prevSettingsRef.current = settings;
     settingsRef.current = settings;
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -431,7 +444,12 @@ export default function GraphView() {
     gravXRef.current?.strength(gravStrength);
     gravYRef.current?.strength(gravStrength);
     collideRef.current?.radius((d) => nodeRadius(d.deg) * settings.sizeScale + 6);
-    simRef.current.alpha(0.5).restart();
+    // Реогрев ТОЛЬКО при реальной смене настроек. На смену графа `settings` тот же → пропускаем
+    // (warmup main-эффекта уже собрал раскладку, не сбиваем её).
+    if (settingsChanged) {
+      simRef.current.alpha(0.5).alphaTarget(0).restart();
+    }
+    prevSettingsRef.current = settings;
   }, [settings, graph]);
 
   useEffect(
@@ -515,7 +533,7 @@ export default function GraphView() {
         node.fy = p.y;
       };
       const up = (ev: MouseEvent) => {
-        sim.alphaTarget(0.02); // обратно к «дыханию», не к нулю
+        sim.alphaTarget(0); // GRAPH-2: остываем до ПОЛНОЙ остановки (Obsidian), не к «дыханию»
         setDragId(null);
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
