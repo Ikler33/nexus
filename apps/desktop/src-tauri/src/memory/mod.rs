@@ -6,6 +6,8 @@
 //! DB-операции (этот слой) отделены от эмбеддинг-индекса (`index_fact`/`unindex_fact`): команда
 //! оркестрирует «add → index_fact (если есть провайдер/индекс)», что упрощает тесты (БД без эмбеддера).
 
+pub mod extract;
+
 use rusqlite::params;
 use serde::Serialize;
 

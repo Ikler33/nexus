@@ -6,7 +6,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::memory::{self, MemoryFact, SOURCE_EXPLICIT};
+use crate::memory::{self, MemoryFact, SOURCE_AUTO, SOURCE_EXPLICIT};
 use crate::state::AppState;
 
 /// AC-MEM-2: список фактов (пины сверху, затем по дате).
@@ -16,10 +16,19 @@ pub async fn memory_list(state: State<'_, AppState>) -> AppResult<Vec<MemoryFact
     Ok(memory::list(&reader).await?)
 }
 
-/// AC-MEM-1: явно добавить факт (+ проиндексировать, если есть эмбеддер). Возвращает id (или `None` —
-/// пустой текст). `source='explicit'` (D1).
+/// AC-MEM-1/6: добавить факт (+ проиндексировать, если есть эмбеддер). Возвращает id (или `None` —
+/// пустой текст). `source` (D1): `'explicit'` (явная команда/кнопка, дефолт) либо `'auto'` (подтверждённое
+/// авто-предложение). Любое иное значение трактуется как `'explicit'` (fail-safe).
 #[tauri::command]
-pub async fn memory_add(state: State<'_, AppState>, text: String) -> AppResult<Option<i64>> {
+pub async fn memory_add(
+    state: State<'_, AppState>,
+    text: String,
+    source: Option<String>,
+) -> AppResult<Option<i64>> {
+    let source = match source.as_deref() {
+        Some(SOURCE_AUTO) => SOURCE_AUTO,
+        _ => SOURCE_EXPLICIT,
+    };
     let (writer, embedder, vectors) = {
         let ctx = state.vault().await?;
         (
@@ -28,11 +37,27 @@ pub async fn memory_add(state: State<'_, AppState>, text: String) -> AppResult<O
             ctx.memory_vectors.clone(),
         )
     };
-    let id = memory::add(&writer, &text, SOURCE_EXPLICIT).await?;
+    let id = memory::add(&writer, &text, source).await?;
     if let (Some(id), Some(emb), Some(vec)) = (id, embedder, vectors) {
         let _ = memory::index_fact(&vec, emb.as_ref(), id, text.trim()).await;
     }
     Ok(id)
+}
+
+/// AC-MEM-6 (D1): авто-ПРЕДЛОЖЕНИЕ факта по последнему обмену — «быстрая» модель извлекает ≤1 кандидат.
+/// НИЧЕГО НЕ ПИШЕТ: фронт показывает чип «Запомнить? ✓/✗», запись — лишь после ✓ через `memory_add`.
+/// Нет утилитарной модели / нечего предлагать / ошибка LLM → `None` (фронт не показывает чип, без toast).
+#[tauri::command]
+pub async fn memory_propose(
+    state: State<'_, AppState>,
+    user_text: String,
+    assistant_text: String,
+) -> AppResult<Option<String>> {
+    let chat = state.vault().await?.ai.chat_util.clone();
+    let Some(chat) = chat else {
+        return Ok(None); // нет «быстрой» модели → без авто-предложений
+    };
+    Ok(memory::extract::propose_fact(&chat, &user_text, &assistant_text).await)
 }
 
 /// AC-MEM-3: пин/анпин факта.

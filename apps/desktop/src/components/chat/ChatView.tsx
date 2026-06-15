@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   AlertTriangle,
+  Brain,
+  Check,
   Copy,
   FilePlus2,
   FileText,
@@ -553,6 +555,41 @@ function MessageActions({
   );
 }
 
+/** MEM-3 (AC-MEM-6): чип авто-предложения факта под ПОСЛЕДНИМ ответом. «Запомнить: «…»? ✓/✗».
+ *  ✓ → пишем в память агента (`source='auto'`) + toast; ✗ → отбрасываем (D1: молчаливых записей нет).
+ *  Рендерится, только если стор предложил факт ИМЕННО для этого сообщения. */
+function FactChip({ messageId }: { messageId: string }) {
+  const { t } = useTranslation();
+  const pendingFact = useChatStore((s) => s.pendingFact);
+  const confirmFact = useChatStore((s) => s.confirmFact);
+  const dismissFact = useChatStore((s) => s.dismissFact);
+  if (!pendingFact || pendingFact.messageId !== messageId) return null;
+  const save = () => {
+    void confirmFact()
+      .then(() => useToastStore.getState().addToast(t('chat.memorySaved'), { kind: 'success' }))
+      .catch(() => useToastStore.getState().addToast(t('chat.memorySaveFailed'), { kind: 'error' }));
+  };
+  return (
+    <div className={styles.factChip} role="group" aria-label={t('chat.memoryProposeAria')}>
+      <Brain size={14} aria-hidden className={styles.factChipIcon} />
+      <span className={styles.factChipText}>
+        {t('chat.memoryPropose')} <span className={styles.factChipQuote}>«{pendingFact.text}»</span>
+      </span>
+      <button type="button" className={styles.factChipSave} onClick={save}>
+        <Check size={13} aria-hidden /> {t('chat.memorySave')}
+      </button>
+      <button
+        type="button"
+        className={styles.factChipDismiss}
+        onClick={dismissFact}
+        aria-label={t('chat.memoryDismiss')}
+      >
+        <X size={13} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
 /** URL-transform ответа ИИ: сохраняет схему цитат `nexus-cite:`, остальное — штатная санитизация. */
 const citeUrlTransform = (url: string): string =>
   url.startsWith(CITE_SCHEME) ? url : defaultUrlTransform(url);
@@ -697,6 +734,8 @@ function Message({
               onRegenerate={onRegenerate}
             />
           )}
+          {/* MEM-3: авто-предложение факта в память — только под последним ответом (стор гейтит по id). */}
+          {!message.streaming && message.content && <FactChip messageId={message.id} />}
           {message.sources && message.sources.length > 0 && (
             <Disclosure
               id={`${message.id}:src`}
