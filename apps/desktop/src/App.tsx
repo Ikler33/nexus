@@ -27,6 +27,7 @@ import { ToastViewport } from './components/chrome/ToastViewport';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
+import { MemoryPanel } from './components/memory/MemoryPanel';
 import { TasksPanel } from './components/tasks/TasksPanel';
 import { InboxPanel } from './components/inbox/InboxPanel';
 import { DigestPanel } from './components/digest/DigestPanel';
@@ -65,6 +66,7 @@ export function App() {
   const versionsOpen = useUIStore((s) => s.versionsOpen);
   const closeVersions = useUIStore((s) => s.closeVersions);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
+  const memoryOpen = useUIStore((s) => s.memoryOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
   const inboxOpen = useUIStore((s) => s.inboxOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
@@ -193,6 +195,7 @@ export function App() {
         s.cheatsheetOpen ||
         s.conflictOpen ||
         s.goalsOpen ||
+        s.memoryOpen ||
         s.tasksOpen ||
         s.inboxOpen ||
         s.digestOpen ||
@@ -302,6 +305,7 @@ export function App() {
       )}
       {tweaksOpen && <SettingsView />}
       {goalsOpen && <GoalsPanel />}
+      {memoryOpen && <MemoryPanel />}
       {tasksOpen && <TasksPanel />}
       {inboxOpen && <InboxPanel />}
       {digestOpen && <DigestPanel />}

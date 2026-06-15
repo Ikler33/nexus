@@ -307,6 +307,17 @@ export function registerCoreCommands(): Disposable {
       },
     }),
     commands.register({
+      // MEM-4: панель «Память ИИ» — управление явными фактами памяти агента.
+      id: 'view.memory',
+      title: 'AI memory',
+      titleKey: 'commands.view.memory',
+      source: 'core',
+      run: () => {
+        if (!useVaultStore.getState().info) return;
+        useUIStore.getState().toggleMemory();
+      },
+    }),
+    commands.register({
       id: 'view.suggest',
       title: 'Link suggestions',
       titleKey: 'commands.view.suggest',

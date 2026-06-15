@@ -373,6 +373,17 @@ export interface MemoryHit {
   score: number;
 }
 
+/** Факт памяти агента (MEM, зеркалит Rust `memory::MemoryFact`). `source`: 'explicit' | 'auto' (D1).
+ *  `createdAt`/`usedAt` — unix-секунды; `usedAt=0` — ещё не подмешивался в контекст. */
+export interface MemoryFact {
+  id: number;
+  text: string;
+  pinned: boolean;
+  source: string;
+  createdAt: number;
+  usedAt: number;
+}
+
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'webSources'; sources: WebSource[] }
@@ -1136,11 +1147,27 @@ export const tauriApi = {
    *  явное добавление + авто-предложение (`propose`) для чипа подтверждения. CRUD-обёртки для панели
    *  «Память ИИ» добавляются в MEM-4. Вне Tauri — no-op (фича OFF по умолчанию). */
   memory: {
+    /** AC-MEM-2: все факты — пины сверху, затем по дате. Вне Tauri — пусто. */
+    list: (): Promise<MemoryFact[]> =>
+      isTauri() ? invoke<MemoryFact[]>('memory_list') : Promise.resolve([]),
+
     /** AC-MEM-1/6: добавить факт. `source`: `'explicit'` (по умолч.) или `'auto'` (подтверждённое). */
     add: (text: string, source?: 'explicit' | 'auto'): Promise<number | null> =>
       isTauri()
         ? invoke<number | null>('memory_add', { text, source })
         : Promise.resolve(null),
+
+    /** AC-MEM-3: пин/анпин факта. */
+    setPinned: (id: number, pinned: boolean): Promise<void> =>
+      isTauri() ? invoke<void>('memory_set_pinned', { id, pinned }) : Promise.resolve(),
+
+    /** AC-MEM-3: правка текста факта (бэкенд ре-эмбеддит). */
+    edit: (id: number, text: string): Promise<void> =>
+      isTauri() ? invoke<void>('memory_edit', { id, text }) : Promise.resolve(),
+
+    /** AC-MEM-3: удалить факт (+ из индекса). */
+    delete: (id: number): Promise<void> =>
+      isTauri() ? invoke<void>('memory_delete', { id }) : Promise.resolve(),
 
     /** AC-MEM-6: предложить ≤1 факт-кандидат по обмену (быстрая модель). `null` — нечего предлагать. */
     propose: (userText: string, assistantText: string): Promise<string | null> =>
