@@ -10,6 +10,7 @@ import {
   readFileMeta,
   readVersion,
   searchContent,
+  setFrontmatterField,
   streamChat,
   writeFile,
 } from './vault';
@@ -26,6 +27,61 @@ describe('mock версии (SAFE-5/6)', () => {
 
   it('listVersions пусто для файла без истории', async () => {
     expect(await listVersions('Notes/Никогда.md')).toEqual([]);
+  });
+});
+
+describe('mock setFrontmatterField (BOARD-1 — зеркало Rust-контракта)', () => {
+  it('заменяет существующий ключ, сохраняя остальной YAML и тело', async () => {
+    await writeFile('Tasks/A.md', '---\nstatus: todo\nproject: Alpha\n---\n# H\nтело\n');
+    const { content } = await setFrontmatterField('Tasks/A.md', 'status', 'doing');
+    expect(content).toBe('---\nstatus: doing\nproject: Alpha\n---\n# H\nтело\n');
+  });
+
+  it('добавляет отсутствующий ключ перед закрывающим ---', async () => {
+    await writeFile('Tasks/B.md', '---\nstatus: todo\n---\nbody\n');
+    const { content } = await setFrontmatterField('Tasks/B.md', 'priority', 'high');
+    expect(content).toBe('---\nstatus: todo\npriority: high\n---\nbody\n');
+  });
+
+  it('создаёт frontmatter, если его нет; квотирует спецсимволы', async () => {
+    await writeFile('Tasks/C.md', 'просто тело\n');
+    const { content } = await setFrontmatterField('Tasks/C.md', 'status', 'todo');
+    expect(content).toBe('---\nstatus: todo\n---\n\nпросто тело\n');
+    await writeFile('Tasks/D.md', '---\nx: 1\n---\nb\n');
+    const r = await setFrontmatterField('Tasks/D.md', 'status', 'a: b');
+    expect(r.content).toContain('status: "a: b"');
+  });
+
+  it('незакрытый frontmatter → throw (как Err(Malformed))', async () => {
+    await writeFile('Tasks/E.md', '---\nstatus: todo\nбез закрытия\n');
+    await expect(setFrontmatterField('Tasks/E.md', 'status', 'x')).rejects.toThrow();
+  });
+
+  it('F4: дубль-ключ — правит ПОСЛЕДНЕЕ вхождение (last-key-wins)', async () => {
+    await writeFile('Tasks/F.md', '---\nstatus: a\nstatus: b\n---\nbody\n');
+    const { content } = await setFrontmatterField('Tasks/F.md', 'status', 'c');
+    expect(content).toBe('---\nstatus: a\nstatus: c\n---\nbody\n');
+  });
+
+  it('F5: добавление ключа в CRLF-файл — новая строка тоже CRLF', async () => {
+    await writeFile('Tasks/G.md', '---\r\nstatus: todo\r\n---\r\nbody\r\n');
+    const { content } = await setFrontmatterField('Tasks/G.md', 'priority', 'high');
+    expect(content).toBe('---\r\nstatus: todo\r\npriority: high\r\n---\r\nbody\r\n');
+  });
+
+  it('F3: невалидный ключ → throw (как Rust value_key)', async () => {
+    await writeFile('Tasks/H.md', '---\nstatus: todo\n---\nbody\n');
+    await expect(setFrontmatterField('Tasks/H.md', 'foo:bar', 'x')).rejects.toThrow();
+    await expect(setFrontmatterField('Tasks/H.md', '', 'x')).rejects.toThrow();
+  });
+
+  it('F1/F2: значение без round-trip → throw (краевая кавычка / перевод строки)', async () => {
+    await writeFile('Tasks/I.md', '---\nx: old\n---\nbody\n');
+    await expect(setFrontmatterField('Tasks/I.md', 'status', 'say "hi"')).rejects.toThrow();
+    await expect(setFrontmatterField('Tasks/I.md', 'status', 'a\nb')).rejects.toThrow();
+    // Интерьерная кавычка (не на краю) — допустима.
+    const { content } = await setFrontmatterField('Tasks/I.md', 'status', 'a "x" b');
+    expect(content).toContain('status: a "x" b');
   });
 });
 

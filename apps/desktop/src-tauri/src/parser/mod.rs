@@ -370,7 +370,7 @@ fn frontmatter_fields(fm: &str) -> Vec<(String, String)> {
         {
             continue;
         }
-        let value = value.trim().trim_matches(['"', '\'']).trim();
+        let value = read_scalar(value);
         // Только непустые скаляры: инлайн-список/объект и пустое (блок ниже) — не сюда.
         if value.is_empty() || value.starts_with('[') || value.starts_with('{') {
             continue;
@@ -382,6 +382,176 @@ fn frontmatter_fields(fm: &str) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// Ошибка записи frontmatter (BOARD-1): не перезаписываем вслепую (сохранность данных).
+#[derive(Debug, PartialEq, Eq)]
+pub enum FmWriteError {
+    /// Открывающий `---` есть, но закрывающего нет — файл битый, не трогаем.
+    Malformed,
+    /// Значение нельзя записать так, чтобы [`read_scalar`] прочитал его ОБРАТНО тем же (перевод строки,
+    /// краевые кавычки, инлайн-список) — читатель — тупой edge-stripper, не YAML-парсер. Лучше явная
+    /// ошибка, чем тихая порча: `say "hi"` потеряло бы хвостовую кавычку при чтении.
+    Unrepresentable,
+}
+
+/// ЕДИНСТВЕННАЯ точка очистки скалярного значения frontmatter — общий источник для чтения
+/// ([`frontmatter_fields`]) и для проверки round-trip при записи ([`fm_value_repr`]), чтобы они НИКОГДА
+/// не разошлись. Тупой edge-stripper: снимает краевые пробелы, затем краевые `"`/`'`, затем снова пробелы.
+fn read_scalar(raw: &str) -> &str {
+    raw.trim().trim_matches(['"', '\'']).trim()
+}
+
+/// Кодирует значение для записи во frontmatter, ЕСЛИ оно переживёт round-trip через [`read_scalar`].
+/// Возвращает `None`, если читатель прочитал бы НЕ то же самое (→ `Err(Unrepresentable)` вместо порчи):
+/// перевод строки (сломает структуру блока), краевые кавычки/escape (edge-stripper их съест), пустое
+/// или `[`/`{` (читатель пропустит как инлайн-список/объект). Нормальные значения kanban
+/// (`todo`, даты, `project: Имя`, даже `a: b` с двоеточием) проходят.
+fn fm_value_repr(value: &str) -> Option<String> {
+    if value.is_empty() || value.contains('\n') || value.contains('\r') {
+        return None;
+    }
+    let quoted = quote_yaml_value(value);
+    let read = read_scalar(&quoted);
+    if read != value || read.starts_with('[') || read.starts_with('{') {
+        return None;
+    }
+    Some(quoted)
+}
+
+/// Та же логика матчинга ключа, что у [`frontmatter_fields`] (точная копия — НЕ regex `^key:`):
+/// верхний уровень (без ведущих пробелов/таба/`-`), `split_once(':')`, `key.trim()==target`, ключ —
+/// идентификатор (буквы/цифры/`_`/`-`).
+fn is_field_line(line: &str, target: &str) -> bool {
+    if line.starts_with([' ', '\t', '-']) {
+        return false;
+    }
+    let Some((k, _)) = line.split_once(':') else {
+        return false;
+    };
+    let k = k.trim();
+    !k.is_empty()
+        && k == target
+        && k.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+/// Нужно ли квотировать скаляр-значение YAML (BOARD-1, защита от потери данных). Покрывает
+/// YAML-индикаторы в начале, блок-конструкции `- `/`? `/`: `, флоу-символы, висячий `:`, комментарий
+/// ` #`, резерв-слова (null/bool во всех регистрах), пустое/с краевыми пробелами. Симметрично чтению
+/// [`frontmatter_fields`], которое БЕЗУСЛОВНО снимает кавычки (→ round-trip).
+fn needs_yaml_quote(v: &str) -> bool {
+    if v.is_empty() || v != v.trim() {
+        return true;
+    }
+    let first = v.chars().next().unwrap();
+    if "!&*?|>%@`\"'#,[]{}".contains(first) {
+        return true;
+    }
+    if (first == '-' || first == '?' || first == ':') && (v.len() == 1 || v[1..].starts_with(' ')) {
+        return true;
+    }
+    if v.ends_with(':') || v.contains(" #") || v.contains(": ") {
+        return true;
+    }
+    matches!(
+        v.to_ascii_lowercase().as_str(),
+        "null" | "~" | "true" | "false" | "yes" | "no" | "on" | "off"
+    )
+}
+
+/// Квотирует значение для записи во frontmatter, если нужно (двойные кавычки, экранирование `\`/`"`).
+fn quote_yaml_value(v: &str) -> String {
+    if needs_yaml_quote(v) {
+        format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        v.to_string()
+    }
+}
+
+/// BOARD-1: правит/добавляет ОДИН плоский top-level frontmatter-ключ, сохраняя остальной YAML и тело
+/// байт-в-байт. serde_yaml архивирован → ручной write-back; это единая точка записи frontmatter (статус
+/// при DnD, project/priority/due, Properties-панель). Нет frontmatter-блока — создаётся. Незакрытый блок
+/// (`---` без пары) → `Err(Malformed)`; значение, которое не переживёт round-trip через читатель
+/// (перевод строки/краевые кавычки/инлайн-список) → `Err(Unrepresentable)` — файл в обоих случаях НЕ
+/// трогаем. Дубль-ключ: правим ПОСЛЕДНЕЕ вхождение (читатель — last-key-wins).
+pub fn set_frontmatter_field(
+    content: &str,
+    key: &str,
+    value: &str,
+) -> Result<String, FmWriteError> {
+    let quoted = fm_value_repr(value).ok_or(FmWriteError::Unrepresentable)?;
+
+    // Нет frontmatter-блока — создаём, тело сохраняем как есть.
+    if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+        return Ok(format!("---\n{key}: {quoted}\n---\n\n{content}"));
+    }
+
+    let open_end = content.find('\n').map(|i| i + 1).unwrap_or(content.len());
+    let rest = &content[open_end..];
+    // Ищем закрывающий `---` (как split_frontmatter).
+    let mut close_rel = None;
+    let mut idx = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches(['\n', '\r']) == "---" {
+            close_rel = Some(idx);
+            break;
+        }
+        idx += line.len();
+    }
+    let Some(close_rel) = close_rel else {
+        return Err(FmWriteError::Malformed);
+    };
+    let fm_region = &rest[..close_rel];
+    let close_and_body = &rest[close_rel..];
+
+    // Строки региона с сохранением окончаний; правим ПОСЛЕДНЕЕ совпадение (читатель: last-key-wins).
+    let lines: Vec<&str> = fm_region.split_inclusive('\n').collect();
+    let last_match = lines
+        .iter()
+        .rposition(|l| is_field_line(l.trim_end_matches(['\n', '\r']), key));
+
+    let mut new_fm = String::new();
+    match last_match {
+        Some(mi) => {
+            for (i, line) in lines.iter().enumerate() {
+                if i == mi {
+                    let trimmed = line.trim_end_matches(['\n', '\r']);
+                    let colon = trimmed.find(':').unwrap();
+                    let ending = &line[trimmed.len()..]; // "\n" / "\r\n" / ""
+                    new_fm.push_str(&trimmed[..colon]);
+                    new_fm.push_str(": ");
+                    new_fm.push_str(&quoted);
+                    new_fm.push_str(ending);
+                } else {
+                    new_fm.push_str(line);
+                }
+            }
+        }
+        None => {
+            new_fm.push_str(fm_region);
+            if !new_fm.is_empty() && !new_fm.ends_with('\n') {
+                new_fm.push('\n');
+            }
+            // EOL новой строки — как у блока (CRLF, если открывающий `---` был CRLF), без mixed-EOL.
+            let eol = if content.starts_with("---\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+            new_fm.push_str(key);
+            new_fm.push_str(": ");
+            new_fm.push_str(&quoted);
+            new_fm.push_str(eol);
+        }
+    }
+
+    Ok(format!(
+        "{}{}{}",
+        &content[..open_end],
+        new_fm,
+        close_and_body
+    ))
 }
 
 /// Нормализует цель ссылки: убирает `|alias` и `#heading`, тримит. `None`, если пусто.
@@ -556,6 +726,127 @@ mod tests {
             parse("body #alpha #Beta-1\n").tags,
             vec!["alpha".to_string(), "beta-1".to_string()]
         );
+    }
+
+    /// BOARD-1: write-back одного ключа — замена/добавление/создание, сохранность, квотирование, round-trip.
+    #[test]
+    fn set_frontmatter_field_write_back() {
+        // Замена существующего ключа — остальное байт-в-байт (другой ключ + тело целы).
+        let src = "---\nstatus: todo\nproject: Alpha\n---\n# H\nтело\n";
+        let out = set_frontmatter_field(src, "status", "doing").unwrap();
+        assert_eq!(out, "---\nstatus: doing\nproject: Alpha\n---\n# H\nтело\n");
+        assert_eq!(
+            parse(&out).fields,
+            parse("---\nstatus: doing\nproject: Alpha\n---\n").fields
+        );
+
+        // Добавление отсутствующего ключа — перед закрывающим ---.
+        let out = set_frontmatter_field(src, "priority", "high").unwrap();
+        assert_eq!(
+            out,
+            "---\nstatus: todo\nproject: Alpha\npriority: high\n---\n# H\nтело\n"
+        );
+
+        // Нет frontmatter — создаётся, тело сохранено.
+        let out = set_frontmatter_field("просто тело\n", "status", "todo").unwrap();
+        assert_eq!(out, "---\nstatus: todo\n---\n\nпросто тело\n");
+
+        // Незакрытый frontmatter — Err, файл не трогаем.
+        assert_eq!(
+            set_frontmatter_field("---\nstatus: todo\nбез закрытия\n", "status", "x"),
+            Err(FmWriteError::Malformed)
+        );
+
+        // CRLF сохраняется при ЗАМЕНЕ.
+        let out = set_frontmatter_field("---\r\nstatus: todo\r\n---\r\nbody\r\n", "status", "done")
+            .unwrap();
+        assert_eq!(
+            out,
+            "---\r\nstatus: todo\r\n---\r\nbody\r\n".replace("todo", "done")
+        );
+
+        // F5: ДОБАВЛЕНИЕ ключа в CRLF-файл — новая строка тоже CRLF (без mixed-EOL).
+        let out =
+            set_frontmatter_field("---\r\nstatus: todo\r\n---\r\nbody\r\n", "priority", "high")
+                .unwrap();
+        assert_eq!(
+            out,
+            "---\r\nstatus: todo\r\npriority: high\r\n---\r\nbody\r\n"
+        );
+
+        // F4: дубль-ключ — правим ПОСЛЕДНЕЕ вхождение (читатель: last-key-wins), первое не трогаем.
+        let dup = "---\nstatus: a\nstatus: b\n---\nbody\n";
+        let out = set_frontmatter_field(dup, "status", "c").unwrap();
+        assert_eq!(out, "---\nstatus: a\nstatus: c\n---\nbody\n");
+        // Читатель действительно видит новое значение.
+        assert_eq!(
+            parse(&out).fields,
+            vec![("status".to_string(), "c".to_string())]
+        );
+    }
+
+    /// BOARD-1 (adversarial F1/F2): значение, которое читатель НЕ прочитал бы обратно тем же
+    /// (краевые кавычки / перевод строки / инлайн-список), → `Err(Unrepresentable)`, файл не трогаем.
+    #[test]
+    fn set_frontmatter_field_rejects_unrepresentable() {
+        let base = "---\nx: old\n---\nbody\n";
+        for bad in [
+            "say \"hi\"",   // хвостовая кавычка — edge-stripper её съест
+            "'urgent'",     // обёрнут кавычками целиком
+            "a: \"b\"",     // нужно квотировать + содержит кавычку (escape необратим)
+            "line1\nline2", // перевод строки — сломал бы структуру блока
+            "tail\r",       // CR
+            "[a, b]",       // инлайн-список — читатель пропустил бы
+            "{a: 1}",       // инлайн-объект
+            "",             // пустое — читатель пропустил бы
+        ] {
+            assert_eq!(
+                set_frontmatter_field(base, "status", bad),
+                Err(FmWriteError::Unrepresentable),
+                "должно отвергнуть «{bad}»"
+            );
+        }
+        // Интерьерные кавычки (НЕ на краю) — допустимы, round-trip целый.
+        let out = set_frontmatter_field(base, "status", "say \"hi\" there").unwrap();
+        assert_eq!(
+            parse(&out).fields,
+            vec![
+                ("x".to_string(), "old".to_string()),
+                ("status".to_string(), "say \"hi\" there".to_string()),
+            ]
+        );
+    }
+
+    /// BOARD-1: квотирование спецсимволов + round-trip через чтение frontmatter_fields (снимает кавычки).
+    #[test]
+    fn set_frontmatter_field_quoting_round_trip() {
+        // (Краевые пробелы НЕ тестируем round-trip: reader frontmatter_fields делает финальный .trim()
+        //  после снятия кавычек → нормализует пробелы; для status/project это несущественно.)
+        for val in [
+            "a: b",       // двоеточие-пробел
+            "true",       // резерв-слово
+            "#hash",      // комментарий-индикатор
+            "- dash",     // блок-список
+            "value # c",  // комментарий
+            "обычный",    // без квот
+            "2025-03-23", // дата — без квот (читается строкой)
+        ] {
+            let out = set_frontmatter_field("---\nx: old\n---\nbody\n", "status", val).unwrap();
+            // Идемпотентность: parse∘write∘parse == значение (кавычки сняты чтением).
+            let got: Vec<_> = parse(&out)
+                .fields
+                .into_iter()
+                .filter(|(k, _)| k == "status")
+                .collect();
+            assert_eq!(
+                got,
+                vec![("status".to_string(), val.to_string())],
+                "round-trip «{val}»"
+            );
+            // Повторная запись того же — стабильна (write∘parse-значения == write).
+            let out2 = set_frontmatter_field(&out, "status", val).unwrap();
+            assert_eq!(out, out2, "идемпотентность записи «{val}»");
+        }
     }
 
     #[test]

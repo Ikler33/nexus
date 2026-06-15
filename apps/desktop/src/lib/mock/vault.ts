@@ -115,6 +115,91 @@ export async function writeFile(path: string, content: string): Promise<string> 
   return mockHash(content);
 }
 
+/** BOARD-1: JS-порт бэкенд-`set_frontmatter_field` (мок зеркалит контракт — иначе превью/тесты «зелёные»
+ *  на неверном поведении, урок MEM-5). Валидирует ключ (как `value_key`), правит/добавляет один плоский
+ *  ключ (дубль → последнее вхождение), нет блока — создаёт; незакрытый `---` → throw (Malformed);
+ *  значение без round-trip (перевод строки/краевые кавычки/инлайн-список) → throw (Unrepresentable). */
+export async function setFrontmatterField(
+  path: string,
+  key: string,
+  value: string,
+): Promise<{ content: string; hash: string }> {
+  const src = CONTENT[path] ?? '';
+  const next = setFmField(src, valueKey(key), value);
+  CONTENT[path] = next;
+  return { content: next, hash: mockHash(next) };
+}
+
+/** Зеркало Rust `value_key`: имя свойства — идентификатор (буквы/цифры/`_`/`-`), триммится. */
+function valueKey(key: string): string {
+  const k = key.trim();
+  if (k === '' || !/^[\p{L}\p{N}_-]+$/u.test(k)) throw new Error(`недопустимый ключ свойства: «${key}»`);
+  return k;
+}
+function quoteYaml(v: string): boolean {
+  if (v === '' || v !== v.trim()) return true;
+  const f = v[0];
+  if ('!&*?|>%@`"\'#,[]{}'.includes(f)) return true;
+  if ((f === '-' || f === '?' || f === ':') && (v.length === 1 || v[1] === ' ')) return true;
+  if (v.endsWith(':') || v.includes(' #') || v.includes(': ')) return true;
+  return ['null', '~', 'true', 'false', 'yes', 'no', 'on', 'off'].includes(v.toLowerCase());
+}
+/** Зеркало Rust `read_scalar`: edge-stripper — краевые пробелы → краевые `"`/`'` → снова пробелы. */
+function readScalar(raw: string): string {
+  const s = raw.trim();
+  let i = 0;
+  let j = s.length;
+  while (i < j && (s[i] === '"' || s[i] === "'")) i++;
+  while (j > i && (s[j - 1] === '"' || s[j - 1] === "'")) j--;
+  return s.slice(i, j).trim();
+}
+/** Зеркало Rust `fm_value_repr`: кодирует значение, ЕСЛИ читатель прочёл бы его обратно тем же; иначе null. */
+function fmValueRepr(value: string): string | null {
+  if (value === '' || value.includes('\n') || value.includes('\r')) return null;
+  const quoted = quoteYaml(value) ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : value;
+  const read = readScalar(quoted);
+  if (read !== value || read.startsWith('[') || read.startsWith('{')) return null;
+  return quoted;
+}
+function isFieldLine(line: string, key: string): boolean {
+  if (/^[ \t-]/.test(line)) return false;
+  const c = line.indexOf(':');
+  if (c < 0) return false;
+  const k = line.slice(0, c).trim();
+  return k === key && /^[\p{L}\p{N}_-]+$/u.test(k);
+}
+function setFmField(content: string, key: string, value: string): string {
+  const quoted = fmValueRepr(value);
+  if (quoted === null) throw new Error('Unrepresentable frontmatter value (перевод строки/краевые кавычки)');
+  if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) {
+    return `---\n${key}: ${quoted}\n---\n\n${content}`;
+  }
+  const lines = content.split('\n');
+  let close = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].replace(/\r$/, '') === '---') {
+      close = i;
+      break;
+    }
+  }
+  if (close < 0) throw new Error('Malformed frontmatter (незакрытый ---)');
+  // Правим ПОСЛЕДНЕЕ совпадение (читатель: last-key-wins).
+  let last = -1;
+  for (let i = 1; i < close; i++) {
+    if (isFieldLine(lines[i].replace(/\r$/, ''), key)) last = i;
+  }
+  if (last >= 0) {
+    const cr = lines[last].endsWith('\r') ? '\r' : '';
+    const bare = lines[last].replace(/\r$/, '');
+    lines[last] = `${bare.slice(0, bare.indexOf(':'))}: ${quoted}${cr}`;
+  } else {
+    // EOL новой строки — как у блока (CRLF, если открывающий `---` был CRLF).
+    const cr = content.startsWith('---\r\n') ? '\r' : '';
+    lines.splice(close, 0, `${key}: ${quoted}${cr}`);
+  }
+  return lines.join('\n');
+}
+
 export async function deletePath(path: string): Promise<void> {
   // Убираем элемент из родительского каталога дерева.
   const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
