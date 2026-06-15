@@ -32,7 +32,7 @@ describe('memory store (MEM-4)', () => {
   });
 
   it('add(explicit) триммит, зовёт memory.add и перечитывает', async () => {
-    const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue(1);
+    const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 1, inserted: true });
     const list = vi.spyOn(tauriApi.memory, 'list').mockResolvedValue([fact({ id: 1, text: 'факт' })]);
     await useMemoryStore.getState().add('  факт  ');
     expect(add).toHaveBeenCalledWith('факт', 'explicit');
@@ -40,7 +40,7 @@ describe('memory store (MEM-4)', () => {
   });
 
   it('add пустого текста — no-op (команда не зовётся)', async () => {
-    const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue(1);
+    const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 1, inserted: true });
     await useMemoryStore.getState().add('   ');
     expect(add).not.toHaveBeenCalled();
   });
