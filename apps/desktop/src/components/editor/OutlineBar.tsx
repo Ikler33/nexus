@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import { ChevronRight, List } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { extractHeadings } from '../../lib/editor/outline';
@@ -13,7 +13,10 @@ import styles from './OutlineBar.module.css';
 export function OutlineBar({ doc, onJump }: { doc: string; onJump: (line: number) => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
-  const headings = useMemo(() => extractHeadings(doc), [doc]);
+  // Парсинг заголовков откладываем (audit B11): при быстром наборе React не пересчитывает оглавление
+  // на каждый символ — useDeferredValue паузит до затишья ввода. Поведение то же, лишь ~кадр задержки.
+  const deferredDoc = useDeferredValue(doc);
+  const headings = useMemo(() => extractHeadings(deferredDoc), [deferredDoc]);
   if (headings.length === 0) return null;
 
   const minLevel = headings.reduce((m, h) => Math.min(m, h.level), 6);

@@ -9,6 +9,9 @@
  * (иначе ломается fast-refresh, react-refresh/only-export-components).
  */
 const cache = new Map<string, string[]>();
+// Кап на размер кэша (audit B11): за длинную сессию с сотнями открытых заметок Map рос бы
+// неограниченно. Map хранит порядок вставки → удаляем самую старую запись (FIFO/≈LRU) при переполнении.
+const CACHE_CAP = 200;
 
 /** Закэшированные вопросы для заметки или `undefined` (промах). */
 export function getCachedQuestions(center: string): string[] | undefined {
@@ -17,7 +20,12 @@ export function getCachedQuestions(center: string): string[] | undefined {
 
 /** Кэширует вопросы (в т.ч. пустой массив — чтобы не дёргать LLM повторно за сессию). */
 export function setCachedQuestions(center: string, questions: string[]): void {
+  cache.delete(center); // переустановка двигает запись в конец (свежесть для FIFO-эвикции)
   cache.set(center, questions);
+  if (cache.size > CACHE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
 }
 
 /** Сбрасывает кэш (смена vault; в тестах — изоляция кейсов). */
