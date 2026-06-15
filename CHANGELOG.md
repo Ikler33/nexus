@@ -11,6 +11,28 @@
      Ниже — сводка по фазам (#181–228). Приёмка качества: adversarial-Workflow-ревью диффа ПЕРЕД
      мержем. Срезы — squash-PR от origin/main, мерж мимо Windows-флейка 0xc0000139 (ubuntu-Rust зелёный). -->
 
+### Дотошный код-аудит (2026-06-15, `docs/reviews/CODE_AUDIT_2026-06.md`)
+
+Мультиагентный аудит (132 агента, 88 уникальных находок) → фикс-батчи поверх #231–238. Каждый
+батч — verified-spec → имплементация → полный CI-гейт → adversarial-ревью диффа ПЕРЕД мержем.
+
+- **CRITICAL/MAJOR (#231–238, ранее):** SSRF плагин-egress + DNS-rebinding · path-traversal `..`/`.nexus` · атомарность конфигов/экспортов · перенос `.nexus/history` при rename · потери данных Home-захвата · zip-усечение векторов · graph_rank unbounded-IN · toggleTask нумерованные · watchdog-requeue.
+- **B1 (#240)** — целостность: git pull dirty-guard (`ensure_clean_tree`) + history TOCTOU(O_EXCL)/traversal-валидация.
+- **B2 (#241)** — БД-устойчивость: потолок версии миграций + `catch_unwind` writer/read-pool.
+- **B3 (#242)** — contradictions: стабильный `hash_snippet` (blake3) + честная выдача list/relation-reasons (фильтры `is_deleted`, пустой-кэш).
+- **B4 (#243)** — graph: self-loop исключён из беклинков, рёбер и степени.
+- **B5 (#245)** — indexer/scheduler: wikilink-границы строки · честный скан (счётчик failed) · re-arm recurring dead-job.
+- **B6 (#244)** — news/digest: lossy-декод не-UTF8 фидов + injection-маркеры контента в дайджесте.
+- **B7 (#246)** — frontend-honesty: `data:image/`-only (анти-XSS) · ASCII-теги превью (как бэкенд) · знаковый `relTime`.
+- **B8 (#248)** — сторы: персист recents при reset · ремап navHistory при moveTab · сброс suggest-dismissed при смене vault.
+- **B9 (#247)** — starred переживает rename/delete заметок и каталогов.
+- **B10 (#249)** — a11y: focus-trap модалок Digest/Contradictions/Settings/Conflict · Esc-приоритет reading-mode · roving-radiogroup · кламп FileTree-active.
+- **B11 (#250)** — perf: отложенный парсинг оглавления (`useDeferredValue`) · кап кэша вопросов · очистка drag-слушателей (AbortController).
+- **B12 (#251)** — чат epoch-гарды: onEvent (поздние токены после stop) · loadSession-recheck · disclosure LRU-кап вместо clear.
+- **B13 (#252)** — фронт-гонки/honesty: epoch-гард news.load · видимость Home error/loading · честный сбой commit в SyncPanel.
+- **B14 (#253)** — news: HN не фильтруется повторно `keyword_filter` (Algolia уже отфильтровал; чинит потерю совпавших по `story_text`).
+- **Отложено в BACKLOG** (с обоснованием): orphan-history-GC · reconcile-orphans (риск usearch v2 API) · should_generate/candidate_pairs (нужна схема) · NewsView-offline-banner (нужен egress-event) · web-save/saveRemote honesty-хвосты. **Отклонено** (перф-регрессия): mtime-shortcut. **Отсеяно** (false-positive): backlinks-occurrences, atom-date-concat, hotkey-ghost, graphview-rerender (уже #148), trap-overlays-stack.
+
 ### Фаза 1 — Сохранность данных (P1, «нетеряемость мысли»)
 
 - **SAFE-1 (#181)** — атомарная запись заметки (tmp в той же папке → fsync → rename), без частичных файлов.

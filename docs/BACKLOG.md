@@ -182,6 +182,12 @@
 | ✂️ **EDIT-нити:** мультикурсор (selection.main), `)` в URL-ветке `editor.format.link` не экранируется, EDIT-2 outdent на пустом вложенном | редкие края, не блокируют | по спросу | adversarial-ревью #204/#206 |
 | 🧩 **Глобальный quick-capture** (ОС-хоткей вне приложения) | tauri-plugin-global-shortcut + macOS Accessibility (owner/ОС-gated); in-app ⌘⇧N готов | разрешение владельца | IMPROVEMENT_PLAN P4 (CAP-6) |
 | 🧩 **STIX-шрифт формул для Win/Linux WebView** | macOS WebKit рендерит MathML из коробки; Win WebView2/Linux WebKitGTK нужен мат-шрифт (бандл) | при сборке под Win/Linux | KaTeX #215 |
+| ✂️ **AUDIT: web-search save-swallow + SyncPanel.saveRemote-swallow** (honesty-хвосты) | autonomous-safe мелкие фиксы (`.catch` + error-state, аналог SyncPanel-commit #252); не блокируют | при правке Settings/Sync | CODE_AUDIT_2026-06 (B13-хвост) |
+| ✂️ **AUDIT: orphan-history/корзина GC при delete** | best-effort удаление `.nexus/history/<rel>` + ретенция корзины; не потеря данных, рост диска | при правке CURATE-delete | CODE_AUDIT MINOR |
+| 🔬 **AUDIT: reconcile_vectors не чистит orphan-векторы** | риск usearch v2 `all_keys()` API (может снести лишнее) — нужен guard `removed>0`+лог+тест; средний риск | сверка usearch-API | CODE_AUDIT MINOR |
+| 🧩 **AUDIT: contradictions should_generate/candidate_pairs** | `should_generate` вечно-true без отдельного `last_run` (нужна схема/миграция); candidate_pairs N+1 (батч-выборка) | при доработке contradictions | CODE_AUDIT MINOR |
+| ✂️ **AUDIT: NewsView offline-баннер fire-once** | нужен egress-state-событие (бэк) или поллинг; маргинально — офлайн-фетч и так даёт видимую ошибку | при egress-event инфре | CODE_AUDIT MINOR |
+| ❌ **AUDIT: mtime-shortcut хеш-сверка — ОТКЛОНЕНО** | хеш-чтение при mtime+size match = чтение+хеш ВСЕХ файлов каждый скан (перф-регрессия, отменяет cross-file-эпик); same-second+same-size edit ловит watcher | не делать | CODE_AUDIT (adversarial B5) |
 
 ## Закрыто (история — для сверки, не для работы)
 - **Ф3-3b-3 — git-sync UI (финиш git-sync)** — панель «Синхронизация»: remote (URL) + токен (→ keychain) + кнопка sync (pull-ff/push) с исходом; `tauriApi.git` (setRemote/getRemote/sync) + мок + i18n. Проверено в превью. **git-sync функционально готов.**
