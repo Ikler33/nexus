@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
+  AlertTriangle,
   ArrowLeftRight,
   ArrowUpRight,
   CalendarDays,
@@ -97,6 +98,8 @@ export function HomeView() {
     reloadWidget,
     refreshWidget,
     syncGenerating,
+    loading,
+    error,
   } = useHomeStore();
   const [ai, setAi] = useState<AiConfigDto | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -308,6 +311,15 @@ export function HomeView() {
             </div>
           </div>
         </header>
+
+        {/* audit B13: видимость загрузки/ошибки дашборда (раньше error/loading из стора не рендерились). */}
+        {error && (
+          <div className={styles.errBanner} role="alert">
+            <AlertTriangle size={15} aria-hidden />
+            {t('home.loadError')}
+          </div>
+        )}
+        {loading && !data && <div className={styles.loadingHint}>{t('home.loading')}</div>}
 
         {/* ── hero-поиск ── */}
         <button type="button" className={styles.heroSearch} onClick={() => openPalette()}>

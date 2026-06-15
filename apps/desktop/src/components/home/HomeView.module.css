@@ -971,3 +971,25 @@
     transition: none;
   }
 }
+
+/* audit B13: видимость загрузки/ошибки дашборда (раньше error/loading молча не рендерились). */
+.errBanner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+.errBanner svg {
+  color: var(--color-danger);
+}
+.loadingHint {
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-subtle);
+}

@@ -6,6 +6,10 @@ import { useChatStore } from '../../stores/chat';
 import { useHomeStore } from '../../stores/home';
 import { useUIStore } from '../../stores/ui';
 
+// Реальный load() стора — восстанавливаем его каждый тест, т.к. отдельные кейсы ниже подменяют его
+// no-op'ом (чтобы детерминированно проверить error/loading), иначе подмена утекла бы в соседние тесты.
+const realLoad = useHomeStore.getState().load;
+
 function resetStores() {
   useUIStore.setState({ homeOpen: true, newsOpen: false, chatOpen: false });
   useChatStore.setState({ draft: '', pinned: [], mode: 'general', streaming: false });
@@ -20,6 +24,7 @@ function resetStores() {
     loading: true,
     generating: {},
     error: null,
+    load: realLoad,
   });
 }
 
@@ -90,6 +95,19 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
     fireEvent.click(discuss[discuss.length - 1]); // последний — CTA дрейфа (после вопросов)
     expect(useChatStore.getState().draft).toMatch(/вернуть фокус/); // шаблон drift
     expect(useChatStore.getState().pinned).toHaveLength(0); // у дрейфа нет одной заметки-источника
+  });
+
+  // audit B13: error/loading из стора теперь видимы (раньше деструктуризация их игнорировала).
+  it('показывает error-баннер при ошибке загрузки', () => {
+    useHomeStore.setState({ error: 'network down', loading: false, data: null, load: async () => {} });
+    render(<HomeView />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/не удалось загрузить|failed to load/i);
+  });
+
+  it('показывает loading-хинт при первой загрузке (data ещё нет)', () => {
+    useHomeStore.setState({ loading: true, data: null, error: null, load: async () => {} });
+    render(<HomeView />);
+    expect(screen.getByText(/^загрузка…$|^loading…$/i)).toBeInTheDocument();
   });
 
   // «Обновить» на AI-карте ставит фоновую генерацию: thinking-оверлей до прихода результата.

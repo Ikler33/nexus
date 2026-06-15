@@ -14,6 +14,8 @@ import { ConflictResolver } from './ConflictResolver';
 import styles from './SyncPanel.module.css';
 
 type SyncResult = GitPullOutcome | { status: 'error'; message: string };
+// audit B13: коммит мог упасть на бэке (git/secret-scan), а UI глотал ошибку — добавляем error-исход.
+type CommitOutcome = GitCommitOutcome | { status: 'error'; message: string };
 
 /**
  * Панель синхронизации (Ф3, git-sync): изменения рабочего дерева + коммит (secret-scan на бэке),
@@ -25,7 +27,7 @@ export function SyncPanel() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeSync);
   const [changes, setChanges] = useState<GitStatusEntry[] | null>(null);
-  const [outcome, setOutcome] = useState<GitCommitOutcome | null>(null);
+  const [outcome, setOutcome] = useState<CommitOutcome | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -67,8 +69,8 @@ export function SyncPanel() {
           .then(setChanges)
           .catch(() => setChanges([]));
       }
-    } catch {
-      /* ошибки команды не ломают UI */
+    } catch (e) {
+      setOutcome({ status: 'error', message: String(e) }); // показываем сбой, а не глотаем (audit B13)
     } finally {
       setBusy(false);
     }
@@ -237,13 +239,16 @@ export function SyncPanel() {
   );
 }
 
-function CommitResult({ outcome }: { outcome: GitCommitOutcome }) {
+function CommitResult({ outcome }: { outcome: CommitOutcome }) {
   const { t } = useTranslation();
   if (outcome.status === 'committed') {
     return <p className={styles.ok}>✓ {outcome.message}</p>;
   }
   if (outcome.status === 'nothing-to-commit') {
     return <p className={styles.muted}>{t('git.clean')}</p>;
+  }
+  if (outcome.status === 'error') {
+    return <p className={styles.errorMsg}>✋ {outcome.message}</p>;
   }
   return (
     <div className={styles.blocked} role="alert">
