@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { tauriApi } from '../lib/tauri-api';
+import { tauriApi, type ChatStreamEvent } from '../lib/tauri-api';
 import { __reset as resetMockSessions } from '../lib/mock/sessions';
-import { useChatStore } from './chat';
+import { disclosureOpen, useChatStore } from './chat';
 
 // В vitest (не Tauri) `streamRag` проксируется в мок `mock/vault.streamChat` (sources→токены→done).
 // jsdom под node 25 не отдаёт рабочий localStorage — мокаем in-memory (свежий на тест) для персиста (#17).
@@ -363,5 +363,50 @@ describe('chat store (Ф1-8)', () => {
     useChatStore.getState().hydrate(null);
     expect(useChatStore.getState().streaming).toBe(false);
     expect(useChatStore.getState().messages).toHaveLength(0);
+  });
+
+  // audit B12: epoch-гард onEvent — поздние события остановленного стрима не трогают финализированный ответ.
+  it('onEvent после stop() игнорирует поздние события старого стрима', () => {
+    let captured: ((e: ChatStreamEvent) => void) | undefined;
+    vi.spyOn(tauriApi.chat, 'streamRag').mockImplementation((_q, onEvent) => {
+      captured = onEvent;
+      return () => {};
+    });
+    useChatStore.getState().send('вопрос');
+    useChatStore.getState().stop(); // ответ финализирован (streaming=false)
+    const before = useChatStore.getState().messages.at(-1)?.content;
+
+    // поздний done после stop
+    captured?.({ type: 'done', full: 'ПОЗДНИЙ ОТВЕТ старого стрима' } as ChatStreamEvent);
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe(before); // не заменён
+  });
+
+  // audit B12: loadSession после await не затирает активный стрим, стартовавший за время загрузки.
+  it('loadSession не затирает чат, если за время загрузки стартовал send', async () => {
+    const stored = [{ role: 'assistant', content: 'старая история', sourcesJson: null }];
+    let resolveMsgs: (v: typeof stored) => void = () => {};
+    vi.spyOn(tauriApi.chat.sessions, 'messages').mockReturnValue(
+      new Promise<typeof stored>((res) => {
+        resolveMsgs = res;
+      }) as ReturnType<typeof tauriApi.chat.sessions.messages>,
+    );
+    vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+
+    const p = useChatStore.getState().loadSession(7); // ждёт messages()
+    useChatStore.getState().send('новый вопрос'); // во время загрузки → streaming=true
+    resolveMsgs(stored);
+    await p;
+
+    expect(useChatStore.getState().messages.some((m) => m.content === 'новый вопрос')).toBe(true);
+    expect(useChatStore.getState().messages.some((m) => m.content === 'старая история')).toBe(false);
+  });
+
+  // audit B12: disclosureOpen — LRU-кап вместо полной чистки при переполнении.
+  it('disclosureOpen: LRU-кап (>600) вытесняет старейшие, не чистит все', () => {
+    disclosureOpen.clear();
+    for (let i = 0; i < 610; i++) disclosureOpen.set(`msg${i}:src`, true);
+    expect(disclosureOpen.size).toBeLessThanOrEqual(600);
+    expect(disclosureOpen.get('msg0:src')).toBeUndefined(); // старейшие вытеснены по одному
+    expect(disclosureOpen.get('msg609:src')).toBe(true); // свежие раскрытия сохранены
   });
 });
