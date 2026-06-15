@@ -18,6 +18,7 @@ vi.mock('d3-force', () => {
         n.y = 100;
       });
       const sim: Record<string, (...a: unknown[]) => unknown> = {
+        velocityDecay: () => sim,
         force: () => sim,
         on: (...a: unknown[]) => {
           (a[1] as (() => void) | undefined)?.(); // тик-колбэк зовём один раз
