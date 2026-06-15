@@ -749,16 +749,15 @@ pub async fn set_frontmatter_field(
     let root = current_root(&state).await?;
     let abs = vault::resolve_vault_path_for_write(&root, Path::new(&path))?;
     let old = tokio::fs::read_to_string(&abs).await?;
-    let new_content = crate::parser::set_frontmatter_field(&old, &value_key(&key)?, &value).map_err(
-        |e| match e {
+    let new_content = crate::parser::set_frontmatter_field(&old, &value_key(&key)?, &value)
+        .map_err(|e| match e {
             crate::parser::FmWriteError::Malformed => {
                 AppError::Msg("frontmatter: незакрытый блок --- (откройте заметку)".into())
             }
             crate::parser::FmWriteError::Unrepresentable => AppError::Msg(
                 "значение нельзя сохранить в свойство (перевод строки или краевые кавычки)".into(),
             ),
-        },
-    )?;
+        })?;
     let hash = vault::content_hash(new_content.as_bytes());
     if new_content != old {
         let rel = path.clone();
