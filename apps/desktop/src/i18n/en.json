@@ -395,7 +395,8 @@
     "orphanThinking": "Finding links…",
     "orphanResult": "Possible link:",
     "orphanNone": "No suitable links found.",
-    "groupTags": "Group by tags"
+    "groupTags": "Group by tags",
+    "showOrphans": "Show orphans"
   },
   "chat": {
     "title": "AI panel",

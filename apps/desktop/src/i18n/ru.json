@@ -406,7 +406,8 @@
     "orphanThinking": "Ищу связи…",
     "orphanResult": "Возможная связь:",
     "orphanNone": "Подходящих связей не нашлось.",
-    "groupTags": "Группировка по тегам"
+    "groupTags": "Группировка по тегам",
+    "showOrphans": "Показывать изоляты"
   },
   "chat": {
     "title": "AI-панель",

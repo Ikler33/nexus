@@ -106,6 +106,7 @@ interface GraphSettings {
   gravity: number; // притяжение к центру (forceX/Y): выше = плотнее, ниже = разлёт
   sizeScale: number; // множитель радиуса узла
   group: boolean; // группировка по тегам (макет gs-toggle): общий центроид на первый тег
+  showOrphans: boolean; // GRAPH-3: показывать сироты (deg=0). Выкл → их не рисуем и не кадрируем (Obsidian)
 }
 // GRAPH-1 (ресёрч-ретюн физики): дефолты подобраны под когезию «как Obsidian» — сильное центрирование
 // побеждает заряд, узлы держатся компактным созвездием, изоляты — аккуратное гало (не разлёт по углам).
@@ -116,6 +117,7 @@ const DEFAULT_SETTINGS: GraphSettings = {
   gravity: 0.085,
   sizeScale: 1,
   group: false,
+  showOrphans: true,
 };
 // v3 (GRAPH-1): ретюн физики не должен перекрываться старым персистом v1/v2 (иначе сохранённый разлёт).
 const SETTINGS_KEY = 'nexus.graph.settings.v3';
@@ -409,8 +411,9 @@ export default function GraphView() {
     warming = false;
     simRef.current = sim;
     // Граф уже собран: убираем лоадер и кадрируем камеру сразу (не ждём фиктивные 700мс).
+    // Скрытые сироты (GRAPH-3) в рамку не входят — кадрируем по связному ядру.
     setLoading(false);
-    setCam(fitCamera(sim.nodes(), stage));
+    setCam(fitCamera(sim.nodes().filter((n) => s.showOrphans || !n.ring), stage));
     tick((v) => v + 1);
     // Короткое живое дотыхание до полной остановки (alphaTarget 0): микро-доводка после warmup, потом стоп.
     sim.alpha(0.06).alphaTarget(0).restart();
@@ -421,10 +424,18 @@ export default function GraphView() {
 
   // ── живое применение настроек физики: мутируем силы существующей сим (позиции сохраняются) ──
   useEffect(() => {
-    // Признак реальной смены настроек считаем ДО ранних выходов и синхронизируем `prevSettingsRef`
-    // ВСЕГДА — иначе слайдер, сдвинутый пока сим ещё нет, оставил бы ref устаревшим → на следующей
-    // загрузке графа сработал бы ложный реогрев и расколол бы уже собранный warmup (находка ревью).
-    const settingsChanged = prevSettingsRef.current !== settings;
+    // Что именно сменилось считаем ДО синхронизации ref. `prevSettingsRef` синхронизируем ВСЕГДА (даже
+    // если сим ещё нет) — иначе слайдер, сдвинутый без сим, оставил бы ref устаревшим → ложный реогрев
+    // на следующей загрузке графа расколол бы warmup (находка ревью). Реогрев — только на смену ФИЗИКИ
+    // (showOrphans — чисто отображение, физику не трогает → лишь перекадрируем, без re-settle).
+    const prev = prevSettingsRef.current;
+    const physicsChanged =
+      prev.repel !== settings.repel ||
+      prev.linkDist !== settings.linkDist ||
+      prev.gravity !== settings.gravity ||
+      prev.sizeScale !== settings.sizeScale ||
+      prev.group !== settings.group;
+    const orphansChanged = prev.showOrphans !== settings.showOrphans;
     prevSettingsRef.current = settings;
     settingsRef.current = settings;
     try {
@@ -444,12 +455,18 @@ export default function GraphView() {
     gravXRef.current?.strength(gravStrength);
     gravYRef.current?.strength(gravStrength);
     collideRef.current?.radius((d) => nodeRadius(d.deg) * settings.sizeScale + 6);
-    // Реогрев ТОЛЬКО при реальной смене настроек. На смену графа `settings` тот же → пропускаем
-    // (warmup main-эффекта уже собрал раскладку, не сбиваем её).
-    if (settingsChanged) {
+    if (physicsChanged) {
       simRef.current.alpha(0.5).alphaTarget(0).restart();
     }
-    prevSettingsRef.current = settings;
+    // GRAPH-3: тоггл сирот → перекадрировать (рамка по видимым узлам), физику НЕ трогаем.
+    if (orphansChanged) {
+      setCam(
+        fitCamera(
+          simRef.current.nodes().filter((n) => settings.showOrphans || !n.ring),
+          graph?.stage ?? STAGE.local,
+        ),
+      );
+    }
   }, [settings, graph]);
 
   useEffect(
@@ -503,7 +520,11 @@ export default function GraphView() {
   };
 
   const fit = useCallback(() => {
-    const nodes = simRef.current?.nodes() ?? [];
+    // GRAPH-3: кадрируем только ВИДИМЫЕ узлы — со скрытыми сиротами рамка тянется по связному ядру
+    // (а не по широкому кольцу гало), вид заметно плотнее.
+    const nodes = (simRef.current?.nodes() ?? []).filter(
+      (n) => settingsRef.current.showOrphans || !n.ring,
+    );
     setCam(fitCamera(nodes, stage));
   }, [stage]);
 
@@ -721,6 +742,7 @@ export default function GraphView() {
             })()}
             {graph.nodes.map((n) => {
               if (n.x == null || n.y == null) return null;
+              if (!settings.showOrphans && n.ring) return null; // GRAPH-3: сироты скрыты
               const isActive = n.id === graph.activeId;
               const r = nodeRadius(n.deg) * settings.sizeScale;
               const faded = (nbrs != null && !nbrs.has(n.id)) || tagFaded(n);
@@ -896,6 +918,18 @@ export default function GraphView() {
             >
               <span className="graph-row-label">{t('graph.groupTags')}</span>
               <span className={'gs-switch' + (settings.group ? ' on' : '')}>
+                <span className="gs-knob" />
+              </span>
+            </button>
+            {/* GRAPH-3: показывать сироты (deg=0). Выкл → вид по связному ядру, как «Show orphans» в Obsidian. */}
+            <button
+              type="button"
+              className="graph-row graph-grouprow"
+              onClick={() => setSettings((s) => ({ ...s, showOrphans: !s.showOrphans }))}
+              aria-pressed={settings.showOrphans}
+            >
+              <span className="graph-row-label">{t('graph.showOrphans')}</span>
+              <span className={'gs-switch' + (settings.showOrphans ? ' on' : '')}>
                 <span className="gs-knob" />
               </span>
             </button>
