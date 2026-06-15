@@ -26,7 +26,9 @@ import styles from './MarkdownPreview.module.css';
 function urlTransform(url: string): string {
   if (url.startsWith(WIKILINK_SCHEME) || url.startsWith(TAG_SCHEME)) return url;
   const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(url);
-  return !hasScheme || /^(https?:|mailto:|tel:)/i.test(url) ? url : '';
+  // `data:image/…` разрешаем (inline-картинки, IMG-1 #213); НЕ весь `data:` — `data:text/html,<script>`
+  // на href ссылки = XSS (urlTransform общий для href и src), поэтому только image-подтип (находка аудита).
+  return !hasScheme || /^(https?:|mailto:|tel:|data:image\/)/i.test(url) ? url : '';
 }
 
 /** Минимальная форма hast-узла, по которой ищем состояние GFM-чекбокса (без зависимости от типов hast). */

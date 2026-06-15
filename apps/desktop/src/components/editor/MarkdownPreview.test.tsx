@@ -152,13 +152,14 @@ describe('MarkdownPreview: формулы (#4, MathML под строгим CSP)
   });
 
   // Сосуществование: math + wikilink + tag на одной строке — remarkNexus не сломан remark-math.
+  // Тег ASCII (`#idea`): бэкенд создаёт только ASCII-теги, превью теперь совпадает (кириллица — текст).
   it('формула уживается с [[wikilink]] и #tag', () => {
     const { container } = render(
-      <MarkdownPreview source={'$$x$$ и [[Заметка]] и #идея'} onOpenLink={() => {}} />,
+      <MarkdownPreview source={'$$x$$ и [[Заметка]] и #idea'} onOpenLink={() => {}} />,
     );
     expect(container.querySelector('math')).not.toBeNull();
     expect(screen.getByText('Заметка')).toBeInTheDocument();
-    expect(screen.getByText('#идея')).toBeInTheDocument();
+    expect(screen.getByText('#idea')).toBeInTheDocument();
   });
 
   // БАГ adversarial-ревью реализации #5: двойной-$ валюты в заметках о деньгах НЕ должен становиться
