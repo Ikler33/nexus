@@ -352,6 +352,17 @@ impl Indexer {
         // добавляем новые: ключ = chunk_id, вектор[i] 1:1 к чанку i (RETURNING сохранил порядок).
         if do_chunk {
             if let Some(rag) = &self.rag {
+                // Инвариант 1:1 чанк↔вектор перед записью в usearch. Рассинхрон (эмбеддер вернул не
+                // столько векторов) молча обрезал бы `zip` по меньшей длине → чанк без вектора:
+                // несёрчабелен, но без ошибки (тихая порча RAG; находка аудита). Эмбеддер уже
+                // гарантирует count, но проверяем и здесь — векторы могли прийти иным путём.
+                if vectors.len() != new_chunk_ids.len() {
+                    return Err(DbError::External(format!(
+                        "рассинхрон вектор/чанк: {} векторов на {} чанков",
+                        vectors.len(),
+                        new_chunk_ids.len()
+                    )));
+                }
                 for old in &old_chunk_ids {
                     let _ = rag.vectors.remove(*old);
                 }

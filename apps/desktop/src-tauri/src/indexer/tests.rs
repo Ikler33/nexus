@@ -462,6 +462,31 @@ impl crate::ai::EmbeddingProvider for CountingEmbedder {
     }
 }
 
+/// Эмбеддер, возвращающий на ОДИН вектор МЕНЬШЕ, чем входов (роняет последний) — модель сломанного/
+/// усекающего сервера. Раньше `zip` молча отбрасывал хвостовой чанк; теперь индексатор обязан падать.
+struct TruncatingEmbedder {
+    dim: usize,
+}
+#[async_trait::async_trait]
+impl crate::ai::EmbeddingProvider for TruncatingEmbedder {
+    async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
+        let mut v = MockEmbedder { dim: self.dim }
+            .embed_documents(texts)
+            .await?;
+        v.pop(); // рассинхрон: на один вектор меньше входов
+        Ok(v)
+    }
+    async fn embed_query(&self, text: &str) -> crate::ai::AiResult<Vec<f32>> {
+        MockEmbedder { dim: self.dim }.embed_query(text).await
+    }
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn model_id(&self) -> &str {
+        "truncating-mock"
+    }
+}
+
 /// Индексатор с RAG поверх детерминированного мок-эмбеддера и собственного usearch-файла.
 fn rag_indexer(db: &Database, root: &Path, dim: usize, force: bool) -> (Indexer, Arc<VectorIndex>) {
     let path = root.join(".nexus").join("vectors.usearch");
@@ -511,6 +536,32 @@ async fn rag_index_writes_chunks_fts_and_vectors() {
     assert!(n >= 1, "должен появиться хотя бы один чанк");
     assert_eq!(vectors.len(), n as usize, "по вектору на чанк (AC-Б4-1)");
     assert_eq!(fts_hits(&db, "vector").await, 1, "FTS находит тело чанка");
+}
+
+/// Аудит 2026-06: эмбеддер вернул МЕНЬШЕ векторов, чем чанков. Раньше `zip` молча ронял хвостовой
+/// чанк (он оставался без вектора — несёрчабелен, но без ошибки). Теперь индексатор падает с явной
+/// ошибкой инварианта 1:1 — тихой порчи RAG не происходит.
+#[tokio::test]
+async fn embedding_count_mismatch_errors_not_silent_truncation() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::write(
+        root.join("Note.md"),
+        "# Heading\n\nтело заметки для эмбеддинга\n",
+    )
+    .unwrap();
+
+    let db = open(&root).await;
+    let path = root.join(".nexus").join("vectors.usearch");
+    let vectors = Arc::new(VectorIndex::open(path, 16).unwrap());
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(TruncatingEmbedder { dim: 16 });
+    let idx = Indexer::with_rag(&db, root.clone(), embedder, vectors, true);
+
+    let res = idx.index_file("Note.md").await;
+    assert!(
+        res.is_err(),
+        "рассинхрон вектор/чанк должен падать с ошибкой, а не молча терять вектор"
+    );
 }
 
 /// AC-Б9 (V2.2): rename сохраняет чанки и векторы под тем же `file_id` (не пересоздаёт) —

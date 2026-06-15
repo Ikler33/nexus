@@ -82,6 +82,10 @@ pub enum AiError {
     BadResponse(String),
     #[error("размерность вектора: ожидалось {expected}, получено {got}")]
     DimMismatch { expected: usize, got: usize },
+    /// Эмбеддер вернул не столько векторов, сколько было входов (находка аудита: рассинхрон молча
+    /// обрезал бы `zip` при записи в usearch → чанки без вектора). Контракт: ровно N векторов на N входов.
+    #[error("число эмбеддингов: ожидалось {expected}, получено {got}")]
+    CountMismatch { expected: usize, got: usize },
     #[error("config: {0}")]
     Config(String),
     /// Отказ политики эгресса (ADR-005-ext, AC-EGR-14): типизированная причина, НЕ reqwest-строка.

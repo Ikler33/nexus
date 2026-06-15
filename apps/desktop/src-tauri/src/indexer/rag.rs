@@ -188,6 +188,17 @@ impl Indexer {
                 .map_err(|_| DbError::Unavailable)?;
             match rag.embedder.embed_documents(&texts).await {
                 Ok(vecs) => {
+                    // Защита от рассинхрона: zip по меньшей длине молча оставил бы часть строк без
+                    // вектора (находка аудита). Эмбеддер уже гарантирует count==входов; здесь —
+                    // belt-and-suspenders: при несовпадении пропускаем батч (повтор при след. открытии).
+                    if vecs.len() != rows.len() {
+                        tracing::warn!(
+                            expected = rows.len(),
+                            got = vecs.len(),
+                            "reconcile: рассинхрон вектор/строка — батч пропущен"
+                        );
+                        continue;
+                    }
                     for ((id, _), v) in rows.iter().zip(&vecs) {
                         match rag.vectors.upsert(*id as u64, v) {
                             Ok(()) => restored += 1,
