@@ -113,6 +113,78 @@ fn push_clone_pull_fast_forward_roundtrip() {
     );
 }
 
+/// Аудит 2026-06: pull с НЕСОХРАНЁННЫМИ правками в дереве A не делает force-checkout (он бы молча
+/// затёр правку) — падает с ошибкой, локальная правка A цела.
+#[test]
+fn dirty_tree_blocks_fast_forward_pull() {
+    let remote = bare_remote();
+    let url = url_of(remote.path());
+
+    let a = TempDir::new().unwrap();
+    let ga = GitSync::open_or_init(a.path()).unwrap();
+    ga.ensure_gitignore().unwrap();
+    fs::write(a.path().join("note.md"), "v1\n").unwrap();
+    ga.set_remote(&url).unwrap();
+    ga.commit_all().unwrap();
+    ga.push("local-no-auth").unwrap();
+
+    // B клонирует и продвигает remote вперёд.
+    let b = TempDir::new().unwrap();
+    git2::Repository::clone(&url, b.path()).unwrap();
+    let gb = GitSync::open_or_init(b.path()).unwrap();
+    fs::write(b.path().join("note.md"), "v1\nv2 from B\n").unwrap();
+    gb.commit_all().unwrap();
+    gb.push("local-no-auth").unwrap();
+
+    // A вносит НЕСОХРАНЁННУЮ правку и пытается pull (был бы FF) → ошибка, а не тихое затирание.
+    fs::write(a.path().join("note.md"), "v1\nlocal unsaved A\n").unwrap();
+    assert!(
+        ga.pull("local-no-auth").is_err(),
+        "pull с грязным деревом должен падать, а не force-checkout'ить поверх правок"
+    );
+    assert_eq!(
+        read_norm(a.path().join("note.md")),
+        "v1\nlocal unsaved A\n",
+        "несохранённая правка A не затёрта"
+    );
+}
+
+/// Аудит-уточнение: НОВЫЙ (untracked) файл НЕ блокирует FF-pull — checkout его сохраняет; блокировать
+/// каждую несохранённую заметку было бы недопустимо строго (гард ловит только tracked-модификации).
+#[test]
+fn untracked_file_does_not_block_pull() {
+    let remote = bare_remote();
+    let url = url_of(remote.path());
+
+    let a = TempDir::new().unwrap();
+    let ga = GitSync::open_or_init(a.path()).unwrap();
+    ga.ensure_gitignore().unwrap();
+    fs::write(a.path().join("note.md"), "v1\n").unwrap();
+    ga.set_remote(&url).unwrap();
+    ga.commit_all().unwrap();
+    ga.push("local-no-auth").unwrap();
+
+    let b = TempDir::new().unwrap();
+    git2::Repository::clone(&url, b.path()).unwrap();
+    let gb = GitSync::open_or_init(b.path()).unwrap();
+    fs::write(b.path().join("note.md"), "v1\nv2 from B\n").unwrap();
+    gb.commit_all().unwrap();
+    gb.push("local-no-auth").unwrap();
+
+    // A создаёт НОВУЮ незакоммиченную заметку и тянет: FF проходит, и note.md обновлён, и new.md цел.
+    fs::write(a.path().join("draft.md"), "черновик\n").unwrap();
+    match ga.pull("local-no-auth").unwrap() {
+        PullOutcome::FastForward { .. } | PullOutcome::UpToDate => {}
+        other => panic!("ожидали FastForward поверх untracked, получили {other:?}"),
+    }
+    assert_eq!(read_norm(a.path().join("note.md")), "v1\nv2 from B\n");
+    assert_eq!(
+        read_norm(a.path().join("draft.md")),
+        "черновик\n",
+        "untracked-черновик цел"
+    );
+}
+
 /// Расхождение истории (оба ветвятся от общего коммита и коммитят своё) → `pull` сигналит
 /// `MergeRequired` (без авто-слияния; разрешение — отдельный поток Ф3-3b-3).
 #[test]

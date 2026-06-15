@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use super::{atomic_write, VaultResult};
+use super::{atomic_write, VaultError, VaultResult};
 
 /// Корень истории внутри vault.
 const HISTORY_ROOT: &str = ".nexus/history";
@@ -90,12 +90,26 @@ pub fn snapshot(root: &Path, rel: &str, content: &str, manual: bool) -> VaultRes
     }
     let dir = history_dir(root, rel);
     std::fs::create_dir_all(&dir)?;
-    // Уникальный ts: два снапшота в одну миллисекунду не должны затирать друг друга.
+    // Уникальный ts: два снапшота одной заметки в одну мс не должны затирать друг друга. Резервируем
+    // имя АТОМАРНО через O_EXCL (create_new) — `exists()`-проверка была TOCTOU: два потока выбирали
+    // один ts и второй atomic_write затирал первый снапшот (находка аудита). Занят → +1 и повтор.
     let mut ts = now_ms();
-    while dir.join(format!("{ts}.md")).exists() {
-        ts += 1;
-    }
-    atomic_write(&dir.join(format!("{ts}.md")), content.as_bytes())?;
+    let target = loop {
+        let p = dir.join(format!("{ts}.md"));
+        match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&p)
+        {
+            Ok(_) => break p, // имя ts закреплено за нами; ниже atomic_write заменит пустышку контентом
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                ts += 1;
+                continue;
+            }
+            Err(e) => return Err(VaultError::Io(e)),
+        }
+    };
+    atomic_write(&target, content.as_bytes())?;
     gc(root, rel)?;
     Ok(())
 }
@@ -216,5 +230,27 @@ mod tests {
     fn list_empty_for_unknown_file() {
         let dir = TempDir::new().unwrap();
         assert!(list_snapshots(dir.path(), "Nope.md").unwrap().is_empty());
+    }
+
+    /// Аудит 2026-06: конкурентные снапшоты одной заметки (вероятно в одну мс) НЕ теряются —
+    /// имя `<ts>.md` резервируется атомарно O_EXCL вместо TOCTOU `exists()`-проверки. Контент у
+    /// каждого уникален → дедуп не схлопывает; ждём все N снапшотов.
+    #[test]
+    fn concurrent_snapshots_do_not_lose_each_other() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        const N: usize = 16;
+        std::thread::scope(|s| {
+            for i in 0..N {
+                s.spawn(move || {
+                    snapshot(root, "Race.md", &format!("content-{i}"), true).unwrap();
+                });
+            }
+        });
+        assert_eq!(
+            list_snapshots(root, "Race.md").unwrap().len(),
+            N,
+            "ни один из {N} конкурентных снапшотов не должен затереться (TOCTOU закрыт O_EXCL)"
+        );
     }
 }

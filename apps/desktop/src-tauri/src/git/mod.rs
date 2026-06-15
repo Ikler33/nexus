@@ -19,6 +19,10 @@ pub enum GitError {
     Git(#[from] git2::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// Рабочее дерево содержит несохранённые изменения — force-checkout (FF/merge) затёр бы их молча
+    /// (находка аудита). Сначала закоммитьте/отмените. Типизирована для понятного UI синхронизации.
+    #[error("в рабочем дереве есть несохранённые изменения — закоммитьте или отмените их перед синхронизацией")]
+    DirtyTree,
 }
 
 pub type GitResult<T> = Result<T, GitError>;
@@ -387,6 +391,24 @@ impl GitSync {
         Ok(())
     }
 
+    /// Гард перед force-checkout (FF/merge): нет ли несохранённых правок ОТСЛЕЖИВАЕМЫХ файлов, которые
+    /// `checkout_head` с `.force()` молча затёр бы (находка аудита — потеря данных при sync). Блокируем
+    /// только Modified/Deleted/Renamed — их перезапишет checkout; новые (untracked) файлы checkout
+    /// сохраняет, поэтому они синхронизации не мешают (иначе любая несохранённая заметка ломала бы pull).
+    fn ensure_clean_tree(&self) -> GitResult<()> {
+        let dirty = self.status()?.iter().any(|e| {
+            matches!(
+                e.kind,
+                ChangeKind::Modified | ChangeKind::Deleted | ChangeKind::Renamed
+            )
+        });
+        if dirty {
+            Err(GitError::DirtyTree)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Pull: fetch `origin/<branch>` + merge-analysis → up-to-date / fast-forward (применяется) /
     /// merge-required (расхождение истории — разрешение в Ф3-3b-3, тут только сигнал).
     pub fn pull(&self, token: &str) -> GitResult<PullOutcome> {
@@ -404,6 +426,7 @@ impl GitSync {
             return Ok(PullOutcome::UpToDate);
         }
         if analysis.is_fast_forward() {
+            self.ensure_clean_tree()?; // не затирать несохранённые правки force-checkout'ом (аудит)
             let refname = format!("refs/heads/{branch}");
             let mut reference = self.repo.find_reference(&refname)?;
             reference.set_target(fetch_commit.id(), "fast-forward")?;
@@ -475,6 +498,7 @@ impl GitSync {
         their_oid: &str,
         resolutions: &[(String, String)],
     ) -> GitResult<String> {
+        self.ensure_clean_tree()?; // правки, сделанные во время разрешения конфликта, не теряем (аудит)
         let their = self.repo.find_commit(git2::Oid::from_str(their_oid)?)?;
         let our = self.repo.head()?.peel_to_commit()?;
         let mut index = self.repo.merge_commits(&our, &their, None)?;
