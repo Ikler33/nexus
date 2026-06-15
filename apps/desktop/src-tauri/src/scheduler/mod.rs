@@ -683,10 +683,18 @@ async fn worker_loop(
         );
         match tokio::time::timeout(Duration::from_secs(TICK_HARD_TIMEOUT_SECS), tick).await {
             Ok(()) => {}
-            Err(_) => tracing::error!(
-                timeout_secs = TICK_HARD_TIMEOUT_SECS,
-                "scheduler: тик завис и оборван вотчдогом — цикл продолжает работу"
-            ),
+            Err(_) => {
+                tracing::error!(
+                    timeout_secs = TICK_HARD_TIMEOUT_SECS,
+                    "scheduler: тик завис и оборван вотчдогом — цикл продолжает работу"
+                );
+                // Тик оборван mid-execution → джоба, которую он держал в `running`, осталась бы там
+                // НАВСЕГДА (следующий тик её не подберёт, UI «Генерирую…» залипает — находка аудита).
+                // Возвращаем застрявшие running→pending (как crash-recovery на старте) — повторим.
+                if let Err(e) = requeue_running(&writer).await {
+                    tracing::warn!(error = %e, "scheduler: requeue running после таймаута тика не удался");
+                }
+            }
         }
     }
     tracing::debug!("scheduler worker loop exit (vault закрыт/заменён)");
