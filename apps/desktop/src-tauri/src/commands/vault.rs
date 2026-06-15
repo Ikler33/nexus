@@ -715,6 +715,21 @@ fn points_into_reserved(root: &Path, abs: &Path) -> bool {
     abs.starts_with(root.join(".nexus")) || abs.starts_with(root.join(".git"))
 }
 
+/// Валидирует относительный путь заметки ПЕРЕД построением `.nexus/history/<rel>`: иначе `rel` вида
+/// `../../etc` увёл бы чтение/листинг истории за пределы vault (path-traversal, находка аудита).
+/// Канонизируем РОДИТЕЛЯ (заметка могла быть удалена — история живёт отдельно от файла) и запрещаем
+/// служебные пути. Зеркалит гард delete/rename.
+fn validate_history_path(root: &Path, rel: &str) -> AppResult<()> {
+    if rel.trim().is_empty() {
+        return Err(AppError::Msg("пустой путь".into()));
+    }
+    let abs = vault::resolve_vault_path_for_write(root, Path::new(rel))?;
+    if points_into_reserved(root, &abs) {
+        return Err(AppError::Msg("недопустимый путь истории".into()));
+    }
+    Ok(())
+}
+
 /// Удаляет заметку/каталог в vault-локальную корзину `.nexus/.trash/` (CURATE-1) — обратимо.
 /// Снимает с индекса каждый перенесённый `.md` явным `VaultEvent::Deleted` (вотчер может не
 /// разложить rename каталога в игнор-папку на пофайловые события). Служебные пути запрещены.
@@ -826,6 +841,7 @@ pub async fn list_versions(
     path: String,
 ) -> AppResult<Vec<vault::history::SnapshotMeta>> {
     let root = current_root(&state).await?;
+    validate_history_path(&root, &path)?; // path-traversal в .nexus/history/<rel> (находка аудита)
     Ok(
         tokio::task::spawn_blocking(move || vault::history::list_snapshots(&root, &path))
             .await
@@ -837,6 +853,7 @@ pub async fn list_versions(
 #[tauri::command]
 pub async fn read_version(state: State<'_, AppState>, path: String, ts: u64) -> AppResult<String> {
     let root = current_root(&state).await?;
+    validate_history_path(&root, &path)?; // path-traversal в .nexus/history/<rel> (находка аудита)
     Ok(
         tokio::task::spawn_blocking(move || vault::history::read_snapshot(&root, &path, ts))
             .await
@@ -993,6 +1010,24 @@ mod tests {
             root,
             Path::new("/vault/.nexusish/a.md")
         ));
+    }
+
+    /// Аудит 2026-06: validate_history_path (гард list/read_version) принимает обычную заметку, но
+    /// отклоняет traversal (`..`) и служебные пути (`.nexus`) — иначе чтение `.nexus/history/<rel>`
+    /// ушло бы за пределы vault.
+    #[test]
+    fn validate_history_path_rejects_traversal_and_reserved() {
+        let dir = TempDir::new().unwrap();
+        // Канонизируем root (в проде `current_root` уже канонизирован; на macOS TempDir = /var → симлинк
+        // на /private/var, иначе starts_with в resolve_vault_path_for_write ложно бы не сматчился).
+        let root = dir.path().canonicalize().unwrap();
+        let root = root.as_path();
+        std::fs::create_dir_all(root.join("Notes")).unwrap();
+        std::fs::create_dir_all(root.join(".nexus")).unwrap();
+        assert!(validate_history_path(root, "Notes/A.md").is_ok()); // обычная (файл может не существовать)
+        assert!(validate_history_path(root, "../../../etc/passwd").is_err()); // traversal
+        assert!(validate_history_path(root, ".nexus/nexus.db").is_err()); // служебный
+        assert!(validate_history_path(root, "   ").is_err()); // пустой
     }
 
     async fn open_db(root: &Path) -> Database {
