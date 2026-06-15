@@ -4,7 +4,6 @@
 //! таблица `contradictions`. Регистрируется ТОЛЬКО при наличии chat И векторов. Уступает интерактиву (S5).
 
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -186,9 +185,11 @@ async fn store_all(writer: &WriteActor, items: Vec<Contradiction>) -> DbResult<(
 /// Хэш сниппета (вход судьи) — ключ кэша CT-3: изменился сниппет → хэш другой → пере-судим.
 /// `pub(crate)` — переиспользуется `relation_reasons` (AIP-10): тот же хэш-домен, что у судьи.
 pub(crate) fn hash_snippet(s: &str) -> i64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    h.finish() as i64
+    // blake3 СТАБИЛЕН между версиями Rust/платформами; `DefaultHasher` (SipHash с рандом-сидом per
+    // сборка) — НЕТ → ключ кэша «плыл» от сборки к сборке, судья пере-вызывался зря (находка аудита).
+    // Берём первые 8 байт хэша как i64 (домен ключа поменялся — старый кэш разово инвалидируется).
+    let bytes = *blake3::hash(s.as_bytes()).as_bytes();
+    i64::from_le_bytes(bytes[..8].try_into().expect("blake3 даёт 32 байта"))
 }
 
 /// CT-3: кэшированный вердикт пары `(hash_a, hash_b, contradiction, ctype, explanation)` или `None`.
@@ -264,9 +265,13 @@ async fn cache_put(
 pub async fn list(reader: &ReadPool) -> DbResult<Vec<Contradiction>> {
     reader
         .query(|c| {
+            // Исключаем пары, где хотя бы одна заметка удалена (is_deleted=1 или нет в files) —
+            // иначе UI показывал бы противоречия по несуществующим заметкам (находка аудита).
             let mut stmt = c.prepare(
-                "SELECT path_a,path_b,ctype,explanation,created_at FROM contradictions \
-                 ORDER BY created_at DESC, path_a",
+                "SELECT ct.path_a,ct.path_b,ct.ctype,ct.explanation,ct.created_at FROM contradictions ct \
+                 WHERE EXISTS (SELECT 1 FROM files f WHERE f.path=ct.path_a AND f.is_deleted=0) \
+                   AND EXISTS (SELECT 1 FROM files f WHERE f.path=ct.path_b AND f.is_deleted=0) \
+                 ORDER BY ct.created_at DESC, ct.path_a",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok(Contradiction {
@@ -540,6 +545,39 @@ mod tests {
             !should_generate(db.reader()).await.unwrap(),
             "после прогона — не overdue"
         );
+    }
+
+    /// Аудит: list() исключает пары, где заметка удалена (is_deleted=1) — UI не показывает противоречия
+    /// по несуществующим заметкам. Строка в `contradictions` остаётся (её выметает отдельный GC).
+    #[tokio::test]
+    async fn list_excludes_pairs_with_deleted_note() {
+        let (_d, db, vectors) = db_two_similar().await;
+        let judge = Arc::new(FakeJudge(
+            r#"{"contradiction": true, "type": "hard", "explanation": "конфликт"}"#,
+        ));
+        let h = ContradictionHandler::new(db.reader().clone(), vectors, judge, db.writer().clone());
+        h.handle(&dummy_job()).await.unwrap();
+        assert_eq!(
+            list(db.reader()).await.unwrap().len(),
+            1,
+            "пара видна, пока обе живы"
+        );
+
+        // Удаляем одну заметку → пара исчезает из выдачи.
+        let idx = Indexer::new(&db, _d.path().to_path_buf());
+        idx.remove_file("a.md").await.unwrap();
+        assert_eq!(
+            list(db.reader()).await.unwrap().len(),
+            0,
+            "пара с удалённой заметкой не показывается"
+        );
+    }
+
+    /// Аудит: hash_snippet детерминирован (blake3) — одинаковый вход → одинаковый ключ кэша; разный → разный.
+    #[test]
+    fn hash_snippet_is_deterministic() {
+        assert_eq!(hash_snippet("кошка"), hash_snippet("кошка"));
+        assert_ne!(hash_snippet("кошка"), hash_snippet("собака"));
     }
 
     /// GC кэша (CT-3+ хвост): пары с удалённой заметкой выметаются, живые остаются.
