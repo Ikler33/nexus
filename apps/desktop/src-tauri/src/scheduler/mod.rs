@@ -487,7 +487,17 @@ pub async fn run_due(
                         .await?;
                 }
             }
-            Err(e) => fail(writer, job.id, &e, now).await?,
+            Err(e) => {
+                fail(writer, job.id, &e, now).await?;
+                // Recurring: исчерпав попытки, джоба становится `dead` → рекуррентность ТЕРЯЛАСЬ навсегда
+                // (находка аудита). Переназначаем следующий прогон; `reschedule_if_absent` — но-оп, пока
+                // джоба ещё ретраится (есть `pending` этого kind), и срабатывает только когда pending'а нет
+                // (джоба умерла). Симметрично Ok-ветке.
+                if let Some(&interval) = recurring.get(&job.kind) {
+                    reschedule_if_absent(writer, &job.kind, now + interval, job.max_attempts)
+                        .await?;
+                }
+            }
         }
         n += 1;
     }
@@ -1119,6 +1129,39 @@ mod tests {
             .unwrap()
             .expect("recurring снова готов");
         assert_eq!(next.kind, "digest");
+    }
+
+    /// Аудит: recurring-джоба, исчерпавшая попытки и ставшая `dead`, ПЕРЕАРМЛИВАЕТСЯ на следующий
+    /// интервал — иначе рекуррентность терялась навсегда при одной серии неудач.
+    #[tokio::test]
+    async fn dead_recurring_job_is_rearmed() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut reg: Registry = HashMap::new();
+        reg.insert(
+            "digest".into(),
+            Arc::new(Counting {
+                calls,
+                fail: true, // всегда падает
+                defer: false,
+            }),
+        );
+        let recurring = HashMap::from([("digest".to_string(), 3600i64)]);
+        enqueue(w, "digest", "", 0, 1).await.unwrap(); // max_attempts=1 → умирает на первом fail
+
+        // Прогон: джоба падает → dead. Recurring → переармлена на now+3600 (а не потеряна).
+        run_due(w, &reg, 100, false, &recurring).await.unwrap();
+        assert!(
+            claim_next(w, 100).await.unwrap().is_none(),
+            "переармлена в будущее, не готова сразу"
+        );
+        let next = claim_next(w, 4000)
+            .await
+            .unwrap()
+            .expect("recurring переармлена после смерти");
+        assert_eq!(next.kind, "digest");
+        assert_eq!(next.attempts, 0, "свежая джоба — счётчик попыток сброшен");
     }
 
     /// slice 6: `reschedule_if_absent` не плодит дубли — при уже ожидающей джобе второй вызов no-op.

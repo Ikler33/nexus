@@ -547,19 +547,27 @@ impl Indexer {
         // полными батчами поперёк файлов (кэш в Rag), index_file внутри группы берёт векторы из
         // кэша. Без RAG group-проход вырождается в прежний поток.
         let mut done = 0usize;
+        let mut failed = 0usize; // файлы, упавшие при индексации — честный счётчик (no silent drop, аудит)
         for group in rels.chunks(SCAN_CHECKPOINT) {
             if rag_on {
                 self.prefill_scan_cache(group).await;
             }
             let mut stream = stream::iter(group.iter().cloned())
                 .map(|rel| async move {
-                    if let Err(e) = self.index_file(&rel).await {
-                        tracing::warn!(file = %rel, error = %e, "index_file failed during scan");
+                    match self.index_file(&rel).await {
+                        Ok(()) => false,
+                        Err(e) => {
+                            tracing::warn!(file = %rel, error = %e, "index_file failed during scan");
+                            true // упал — учитываем в счётчике ошибок
+                        }
                     }
                 })
                 .buffer_unordered(SCAN_CONCURRENCY);
-            while stream.next().await.is_some() {
+            while let Some(file_failed) = stream.next().await {
                 done += 1;
+                if file_failed {
+                    failed += 1;
+                }
                 // Прогресс наружу чаще чекпойнта usearch (статусбар), но не на каждый файл.
                 if done % SCAN_PROGRESS_EVERY == 0 {
                     if let Some(p) = &self.progress {
@@ -585,7 +593,15 @@ impl Indexer {
         if let Some(p) = &self.progress {
             p(total, total); // финиш — фронт гасит прогресс-бар
         }
-        tracing::info!(files = total, "initial vault scan complete");
+        // Честность (аудит): упавшие файлы не растворяются молча — сводный счётчик сверх per-файл warn.
+        if failed > 0 {
+            tracing::warn!(
+                failed,
+                total,
+                "скан завершён: {failed} из {total} файл(ов) НЕ проиндексированы (см. предыдущие warn)"
+            );
+        }
+        tracing::info!(files = total, failed, "initial vault scan complete");
         Ok(())
     }
 }
