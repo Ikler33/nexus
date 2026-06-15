@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { tauriApi } from '../lib/tauri-api';
+import { tauriApi, type ChatStreamEvent } from '../lib/tauri-api';
 import { __reset as resetMockSessions } from '../lib/mock/sessions';
 import { disclosureOpen, useChatStore } from './chat';
 
@@ -367,32 +367,34 @@ describe('chat store (Ф1-8)', () => {
 
   // audit B12: epoch-гард onEvent — поздние события остановленного стрима не трогают финализированный ответ.
   it('onEvent после stop() игнорирует поздние события старого стрима', () => {
-    let captured: ((e: { type: string; full?: string }) => void) | null = null;
+    let captured: ((e: ChatStreamEvent) => void) | undefined;
     vi.spyOn(tauriApi.chat, 'streamRag').mockImplementation((_q, onEvent) => {
-      captured = onEvent as typeof captured;
+      captured = onEvent;
       return () => {};
     });
     useChatStore.getState().send('вопрос');
     useChatStore.getState().stop(); // ответ финализирован (streaming=false)
     const before = useChatStore.getState().messages.at(-1)?.content;
 
-    captured?.({ type: 'done', full: 'ПОЗДНИЙ ОТВЕТ старого стрима' }); // поздний done после stop
+    // поздний done после stop
+    captured?.({ type: 'done', full: 'ПОЗДНИЙ ОТВЕТ старого стрима' } as ChatStreamEvent);
     expect(useChatStore.getState().messages.at(-1)?.content).toBe(before); // не заменён
   });
 
   // audit B12: loadSession после await не затирает активный стрим, стартовавший за время загрузки.
   it('loadSession не затирает чат, если за время загрузки стартовал send', async () => {
-    let resolveMsgs: ((v: unknown[]) => void) | null = null;
+    const stored = [{ role: 'assistant', content: 'старая история', sourcesJson: null }];
+    let resolveMsgs: (v: typeof stored) => void = () => {};
     vi.spyOn(tauriApi.chat.sessions, 'messages').mockReturnValue(
-      new Promise<never[]>((res) => {
-        resolveMsgs = res as typeof resolveMsgs;
-      }) as never,
+      new Promise<typeof stored>((res) => {
+        resolveMsgs = res;
+      }) as ReturnType<typeof tauriApi.chat.sessions.messages>,
     );
     vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
 
     const p = useChatStore.getState().loadSession(7); // ждёт messages()
     useChatStore.getState().send('новый вопрос'); // во время загрузки → streaming=true
-    resolveMsgs?.([{ role: 'assistant', content: 'старая история', sourcesJson: null }]);
+    resolveMsgs(stored);
     await p;
 
     expect(useChatStore.getState().messages.some((m) => m.content === 'новый вопрос')).toBe(true);
