@@ -70,7 +70,7 @@ pub fn save(path: &Path, cfg: &WebSearchConfig) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_string_pretty(cfg).expect("WebSearchConfig сериализуем всегда");
-    std::fs::write(path, json)
+    crate::vault::atomic_write_io(path, json.as_bytes()) // атомарно: обрыв не корраптит конфиг (аудит)
 }
 
 #[cfg(test)]

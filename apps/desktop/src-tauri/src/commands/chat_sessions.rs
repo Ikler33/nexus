@@ -175,7 +175,11 @@ pub async fn chat_session_to_note(state: State<'_, AppState>, id: i64) -> AppRes
     if let Some(dir) = abs.parent() {
         tokio::fs::create_dir_all(dir).await?;
     }
-    tokio::fs::write(&abs, md).await?;
+    // Атомарно (blocking → spawn_blocking): обрыв не оставляет усечённый экспорт сессии (аудит).
+    let bytes = md.into_bytes();
+    tokio::task::spawn_blocking(move || vault::atomic_write_io(&abs, &bytes))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
     tracing::info!(path = %rel, "сессия чата сохранена заметкой");
     Ok(rel)
 }

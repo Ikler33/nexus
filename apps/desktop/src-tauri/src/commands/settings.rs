@@ -145,7 +145,13 @@ pub async fn set_ai_config(
     // `apply_ai` отдаёт `String`-ошибку (serde) → поднимается как `AppError::Msg` через `From<String>`.
     let embedding_changed = apply_ai(&mut doc, chat.as_ref(), embedding.as_ref(), fast.as_ref())?;
     let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
-    tokio::fs::write(&path, &pretty).await?;
+    // Атомарно (blocking → spawn_blocking): обрыв между записью и rename не оставляет усечённый
+    // local.json (находка аудита: truncate-then-write мог потерять конфиг ИИ/эгресса).
+    let path2 = path.clone();
+    let bytes = pretty.clone().into_bytes();
+    tokio::task::spawn_blocking(move || crate::vault::atomic_write_io(&path2, &bytes))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
 
     // Allowlist эгресса пересобирается из ИТОГОВОГО local.json (E4: явные `ai.*`-хосты; consent на
     // pull-changed URL — срез 2 с персистом политики). Один policy на приложение (AC-EGR-13).

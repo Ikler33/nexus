@@ -151,6 +151,17 @@ pub fn atomic_write(abs: &Path, bytes: &[u8]) -> VaultResult<()> {
     Ok(())
 }
 
+/// Как [`atomic_write`], но с `std::io::Result` — единый атомарный врайтер для писателей конфигов и
+/// экспортов вне vault-границы (egress/news/websearch/local.json, news/chat-экспорт), которым удобнее
+/// `io::Error`, чем [`VaultError`]. Та же гарантия tmp→fsync→rename: обрыв питания/процесса не оставляет
+/// усечённый целевой JSON (находка аудита: truncate-then-write корраптил конфиги). Блокирующая.
+pub fn atomic_write_io(abs: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_write(abs, bytes).map_err(|e| match e {
+        VaultError::Io(io) => io,
+        other => std::io::Error::other(other.to_string()),
+    })
+}
+
 /// Переносит файл/каталог `abs` в vault-локальную корзину `.nexus/.trash/<unixms>-<basename>`
 /// (CURATE-1). `.nexus` игнорируется вотчером → перенос не порождает индексных событий на копию в
 /// корзине. rename в пределах одной ФС (корзина внутри vault) — атомарен и сохраняет содержимое;

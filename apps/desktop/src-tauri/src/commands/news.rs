@@ -463,7 +463,7 @@ fn make_news_note(root: &std::path::Path, item: &NewsItem) -> Result<String, Str
         title = item.title_ru,
         summary = item.summary_ru,
     );
-    std::fs::write(&abs, content).map_err(|e| e.to_string())?;
+    crate::vault::atomic_write_io(&abs, content.as_bytes()).map_err(|e| e.to_string())?; // атомарно (аудит)
     Ok(rel)
 }
 
