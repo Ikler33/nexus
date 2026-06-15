@@ -36,6 +36,20 @@ describe('suggest store (Ф1-9)', () => {
     expect(useSuggestStore.getState().items.map((i) => i.path)).toEqual(['C.md']);
   });
 
+  // audit B8: смена vault обязана сбросить отклонённые цели — ключ dismissed это относительный
+  // путь, в другом vault он чужой (иначе dismiss скрыл бы связь в новом vault с тем же путём).
+  it('clearDismissed возвращает ранее отклонённые цели при пересчёте', async () => {
+    vi.spyOn(tauriApi.suggest, 'forFile').mockResolvedValue(SUG);
+    await useSuggestStore.getState().load('clr.md');
+    useSuggestStore.getState().dismiss('B.md');
+    await useSuggestStore.getState().load('clr.md');
+    expect(useSuggestStore.getState().items.map((i) => i.path)).toEqual(['C.md']); // всё ещё скрыт
+
+    useSuggestStore.getState().clearDismissed();
+    await useSuggestStore.getState().load('clr.md');
+    expect(useSuggestStore.getState().items.map((i) => i.path)).toEqual(['B.md', 'C.md']); // вернулся
+  });
+
   it('accept дописывает [[wikilink]] в активный буфер и убирает из списка', async () => {
     vi.spyOn(tauriApi.suggest, 'forFile').mockResolvedValue(SUG);
     useWorkspaceStore.setState({
