@@ -101,18 +101,24 @@ export const useHomeStore = create<HomeState>((set, get) => ({
   },
 
   reloadWidget: async (key) => {
-    if (key === 'daily_brief') {
-      const brief = await tauriApi.home.widget('daily_brief');
-      set((s) => ({ brief, generating: { ...s.generating, daily_brief: false } }));
-    } else if (key === 'open_questions') {
-      const questions = await tauriApi.home.openQuestions();
-      set((s) => ({ questions, generating: { ...s.generating, open_questions: false } }));
-    } else if (key === 'context_drift') {
-      const drift = await tauriApi.home.contextDrift();
-      set((s) => ({ drift, generating: { ...s.generating, context_drift: false } }));
-    } else if (key === 'stale_radar') {
-      const stale = await tauriApi.home.staleRadar();
-      set((s) => ({ stale, generating: { ...s.generating, stale_radar: false } }));
+    try {
+      if (key === 'daily_brief') {
+        const brief = await tauriApi.home.widget('daily_brief');
+        set((s) => ({ brief, generating: { ...s.generating, daily_brief: false } }));
+      } else if (key === 'open_questions') {
+        const questions = await tauriApi.home.openQuestions();
+        set((s) => ({ questions, generating: { ...s.generating, open_questions: false } }));
+      } else if (key === 'context_drift') {
+        const drift = await tauriApi.home.contextDrift();
+        set((s) => ({ drift, generating: { ...s.generating, context_drift: false } }));
+      } else if (key === 'stale_radar') {
+        const stale = await tauriApi.home.staleRadar();
+        set((s) => ({ stale, generating: { ...s.generating, stale_radar: false } }));
+      }
+    } catch (e) {
+      // Фетч виджета упал (бэкенд недоступен/ошибка) — гасим спиннер «генерирую…», иначе он
+      // висел бы вечно, обещая результат, которого не будет (audit honesty/stuck-state).
+      set((s) => ({ error: String(e), generating: { ...s.generating, [key]: false } }));
     }
   },
 

@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { appendCapture, dailyNotePath, dateStamp, openOrCreateDaily } from './daily';
+import {
+  appendCapture,
+  dailyNotePath,
+  dateStamp,
+  INBOX,
+  openOrCreateDaily,
+  openOrCreateInbox,
+} from './daily';
 import { tauriApi } from './tauri-api';
 import { useVaultStore } from '../stores/vault';
 import { activePath, useWorkspaceStore } from '../stores/workspace';
@@ -46,5 +53,28 @@ describe('daily (CAP-1)', () => {
     expect(doc).toContain('- 09:05 первая мысль');
     expect(doc).toContain('- 14:30 вторая');
     expect(doc.indexOf('первая')).toBeLessThan(doc.indexOf('вторая')); // порядок дозаписи
+  });
+
+  it('appendCapture с открытым Inbox пишет в буфер, не на диск', async () => {
+    await appendCapture('первая', new Date(2026, 5, 13, 8, 0)); // Inbox создан на диске (буфера нет)
+    await useWorkspaceStore.getState().openFile(INBOX); // теперь Inbox открыт в редакторе
+    const diskBefore = await tauriApi.vault.readFile(INBOX);
+    await appendCapture('вторая', new Date(2026, 5, 13, 9, 5)); // → должно уйти в буфер
+    const buf = useWorkspaceStore.getState().buffers[INBOX]?.doc ?? '';
+    expect(buf).toContain('- 09:05 вторая'); // буфер получил новую строку
+    expect(await tauriApi.vault.readFile(INBOX)).toBe(diskBefore); // диск не тронут (иначе затёрли бы правки)
+  });
+
+  it('openOrCreateInbox открывает Inbox в редакторе (с содержимым)', async () => {
+    await openOrCreateInbox();
+    expect(activePath(useWorkspaceStore.getState())).toBe(INBOX);
+    // Буфер загружен непустым: либо существующий Inbox, либо свежесозданный «# Inbox\n».
+    expect((useWorkspaceStore.getState().buffers[INBOX]?.doc ?? '').length).toBeGreaterThan(0);
+  });
+
+  it('openOrCreateInbox не затирает существующий Inbox', async () => {
+    await appendCapture('моя мысль', new Date(2026, 5, 13, 9, 5)); // Inbox уже есть на диске
+    await openOrCreateInbox(); // открыть существующий — не пересоздавать пустым
+    expect(useWorkspaceStore.getState().buffers[INBOX]?.doc ?? '').toContain('моя мысль');
   });
 });
