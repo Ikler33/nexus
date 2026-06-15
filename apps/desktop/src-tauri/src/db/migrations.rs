@@ -137,6 +137,15 @@ pub(crate) fn user_version(conn: &Connection) -> rusqlite::Result<i64> {
 /// краха (см. `docs/dev/db.md`).
 pub(crate) fn apply(conn: &mut Connection) -> DbResult<()> {
     let current = user_version(conn)?;
+    // Потолок версии: БД, поднятая БОЛЕЕ новым приложением, не должна молча открываться старым —
+    // операции по новым полям/таблицам падали бы / портили данные. Явный отказ вместо тихого приёма
+    // (находка аудита: downgrade молча «работал»).
+    if current > i64::from(latest_version()) {
+        return Err(DbError::External(format!(
+            "БД схемы v{current} новее приложения (v{}) — обновите приложение, downgrade не поддержан",
+            latest_version()
+        )));
+    }
     for m in MIGRATIONS {
         if i64::from(m.version) <= current {
             continue;
@@ -214,5 +223,20 @@ mod tests {
         assert_eq!(v, i64::from(latest_version()));
         apply(&mut conn).unwrap();
         assert_eq!(user_version(&conn).unwrap(), v, "повторный apply — no-op");
+    }
+
+    /// Аудит: БД новее приложения (downgrade) → явный отказ, а не тихий приём (иначе операции по
+    /// новым полям/таблицам портили бы данные / падали).
+    #[test]
+    fn apply_rejects_db_newer_than_app() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+        // Имитируем БД, поднятую более новым приложением.
+        conn.pragma_update(None, "user_version", i64::from(latest_version()) + 1)
+            .unwrap();
+        assert!(
+            apply(&mut conn).is_err(),
+            "downgrade (current > latest) должен падать с ошибкой"
+        );
     }
 }

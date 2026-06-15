@@ -29,7 +29,16 @@ impl WriteActor {
             .name("nexus-db-writer".into())
             .spawn(move || {
                 while let Some(job) = rx.blocking_recv() {
-                    job(&mut conn);
+                    // Паника внутри задания не должна убивать единственный поток-писателя (иначе ВСЕ
+                    // дальнейшие записи виснут — докстринг обещает устойчивость). Ловим: незавершённая
+                    // транзакция откатывается её Drop'ом (RAII) → коннект цел, продолжаем. В release с
+                    // panic=abort это no-op (процесс и так падает); в debug/test — реальная страховка.
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut conn)));
+                    if r.is_err() {
+                        tracing::error!(
+                            "nexus-db-writer: write-задание паниковало — поток продолжает (коннект откачен)"
+                        );
+                    }
                 }
             })
             .expect("failed to spawn nexus-db-writer thread");
@@ -67,5 +76,32 @@ impl WriteActor {
             Ok(out)
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// Аудит: паника write-задания не убивает единственный поток-писатель — ошибка возвращается, но
+    /// последующие записи работают (catch_unwind в цикле). В release(panic=abort) неприменимо, но
+    /// `cargo test` = panic=unwind, поэтому проверяемо.
+    #[tokio::test]
+    async fn writer_survives_panicking_job() {
+        let actor = WriteActor::spawn(Connection::open_in_memory().unwrap());
+        let panicked = actor
+            .call(|_c| -> rusqlite::Result<()> { panic!("boom") })
+            .await;
+        assert!(panicked.is_err(), "паническое задание → ошибка вызова");
+        // Поток жив: следующая запись обслуживается.
+        let ok = actor
+            .call(|c| c.execute_batch("CREATE TABLE t(x)").map(|_| 42))
+            .await;
+        assert_eq!(
+            ok.unwrap(),
+            42,
+            "поток-писатель пережил панику и работает дальше"
+        );
     }
 }
