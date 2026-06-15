@@ -565,6 +565,14 @@ export const tauriApi = {
         ? invoke<string>('write_file', { path, content, manual })
         : mockVault.writeFile(path, content),
 
+    /** BOARD-1: правит ОДИН плоский frontmatter-ключ заметки (статус задачи/project/priority/Properties),
+     *  сохраняя остальной YAML/тело. Возвращает новый контент+хеш — фронт кладёт хеш в `baseHash`
+     *  (анти-эхо SAFE-3) и обновляет буфер, если заметка открыта. Незакрытый `---` → ошибка. */
+    setFrontmatterField: (path: string, key: string, value: string) =>
+      isTauri()
+        ? invoke<{ content: string; hash: string }>('set_frontmatter_field', { path, key, value })
+        : mockVault.setFrontmatterField(path, key, value),
+
     /** Удаляет заметку/каталог в корзину `.nexus/.trash/` (CURATE-1) — обратимо. */
     deletePath: (path: string) =>
       isTauri() ? invoke<void>('delete_path', { path }) : mockVault.deletePath(path),

@@ -734,6 +734,68 @@ pub async fn write_file(
     Ok(hash)
 }
 
+/// BOARD-1: правит ОДИН плоский frontmatter-ключ заметки (статус задачи при DnD, project/priority/due,
+/// Properties-панель) — единая точка записи frontmatter. Читает файл → `parser::set_frontmatter_field`
+/// (хирургическая правка, сохраняет остальной YAML/тело; serde_yaml архивирован) → атомарная запись.
+/// Возвращает НОВЫЙ контент+хеш: фронт кладёт хеш в `Buffer.baseHash` (анти-эхо SAFE-3) и обновляет
+/// буфер, если заметка открыта. Незакрытый frontmatter → ошибка, файл НЕ перезаписан (сохранность).
+#[tauri::command]
+pub async fn set_frontmatter_field(
+    state: State<'_, AppState>,
+    path: String,
+    key: String,
+    value: String,
+) -> AppResult<FileMeta> {
+    let root = current_root(&state).await?;
+    let abs = vault::resolve_vault_path_for_write(&root, Path::new(&path))?;
+    let old = tokio::fs::read_to_string(&abs).await?;
+    let new_content = crate::parser::set_frontmatter_field(&old, &value_key(&key)?, &value).map_err(
+        |e| match e {
+            crate::parser::FmWriteError::Malformed => {
+                AppError::Msg("frontmatter: незакрытый блок --- (откройте заметку)".into())
+            }
+            crate::parser::FmWriteError::Unrepresentable => AppError::Msg(
+                "значение нельзя сохранить в свойство (перевод строки или краевые кавычки)".into(),
+            ),
+        },
+    )?;
+    let hash = vault::content_hash(new_content.as_bytes());
+    if new_content != old {
+        let rel = path.clone();
+        let content_for_write = new_content.clone();
+        let root_for_write = root.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+            vault::atomic_write(&abs, content_for_write.as_bytes())?;
+            // Правка статуса/свойства — намеренная → снапшот истории как ручной (SAFE-5).
+            if let Err(e) = vault::history::snapshot(&root_for_write, &rel, &content_for_write, true) {
+                tracing::warn!(error = %e, path = %rel, "history snapshot failed (set_frontmatter_field)");
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
+    }
+    Ok(FileMeta {
+        content: new_content,
+        hash,
+    })
+}
+
+/// Валидирует имя frontmatter-ключа (идентификатор: буквы/цифры/`_`/`-`) — анти-инъекция в YAML.
+fn value_key(key: &str) -> AppResult<String> {
+    let k = key.trim();
+    if k.is_empty()
+        || !k
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+    {
+        return Err(AppError::Msg(format!(
+            "недопустимый ключ свойства: «{key}»"
+        )));
+    }
+    Ok(k.to_string())
+}
+
 /// Канонический путь указывает В служебный каталог (`.nexus`/`.git`) — КОМПОНЕНТНАЯ проверка после
 /// канонизации. Строковый `starts_with(".nexus")` обходится через `Notes/../.nexus/nexus.db` (после
 /// `canonicalize` попадает в `.nexus`, но строка начинается с «Notes») и Windows-backslash (находка
