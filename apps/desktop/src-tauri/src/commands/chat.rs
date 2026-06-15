@@ -12,8 +12,9 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{
-    build_chat_messages, build_memory_block, build_pinned_block, build_rag_messages,
-    build_web_answer_messages, injection_marker, prepend_memory_block, ChatMessage, ChatProvider,
+    build_agent_memory_block, build_chat_messages, build_memory_block, build_pinned_block,
+    build_rag_messages, build_web_answer_messages, injection_marker, prepend_memory_block,
+    ChatMessage, ChatProvider,
 };
 use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
@@ -82,6 +83,9 @@ const DEFAULT_K: usize = 8;
 /// Консервативно мало — память это ФОН, а не основной контекст (не должна глушить заметки/ответ).
 const MEMORY_K: usize = 3;
 const MEMORY_SNIPPET_CHARS: usize = 280;
+/// Память агента (MEM, D2): сколько НЕ-пинов подмешивать по близости (пины — всегда, сверх этого).
+/// Консервативно мало — факты это фон, как и переписка.
+const AGENT_MEMORY_K: usize = 3;
 /// P6-PIN: бюджет закреплённого контекста — макс. заметок и символов на заметку (защита окна модели).
 const PINNED_MAX_NOTES: usize = 5;
 const PINNED_NOTE_CHARS: usize = 4000;
@@ -121,6 +125,7 @@ pub async fn chat_rag(
     web: Option<bool>,
     rerank: Option<bool>,
     memory: Option<bool>,
+    agent_memory: Option<bool>,
     session_id: Option<i64>,
     pinned: Option<Vec<String>>,
 ) -> AppResult<()> {
@@ -132,14 +137,19 @@ pub async fn chat_rag(
     // Память переписки (N4b) — отдельный канал (chat_vectors), ВКЛ по умолчанию (решение владельца:
     // переписка часть «второго мозга»). Тумблер `aiChatMemory` в настройках AI фронта.
     let memory = memory.unwrap_or(true);
+    // Память агента (MEM, явные факты) — ВЫКЛ по умолчанию (D5: приватность-first). Тумблер
+    // `aiAgentMemory` в Настройках → AI (MEM-4). Отдельный канал (memory_vectors), не трогает RAG.
+    let agent_memory = agent_memory.unwrap_or(false);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
-    let (root, reader, vectors, chat_vectors, embedder, chat, chat_util) = {
+    let (root, reader, writer, vectors, chat_vectors, memory_vectors, embedder, chat, chat_util) = {
         let ctx = state.vault().await?;
         (
             ctx.root.clone(),
             ctx.db.reader().clone(),
+            ctx.db.writer().clone(),
             ctx.vectors.clone(),
             ctx.chat_vectors.clone(),
+            ctx.memory_vectors.clone(),
             ctx.ai.embedder.clone(),
             ctx.ai.chat.clone(),
             ctx.ai.chat_util.clone(),
@@ -307,6 +317,46 @@ pub async fn chat_rag(
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "chat-memory: поиск памяти не удался"),
+            }
+        }
+    }
+
+    // MEM (AC-MEM-5): память агента — курируемые ЯВНЫЕ ФАКТЫ (пины «всегда» + top-k близких), отдельный
+    // КАНАЛ (memory_vectors + таблица memory_facts), не трогает note-RAG ранжирование (eval-гейт держится).
+    // ВЫКЛ по умолчанию (D5), включается тумблером `aiAgentMemory`. Подмешиваем фоном к user-сообщению
+    // ЛЮБОГО режима. Best-effort: ошибка эмбеддинга/поиска не валит чат — просто без памяти.
+    if agent_memory {
+        if let (Some(embedder), Some(memory_vectors)) = (embedder.as_ref(), memory_vectors.as_ref())
+        {
+            match crate::memory::context_facts(
+                &reader,
+                &writer,
+                memory_vectors,
+                embedder.as_ref(),
+                &question,
+                AGENT_MEMORY_K,
+            )
+            .await
+            {
+                Ok(facts) if !facts.is_empty() => {
+                    let snippets: Vec<(String, String)> = facts
+                        .iter()
+                        .map(|f| {
+                            let label = if f.pinned {
+                                "Закреплённый факт"
+                            } else {
+                                "Факт"
+                            };
+                            (label.to_string(), f.text.clone())
+                        })
+                        .collect();
+                    prepend_memory_block(
+                        &mut messages,
+                        build_agent_memory_block(&snippets, &injection_marker()),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "agent-memory: поиск фактов не удался"),
             }
         }
     }

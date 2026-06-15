@@ -337,6 +337,8 @@ export const useChatStore = create<ChatState>((set, get) => {
         // N4b: память переписки (отдельный канал chat_vectors). Текущую сессию исключаем на бэке
         // по sessionId — не пересказываем ассистенту его же реплики из этого диалога.
         memory: usePrefsStore.getState().aiChatMemory,
+        // MEM (AC-MEM-5): память агента — явные факты (пины + top-k). ВЫКЛ по умолчанию (D5).
+        agentMemory: usePrefsStore.getState().aiAgentMemory,
         sessionId: get().sessionId,
         // P6-PIN: гарантированный контекст закреплённых заметок (полное содержимое).
         pinned: pinned.length ? pinned : undefined,
