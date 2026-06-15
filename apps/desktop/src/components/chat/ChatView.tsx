@@ -63,6 +63,39 @@ export function ChatView() {
   const togglePin = useChatStore((s) => s.togglePin);
   const draft = useChatStore((s) => s.draft);
   const setDraft = useChatStore((s) => s.setDraft);
+  // MEM-5: сразу-сохранённый факт (явная команда «запомни …» / кнопка «В память») и индикатор сохранения.
+  const savedFact = useChatStore((s) => s.savedFact);
+  const acknowledgeSavedFact = useChatStore((s) => s.acknowledgeSavedFact);
+  const undoSavedFact = useChatStore((s) => s.undoSavedFact);
+  const explicitSaving = useChatStore((s) => s.explicitSaving);
+
+  // MEM-5: тост по исходу сразу-сохранения. saved → «Запомнил: «…»» + «Отменить» (удаляем ТОЛЬКО
+  // реально созданный факт); duplicate → «Уже в памяти» (без отмены — не трогаем существующий);
+  // error → «Не удалось сохранить»; nothing → «Нечего сохранять». Одноразово (acknowledge сбрасывает).
+  useEffect(() => {
+    if (!savedFact) return;
+    const r = savedFact;
+    acknowledgeSavedFact();
+    const { addToast } = useToastStore.getState();
+    if (r.status === 'saved') {
+      addToast(t('chat.memorySavedFact', { text: r.text }), {
+        kind: 'success',
+        action: {
+          label: t('chat.memoryUndo'),
+          run: () =>
+            void undoSavedFact(r.id).then(() =>
+              useToastStore.getState().addToast(t('chat.memoryRemoved'), { kind: 'info' }),
+            ),
+        },
+      });
+    } else if (r.status === 'duplicate') {
+      addToast(t('chat.memoryAlready'), { kind: 'info' });
+    } else if (r.status === 'error') {
+      addToast(t('chat.memorySaveFailed'), { kind: 'error' });
+    } else {
+      addToast(t('chat.memoryNothing'), { kind: 'info' });
+    }
+  }, [savedFact, acknowledgeSavedFact, undoSavedFact, t]);
 
   const [input, setInput] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
@@ -312,6 +345,13 @@ export function ChatView() {
         </div>
       )}
 
+      {/* MEM-5: индикатор сразу-сохранения по явной команде «запомни …» (тост придёт по завершении). */}
+      {explicitSaving && (
+        <div className={styles.memorySavingBar} role="status">
+          <Brain size={13} aria-hidden className={styles.memoryCapturing} /> {t('chat.memorySaving')}
+        </div>
+      )}
+
       <form
         className={styles.composer}
         onSubmit={(e) => {
@@ -495,14 +535,22 @@ function thinkingKey(mode: ChatMode, web: boolean): string {
  */
 function MessageActions({
   content,
+  messageId,
   isLast,
   onRegenerate,
 }: {
   content: string;
+  messageId: string;
   isLast: boolean;
   onRegenerate: () => void;
 }) {
   const { t } = useTranslation();
+  const captureFromMessage = useChatStore((s) => s.captureFromMessage);
+  const capturing = useChatStore((s) => s.capturingId === messageId);
+
+  // MEM-5: «В память» — извлечь и СОХРАНИТЬ факт из этого обмена (явное действие = согласие). Все исходы
+  // (Запомнил/уже в памяти/нечего сохранять/ошибка) показывает единый эффект savedFact в ChatView.
+  const capture = () => void captureFromMessage(messageId);
 
   const copy = () => {
     if (!navigator.clipboard) {
@@ -544,6 +592,16 @@ function MessageActions({
       </button>
       <button type="button" className={styles.msgAct} onClick={insert}>
         <FilePlus2 size={13} aria-hidden /> {t('chat.insert')}
+      </button>
+      <button
+        type="button"
+        className={styles.msgAct}
+        onClick={capture}
+        disabled={capturing}
+        title={t('chat.memoryCaptureHint')}
+      >
+        <Brain size={13} aria-hidden className={capturing ? styles.memoryCapturing : undefined} />{' '}
+        {t(capturing ? 'chat.memoryCapturingLabel' : 'chat.memoryCapture')}
       </button>
       {isLast && (
         // P6-RGN: регенерация только у ПОСЛЕДНЕГО ответа (тот же вопрос → свежий ответ).
@@ -730,6 +788,7 @@ function Message({
           {!message.streaming && message.content && (
             <MessageActions
               content={message.content}
+              messageId={message.id}
               isLast={isLast}
               onRegenerate={onRegenerate}
             />

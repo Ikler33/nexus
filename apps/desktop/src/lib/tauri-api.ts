@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockEgress from './mock/egress';
+import * as mockMemory from './mock/memory';
 import * as mockGit from './mock/git';
 import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
@@ -382,6 +383,12 @@ export interface MemoryFact {
   source: string;
   createdAt: number;
   usedAt: number;
+}
+
+/** Результат `memory.add` (MEM-5): id факта + `inserted` (новая строка vs дубль). */
+export interface MemoryAddResult {
+  id: number;
+  inserted: boolean;
 }
 
 export type ChatStreamEvent =
@@ -1147,33 +1154,35 @@ export const tauriApi = {
    *  явное добавление + авто-предложение (`propose`) для чипа подтверждения. CRUD-обёртки для панели
    *  «Память ИИ» добавляются в MEM-4. Вне Tauri — no-op (фича OFF по умолчанию). */
   memory: {
-    /** AC-MEM-2: все факты — пины сверху, затем по дате. Вне Tauri — пусто. */
+    /** AC-MEM-2: все факты — пины сверху, затем по дате. Вне Tauri — in-memory мок. */
     list: (): Promise<MemoryFact[]> =>
-      isTauri() ? invoke<MemoryFact[]>('memory_list') : Promise.resolve([]),
+      isTauri() ? invoke<MemoryFact[]>('memory_list') : mockMemory.list(),
 
-    /** AC-MEM-1/6: добавить факт. `source`: `'explicit'` (по умолч.) или `'auto'` (подтверждённое). */
-    add: (text: string, source?: 'explicit' | 'auto'): Promise<number | null> =>
+    /** AC-MEM-1/6: добавить факт. `source`: `'explicit'` (по умолч.) или `'auto'` (подтверждённое).
+     *  Возвращает `{id, inserted}` (`inserted=false` — дубль, вернули существующий id) или `null`
+     *  (пустой текст). MEM-5: `inserted` решает, безопасно ли «Отменить» удалять факт. */
+    add: (text: string, source?: 'explicit' | 'auto'): Promise<MemoryAddResult | null> =>
       isTauri()
-        ? invoke<number | null>('memory_add', { text, source })
-        : Promise.resolve(null),
+        ? invoke<MemoryAddResult | null>('memory_add', { text, source })
+        : mockMemory.add(text, source),
 
     /** AC-MEM-3: пин/анпин факта. */
     setPinned: (id: number, pinned: boolean): Promise<void> =>
-      isTauri() ? invoke<void>('memory_set_pinned', { id, pinned }) : Promise.resolve(),
+      isTauri() ? invoke<void>('memory_set_pinned', { id, pinned }) : mockMemory.setPinned(id, pinned),
 
     /** AC-MEM-3: правка текста факта (бэкенд ре-эмбеддит). */
     edit: (id: number, text: string): Promise<void> =>
-      isTauri() ? invoke<void>('memory_edit', { id, text }) : Promise.resolve(),
+      isTauri() ? invoke<void>('memory_edit', { id, text }) : mockMemory.edit(id, text),
 
     /** AC-MEM-3: удалить факт (+ из индекса). */
     delete: (id: number): Promise<void> =>
-      isTauri() ? invoke<void>('memory_delete', { id }) : Promise.resolve(),
+      isTauri() ? invoke<void>('memory_delete', { id }) : mockMemory.remove(id),
 
     /** AC-MEM-6: предложить ≤1 факт-кандидат по обмену (быстрая модель). `null` — нечего предлагать. */
     propose: (userText: string, assistantText: string): Promise<string | null> =>
       isTauri()
         ? invoke<string | null>('memory_propose', { userText, assistantText })
-        : Promise.resolve(null),
+        : mockMemory.propose(),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).

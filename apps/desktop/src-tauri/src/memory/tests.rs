@@ -21,16 +21,29 @@ async fn add_dedup_and_list() {
     let id1 = add(db.writer(), "пишу на Rust", SOURCE_EXPLICIT)
         .await
         .unwrap();
-    assert!(id1.is_some());
+    assert_eq!(
+        id1.map(|(_, ins)| ins),
+        Some(true),
+        "первая запись — inserted"
+    );
     let id2 = add(db.writer(), "дедлайн проекта X — пятница", SOURCE_AUTO)
         .await
         .unwrap();
     assert!(id2.is_some());
-    // дубль (точный текст) — тот же id, без второй строки.
+    // дубль (точный текст) — тот же id, inserted=false (MEM-5).
     let dup = add(db.writer(), "  пишу на Rust  ", SOURCE_EXPLICIT)
         .await
         .unwrap();
-    assert_eq!(dup, id1, "дубль вернул существующий id (trim)");
+    assert_eq!(
+        dup.map(|(id, _)| id),
+        id1.map(|(id, _)| id),
+        "дубль вернул существующий id (trim)"
+    );
+    assert_eq!(
+        dup.map(|(_, ins)| ins),
+        Some(false),
+        "дубль — inserted=false"
+    );
     // пустой — None.
     assert_eq!(
         add(db.writer(), "   ", SOURCE_EXPLICIT).await.unwrap(),
@@ -49,11 +62,13 @@ async fn pin_edit_delete() {
     let a = add(db.writer(), "факт А", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
     let b = add(db.writer(), "факт Б", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
 
     set_pinned(db.writer(), b, true).await.unwrap();
     let facts = list(db.reader()).await.unwrap();
@@ -78,7 +93,8 @@ async fn edit_empty_is_noop() {
     let id = add(db.writer(), "исходный текст", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
     edit(db.writer(), id, "   ").await.unwrap();
     let facts = list(db.reader()).await.unwrap();
     assert_eq!(
@@ -100,15 +116,18 @@ async fn context_facts_pins_plus_topk() {
     let pin = add(db.writer(), "меня зовут Артан", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
     let rel = add(db.writer(), "Nexus проект на Rust и Tauri", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
     let other = add(db.writer(), "погода сегодня солнечная", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
     for (id, text) in [
         (pin, "меня зовут Артан"),
         (rel, "Nexus проект на Rust и Tauri"),
@@ -150,7 +169,8 @@ async fn context_facts_only_pins_when_no_search() {
     let pin = add(db.writer(), "всегда отвечай по-русски", SOURCE_EXPLICIT)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .0;
     set_pinned(db.writer(), pin, true).await.unwrap();
     // индекс пуст → top-k не ищется, но пин есть.
     let facts = context_facts(db.reader(), db.writer(), &vectors, &emb, "любой вопрос", 3)

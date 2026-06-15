@@ -667,6 +667,40 @@
 .msgAct svg {
   color: var(--color-ai);
 }
+.msgAct:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* MEM-5: пульс иконки мозга при извлечении факта (кнопка «В память» / явное сохранение). */
+.memoryCapturing {
+  animation: memPulse 1s ease-in-out infinite;
+}
+@keyframes memPulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* MEM-5: инлайн-индикатор «Сохраняю в память…» над композером по явной команде «запомни …». */
+.memorySavingBar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 12px 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm, 8px);
+  background: color-mix(in srgb, var(--color-ai) 8%, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--color-ai) 26%, var(--color-border));
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.memorySavingBar svg {
+  color: var(--color-ai);
+}
 
 /* MEM-3: чип авто-предложения факта в «Память ИИ» под последним ответом (Запомнить: «…»? ✓/✗). */
 .factChip {

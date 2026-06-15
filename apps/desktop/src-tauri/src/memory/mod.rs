@@ -51,7 +51,11 @@ const SELECT_COLS: &str = "id, text, pinned, source, created_at, used_at";
 /// AC-MEM-1: добавить факт в БД (дедуп по точному тексту — UNIQUE index). Пустой/whitespace отклоняется.
 /// Возвращает id (нового или уже существующего дубля), либо `None` для пустого текста. Эмбеддинг — отдельно
 /// (`index_fact`), чтобы DB-слой не зависел от провайдера.
-pub async fn add(writer: &WriteActor, text: &str, source: &str) -> DbResult<Option<i64>> {
+/// Добавить факт. Возвращает `Some((id, inserted))`: `inserted=true` — НОВАЯ строка, `false` — дубль
+/// (вернули существующий id, не плодим, AC-MEM-1). `None` — пустой текст. Флаг `inserted` критичен для
+/// фронта (MEM-5): «Отменить» удаляет факт ТОЛЬКО если мы его реально создали — иначе undo стёр бы
+/// уже существующий курированный факт пользователя (adversarial-ревью MEM-5, MAJOR).
+pub async fn add(writer: &WriteActor, text: &str, source: &str) -> DbResult<Option<(i64, bool)>> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Ok(None);
@@ -73,7 +77,7 @@ pub async fn add(writer: &WriteActor, text: &str, source: &str) -> DbResult<Opti
             } else {
                 tx.last_insert_rowid()
             };
-            Ok(Some(id))
+            Ok(Some((id, changed != 0)))
         })
         .await
 }

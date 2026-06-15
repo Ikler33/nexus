@@ -16,15 +16,24 @@ pub async fn memory_list(state: State<'_, AppState>) -> AppResult<Vec<MemoryFact
     Ok(memory::list(&reader).await?)
 }
 
-/// AC-MEM-1/6: добавить факт (+ проиндексировать, если есть эмбеддер). Возвращает id (или `None` —
-/// пустой текст). `source` (D1): `'explicit'` (явная команда/кнопка, дефолт) либо `'auto'` (подтверждённое
-/// авто-предложение). Любое иное значение трактуется как `'explicit'` (fail-safe).
+/// Результат `memory_add` для фронта: id факта + `inserted` (новая строка vs дубль). MEM-5: «Отменить»
+/// удаляет факт ТОЛЬКО при `inserted=true` — иначе undo стёр бы существующий факт пользователя.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAddResult {
+    pub id: i64,
+    pub inserted: bool,
+}
+
+/// AC-MEM-1/6: добавить факт (+ проиндексировать НОВЫЙ, если есть эмбеддер). Возвращает `{id, inserted}`
+/// (или `None` — пустой текст). `source` (D1): `'explicit'` (явная команда/кнопка, дефолт) либо `'auto'`
+/// (подтверждённое авто-предложение). Любое иное значение трактуется как `'explicit'` (fail-safe).
 #[tauri::command]
 pub async fn memory_add(
     state: State<'_, AppState>,
     text: String,
     source: Option<String>,
-) -> AppResult<Option<i64>> {
+) -> AppResult<Option<MemoryAddResult>> {
     let source = match source.as_deref() {
         Some(SOURCE_AUTO) => SOURCE_AUTO,
         _ => SOURCE_EXPLICIT,
@@ -37,11 +46,12 @@ pub async fn memory_add(
             ctx.memory_vectors.clone(),
         )
     };
-    let id = memory::add(&writer, &text, source).await?;
-    if let (Some(id), Some(emb), Some(vec)) = (id, embedder, vectors) {
+    let added = memory::add(&writer, &text, source).await?;
+    // Индексируем только НОВЫЙ факт — дубль уже в индексе (и его вектор не трогаем).
+    if let (Some((id, true)), Some(emb), Some(vec)) = (added, embedder, vectors) {
         let _ = memory::index_fact(&vec, emb.as_ref(), id, text.trim()).await;
     }
-    Ok(id)
+    Ok(added.map(|(id, inserted)| MemoryAddResult { id, inserted }))
 }
 
 /// AC-MEM-6 (D1): авто-ПРЕДЛОЖЕНИЕ факта по последнему обмену — «быстрая» модель извлекает ≤1 кандидат.

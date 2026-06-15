@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 
 import { logUi } from '../lib/debug-log';
+import { isExplicitSave, stripSaveCommand } from '../lib/memory-intent';
+import { useMemoryStore } from './memory';
 import { usePrefsStore } from './prefs';
 
 import type {
@@ -20,6 +22,14 @@ import { tauriApi } from '../lib/tauri-api';
 
 /** Источник ответа (RAG-чанк) — = `SearchHit`. */
 export type ChatSource = SearchHit;
+
+/** MEM-5: исход сразу-сохранения факта. `saved` — реально создан (с id для отмены); `duplicate` — уже
+ *  был; `error` — запись упала; `nothing` — извлекать нечего. ChatView маппит на тост. */
+export type SaveResult =
+  | { status: 'saved'; id: number; text: string }
+  | { status: 'duplicate'; text: string }
+  | { status: 'error' }
+  | { status: 'nothing' };
 
 export interface ChatMessage {
   id: string;
@@ -119,6 +129,21 @@ interface ChatState {
   confirmFact: () => Promise<void>;
   /** MEM-3: отклонить предложенный факт — просто убрать чип, в БД НИЧЕГО не пишем (D1). */
   dismissFact: () => void;
+  /** MEM-5: результат сразу-сохранения (явная команда «запомни …» / кнопка «В память»). ChatView
+   *  показывает тост по `status` и сбрасывает. `saved` несёт `id` для «Отменить» (удаляем ТОЛЬКО реально
+   *  созданный факт — `duplicate` уже был, без отмены; `error`/`nothing` — честные тосты). */
+  savedFact: SaveResult | null;
+  /** MEM-5: идёт извлечение факта по ЯВНОЙ команде (инлайн-индикатор «Сохраняю в память…»). */
+  explicitSaving: boolean;
+  /** MEM-5: id сообщения, для которого жмут «В память» (спиннер на кнопке); null — никакой. */
+  capturingId: string | null;
+  /** MEM-5: ChatView показал тост по `savedFact` → сбросить (одноразово). */
+  acknowledgeSavedFact: () => void;
+  /** MEM-5: «Отменить» только что сохранённый факт — удалить из памяти по id. */
+  undoSavedFact: (id: number) => Promise<void>;
+  /** MEM-5: кнопка «В память» под ответом — извлечь и СОХРАНИТЬ факт из обмена этого сообщения.
+   *  Возвращает true, если что-то сохранено (для тоста «нечего сохранять» при false). */
+  captureFromMessage: (messageId: string) => Promise<boolean>;
   /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
   /** P6-RGN: перегенерировать последний ответ ИИ — тот же вопрос → свежий ответ. Старая пара
@@ -215,6 +240,29 @@ export const useChatStore = create<ChatState>((set, get) => {
       .catch(() => {});
   };
 
+  // MEM-5: ЯВНОЕ сохранение факта (команда «запомни …» или кнопка «В память»). Явная команда =
+  // согласие (решение владельца) → пишем сразу, `source='explicit'`, без чипа-подтверждения. Различаем
+  // исходы (adversarial-ревью): saved (создан, есть undo) / duplicate (уже был, БЕЗ undo — иначе стёрли
+  // бы существующий факт) / error (запись упала — честный тост) / nothing (извлекать нечего).
+  const runExplicitSave = async (
+    userText: string,
+    assistantText: string,
+  ): Promise<SaveResult> => {
+    let fact = (await tauriApi.memory.propose(userText, assistantText).catch(() => null))?.trim();
+    if (!fact) fact = stripSaveCommand(userText); // фолбэк: срезать команду
+    if (!fact) return { status: 'nothing' };
+    try {
+      const res = await tauriApi.memory.add(fact, 'explicit'); // {id, inserted} | null
+      if (!res) return { status: 'nothing' }; // пустой текст (не должно при непустом fact)
+      void useMemoryStore.getState().load(); // обновить панель «Память ИИ», если открыта
+      return res.inserted
+        ? { status: 'saved', id: res.id, text: fact }
+        : { status: 'duplicate', text: fact };
+    } catch {
+      return { status: 'error' }; // реальный сбой записи — НЕ выдаём за «уже в памяти»
+    }
+  };
+
   return {
     messages: [],
     streaming: false,
@@ -224,6 +272,9 @@ export const useChatStore = create<ChatState>((set, get) => {
     pinned: [],
     sessionId: null,
     pendingFact: null,
+    savedFact: null,
+    explicitSaving: false,
+    capturingId: null,
 
     confirmFact() {
       const pf = get().pendingFact;
@@ -235,6 +286,37 @@ export const useChatStore = create<ChatState>((set, get) => {
     dismissFact() {
       // Отказ (D1): ничего не пишем, просто снимаем чип.
       if (get().pendingFact) set({ pendingFact: null });
+    },
+    acknowledgeSavedFact() {
+      if (get().savedFact) set({ savedFact: null });
+    },
+    undoSavedFact(id) {
+      // «Отменить» сразу-сохранённый факт (явная команда/кнопка) — убрать из памяти.
+      return tauriApi.memory
+        .delete(id)
+        .then(() => {
+          void useMemoryStore.getState().load();
+        })
+        .catch(() => {});
+    },
+    async captureFromMessage(messageId) {
+      if (get().streaming || get().capturingId) return false; // не во время стрима / двойного клика
+      const msgs = get().messages;
+      const idx = msgs.findIndex((m) => m.id === messageId);
+      if (idx < 0 || msgs[idx].role !== 'assistant') return false;
+      // Пара = ассистент-ответ + предшествующая реплика пользователя.
+      const user = msgs.slice(0, idx).reverse().find((m) => m.role === 'user');
+      const assistantText = msgs[idx].content;
+      if (!user) return false;
+      set({ capturingId: messageId });
+      try {
+        const res = await runExplicitSave(user.content, assistantText);
+        // epoch-гард: за время await ленту могли очистить/сменить сессию — не вешаем тост на чужой экран.
+        if (get().messages.some((m) => m.id === messageId)) set({ savedFact: res });
+        return res.status === 'saved';
+      } finally {
+        set({ capturingId: null });
+      }
     },
 
     setMode(mode) {
@@ -281,6 +363,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     send(question, center) {
       const q = question.trim();
       if (!q || get().streaming) return;
+      // MEM-5: явная команда «запомни …» → сразу сохраним факт по завершении обмена (инлайн-индикатор).
+      const explicit = isExplicitSave(q);
 
       const userMsg: ChatMessage = { id: nextId(), role: 'user', content: q };
       const replyId = nextId();
@@ -292,6 +376,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         messages: [...s.messages, userMsg, reply],
         streaming: true,
         pendingFact: null,
+        explicitSaving: explicit,
       }));
 
       // Применяет накопленный буфер токенов одним апдейтом (вызывается из rAF).
@@ -350,8 +435,22 @@ export const useChatStore = create<ChatState>((set, get) => {
             cancelFn = null;
             set({ streaming: false });
             save();
-            // MEM-3 (AC-MEM-6): авто-предложение факта из этого обмена (если память агента включена).
-            proposeFact(replyId, q, get().messages.find((m) => m.id === replyId)?.content ?? '');
+            const answer = get().messages.find((m) => m.id === replyId)?.content ?? '';
+            if (explicit) {
+              // MEM-5: ЯВНАЯ команда = согласие → сохраняем сразу (source='explicit'), без чипа.
+              void runExplicitSave(q, answer).then((res) => {
+                // epoch-гард: за время propose+add юзер мог clear()/новый send()/сменить сессию —
+                // не вешаем тост старого обмена на новую/очищенную ленту (как proposeFact).
+                if (get().streaming || !get().messages.some((m) => m.id === replyId)) {
+                  set({ explicitSaving: false });
+                  return;
+                }
+                set({ savedFact: res, explicitSaving: false });
+              });
+            } else {
+              // MEM-3 (AC-MEM-6): авто-предложение факта из обмена (если память агента включена) → чип.
+              proposeFact(replyId, q, answer);
+            }
             break;
           }
           case 'error': {
@@ -366,7 +465,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               streaming: false,
             }));
             cancelFn = null;
-            set({ streaming: false });
+            set({ streaming: false, explicitSaving: false }); // MEM-5: индикатор не висит при ошибке
             save();
             break;
           }
@@ -434,6 +533,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       pending = '';
       set((s) => ({
         streaming: false,
+        explicitSaving: false, // MEM-5: прерванный обмен — индикатор сохранения не висит
         messages: s.messages.map((m) =>
           m.streaming ? { ...m, content: m.content + tail, streaming: false } : m,
         ),
@@ -444,7 +544,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     clear() {
       disclosureOpen.clear();
       if (get().streaming) return;
-      set({ messages: [], pendingFact: null });
+      // MEM-5: сброс транзиентного состояния захвата (индикатор/чип не висят на пустой ленте).
+      set({ messages: [], pendingFact: null, savedFact: null, explicitSaving: false, capturingId: null });
       save();
     },
 
@@ -456,7 +557,15 @@ export const useChatStore = create<ChatState>((set, get) => {
       vaultOpen = root != null;
       // pinned ЧИСТИМ при смене vault: пути относительны хранилищу — иначе кросс-vault утечка
       // содержимого в контекст ИИ (одноимённый файл в новом vault) или мёртвые чипы.
-      set({ messages: [], sessionId: null, pinned: [], pendingFact: null });
+      set({
+        messages: [],
+        sessionId: null,
+        pinned: [],
+        pendingFact: null,
+        savedFact: null,
+        explicitSaving: false,
+        capturingId: null,
+      });
       if (!vaultOpen) return;
       // Продолжаем последнюю сессию (поведение прежнего localStorage-хвоста, теперь из БД).
       void tauriApi.chat.sessions
@@ -504,7 +613,14 @@ export const useChatStore = create<ChatState>((set, get) => {
             memorySources,
           };
         });
-        set({ messages: restored, sessionId: id, pendingFact: null });
+        set({
+          messages: restored,
+          sessionId: id,
+          pendingFact: null,
+          savedFact: null,
+          explicitSaving: false,
+          capturingId: null,
+        });
       } catch {
         /* сессия недоступна — лента не трогается */
       }
@@ -514,7 +630,14 @@ export const useChatStore = create<ChatState>((set, get) => {
       if (get().streaming) return;
       logUi('chat:new-session');
       disclosureOpen.clear();
-      set({ messages: [], sessionId: null, pendingFact: null });
+      set({
+        messages: [],
+        sessionId: null,
+        pendingFact: null,
+        savedFact: null,
+        explicitSaving: false,
+        capturingId: null,
+      });
     },
   };
 });

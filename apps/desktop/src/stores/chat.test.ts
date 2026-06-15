@@ -443,7 +443,7 @@ describe('chat store (Ф1-8)', () => {
     });
 
     it('confirmFact пишет факт (source=auto) и снимает чип', async () => {
-      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue(1);
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 1, inserted: true });
       useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'дедлайн в пятницу' } });
       await useChatStore.getState().confirmFact();
       expect(add).toHaveBeenCalledWith('дедлайн в пятницу', 'auto');
@@ -451,7 +451,7 @@ describe('chat store (Ф1-8)', () => {
     });
 
     it('dismissFact снимает чип, в БД ничего не пишет (D1)', () => {
-      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue(1);
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 1, inserted: true });
       useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'что-то' } });
       useChatStore.getState().dismissFact();
       expect(useChatStore.getState().pendingFact).toBeNull();
@@ -464,6 +464,86 @@ describe('chat store (Ф1-8)', () => {
       useChatStore.getState().send('новый вопрос');
       expect(useChatStore.getState().pendingFact).toBeNull();
       useChatStore.getState().stop();
+    });
+  });
+
+  // MEM-5: явная команда «запомни …» сохраняет сразу; кнопка «В память»; undo.
+  describe('MEM-5: захват факта в память из чата', () => {
+    it('явная команда «запомни …» сохраняет факт сразу (source=explicit) + savedFact, без чипа', async () => {
+      const propose = vi.spyOn(tauriApi.memory, 'propose').mockResolvedValue('Работает над RMS B2B');
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 42, inserted: true });
+      useChatStore.getState().send('запомни что я работаю над RMS B2B');
+      await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
+        timeout: 2000,
+      });
+      await vi.waitFor(() => expect(useChatStore.getState().savedFact).not.toBeNull());
+      expect(propose).toHaveBeenCalled();
+      expect(add).toHaveBeenCalledWith('Работает над RMS B2B', 'explicit');
+      expect(useChatStore.getState().savedFact).toEqual({
+        status: 'saved',
+        id: 42,
+        text: 'Работает над RMS B2B',
+      });
+      expect(useChatStore.getState().pendingFact).toBeNull(); // не чип-подтверждение
+      expect(useChatStore.getState().explicitSaving).toBe(false);
+    });
+
+    it('дубль (inserted=false) → savedFact status=duplicate, БЕЗ id (undo не сотрёт существующий)', async () => {
+      vi.spyOn(tauriApi.memory, 'propose').mockResolvedValue('Уже сохранённый факт');
+      vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 9, inserted: false });
+      useChatStore.getState().send('запомни уже сохранённый факт');
+      await vi.waitFor(() => expect(useChatStore.getState().savedFact).not.toBeNull(), {
+        timeout: 2000,
+      });
+      expect(useChatStore.getState().savedFact).toEqual({
+        status: 'duplicate',
+        text: 'Уже сохранённый факт',
+      });
+    });
+
+    it('сбой записи (add throws) → savedFact status=error (не выдаём за «уже в памяти»)', async () => {
+      vi.spyOn(tauriApi.memory, 'propose').mockResolvedValue('Факт');
+      vi.spyOn(tauriApi.memory, 'add').mockRejectedValue(new Error('db down'));
+      useChatStore.getState().send('запомни факт');
+      await vi.waitFor(() => expect(useChatStore.getState().savedFact).not.toBeNull(), {
+        timeout: 2000,
+      });
+      expect(useChatStore.getState().savedFact).toEqual({ status: 'error' });
+    });
+
+    it('обычная реплика НЕ сохраняет факт сразу (memory.add не зовётся, savedFact пуст)', async () => {
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 1, inserted: true });
+      useChatStore.getState().send('расскажи про RMS B2B');
+      await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
+        timeout: 2000,
+      });
+      expect(add).not.toHaveBeenCalled();
+      expect(useChatStore.getState().savedFact).toBeNull();
+    });
+
+    it('captureFromMessage («В память») извлекает и сохраняет факт из обмена сообщения', async () => {
+      vi.spyOn(tauriApi.memory, 'propose').mockResolvedValue('Любит тёмную тему');
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue({ id: 7, inserted: true });
+      useChatStore.getState().send('какой стиль предпочесть');
+      await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
+        timeout: 2000,
+      });
+      const assistant = useChatStore.getState().messages.at(-1)!;
+      const saved = await useChatStore.getState().captureFromMessage(assistant.id);
+      expect(saved).toBe(true);
+      expect(add).toHaveBeenCalledWith('Любит тёмную тему', 'explicit');
+      expect(useChatStore.getState().savedFact).toEqual({
+        status: 'saved',
+        id: 7,
+        text: 'Любит тёмную тему',
+      });
+      expect(useChatStore.getState().capturingId).toBeNull();
+    });
+
+    it('undoSavedFact удаляет факт по id', async () => {
+      const del = vi.spyOn(tauriApi.memory, 'delete').mockResolvedValue();
+      await useChatStore.getState().undoSavedFact(42);
+      expect(del).toHaveBeenCalledWith(42);
     });
   });
 });
