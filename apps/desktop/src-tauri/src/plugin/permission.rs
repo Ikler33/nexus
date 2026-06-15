@@ -246,14 +246,17 @@ pub fn is_private_host(host: &str) -> bool {
         return true;
     }
     match h.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(v4)) => {
-            v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local() // 169.254/16, incl. 169.254.169.254 (cloud metadata)
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-        }
+        Ok(std::net::IpAddr::V4(v4)) => is_private_v4(v4),
         Ok(std::net::IpAddr::V6(v6)) => {
+            // Любая форма, ТУННЕЛИРУЮЩАЯ IPv4 (mapped/compatible/NAT64/6to4), судится по V4-правилам:
+            // иначе `::ffff:192.168.x` / `64:ff9b::a9fe:a9fe` (NAT64→169.254.169.254) / `2002:…::` (6to4)
+            // обходят гард как «не приватный V6» (находки аудита + security-ревью 2026-06).
+            if let Some(v4) = embedded_ipv4(v6) {
+                if is_private_v4(v4) {
+                    return true;
+                }
+                // встроенный публичный v4 — продолжаем к native-V6-правилам (на случай `::1` и т.п.).
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
@@ -261,6 +264,53 @@ pub fn is_private_host(host: &str) -> bool {
         }
         Err(_) => false, // домен — контролируется allowlist
     }
+}
+
+/// Извлекает встроенный IPv4 из IPv6, если адрес — форма, ТУННЕЛИРУЮЩАЯ v4 (иначе `None`). Покрывает
+/// IPv4-mapped (`::ffff:a.b.c.d`), NAT64 (`64:ff9b::/96`, RFC6052), 6to4 (`2002:V4::/16`, RFC3056),
+/// IPv4-compatible (`::a.b.c.d`, deprecated). Нужно SSRF-гарду: эти формы прячут приватный/metadata v4.
+/// `is_global`/`is_ipv4_mapped`-хелперы нестабильны на текущем rustc — извлекаем сегментами явно.
+fn embedded_ipv4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    use std::net::Ipv4Addr;
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return Some(v4); // ::ffff:a.b.c.d
+    }
+    let s = v6.segments();
+    let v4_from = |hi: u16, lo: u16| {
+        Ipv4Addr::new(
+            (hi >> 8) as u8,
+            (hi & 0xff) as u8,
+            (lo >> 8) as u8,
+            (lo & 0xff) as u8,
+        )
+    };
+    // NAT64 64:ff9b::/96 → v4 в последних 32 битах.
+    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
+        return Some(v4_from(s[6], s[7]));
+    }
+    // 6to4 2002:V4::/16 → v4 в сегментах [1],[2].
+    if s[0] == 0x2002 {
+        return Some(v4_from(s[1], s[2]));
+    }
+    // IPv4-compatible ::a.b.c.d (старшие 96 бит нули, младшие 32 не нули). `::`/`::1` сюда не относим —
+    // их разберут native is_unspecified/is_loopback (0.0.0.x не приватны и обошли бы гард).
+    if s[..6] == [0, 0, 0, 0, 0, 0] && (s[6] != 0 || s[7] != 0) {
+        return Some(v4_from(s[6], s[7]));
+    }
+    None
+}
+
+/// Приватный/loopback/link-local/служебный/CGNAT IPv4 (169.254/16 включает metadata 169.254.169.254).
+fn is_private_v4(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+    v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || v4.is_broadcast()
+        || (o[0] == 100 && (o[1] & 0xc0) == 0x40) // CGNAT 100.64.0.0/10 (RFC6598, Tailscale/CGN)
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24 (IETF protocol assignments)
+        || (o[0] == 198 && (o[1] == 18 || o[1] == 19)) // 198.18.0.0/15 (benchmarking)
 }
 
 /// Cloud-metadata-блок (E7, AC-EGR-12): хост — это `169.254.169.254` (IMDS AWS/GCP/Azure/…).
@@ -274,8 +324,9 @@ pub fn blocks_cloud_metadata(host: &str) -> bool {
     let h = host.trim().trim_start_matches('[').trim_end_matches(']');
     match h.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(v4)) => v4 == METADATA_V4,
-        // `::ffff:169.254.169.254` — тот же адрес в IPv4-mapped-форме (обход через v6-литерал).
-        Ok(std::net::IpAddr::V6(v6)) => v6.to_ipv4_mapped() == Some(METADATA_V4),
+        // Любая форма, туннелирующая v4 (mapped/NAT64/6to4/compatible), — тот же metadata-адрес
+        // в v6-обёртке (обход через v6-литерал).
+        Ok(std::net::IpAddr::V6(v6)) => embedded_ipv4(v6) == Some(METADATA_V4),
         Err(_) => false,
     }
 }
@@ -501,10 +552,30 @@ mod tests {
             "[::1]",
             "fe80::1",
             "fc00::1",
+            // Формы, туннелирующие приватный/metadata v4 — НЕ должны обходить гард (security-ревью 2026-06).
+            "::ffff:192.168.0.1", // IPv4-mapped
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "[::ffff:192.168.0.31]", // боевой LLM-сервер в форме v4-mapped
+            "64:ff9b::a9fe:a9fe",    // NAT64 → 169.254.169.254 (metadata)
+            "64:ff9b::7f00:1",       // NAT64 → 127.0.0.1
+            "64:ff9b::c0a8:1",       // NAT64 → 192.168.0.1
+            "2002:a9fe:a9fe::",      // 6to4 → 169.254.169.254
+            "2002:c0a8:1f::",        // 6to4 → 192.168.0.31
+            "::a9fe:a9fe",           // IPv4-compatible → 169.254.169.254
+            "100.64.0.1",            // CGNAT 100.64.0.0/10 (Tailscale/CGN)
         ] {
             assert!(is_private_host(h), "{h} должен быть заблокирован (SSRF)");
         }
-        for h in ["example.com", "93.184.216.34", "api.openai.com", "8.8.8.8"] {
+        for h in [
+            "example.com",
+            "93.184.216.34",
+            "api.openai.com",
+            "8.8.8.8",
+            "2606:4700:4700::1111", // публичный v6 (Cloudflare) — не туннель v4
+            "99.255.255.255",       // соседний к CGNAT, но публичный
+            "101.0.0.1",
+        ] {
             assert!(!is_private_host(h), "{h} НЕ должен блокироваться");
         }
     }
@@ -516,8 +587,11 @@ mod tests {
         for h in [
             "169.254.169.254",
             " 169.254.169.254 ",
-            "::ffff:169.254.169.254",
+            "::ffff:169.254.169.254", // IPv4-mapped
             "[::ffff:169.254.169.254]",
+            "64:ff9b::a9fe:a9fe", // NAT64 → metadata (security-ревью 2026-06)
+            "2002:a9fe:a9fe::",   // 6to4 → metadata
+            "::a9fe:a9fe",        // IPv4-compatible → metadata
         ] {
             assert!(
                 blocks_cloud_metadata(h),
