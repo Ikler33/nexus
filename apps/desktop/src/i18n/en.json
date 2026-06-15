@@ -361,7 +361,8 @@
     "content": "In content",
     "commands": "Commands",
     "navigate": "navigate",
-    "open": "open"
+    "open": "open",
+    "clear": "Clear"
   },
   "graph": {
     "title": "Graph",

@@ -6,6 +6,7 @@ import {
   FileText,
   Search,
   TextSearch,
+  X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { commands, type Command, formatCombo, spellCombo } from '../../lib/commands';
@@ -257,7 +258,12 @@ export function CommandPalette() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className={styles.inputRow}>
-          <Search size={16} aria-hidden />
+          {/* DF-1: в spotlight-стиле ведущая иконка — командная (макет palette.jsx), иначе поиск. */}
+          {paletteStyle === 'spotlight' ? (
+            <CommandIcon size={18} aria-hidden />
+          ) : (
+            <Search size={16} aria-hidden />
+          )}
           <input
             className={styles.input}
             autoFocus
@@ -273,7 +279,23 @@ export function CommandPalette() {
             aria-expanded
             aria-controls="command-list"
           />
-          <kbd className={styles.kbd}>Esc</kbd>
+          {/* DF-1: непустой запрос → кнопка очистки (×), иначе подсказка Esc (макет palette.jsx). */}
+          {query ? (
+            <button
+              type="button"
+              className={styles.clearBtn}
+              onClick={() => {
+                setQuery('');
+                setActive(0);
+              }}
+              aria-label={t('palette.clear')}
+              title={t('palette.clear')}
+            >
+              <X size={14} aria-hidden />
+            </button>
+          ) : (
+            <kbd className={styles.kbd}>Esc</kbd>
+          )}
         </div>
         <ul className={styles.list} id="command-list" role="listbox">
           {rows.length === 0 ? (
@@ -315,6 +337,10 @@ export function CommandPalette() {
           </span>
           <span className={styles.footHint}>
             <CornerDownLeft size={11} aria-hidden /> {t('palette.open')}
+          </span>
+          {/* DF-1: бренд-хинт справа (макет palette.jsx — marginLeft:auto + command-иконка). */}
+          <span className={styles.footBrand}>
+            <CommandIcon size={11} aria-hidden /> Nexus
           </span>
         </div>
       </div>
