@@ -35,6 +35,8 @@ pub mod graph;
 pub mod home;
 /// Инкрементальный индексатор (files/links/tags) — §4.2.
 pub mod indexer;
+/// Персистентная память агента (MEM, спека `docs/specs/agent-memory.md`): слой явных фактов + инжекция.
+pub mod memory;
 /// Egress-граница ядра (ADR-005-ext): `GuardedClient` + политика + audit — единый chokepoint HTTP.
 pub mod net;
 /// Лента новостей (спека `docs/specs/news-feed.md`): NF-1 — парсеры фидов + keyword-фильтр.
@@ -183,6 +185,11 @@ pub fn run() {
             commands::chat_sessions::chat_log_exchange,
             commands::chat_sessions::chat_delete_last_exchange,
             commands::chat_sessions::chat_session_to_note,
+            commands::memory::memory_list,
+            commands::memory::memory_add,
+            commands::memory::memory_set_pinned,
+            commands::memory::memory_edit,
+            commands::memory::memory_delete,
             commands::inline::inline_complete,
             commands::inline::inline_cancel,
             commands::news::get_news,
