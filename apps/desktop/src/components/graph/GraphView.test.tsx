@@ -24,6 +24,7 @@ vi.mock('d3-force', () => {
           (a[1] as (() => void) | undefined)?.(); // тик-колбэк зовём один раз
           return sim;
         },
+        tick: () => sim, // GRAPH-2: warmup-цикл зовёт sim.tick() (мок — no-op, позиции уже проставлены)
         alpha: () => sim,
         alphaTarget: () => sim,
         restart: () => sim,
