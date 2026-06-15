@@ -56,8 +56,8 @@ pub async fn open_vault(
         Some(cfg) => build_rag(&root, &db, cfg, &state.egress_policy, &state.egress_audit).await,
         None => None,
     };
-    let (vectors, chat_vectors, embedder, indexer) = match rag {
-        Some((embedder, vec_index, chat_vec_index, force)) => {
+    let (vectors, chat_vectors, memory_vectors, embedder, indexer) = match rag {
+        Some((embedder, vec_index, chat_vec_index, mem_vec_index, force)) => {
             let idx = crate::indexer::Indexer::with_rag(
                 &db,
                 root.clone(),
@@ -65,9 +65,16 @@ pub async fn open_vault(
                 vec_index.clone(),
                 force,
             );
-            (Some(vec_index), Some(chat_vec_index), Some(embedder), idx)
+            (
+                Some(vec_index),
+                Some(chat_vec_index),
+                Some(mem_vec_index),
+                Some(embedder),
+                idx,
+            )
         }
         None => (
+            None,
             None,
             None,
             None,
@@ -415,6 +422,7 @@ pub async fn open_vault(
         db,
         vectors,
         chat_vectors,
+        memory_vectors,
         ai: AIClient {
             chat,
             chat_fast,
@@ -456,6 +464,7 @@ async fn build_rag(
     audit: &Arc<EgressAudit>,
 ) -> Option<(
     Arc<dyn EmbeddingProvider>,
+    Arc<VectorIndex>,
     Arc<VectorIndex>,
     Arc<VectorIndex>,
     bool,
@@ -510,12 +519,20 @@ async fn build_rag(
     let chat_vectors = VectorIndex::open(root.join(".nexus").join("chat_vectors.usearch"), dim)
         .map_err(|e| tracing::warn!(error = %e, "chat_vectors open не удался — память чата off"))
         .ok()?;
+    // MEM: индекс памяти агента (явные факты) — свои ключи (id факта), тот же эмбеддер/dim. Параллельный
+    // канал, как chat_vectors; per-vault (в .nexus этого хранилища) — память не течёт между vault'ами.
+    let memory_vectors = VectorIndex::open(root.join(".nexus").join("memory_vectors.usearch"), dim)
+        .map_err(
+            |e| tracing::warn!(error = %e, "memory_vectors open не удался — память агента off"),
+        )
+        .ok()?;
 
     tracing::info!(model = %model, dim, force, "RAG включён");
     Some((
         Arc::new(embedder),
         Arc::new(vectors),
         Arc::new(chat_vectors),
+        Arc::new(memory_vectors),
         force,
     ))
 }

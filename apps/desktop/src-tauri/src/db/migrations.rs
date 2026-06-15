@@ -116,6 +116,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/016_relation_reasons.sql"),
         rebuild_fts: false, // новая таблица-кэш LLM-объяснений связей, производных не инвалидирует
     },
+    Migration {
+        version: 17,
+        name: "memory_facts",
+        sql: include_str!("migrations/017_memory_facts.sql"),
+        rebuild_fts: false, // память агента (MEM): отдельный слой фактов, заметочных производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
