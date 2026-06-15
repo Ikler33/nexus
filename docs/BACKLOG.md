@@ -184,6 +184,7 @@
 | 🧩 **Глобальный quick-capture** (ОС-хоткей вне приложения) | tauri-plugin-global-shortcut + macOS Accessibility (owner/ОС-gated); in-app ⌘⇧N готов | разрешение владельца | IMPROVEMENT_PLAN P4 (CAP-6) |
 | 🧩 **STIX-шрифт формул для Win/Linux WebView** | macOS WebKit рендерит MathML из коробки; Win WebView2/Linux WebKitGTK нужен мат-шрифт (бандл) | при сборке под Win/Linux | KaTeX #215 |
 | ✅ ~~**AUDIT: web-search save-swallow + SyncPanel.saveRemote-swallow**~~ — **СДЕЛАНО (B16):** `.catch` + error-состояние (`settings.web.saveError` / `remoteError`), +2 теста. | — | — | CODE_AUDIT_2026-06 |
+| ✂️ **GRAPH-4: поиск не находит изоляты при выкл. «Показывать изоляты»** | сироты (`n.ring`) рано `return null` до hit/faded → запрос их не подсветит; обходится включением тумблера. Фикс: при активном поиске не скрывать изоляты-совпадения (или авто-показ сирот пока поиск активен) | при доводке GRAPH-поиска | adversarial-ревью GRAPH-4 |
 | ✂️ **AUDIT: orphan-history/корзина GC при delete** | best-effort удаление `.nexus/history/<rel>` + ретенция корзины; не потеря данных, рост диска | при правке CURATE-delete | CODE_AUDIT MINOR |
 | 🔬 **AUDIT: reconcile_vectors не чистит orphan-векторы** | риск usearch v2 `all_keys()` API (может снести лишнее) — нужен guard `removed>0`+лог+тест; средний риск | сверка usearch-API | CODE_AUDIT MINOR |
 | 🧩 **AUDIT: contradictions should_generate/candidate_pairs** | `should_generate` вечно-true без отдельного `last_run` (нужна схема/миграция); candidate_pairs N+1 (батч-выборка) | при доработке contradictions | CODE_AUDIT MINOR |

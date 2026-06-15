@@ -75,5 +75,19 @@ describe('GraphView render-smoke (кросс-план #23)', () => {
     await waitFor(() => {
       expect(document.querySelectorAll('.g-node.faded').length).toBe(0);
     });
+
+    // GRAPH-4: поиск — совпадение по заголовку подсвечивается (.hit), прочие гаснут (.faded).
+    const searchInput = screen.getByLabelText(/поиск по графу|search the graph/i);
+    fireEvent.change(searchInput, { target: { value: 'a' } });
+    await waitFor(() => {
+      expect(document.querySelectorAll('.g-node.hit').length).toBe(1);
+      expect(document.querySelectorAll('.g-node.faded').length).toBe(1); // B погас
+    });
+    // Очистка сбрасывает подсветку и гашение.
+    fireEvent.change(searchInput, { target: { value: '' } });
+    await waitFor(() => {
+      expect(document.querySelectorAll('.g-node.hit').length).toBe(0);
+      expect(document.querySelectorAll('.g-node.faded').length).toBe(0);
+    });
   });
 });

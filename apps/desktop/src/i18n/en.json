@@ -396,7 +396,10 @@
     "orphanResult": "Possible link:",
     "orphanNone": "No suitable links found.",
     "groupTags": "Group by tags",
-    "showOrphans": "Show orphans"
+    "showOrphans": "Show orphans",
+    "search": "Search the graph",
+    "searchPlaceholder": "Find a node…",
+    "searchClear": "Clear search"
   },
   "chat": {
     "title": "AI panel",

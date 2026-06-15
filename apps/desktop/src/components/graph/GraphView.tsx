@@ -16,7 +16,7 @@ import {
   type ForceY,
   type Simulation,
 } from 'd3-force';
-import { Link2, Maximize2, Minus, Plus, Settings, X } from 'lucide-react';
+import { Link2, Maximize2, Minus, Plus, Search, Settings, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
@@ -215,6 +215,7 @@ export default function GraphView() {
   const [hover, setHover] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [search, setSearch] = useState(''); // GRAPH-4: поиск-в-графе — подсветка совпадений, гашение прочих
   const [settings, setSettings] = useState<GraphSettings>(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
   const [orphanPop, setOrphanPop] = useState<OrphanPop | null>(null);
@@ -617,6 +618,13 @@ export default function GraphView() {
     (n: GraphNodeDatum) => activeTag != null && !n.tags.includes(activeTag),
     [activeTag],
   );
+  // GRAPH-4 поиск-в-графе: совпадения по заголовку подсвечены, прочие гаснут (как hover-dim).
+  const searchQ = search.trim().toLowerCase();
+  const searchActive = searchQ.length > 0;
+  const searchHit = useCallback(
+    (n: GraphNodeDatum) => searchQ.length > 0 && n.title.toLowerCase().includes(searchQ),
+    [searchQ],
+  );
 
   const showCanvas = mode === 'full' || !!center;
   // Лейблы макета: всегда у активной/hover/drag; у остальных — только средний зум (1.25…3.2).
@@ -667,6 +675,27 @@ export default function GraphView() {
             ))}
           </div>
         )}
+        {/* GRAPH-4: поиск-в-графе — подсветка совпадений (по заголовку), гашение прочих. */}
+        <div className="graph-search">
+          <Search size={13} aria-hidden />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('graph.searchPlaceholder')}
+            aria-label={t('graph.search')}
+          />
+          {search && (
+            <button
+              type="button"
+              className="graph-search-clear"
+              onClick={() => setSearch('')}
+              aria-label={t('graph.searchClear')}
+            >
+              <X size={12} aria-hidden />
+            </button>
+          )}
+        </div>
         <div className="graph-spacer" />
         {graph && (
           <span className="graph-stat graph-mono">
@@ -722,8 +751,10 @@ export default function GraphView() {
                 if (s.x == null || s.y == null || tt.x == null || tt.y == null) return null;
                 const sId = endpointId(l.source);
                 const tId = endpointId(l.target);
-                const active =
-                  (nbrs ? nbrs.has(sId) && nbrs.has(tId) : true) && !tagFaded(s) && !tagFaded(tt);
+                // Поиск доминирует и над рёбрами: горит только ребро между двумя совпадениями.
+                const active = searchActive
+                  ? searchHit(s) && searchHit(tt)
+                  : (nbrs ? nbrs.has(sId) && nbrs.has(tId) : true) && !tagFaded(s) && !tagFaded(tt);
                 const lit = dragId != null && (sId === dragId || tId === dragId);
                 const flow =
                   !dragId && graph.activeId != null && (sId === graph.activeId || tId === graph.activeId);
@@ -745,18 +776,25 @@ export default function GraphView() {
               if (!settings.showOrphans && n.ring) return null; // GRAPH-3: сироты скрыты
               const isActive = n.id === graph.activeId;
               const r = nodeRadius(n.deg) * settings.sizeScale;
-              const faded = (nbrs != null && !nbrs.has(n.id)) || tagFaded(n);
+              const hit = searchHit(n);
+              // Поиск доминирует: при активном запросе совпадения горят, остальное гаснет —
+              // и hit никогда не faded (иначе акцент+0.28 = противоречивый полу-гашёный вид).
+              const faded = searchActive
+                ? !hit
+                : (nbrs != null && !nbrs.has(n.id)) || tagFaded(n);
               const isKin = !isActive && kin.has(n.id);
               // Активная нота красится акцентом из CSS (inline-fill перебил бы класс .active).
               const fill = isActive ? null : nodeColor(n.tags);
               const pin = isActive || n.id === focus;
-              const labelOn = pin || labelsByZoom;
+              // Совпадения поиска подписываем всегда (видно, что нашлось), даже на крупном/мелком зуме.
+              const labelOn = pin || labelsByZoom || hit;
               return (
                 <g
                   key={n.id}
                   className={
                     'g-node' +
                     (faded ? ' faded' : '') +
+                    (hit ? ' hit' : '') +
                     (isActive ? ' active' : '') +
                     (isKin ? ' kin' : '') +
                     (dragId === n.id ? ' grabbing' : '')
