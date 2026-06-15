@@ -406,22 +406,33 @@ async fn graph_rank(
                 if frontier.is_empty() {
                     break;
                 }
-                let ph = vec!["?"; frontier.len()].join(",");
-                let sql = format!(
-                    "SELECT source_id, target_id FROM links \
-                     WHERE target_id IS NOT NULL AND (source_id IN ({ph}) OR target_id IN ({ph}))"
-                );
-                let mut stmt = c.prepare(&sql)?;
-                let params: Vec<&dyn rusqlite::ToSql> = frontier
-                    .iter()
-                    .chain(frontier.iter())
-                    .map(|x| x as &dyn rusqlite::ToSql)
-                    .collect();
-                let pairs = stmt
-                    .query_map(params.as_slice(), |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                // Соседи по ОБЕ стороны рёбер. Раньше — один запрос с `source_id IN OR target_id IN`
+                // (набор повторялся дважды) без чанкинга: супер-хаб с тысячами связей валил
+                // `too many SQL variables` (находка аудита). Теперь каждая сторона — отдельный
+                // чанкованный одиночный `IN` через общий `graph::collect_in_chunks`; объединение даёт
+                // тот же набор пар (дубли при двусторонней связи схлопывает `seen.insert` ниже).
+                let mut pairs = crate::graph::collect_in_chunks(
+                    c,
+                    &frontier,
+                    |ph| {
+                        format!(
+                            "SELECT source_id, target_id FROM links \
+                             WHERE target_id IS NOT NULL AND source_id IN ({ph})"
+                        )
+                    },
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+                )?;
+                pairs.extend(crate::graph::collect_in_chunks(
+                    c,
+                    &frontier,
+                    |ph| {
+                        format!(
+                            "SELECT source_id, target_id FROM links \
+                             WHERE target_id IS NOT NULL AND target_id IN ({ph})"
+                        )
+                    },
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+                )?);
                 let mut next = Vec::new();
                 for (s, t) in pairs {
                     for n in [s, t] {
@@ -442,17 +453,14 @@ async fn graph_rank(
                 .enumerate()
                 .map(|(i, &f)| (f, i))
                 .collect();
-            let ph = vec!["?"; ordered_files.len()].join(",");
-            let sql =
-                format!("SELECT id, file_id, chunk_index FROM chunks WHERE file_id IN ({ph})");
-            let mut stmt = c.prepare(&sql)?;
-            let params: Vec<&dyn rusqlite::ToSql> = ordered_files
-                .iter()
-                .map(|x| x as &dyn rusqlite::ToSql)
-                .collect();
-            let mut rows: Vec<(i64, i64, i64)> = stmt
-                .query_map(params.as_slice(), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+            // Чанкуем `file_id IN` (супер-хаб → ordered_files может превысить лимит bind-переменных,
+            // находка аудита). Порядок строк не важен — ниже сортируем по (file_rank, chunk_index).
+            let mut rows: Vec<(i64, i64, i64)> = crate::graph::collect_in_chunks(
+                c,
+                &ordered_files,
+                |ph| format!("SELECT id, file_id, chunk_index FROM chunks WHERE file_id IN ({ph})"),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
             if let Some(a) = &allowed {
                 rows.retain(|(id, _, _)| a.contains(id));
             }
@@ -952,6 +960,52 @@ mod tests {
             .await
             .unwrap();
         assert!(hits_no_center.is_empty(), "без центра граф-ранга нет");
+    }
+
+    /// Аудит 2026-06: graph_rank на супер-хабе (центр с тысячами связей) НЕ валит `too many SQL
+    /// variables`. N=1000 > SQL_VAR_CHUNK(900): на hop-2 frontier = N соседей → `IN`-запросы по обе
+    /// стороны рёбер чанкуются (`graph::collect_in_chunks`). Фикстуру вставляем прямо в БД (быстро).
+    #[tokio::test]
+    async fn graph_rank_super_hub_does_not_exceed_sql_var_limit() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        const N: i64 = 1000;
+        db.writer()
+            .transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                     VALUES (1,'hub.md','h',0,0,0,0)",
+                    [],
+                )?;
+                for i in 0..N {
+                    let fid = i + 2;
+                    tx.execute(
+                        "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                         VALUES (?1,?2,'h',0,0,0,0)",
+                        rusqlite::params![fid, format!("n{i}.md")],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO links (source_id,target_id,target_raw,link_type) \
+                         VALUES (1,?1,?2,'wikilink')",
+                        rusqlite::params![fid, format!("n{i}")],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // hops=2 → на втором хопе frontier = 1000 соседей: `IN` по 1000 id чанкуется, без краша лимитом.
+        let ranked = graph_rank(db.reader(), "hub.md".into(), 2, None)
+            .await
+            .expect("супер-хаб не должен валить graph_rank лимитом SQL-переменных");
+        // Чанков нет (вставляли только files+links) → выдача пуста, но запрос отработал без ошибки.
+        assert!(
+            ranked.is_empty(),
+            "без чанков graph_rank пуст, но не падает на лимите"
+        );
     }
 
     /// Dedup overlap: соседние перекрывающиеся чанки одного файла схлопываются (≤1 на регион).

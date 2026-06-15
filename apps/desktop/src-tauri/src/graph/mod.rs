@@ -16,7 +16,9 @@ const SQL_VAR_CHUNK: usize = 900;
 
 /// Гоняет запрос с одним `IN ({ph})` по `ids` чанками ≤ [`SQL_VAR_CHUNK`] и собирает строки.
 /// `make_sql(ph)` строит SQL по строке плейсхолдеров; `map_row` маппит строку результата.
-fn collect_in_chunks<T>(
+/// `pub(crate)` — общий util для всех IN-по-id-набору запросов (граф + `search::graph_rank`,
+/// находка аудита: graph_rank бил двойным неограниченным `IN` → краш на супер-хабе).
+pub(crate) fn collect_in_chunks<T>(
     c: &rusqlite::Connection,
     ids: &[i64],
     make_sql: impl Fn(&str) -> String,
