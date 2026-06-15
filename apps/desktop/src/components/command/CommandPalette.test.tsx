@@ -40,6 +40,18 @@ describe('CommandPalette (Ф0-8)', () => {
     expect(useUIStore.getState().paletteOpen).toBe(false);
   });
 
+  // DF-1 (макет palette.jsx): непустой запрос → кнопка очистки (×); клик очищает поле.
+  it('кнопка очистки (×) появляется при вводе и очищает запрос', () => {
+    useUIStore.getState().openPalette();
+    render(<CommandPalette />);
+    const input = screen.getByRole('combobox');
+    expect(screen.queryByRole('button', { name: /очистить|clear/i })).toBeNull(); // пусто → нет кнопки
+    fireEvent.change(input, { target: { value: 'foo' } });
+    const clear = screen.getByRole('button', { name: /очистить|clear/i });
+    fireEvent.click(clear);
+    expect((input as HTMLInputElement).value).toBe('');
+  });
+
   // DP-5 (макет palette.jsx): непустой запрос ищет и файлы — секция «Файлы», Enter открывает.
   it('секция «Файлы»: запрос находит заметку, Enter открывает её', async () => {
     const { useVaultStore } = await import('../../stores/vault');

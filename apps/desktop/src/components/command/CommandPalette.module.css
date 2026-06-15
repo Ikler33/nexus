@@ -176,6 +176,30 @@
   align-items: center;
   gap: 5px;
 }
+/* DF-1: бренд-хинт прижат вправо (макет palette.jsx marginLeft:auto). */
+.footBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--color-text-faint);
+}
+/* DF-1: кнопка очистки запроса (×) вместо подсказки Esc при непустом вводе (макет palette.jsx). */
+.clearBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.clearBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
 
 /* ── DP-11: позиции палитры (макет tweaks): top (дефолт) / center / spotlight ── */
 .center {
