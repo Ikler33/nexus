@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi, type ChatStreamEvent } from '../lib/tauri-api';
 import { __reset as resetMockSessions } from '../lib/mock/sessions';
 import { disclosureOpen, useChatStore } from './chat';
+import { usePrefsStore } from './prefs';
 
 // В vitest (не Tauri) `streamRag` проксируется в мок `mock/vault.streamChat` (sources→токены→done).
 // jsdom под node 25 не отдаёт рабочий localStorage — мокаем in-memory (свежий на тест) для персиста (#17).
@@ -408,5 +409,61 @@ describe('chat store (Ф1-8)', () => {
     expect(disclosureOpen.size).toBeLessThanOrEqual(600);
     expect(disclosureOpen.get('msg0:src')).toBeUndefined(); // старейшие вытеснены по одному
     expect(disclosureOpen.get('msg609:src')).toBe(true); // свежие раскрытия сохранены
+  });
+
+  // MEM-3 (AC-MEM-6): авто-ПРЕДЛОЖЕНИЕ факта после обмена при включённой памяти агента.
+  describe('MEM-3 авто-предложение факта', () => {
+    it('done при aiAgentMemory=on → propose → pendingFact под последним ответом', async () => {
+      usePrefsStore.setState({ aiAgentMemory: true });
+      const propose = vi
+        .spyOn(tauriApi.memory, 'propose')
+        .mockResolvedValue('пользователь пишет на Rust');
+      useChatStore.getState().send('я пишу на Rust');
+      await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
+        timeout: 2000,
+      });
+      await vi.waitFor(() =>
+        expect(useChatStore.getState().pendingFact?.text).toBe('пользователь пишет на Rust'),
+      );
+      expect(propose).toHaveBeenCalled();
+      // Чип привязан к ПОСЛЕДНЕМУ (assistant) сообщению.
+      const last = useChatStore.getState().messages.at(-1);
+      expect(useChatStore.getState().pendingFact?.messageId).toBe(last?.id);
+    });
+
+    it('aiAgentMemory=off → propose не зовётся, чипа нет (D5)', async () => {
+      usePrefsStore.setState({ aiAgentMemory: false });
+      const propose = vi.spyOn(tauriApi.memory, 'propose').mockResolvedValue('факт');
+      useChatStore.getState().send('вопрос');
+      await vi.waitFor(() => expect(useChatStore.getState().streaming).toBe(false), {
+        timeout: 2000,
+      });
+      expect(propose).not.toHaveBeenCalled();
+      expect(useChatStore.getState().pendingFact).toBeNull();
+    });
+
+    it('confirmFact пишет факт (source=auto) и снимает чип', async () => {
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue(1);
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'дедлайн в пятницу' } });
+      await useChatStore.getState().confirmFact();
+      expect(add).toHaveBeenCalledWith('дедлайн в пятницу', 'auto');
+      expect(useChatStore.getState().pendingFact).toBeNull();
+    });
+
+    it('dismissFact снимает чип, в БД ничего не пишет (D1)', () => {
+      const add = vi.spyOn(tauriApi.memory, 'add').mockResolvedValue(1);
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'что-то' } });
+      useChatStore.getState().dismissFact();
+      expect(useChatStore.getState().pendingFact).toBeNull();
+      expect(add).not.toHaveBeenCalled();
+    });
+
+    it('новый send снимает прежнее предложение факта', () => {
+      vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'старый' } });
+      useChatStore.getState().send('новый вопрос');
+      expect(useChatStore.getState().pendingFact).toBeNull();
+      useChatStore.getState().stop();
+    });
   });
 });

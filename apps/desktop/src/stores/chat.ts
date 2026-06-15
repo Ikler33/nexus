@@ -110,6 +110,15 @@ interface ChatState {
   /** CURATE: переписать закреплённые пути при rename/move (своп префикса) — иначе после
    *  переименования на старый путь может лечь чужая заметка → неверный контекст ИИ. */
   renamePins: (from: string, to: string) => void;
+  /** MEM-3 (AC-MEM-6): авто-ПРЕДЛОЖЕНИЕ факта после обмена (при `aiAgentMemory`) — кандидат от «быстрой»
+   *  модели, ожидающий подтверждения чипом «Запомнить? ✓/✗». `null` — нет предложения. `messageId`
+   *  привязывает чип к конкретному ответу (не показываем под устаревшим). */
+  pendingFact: { messageId: string; text: string } | null;
+  /** MEM-3: подтвердить предложенный факт → пишем в память агента (`source='auto'`), чип убираем.
+   *  Промис реджектится при сбое записи (компонент показывает toast). */
+  confirmFact: () => Promise<void>;
+  /** MEM-3: отклонить предложенный факт — просто убрать чип, в БД НИЧЕГО не пишем (D1). */
+  dismissFact: () => void;
   /** Отправляет вопрос; `center` — путь открытого файла (граф-ранг в retrieval, только в vault-режиме). */
   send: (question: string, center?: string) => void;
   /** P6-RGN: перегенерировать последний ответ ИИ — тот же вопрос → свежий ответ. Старая пара
@@ -187,6 +196,25 @@ export const useChatStore = create<ChatState>((set, get) => {
   const patch = (id: string, fn: (m: ChatMessage) => ChatMessage) =>
     set((s) => ({ messages: s.messages.map((m) => (m.id === id ? fn(m) : m)) }));
 
+  // MEM-3 (AC-MEM-6): после завершённого обмена при `aiAgentMemory`=on просим «быструю» модель
+  // предложить ≤1 факт-кандидат → чип подтверждения. Ничего НЕ пишем (D1). Best-effort: ошибка/нет
+  // модели → молча без чипа. Гард на устаревание: показываем, только если `replyId` всё ещё последнее
+  // сообщение и не стартовал новый стрим (иначе кандидат относится к прошлому обмену).
+  const proposeFact = (replyId: string, userText: string, assistantText: string) => {
+    if (!usePrefsStore.getState().aiAgentMemory) return;
+    if (!userText.trim() || !assistantText.trim()) return;
+    void tauriApi.memory
+      .propose(userText, assistantText)
+      .then((fact) => {
+        const text = (fact ?? '').trim();
+        if (!text) return;
+        if (get().streaming) return; // уже идёт новый обмен
+        if (get().messages.at(-1)?.id !== replyId) return; // ответ устарел
+        set({ pendingFact: { messageId: replyId, text } });
+      })
+      .catch(() => {});
+  };
+
   return {
     messages: [],
     streaming: false,
@@ -195,6 +223,19 @@ export const useChatStore = create<ChatState>((set, get) => {
     draft: '',
     pinned: [],
     sessionId: null,
+    pendingFact: null,
+
+    confirmFact() {
+      const pf = get().pendingFact;
+      if (!pf) return Promise.resolve();
+      set({ pendingFact: null });
+      // Подтверждённое авто (D1): пишем с source='auto'. Промис наверх — компонент решает про toast.
+      return tauriApi.memory.add(pf.text, 'auto').then(() => {});
+    },
+    dismissFact() {
+      // Отказ (D1): ничего не пишем, просто снимаем чип.
+      if (get().pendingFact) set({ pendingFact: null });
+    },
 
     setMode(mode) {
       if (get().streaming) return; // не переключаем режим на лету
@@ -246,7 +287,12 @@ export const useChatStore = create<ChatState>((set, get) => {
       const reply: ChatMessage = { id: replyId, role: 'assistant', content: '', streaming: true };
       pending = '';
       cancelFlush();
-      set((s) => ({ messages: [...s.messages, userMsg, reply], streaming: true }));
+      // Новый обмен — снимаем прежнее авто-предложение факта (MEM-3), чтобы чип не висел над старым.
+      set((s) => ({
+        messages: [...s.messages, userMsg, reply],
+        streaming: true,
+        pendingFact: null,
+      }));
 
       // Применяет накопленный буфер токенов одним апдейтом (вызывается из rAF).
       const flush = () => {
@@ -304,6 +350,8 @@ export const useChatStore = create<ChatState>((set, get) => {
             cancelFn = null;
             set({ streaming: false });
             save();
+            // MEM-3 (AC-MEM-6): авто-предложение факта из этого обмена (если память агента включена).
+            proposeFact(replyId, q, get().messages.find((m) => m.id === replyId)?.content ?? '');
             break;
           }
           case 'error': {
@@ -396,7 +444,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     clear() {
       disclosureOpen.clear();
       if (get().streaming) return;
-      set({ messages: [] });
+      set({ messages: [], pendingFact: null });
       save();
     },
 
@@ -408,7 +456,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       vaultOpen = root != null;
       // pinned ЧИСТИМ при смене vault: пути относительны хранилищу — иначе кросс-vault утечка
       // содержимого в контекст ИИ (одноимённый файл в новом vault) или мёртвые чипы.
-      set({ messages: [], sessionId: null, pinned: [] });
+      set({ messages: [], sessionId: null, pinned: [], pendingFact: null });
       if (!vaultOpen) return;
       // Продолжаем последнюю сессию (поведение прежнего localStorage-хвоста, теперь из БД).
       void tauriApi.chat.sessions
@@ -456,7 +504,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             memorySources,
           };
         });
-        set({ messages: restored, sessionId: id });
+        set({ messages: restored, sessionId: id, pendingFact: null });
       } catch {
         /* сессия недоступна — лента не трогается */
       }
@@ -466,7 +514,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       if (get().streaming) return;
       logUi('chat:new-session');
       disclosureOpen.clear();
-      set({ messages: [], sessionId: null });
+      set({ messages: [], sessionId: null, pendingFact: null });
     },
   };
 });

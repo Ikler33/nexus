@@ -4,8 +4,10 @@ import { getActiveEditorView } from './editor/activeView';
 import { insertLink, toggleTask, toggleWrap } from './editor/format';
 import { printActiveNote } from './print';
 import { isTauri, tauriApi, type InlineMode } from './tauri-api';
+import i18n from '../i18n/setup';
 import { useInlineStore } from '../stores/inline';
 import { useThemeStore } from '../stores/theme';
+import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { useVaultStore } from '../stores/vault';
 import { activeBuffer, useWorkspaceStore } from '../stores/workspace';
@@ -34,6 +36,25 @@ function toggleTaskInActiveEditor(): void {
 function insertLinkInActiveEditor(): void {
   const view = getActiveEditorView();
   if (view) insertLink(view);
+}
+
+/** MEM-3 (D1): ЯВНО сохранить выделенный текст активного редактора в память агента (`source='explicit'`).
+ *  Нет редактора / пустое выделение → честный toast-хинт. Toast об успехе/сбое (i18n-синглтон — команда
+ *  вне React-дерева). */
+async function saveSelectionToMemory(): Promise<void> {
+  const view = getActiveEditorView();
+  const sel = view?.state.selection.main;
+  const text = view && sel ? view.state.sliceDoc(sel.from, sel.to).trim() : '';
+  if (!text) {
+    useToastStore.getState().addToast(i18n.t('commands.memory.noSelection'), { kind: 'error' });
+    return;
+  }
+  try {
+    await tauriApi.memory.add(text, 'explicit');
+    useToastStore.getState().addToast(i18n.t('chat.memorySaved'), { kind: 'success' });
+  } catch {
+    useToastStore.getState().addToast(i18n.t('chat.memorySaveFailed'), { kind: 'error' });
+  }
 }
 
 /** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
@@ -211,6 +232,14 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       defaultKey: 'mod+l',
       run: () => toggleTaskInActiveEditor(),
+    }),
+    commands.register({
+      // MEM-3 (D1): явная команда «в память» — сохранить выделение редактора как факт памяти агента.
+      id: 'memory.saveSelection',
+      title: 'Save selection to AI memory',
+      titleKey: 'commands.memory.saveSelection',
+      source: 'core',
+      run: () => void saveSelectionToMemory(),
     }),
     commands.register({
       id: 'editor.toggleMode',

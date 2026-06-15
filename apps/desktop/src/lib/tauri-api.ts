@@ -1132,6 +1132,23 @@ export const tauriApi = {
         : mockNews.related(id, limit),
   },
 
+  /** Память агента (MEM): курируемые ЯВНЫЕ ФАКТЫ о пользователе/проектах. MEM-3 — захват:
+   *  явное добавление + авто-предложение (`propose`) для чипа подтверждения. CRUD-обёртки для панели
+   *  «Память ИИ» добавляются в MEM-4. Вне Tauri — no-op (фича OFF по умолчанию). */
+  memory: {
+    /** AC-MEM-1/6: добавить факт. `source`: `'explicit'` (по умолч.) или `'auto'` (подтверждённое). */
+    add: (text: string, source?: 'explicit' | 'auto'): Promise<number | null> =>
+      isTauri()
+        ? invoke<number | null>('memory_add', { text, source })
+        : Promise.resolve(null),
+
+    /** AC-MEM-6: предложить ≤1 факт-кандидат по обмену (быстрая модель). `null` — нечего предлагать. */
+    propose: (userText: string, assistantText: string): Promise<string | null> =>
+      isTauri()
+        ? invoke<string | null>('memory_propose', { userText, assistantText })
+        : Promise.resolve(null),
+  },
+
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).
    * Изменения применяются мгновенно и переживают рестарт (E5, OS config-dir). */
   egress: {

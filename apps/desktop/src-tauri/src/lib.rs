@@ -187,6 +187,7 @@ pub fn run() {
             commands::chat_sessions::chat_session_to_note,
             commands::memory::memory_list,
             commands::memory::memory_add,
+            commands::memory::memory_propose,
             commands::memory::memory_set_pinned,
             commands::memory::memory_edit,
             commands::memory::memory_delete,
