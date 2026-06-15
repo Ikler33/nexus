@@ -51,13 +51,14 @@ pub fn load(path: &Path) -> EgressState {
     }
 }
 
-/// Пишет состояние в `path` (родительский каталог создаётся). Файл крошечный — обычная запись.
+/// Пишет состояние в `path` (родительский каталог создаётся). Атомарно (tmp→fsync→rename) — обрыв
+/// между записью и rename не оставляет усечённый egress-конфиг (находка аудита).
 pub fn save(path: &Path, state: &EgressState) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_string_pretty(state).expect("EgressState сериализуем всегда");
-    std::fs::write(path, json)
+    crate::vault::atomic_write_io(path, json.as_bytes())
 }
 
 #[cfg(test)]
@@ -78,6 +79,25 @@ mod tests {
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), state);
+    }
+
+    /// Атомарность (аудит): после save() в каталоге только целевой файл — никаких осиротевших
+    /// `.egress.json.nexus-tmp-*` (доказывает, что запись прошла через `atomic_write_io`, а не
+    /// прямой `fs::write`; tmp удаляется/переименовывается, усечённого файла при обрыве не будет).
+    #[test]
+    fn save_is_atomic_no_leftover_tmp() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("egress.json");
+        save(&path, &EgressState::default()).unwrap();
+        save(&path, &EgressState::default()).unwrap(); // повторный save поверх существующего
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("nexus-tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "осиротевшие tmp: {leftovers:?}");
+        assert!(path.exists(), "целевой файл на месте");
     }
 
     /// Нет файла (первый запуск) и битый JSON → local-first-дефолты, без паники (fail-safe).

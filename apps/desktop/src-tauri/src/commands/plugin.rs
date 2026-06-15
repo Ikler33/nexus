@@ -282,10 +282,15 @@ async fn dispatch_vault(
             // Запись: канонизируем РОДИТЕЛЯ (файл может не существовать) — `*_for_write`.
             let abs = vault::resolve_vault_path_for_write(vault_root, Path::new(p))
                 .map_err(|e| e.to_string())?;
-            tokio::fs::write(&abs, body)
+            // Атомарно (blocking → spawn_blocking): обрыв в середине записи не оставляет
+            // усечённый .md плагином (находка аудита: окно повреждения через tokio::fs::write).
+            let bytes = body.as_bytes().to_vec();
+            let n = bytes.len();
+            tokio::task::spawn_blocking(move || vault::atomic_write_io(&abs, &bytes))
                 .await
+                .map_err(|e| e.to_string())?
                 .map_err(|e| e.to_string())?;
-            Ok(serde_json::json!({ "ok": true, "bytes": body.len() }))
+            Ok(serde_json::json!({ "ok": true, "bytes": n }))
         }
         other => Err(format!("метод пока не поддержан host-стороной: {other}")),
     }
