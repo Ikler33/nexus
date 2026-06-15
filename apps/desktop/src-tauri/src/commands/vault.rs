@@ -392,6 +392,16 @@ pub async fn open_vault(
         && crate::contradictions::should_generate(db.reader())
             .await
             .unwrap_or(false)
+        // B17: дедуп при повторном открытии vault — не ставим второй contra-джоб, если уже есть
+        // готовая/выполняющаяся. has_ready_job (а НЕ reschedule_if_absent): будущая recurring-pending
+        // НЕ должна блокировать немедленный overdue-запуск (находка аудита).
+        && !crate::scheduler::has_ready_job(
+            db.reader(),
+            crate::contradictions::KIND_CONTRA,
+            crate::scheduler::now_secs(),
+        )
+        .await
+        .unwrap_or(false)
     {
         let _ =
             crate::scheduler::enqueue(db.writer(), crate::contradictions::KIND_CONTRA, "", 0, 2)
