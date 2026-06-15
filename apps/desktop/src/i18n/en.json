@@ -200,6 +200,8 @@
   },
   "home": {
     "title": "Home",
+    "loading": "Loading…",
+    "loadError": "Failed to load the dashboard",
     "greet": {
       "morning": "Good morning",
       "day": "Good afternoon",

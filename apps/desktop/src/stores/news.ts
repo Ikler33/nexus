@@ -42,6 +42,10 @@ interface NewsState {
   clearNotice: () => void;
 }
 
+// Epoch-счётчик загрузок (audit B13): быстрая смена темы/«непрочитанные» во время in-flight load
+// могла применить устаревший ответ (темы A) уже после переключения на B → лента не совпадала с чипом.
+let loadEpoch = 0;
+
 export const useNewsStore = create<NewsState>((set, get) => ({
   items: [],
   topics: [],
@@ -56,6 +60,7 @@ export const useNewsStore = create<NewsState>((set, get) => ({
   notice: null,
 
   load: async () => {
+    const epoch = ++loadEpoch;
     try {
       const { topic, unreadOnly } = get();
       const [config, sources, page] = await Promise.all([
@@ -64,6 +69,7 @@ export const useNewsStore = create<NewsState>((set, get) => ({
         tauriApi.news.page({ topic: topic ?? undefined, unreadOnly }),
       ]);
       const stillRefreshing = await tauriApi.scheduler.jobActive('newsfeed');
+      if (epoch !== loadEpoch) return; // фильтр сменился во время загрузки → этот ответ устарел
       set({
         config,
         sources,
@@ -75,6 +81,7 @@ export const useNewsStore = create<NewsState>((set, get) => ({
         error: null,
       });
     } catch (e) {
+      if (epoch !== loadEpoch) return; // устаревшая загрузка не показывает свою ошибку
       set({ loading: false, refreshing: false, error: String(e) });
     }
   },
