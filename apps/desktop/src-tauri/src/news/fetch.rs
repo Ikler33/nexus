@@ -142,7 +142,9 @@ pub async fn read_body_capped(mut resp: reqwest::Response, cap: usize) -> Result
         }
         buf.extend_from_slice(&chunk);
     }
-    String::from_utf8(buf).map_err(|_| "фид не в UTF-8".to_string())
+    // Фиды иногда в legacy-кодировках (latin-1/cp1252) — строгий reject ронял бы их целиком. Lossy
+    // (невалидные байты → U+FFFD), как уже делает CDATA-парсер; контент недоверенный в любом случае (аудит).
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]
