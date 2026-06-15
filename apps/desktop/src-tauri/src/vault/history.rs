@@ -114,6 +114,30 @@ fn gc(root: &Path, rel: &str) -> VaultResult<()> {
     Ok(())
 }
 
+/// Переносит каталог истории `.nexus/history/<from_rel>` → `<to_rel>` при rename/move заметки или
+/// поддерева (CURATE-2): иначе история версий теряет связь с новым путём (SAFE-5/6). Один rename
+/// поддерева покрывает и файл (`<rel>` = `.nexus/history/<file>`), и каталог (всё поддерево разом).
+/// Нет истории у `from` — no-op (`Ok`). Цель занята — best-effort удаляем старую перед переносом
+/// (история по новому пути авторитетнее древней осиротевшей).
+pub fn move_history(root: &Path, from_rel: &str, to_rel: &str) -> VaultResult<()> {
+    if from_rel == to_rel {
+        return Ok(());
+    }
+    let from_dir = history_dir(root, from_rel);
+    if !from_dir.exists() {
+        return Ok(());
+    }
+    let to_dir = history_dir(root, to_rel);
+    if let Some(parent) = to_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if to_dir.exists() {
+        std::fs::remove_dir_all(&to_dir)?;
+    }
+    std::fs::rename(&from_dir, &to_dir)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +162,25 @@ mod tests {
 
         // .nexus-история игнорируется деревом/вотчером.
         assert!(super::super::is_ignored(".nexus"));
+    }
+
+    #[test]
+    fn move_history_follows_rename_and_clears_orphan() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        snapshot(root, "Notes/A.md", "v1", true).unwrap();
+        // Rename A.md → B.md: история переезжает, по старому пути пусто, по новому — снапшот цел.
+        move_history(root, "Notes/A.md", "Notes/B.md").unwrap();
+        assert!(list_snapshots(root, "Notes/A.md").unwrap().is_empty());
+        let moved = list_snapshots(root, "Notes/B.md").unwrap();
+        assert_eq!(moved.len(), 1);
+        assert_eq!(
+            read_snapshot(root, "Notes/B.md", moved[0].ts).unwrap(),
+            "v1"
+        );
+        // Нет истории у from → no-op (не ошибка).
+        move_history(root, "Ghost.md", "Other.md").unwrap();
+        assert!(list_snapshots(root, "Other.md").unwrap().is_empty());
     }
 
     #[test]

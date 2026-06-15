@@ -162,13 +162,19 @@ impl Permissions {
     }
 }
 
-/// Путь вне vault: абсолютный, с пустым/`.`/`..`-сегментом или backslash (Windows-traversal).
+/// Путь вне vault или в служебном каталоге: абсолютный, с пустым/`.`/`..`-сегментом, backslash
+/// (Windows-traversal), либо касающийся `.nexus`/`.git` (секреты/БД/код плагинов — плагину недоступны
+/// независимо от glob-scope манифеста, защита в глубину; находка аудита 2026-06).
 fn is_escaping(path: &str) -> bool {
     if path.is_empty() || path.starts_with('/') || path.contains('\\') || path.contains('\0') {
         return true;
     }
-    path.split('/')
-        .any(|seg| seg == ".." || seg == "." || seg.is_empty())
+    path.split('/').any(|seg| {
+        // .nexus/.git — без учёта регистра (на case-insensitive ФС `.NEXUS` указывает в тот же каталог).
+        matches!(seg, ".." | "." | "")
+            || seg.eq_ignore_ascii_case(".nexus")
+            || seg.eq_ignore_ascii_case(".git")
+    })
 }
 
 /// Путь проходит scope: совпал хотя бы с одним allow-glob И ни с одним deny (`!`)-glob (deny > allow).
@@ -425,6 +431,13 @@ mod tests {
             "a\\b",
             "Notes//x",
             "",
+            // Служебные каталоги недоступны плагину даже при scope `**` (находка аудита 2026-06).
+            ".nexus/local.json",
+            ".nexus/nexus.db",
+            ".git/config",
+            "Notes/../.nexus/secrets",
+            ".NEXUS/local.json", // case-insensitive ФС
+            ".Git/config",
         ] {
             assert!(
                 matches!(p.check(&read_req(bad)), Err(Denied::PathEscape(_))),

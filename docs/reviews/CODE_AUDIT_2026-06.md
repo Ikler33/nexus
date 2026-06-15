@@ -25,14 +25,14 @@
 
 ## MAJOR (17)
 
-- [ ] **delete/rename: гард служебных путей обходится через `..`** — живой `nexus.db`/`.nexus` можно отправить в корзину. `commands/vault.rs:717,751` + `vault/mod.rs:71-74,158-179`. Fix: проверять служебные пути ПОСЛЕ канонизации (компонентно, как `watcher::is_ignored`); строковый `starts_with` ещё и Windows-слаб.
-- [ ] **rename/move не переносит `.nexus/history/<rel>/`** — история версий недоступна (CURATE-2 ломает SAFE-5/6). `commands/vault.rs:745-797`. Fix: после `fs::rename` переносить каталог истории (top-level rename для папки).
+- [x] **delete/rename: гард служебных путей обходится через `..`** — **ЗАКРЫТО (PR #232).** `points_into_reserved` компонентная проверка ПОСЛЕ канонизации (delete + оба конца rename); `to_abs` канонизируется (parent), `..` схлопывается. Исходно: живой `nexus.db`/`.nexus` можно отправить в корзину.
+- [x] **rename/move не переносит `.nexus/history/<rel>/`** — **ЗАКРЫТО (PR #232).** `vault::history::move_history` переносит каталог истории (best-effort) после `fs::rename`; тест move+orphan-clear. Исходно: история недоступна по новому пути (ломало SAFE-5/6).
 - [ ] **Молчаливое усечение векторов** при несовпадении длины ответа эмбеддера (zip-truncation). `indexer/mod.rs:358`, `ai/embedder.rs:130-142`, `rag.rs:191`. Fix: `Err` при `data.len() != inputs.len()`; инвариант `vectors.len()==chunk_ids.len()` перед записью.
 - [ ] **get_backlinks дубли** — каждое повторное `[[упоминание]]` = отдельная строка (раздут счётчик). `graph/mod.rs:53-58`. Fix: `GROUP BY l.source_id`.
 - [ ] **graph_rank неограниченные IN** → `too many SQL variables` / краш RAG-чата на супер-хабе. `search/mod.rs:405-455`. Fix: `graph::collect_in_chunks` (вынести в общий util) для обоих IN.
 - [ ] **Вотчдог-таймаут оставляет джобу в running навсегда** → «Генерирую…» залипает. `scheduler/mod.rs:681-690,169-180`. Fix: `requeue_running` в ветке таймаута (или lease/claimed_at).
 - [ ] **git force-checkout на грязном дереве** → молчаливая потеря незакоммиченных правок. `git/mod.rs:406-416` ← `commands/git.rs:131`. Fix: `status()`-guard перед checkout (или commit-then-pull-push).
-- [ ] **plugin vault.writeFile не запрещает `.nexus/`** — плагин с `vault:write['**']` перезаписывает секреты/БД/код плагинов. `commands/plugin.rs:221-251`, `permission.rs:144-187`. Fix: отклонять `is_ignored`-пути в `check_path` независимо от glob-scope.
+- [x] **plugin vault.writeFile не запрещает `.nexus/`** — **ЗАКРЫТО (PR #232).** `is_escaping` блокирует сегменты `.nexus`/`.git` (case-insensitive) ДО scope — все vault-методы плагина (read/write/list) через `check_path`. Исходно: плагин с `vault:write['**']` перезаписывал секреты/БД/код плагинов.
 - [ ] **⌘L toggleTask портит нумерованные таски** `1. [ ] foo` → `- [ ] 1. [ ] foo`. `lib/editor/format.ts:63-72`. Fix: выровнять `transformTaskLine` с `TASK_LINE_RE`; тест на ordered-tasks.
 - [ ] **dailyNote/quickThought перезаписывают файл при ЛЮБОЙ ошибке чтения** (try read / catch write). `components/home/HomeView.tsx:155-173`. Fix: проверять существование через `fileHash` (null только когда файла нет), как `lib/daily.ts:38`.
 - [ ] **Регенерация удаляет обмен из БД ДО переспроса** — при сбое генерации обмен потерян. `stores/chat.ts:329-342`. Fix: `deleteLastExchange` в success-ветке (или восстановить при ошибке).

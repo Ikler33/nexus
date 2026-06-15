@@ -707,6 +707,14 @@ pub async fn write_file(
     Ok(hash)
 }
 
+/// Канонический путь указывает В служебный каталог (`.nexus`/`.git`) — КОМПОНЕНТНАЯ проверка после
+/// канонизации. Строковый `starts_with(".nexus")` обходится через `Notes/../.nexus/nexus.db` (после
+/// `canonicalize` попадает в `.nexus`, но строка начинается с «Notes») и Windows-backslash (находка
+/// аудита 2026-06). `Path::starts_with` сравнивает по компонентам — кросс-платформенно безопасен.
+fn points_into_reserved(root: &Path, abs: &Path) -> bool {
+    abs.starts_with(root.join(".nexus")) || abs.starts_with(root.join(".git"))
+}
+
 /// Удаляет заметку/каталог в vault-локальную корзину `.nexus/.trash/` (CURATE-1) — обратимо.
 /// Снимает с индекса каждый перенесённый `.md` явным `VaultEvent::Deleted` (вотчер может не
 /// разложить rename каталога в игнор-папку на пофайловые события). Служебные пути запрещены.
@@ -714,10 +722,13 @@ pub async fn write_file(
 pub async fn delete_path(state: State<'_, AppState>, path: String) -> AppResult<()> {
     let ctx = state.vault().await?;
     let root = ctx.root.clone();
-    if path.trim().is_empty() || path.starts_with(".nexus") || path.starts_with(".git") {
-        return Err(AppError::Msg("нельзя удалить служебный путь".into()));
+    if path.trim().is_empty() {
+        return Err(AppError::Msg("пустой путь".into()));
     }
     let abs = vault::resolve_vault_path(&root, Path::new(&path))?;
+    if points_into_reserved(&root, &abs) {
+        return Err(AppError::Msg("нельзя удалить служебный путь".into()));
+    }
     // Собираем rel удаляемых .md ДО переноса (после переноса каталога их уже не пройти).
     let (root_c, abs_c) = (root.clone(), abs.clone());
     let rels = tokio::task::spawn_blocking(move || vault::collect_md_rels(&root_c, &abs_c))
@@ -748,14 +759,15 @@ pub async fn rename_path(state: State<'_, AppState>, from: String, to: String) -
     if from.trim().is_empty() || to.trim().is_empty() {
         return Err(AppError::Msg("пустой путь".into()));
     }
-    if from.starts_with(".nexus") || to.starts_with(".nexus") || to.starts_with(".git") {
-        return Err(AppError::Msg("нельзя трогать служебный путь".into()));
-    }
     if from == to {
         return Ok(());
     }
     let from_abs = vault::resolve_vault_path(&root, Path::new(&from))?;
     let to_abs = vault::resolve_vault_path_for_write(&root, Path::new(&to))?;
+    // Компонентная проверка ПОСЛЕ канонизации (строковый starts_with обходится через `..`/backslash).
+    if points_into_reserved(&root, &from_abs) || points_into_reserved(&root, &to_abs) {
+        return Err(AppError::Msg("нельзя трогать служебный путь".into()));
+    }
     if to_abs.exists() {
         return Err(AppError::Msg("цель уже существует".into()));
     }
@@ -784,6 +796,17 @@ pub async fn rename_path(state: State<'_, AppState>, from: String, to: String) -
         .await
         .map_err(|e| AppError::Msg(e.to_string()))?
         .map_err(AppError::Io)?;
+    // Перенос каталога истории версий `.nexus/history/<rel>` (иначе rename ломает SAFE-5/6 — история
+    // становится недоступной по новому пути; находка аудита 2026-06). Best-effort: история вторична,
+    // её сбой не валит rename. Один rename поддерева покрывает и файл, и каталог.
+    let (root_h, from_h, to_h) = (root.clone(), from.clone(), to.clone());
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || vault::history::move_history(&root_h, &from_h, &to_h))
+            .await
+            .map_err(|e| AppError::Msg(e.to_string()))?
+    {
+        tracing::warn!(error = %e, %from, %to, "перенос истории версий при rename не удался");
+    }
     // Перенос записей индекса (file_id/беклинки сохраняются — indexer::rename_file).
     if let Some(tx) = ctx.index_tx.as_ref() {
         for (rel_from, rel_to) in &pairs {
@@ -953,6 +976,24 @@ async fn current_root(state: &State<'_, AppState>) -> AppResult<PathBuf> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Компонентная проверка служебных путей ловит `.nexus`/`.git` (вкл. форму после канонизации
+    /// `..`), но не задевает похожие имена (`.nexusish`) — находка аудита 2026-06.
+    #[test]
+    fn points_into_reserved_catches_service_dirs() {
+        let root = Path::new("/vault");
+        assert!(points_into_reserved(
+            root,
+            Path::new("/vault/.nexus/nexus.db")
+        ));
+        assert!(points_into_reserved(root, Path::new("/vault/.nexus")));
+        assert!(points_into_reserved(root, Path::new("/vault/.git/config")));
+        assert!(!points_into_reserved(root, Path::new("/vault/Notes/a.md")));
+        assert!(!points_into_reserved(
+            root,
+            Path::new("/vault/.nexusish/a.md")
+        ));
+    }
 
     async fn open_db(root: &Path) -> Database {
         Database::open(root.join(".nexus/nexus.db")).await.unwrap()
