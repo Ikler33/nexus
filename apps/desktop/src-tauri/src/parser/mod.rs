@@ -158,7 +158,12 @@ fn scan_wiki_and_tags(
 
     while i < body.len() {
         if body[i..].starts_with("[[") && !in_code(i) {
-            if let Some(rel) = body[i + 2..].find("]]") {
+            // Закрывающие `]]` ищем ТОЛЬКО в текущей строке: несбалансированный `[[` без `]]` на своей
+            // строке раньше матчил далёкие `]]` через абзацы → фантомные «многострочные» ссылки (аудит).
+            // Obsidian-вики-ссылка всегда в пределах одной строки.
+            let rest = &body[i + 2..];
+            let line_end = rest.find('\n').unwrap_or(rest.len());
+            if let Some(rel) = rest[..line_end].find("]]") {
                 let inner = &body[i + 2..i + 2 + rel];
                 let embed = i > 0 && bytes[i - 1] == b'!';
                 if let Some(target) = normalize_target(inner) {
@@ -459,6 +464,19 @@ mod tests {
             vec!["area/sub".to_string(), "project".to_string()]
         );
         assert_eq!(doc.aliases, vec!["Alt".to_string()]);
+    }
+
+    /// Аудит: несбалансированный `[[` без `]]` на своей строке НЕ матчит далёкие `]]` через абзацы
+    /// (раньше плодил фантомную «многострочную» ссылку). Сбалансированная на строке — парсится.
+    #[test]
+    fn unbalanced_wikilink_does_not_match_across_lines() {
+        let doc = parse("[[Unclosed link here\n\nдалёкий текст ]] потом\n");
+        assert!(
+            doc.links.is_empty(),
+            "несбалансированный [[ не создаёт ссылку через строки"
+        );
+        let doc2 = parse("есть [[Valid]] ссылка на строке\n");
+        assert!(doc2.links.iter().any(|l| l.target_raw == "Valid"));
     }
 
     #[test]
