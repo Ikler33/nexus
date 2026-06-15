@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   forceCollide,
   forceLink,
@@ -16,7 +16,7 @@ import {
   type ForceY,
   type Simulation,
 } from 'd3-force';
-import { Link2, Maximize2, Minus, Plus, Search, Settings, X } from 'lucide-react';
+import { Link2, Maximize2, Minus, Palette, Plus, Search, Settings, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
@@ -29,6 +29,7 @@ import {
   CHARGE_DISTANCE_MIN,
   chargeStrength,
   clampNodePosition,
+  clusterColor,
   endpointId,
   gravityStrength,
   kinSet,
@@ -44,6 +45,7 @@ import {
   type GraphLink,
   type GraphNodeDatum,
 } from './graph-sim';
+import { louvainCommunities } from './louvain';
 import './graph.css';
 
 type Mode = 'local' | 'full';
@@ -105,8 +107,9 @@ interface GraphSettings {
   linkDist: number; // длина пружин-связей
   gravity: number; // притяжение к центру (forceX/Y): выше = плотнее, ниже = разлёт
   sizeScale: number; // множитель радиуса узла
-  group: boolean; // группировка по тегам (макет gs-toggle): общий центроид на первый тег
+  group: boolean; // группировка (макет gs-toggle): общий центроид по ключу colorBy (тег или сообщество)
   showOrphans: boolean; // GRAPH-3: показывать сироты (deg=0). Выкл → их не рисуем и не кадрируем (Obsidian)
+  colorBy: 'tag' | 'cluster'; // GRAPH-6: красить узлы по тегу (как было) или по авто-сообществу (Louvain)
 }
 // GRAPH-1 (ресёрч-ретюн физики): дефолты подобраны под когезию «как Obsidian» — сильное центрирование
 // побеждает заряд, узлы держатся компактным созвездием, изоляты — аккуратное гало (не разлёт по углам).
@@ -118,6 +121,7 @@ const DEFAULT_SETTINGS: GraphSettings = {
   sizeScale: 1,
   group: false,
   showOrphans: true,
+  colorBy: 'tag',
 };
 // v3 (GRAPH-1): ретюн физики не должен перекрываться старым персистом v1/v2 (иначе сохранённый разлёт).
 const SETTINGS_KEY = 'nexus.graph.settings.v3';
@@ -351,13 +355,18 @@ export default function GraphView() {
     const collide = forceCollide<GraphNodeDatum>()
       .radius((d) => nodeRadius(d.deg) * s.sizeScale + 6)
       .iterations(2);
-    // Группировка по тегам (макет gs-toggle): мягкое притяжение к центроиду первого тега.
+    // Группировка (макет gs-toggle): мягкое притяжение к центроиду группы. Ключ группы зависит от
+    // режима цвета (GRAPH-6): по первому тегу или по id Louvain-сообщества (читаем comm через ref).
+    const groupKey = (n: GraphNodeDatum): string =>
+      settingsRef.current.colorBy === 'cluster'
+        ? `c${commRef.current?.get(n.id) ?? -1}`
+        : (n.tags[0] ?? '_');
     const groupForce: Force<GraphNodeDatum, GraphLink> = (alpha: number) => {
       if (!settingsRef.current.group) return;
       const cents = new Map<string, { x: number; y: number; n: number }>();
       for (const n of graph.nodes) {
         if (n.ring) continue;
-        const g = n.tags[0] ?? '_';
+        const g = groupKey(n);
         const c = cents.get(g) ?? { x: 0, y: 0, n: 0 };
         c.x += n.x ?? 0;
         c.y += n.y ?? 0;
@@ -366,7 +375,7 @@ export default function GraphView() {
       }
       for (const n of graph.nodes) {
         if (n.ring) continue;
-        const c = cents.get(n.tags[0] ?? '_');
+        const c = cents.get(groupKey(n));
         if (!c || c.n < 2) continue;
         n.vx = (n.vx ?? 0) + (c.x / c.n - (n.x ?? 0)) * 0.03 * alpha;
         n.vy = (n.vy ?? 0) + (c.y / c.n - (n.y ?? 0)) * 0.03 * alpha;
@@ -435,7 +444,10 @@ export default function GraphView() {
       prev.linkDist !== settings.linkDist ||
       prev.gravity !== settings.gravity ||
       prev.sizeScale !== settings.sizeScale ||
-      prev.group !== settings.group;
+      prev.group !== settings.group ||
+      // GRAPH-6: смена ключа группировки (colorBy) перегруппирует узлы — реогрев нужен ТОЛЬКО при
+      // включённой группировке; без неё colorBy — чистая перекраска (мгновенный ре-рендер, без re-settle).
+      (settings.group && prev.colorBy !== settings.colorBy);
     const orphansChanged = prev.showOrphans !== settings.showOrphans;
     prevSettingsRef.current = settings;
     settingsRef.current = settings;
@@ -609,6 +621,19 @@ export default function GraphView() {
     () => (graph ? kinSet(graph.edgeIds, graph.activeId) : new Set<string>()),
     [graph],
   );
+  // GRAPH-6: сообщества (Louvain) — чистая функция от топологии, считаем раз на смену данных, не на тик.
+  const comm = useMemo(
+    () => (graph ? louvainCommunities(graph.nodes, graph.edgeIds).community : null),
+    [graph],
+  );
+  // groupForce читает comm через ref (как settingsRef) — d3-эффект остаётся на [graph], смена comm
+  // не реогревает warmup. useLayoutEffect (НЕ useEffect): все layout-эффекты идут ДО любого passive,
+  // поэтому commRef свеж к warmup-проходу d3-эффекта (passive) — иначе при персисте cluster+group
+  // первая укладка группировалась бы по устаревшему/нулевому comm. См. adversarial-ревью GRAPH-6.
+  const commRef = useRef(comm);
+  useLayoutEffect(() => {
+    commRef.current = comm;
+  }, [comm]);
 
   // ── тег-чипы (макет graph.jsx): топ-8 тегов текущего графа; выбранный гасит остальные узлы ──
   const tagChips = useMemo(() => (graph ? topTags(graph.nodes, TAG_CHIP_LIMIT) : []), [graph]);
@@ -671,6 +696,26 @@ export default function GraphView() {
           >
             {t('graph.modeFull')}
           </button>
+        </div>
+        {/* GRAPH-6: режим цвета — теги или авто-сообщества (Louvain). В баре для дискаверабельности. */}
+        <div className="graph-colorby" role="group" aria-label={t('graph.colorBy')}>
+          <Palette size={13} aria-hidden />
+          <div className="seg">
+            <button
+              className={'seg-btn' + (settings.colorBy === 'tag' ? ' on' : '')}
+              aria-pressed={settings.colorBy === 'tag'}
+              onClick={() => setSettings((s) => ({ ...s, colorBy: 'tag' }))}
+            >
+              {t('graph.colorByTags')}
+            </button>
+            <button
+              className={'seg-btn' + (settings.colorBy === 'cluster' ? ' on' : '')}
+              aria-pressed={settings.colorBy === 'cluster'}
+              onClick={() => setSettings((s) => ({ ...s, colorBy: 'cluster' }))}
+            >
+              {t('graph.colorByClusters')}
+            </button>
+          </div>
         </div>
         {mode === 'local' && (
           <label className="graph-depth">
@@ -814,7 +859,12 @@ export default function GraphView() {
                 : (nbrs != null && !nbrs.has(n.id)) || tagFaded(n);
               const isKin = !isActive && kin.has(n.id);
               // Активная нота красится акцентом из CSS (inline-fill перебил бы класс .active).
-              const fill = isActive ? null : nodeColor(n.tags);
+              // GRAPH-6: режим «Сообщества» — цвет по id Louvain-кластера; иначе по тегу.
+              const fill = isActive
+                ? null
+                : settings.colorBy === 'cluster'
+                  ? clusterColor(comm?.get(n.id) ?? -1)
+                  : nodeColor(n.tags);
               const pin = isActive || n.id === focus;
               // Совпадения поиска подписываем всегда (видно, что нашлось), даже на крупном/мелком зуме.
               const labelOn = pin || labelsByZoom || hit;
@@ -977,14 +1027,17 @@ export default function GraphView() {
               fmt={(v) => v.toFixed(1) + '×'}
               onChange={(v) => setSettings((s) => ({ ...s, sizeScale: v }))}
             />
-            {/* Группировка по тегам — gs-toggle макета. */}
+            {/* Группировка — gs-toggle макета. Лейбл зависит от режима цвета (GRAPH-6): группирует
+                по тегам или по сообществам — нельзя писать «по тегам», когда центроид по кластеру. */}
             <button
               type="button"
               className="graph-row graph-grouprow"
               onClick={() => setSettings((s) => ({ ...s, group: !s.group }))}
               aria-pressed={settings.group}
             >
-              <span className="graph-row-label">{t('graph.groupTags')}</span>
+              <span className="graph-row-label">
+                {t(settings.colorBy === 'cluster' ? 'graph.groupClusters' : 'graph.groupTags')}
+              </span>
               <span className={'gs-switch' + (settings.group ? ' on' : '')}>
                 <span className="gs-knob" />
               </span>

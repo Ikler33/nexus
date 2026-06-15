@@ -38,6 +38,18 @@ export function nodeColor(tags: string[]): string | null {
   return `oklch(var(--g-tag-l, 0.55) var(--g-tag-c, 0.12) ${tagHue(tags[0])})`;
 }
 
+/**
+ * Цвет узла по id сообщества (GRAPH-6, режим «Цвет: Сообщества»). Hue — золотой угол
+ * (137.508°), даёт максимальный визуальный разнос соседних кластеров; та же oklch-семья и
+ * CSS-переменные светлоты/хромы, что у `nodeColor` (пер-тема, без нового CSS). id<0 («нет
+ * сообщества») → `null` (фолбэк из CSS), чтобы не путать с кластером 0 (крупнейшим).
+ */
+export function clusterColor(id: number): string | null {
+  if (id < 0) return null;
+  const hue = Math.round((id * 137.508) % 360);
+  return `oklch(var(--g-tag-l, 0.55) var(--g-tag-c, 0.12) ${hue})`;
+}
+
 /** Топ-N тегов узлов графа по частоте (ничья — по алфавиту) — фильтр-чипы бара. */
 export function topTags(nodes: readonly { tags: string[] }[], limit: number): string[] {
   const counts = new Map<string, number>();

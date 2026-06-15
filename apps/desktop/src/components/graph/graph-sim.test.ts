@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chargeStrength,
   clampNodePosition,
+  clusterColor,
   CORE_MAX_FACTOR,
   endpointId,
   gravityStrength,
@@ -71,6 +72,16 @@ describe('graph-sim (помощники подсветки/размера)', () 
     expect(nodeColor(['demo', 'docs'])).toBe(
       `oklch(var(--g-tag-l, 0.55) var(--g-tag-c, 0.12) ${tagHue('demo')})`,
     );
+  });
+
+  it('clusterColor: oklch той же семьи, разные id — разные hue, id<0 → null (GRAPH-6)', () => {
+    expect(clusterColor(-1)).toBeNull(); // «нет сообщества» — фолбэк CSS, не цвет кластера 0
+    expect(clusterColor(0)).toBe(`oklch(var(--g-tag-l, 0.55) var(--g-tag-c, 0.12) 0)`);
+    expect(clusterColor(1)).not.toBe(clusterColor(2));
+    expect(clusterColor(3)).toBe(clusterColor(3)); // детерминирован
+    const m = clusterColor(5)!.match(/ (\d+)\)$/);
+    expect(Number(m![1])).toBeGreaterThanOrEqual(0);
+    expect(Number(m![1])).toBeLessThan(360);
   });
 
   it('topTags: по частоте, ничья по алфавиту, обрезка по лимиту', () => {
