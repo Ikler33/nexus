@@ -46,8 +46,37 @@ export interface ChatMessage {
 }
 
 /** Раскрытость аккордеонов источников ВНЕ React-состояния (см. ChatView.Disclosure): живёт со
- *  стором, чтобы чиститься вместе с историей (clear/hydrate) и в тестах. Не персистится. */
-export const disclosureOpen = new Map<string, boolean>();
+ *  стором, чтобы чиститься вместе с историей (clear/hydrate) и в тестах. Не персистится.
+ *  LRU-кап (audit B12): за очень длинную сессию ключей-сообщений накапливались бы тысячи; раньше при
+ *  >500 ChatView делал полный `.clear()` — резко схлопывал ВСЕ раскрытые CoT-аккордеоны. Теперь
+ *  вытесняем по одному старейшему, текущие раскрытия не страдают. API совместим с Map (get/set/size/clear). */
+class DisclosureMap {
+  private map = new Map<string, boolean>();
+  private readonly maxSize = 600;
+
+  get(key: string): boolean | undefined {
+    return this.map.get(key);
+  }
+
+  set(key: string, value: boolean): void {
+    this.map.delete(key); // переустановка двигает ключ в конец (свежесть для эвикции по порядку вставки)
+    this.map.set(key, value);
+    if (this.map.size > this.maxSize) {
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) this.map.delete(oldest);
+    }
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+}
+
+export const disclosureOpen = new DisclosureMap();
 
 /** Режим чата: по vault (RAG) / общий. Web — НЕ режим, а дополнительный флаг (`web`): «модель
  *  может сходить в интернет за уточнениями» поверх любого режима (ревизия владельца 11.06). */
@@ -232,6 +261,11 @@ export const useChatStore = create<ChatState>((set, get) => {
       };
 
       const onEvent = (event: ChatStreamEvent) => {
+        // Epoch-гард (audit B12): принимаем события, только пока ИМЕННО этот ответ ещё стримится.
+        // После stop()/нового send() сообщение replyId уже не streaming (или вытеснено) → поздние
+        // токены старого стрима игнорируем, иначе они дописались бы в финализированный/чужой ответ.
+        const cur = get().messages.find((m) => m.id === replyId);
+        if (!cur || !cur.streaming) return;
         switch (event.type) {
           case 'sources':
             patch(replyId, (m) => ({ ...m, sources: event.sources }));
@@ -388,6 +422,10 @@ export const useChatStore = create<ChatState>((set, get) => {
       if (get().streaming) return; // во время стрима не прыгаем по истории
       try {
         const stored = await tauriApi.chat.sessions.messages(id);
+        // Перепроверка после await (audit B12): за время загрузки истории мог стартовать send()
+        // (streaming=true). Без гарда set({messages: restored}) ниже затёр бы активный чат старой
+        // историей — гонка «загрузка сессии vs новый вопрос».
+        if (get().streaming) return;
         disclosureOpen.clear();
         const restored: ChatMessage[] = stored.map((m) => {
           let sources: ChatSource[] | undefined;

@@ -456,7 +456,8 @@ function Disclosure({ id, label, children }: { id: string; label: string; childr
   const [open, setOpen] = useState(() => disclosureOpen.get(id) ?? false);
   const toggle = () =>
     setOpen((o) => {
-      if (disclosureOpen.size > 500) disclosureOpen.clear();
+      // Рост `disclosureOpen` теперь ограничивает LRU-кап внутри DisclosureMap (audit B12) —
+      // больше НЕ нужно резко чистить ВСЁ при >500 (это схлопывало все раскрытые аккордеоны).
       disclosureOpen.set(id, !o);
       return !o;
     });
