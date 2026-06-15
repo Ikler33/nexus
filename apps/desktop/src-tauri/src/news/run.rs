@@ -65,7 +65,15 @@ pub async fn run_news_pipeline(
         match fetch_source(fetcher, s, &keywords).await {
             Ok(parsed) => {
                 sources_ok += 1;
-                let kept = keyword_filter(parsed, s, &keywords);
+                // HN (Algolia) уже отфильтрован по ключам при fetch_source (по одному query на ключ).
+                // Повторный keyword_filter по title+excerpt — двойная фильтрация, к тому же ВРЕДНАЯ:
+                // `parse_hn` кладёт story_text=null → excerpt="", поэтому запись, где ключ был только
+                // в теле (его нашёл Algolia), здесь отбрасывалась бы как «нет ключа» (находка аудита B14).
+                let kept = if matches!(s.kind, FeedKind::HnAlgolia) {
+                    parsed
+                } else {
+                    keyword_filter(parsed, s, &keywords)
+                };
                 entries.extend(kept.into_iter().map(|e| (e, s.lang_ru)));
             }
             Err(e) => errors.push(format!("{}: {e}", s.id)),
@@ -540,6 +548,54 @@ mod tests {
             "по запросу на ключ"
         );
         assert_eq!(entries.len(), 1, "дедуп одинаковых историй между ключами");
+    }
+
+    /// audit B14: HN (Algolia) НЕ прогоняется повторно через keyword_filter — иначе запись, где ключ
+    /// был только в теле (story_text=null → excerpt=""), была бы отброшена по title+excerpt.
+    #[tokio::test]
+    async fn hn_keyword_filter_not_double_applied() {
+        let (_d, db) = open().await;
+        let base = "https://hn.algolia.com/api/v1/search_by_date?tags=story&query=";
+        // Заголовок БЕЗ ключа "quantum" (ключ был в теле, его нашёл Algolia); excerpt пуст.
+        let hit = r#"{"hits":[{"title":"Neat physics breakthrough","url":"https://hn/x","created_at_i":1765000000,"objectID":"1"}]}"#;
+        let fetcher = MockFetcher {
+            bodies: HashMap::from([(
+                Box::leak(format!("{base}quantum&hitsPerPage=10").into_boxed_str()) as &'static str,
+                hit,
+            )]),
+            calls: AtomicUsize::new(0),
+        };
+        let chat: Arc<dyn ChatProvider> = Arc::new(YesChat {
+            eval_calls: AtomicUsize::new(0),
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let mut cfg = NewsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        for s in super::super::SOURCES_V1 {
+            cfg.sources.insert(s.id.to_string(), false);
+        }
+        cfg.sources.insert("hn".into(), true);
+        cfg.keywords = Some(vec!["quantum".into()]);
+
+        let run = run_news_pipeline(
+            &fetcher,
+            &chat,
+            db.writer(),
+            db.reader(),
+            &cfg,
+            1_800_000_000,
+            &cancel,
+            &|_, _, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            run.items_new, 1,
+            "HN-запись с ключом в теле НЕ отброшена двойным фильтром (B14)"
+        );
     }
 
     use super::super::SOURCES_V1;
