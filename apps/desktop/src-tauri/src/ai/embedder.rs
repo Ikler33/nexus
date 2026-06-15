@@ -139,6 +139,14 @@ impl OpenAiEmbedder {
             l2_normalize(&mut v);
             out.push(v);
         }
+        // Контракт эмбеддера: ровно по вектору на каждый вход. Иначе вызывающий (indexer/reconcile)
+        // молча обрезал бы `zip` и оставил чанки без вектора (тихая порча RAG; находка аудита 2026-06).
+        if out.len() != inputs.len() {
+            return Err(AiError::CountMismatch {
+                expected: inputs.len(),
+                got: out.len(),
+            });
+        }
         Ok(out)
     }
 }
