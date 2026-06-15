@@ -59,16 +59,24 @@ export function toggleWrap(view: EditorView, marker: string): boolean {
 export const TASK_MARKER = '- [ ] ';
 
 /** Один шаг тоггла таска для строки: `- [ ]`↔`- [x]`; строка без чекбокса (буллет или обычный
- *  текст, в т.ч. пустая) → `- [ ] …`. Отступ сохраняется. */
+ *  текст, в т.ч. пустая) → `- [ ] …`. Отступ и list-маркер сохраняются.
+ *
+ *  Набор маркеров ЗЕРКАЛИТ `TASK_LINE_RE` (`[-*+]` ИЛИ нумерованный `\d+[.)]`) и СОХРАНЯЕТ исходный
+ *  маркер при реконструкции — иначе тоггл нумерованного таска `1. [ ] foo` ломал строку в
+ *  `- [ ] 1. [ ] foo` (хардкод `- `, находка аудита 2026-06). Текст без маркера получает `- `. */
 function transformTaskLine(line: string): string {
-  const m = /^(\s*)(?:[-*+] )?(?:\[\s*([ xX])\s*\] ?)?(.*)$/.exec(line);
+  const m = /^(\s*)((?:[-*+]|\d+[.)])\s+)?(?:\[\s*([ xX])\s*\] ?)?(.*)$/.exec(line);
   if (!m) return line;
-  const [, indent, check, rest] = m;
+  const [, indent, bullet, check, rest] = m;
+  // Нумерованный маркер (`1. `/`1) `) СОХРАНЯЕМ (как toggleTaskAtLine/TASK_LINE_RE — `1. [ ] x`↔`1. [x] x`);
+  // буллет `-*+` нормализуем в `- `, голый текст → `- `. Без сохранения нумерованного `1. [ ] x` ломался
+  // в `- [ ] 1. [ ] x` (хардкод `- `, находка аудита 2026-06).
+  const lead = bullet != null && /\d/.test(bullet) ? bullet : TASK_MARKER.slice(0, 2);
   if (check != null) {
     const checked = check === 'x' || check === 'X';
-    return `${indent}- [${checked ? ' ' : 'x'}] ${rest}`;
+    return `${indent}${lead}[${checked ? ' ' : 'x'}] ${rest}`;
   }
-  return `${indent}${TASK_MARKER}${rest}`;
+  return `${indent}${lead}[ ] ${rest}`;
 }
 
 /**
