@@ -9,7 +9,9 @@ import { visit } from 'unist-util-visit';
  */
 
 // `[[Target]]`, `[[Target#H|Alias]]` ИЛИ `#tag` с границей (^|\s) — без lookbehind (совместимость WebKit).
-const RE = /\[\[([^\]\n]+?)\]\]|(^|\s)(#[\p{L}\d/_-]*\p{L}[\p{L}\d/_-]*)/gu;
+// Теги — ТОЛЬКО ASCII-буквы (как бэкенд `is_ascii_alphabetic`, parser/mod.rs): кириллический `#тег`
+// бэкенд не создаёт, а превью раньше подсвечивало его кликабельным → ложный сигнал (находка аудита).
+const RE = /\[\[([^\]\n]+?)\]\]|(^|\s)(#[a-zA-Z0-9/_-]*[a-zA-Z][a-zA-Z0-9/_-]*)/gu;
 
 /** Кастомные URL-схемы кастомных узлов (распознаются в `MarkdownPreview` по префиксу href). */
 export const WIKILINK_SCHEME = 'nexus-wikilink:';
