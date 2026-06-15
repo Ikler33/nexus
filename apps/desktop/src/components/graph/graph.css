@@ -69,6 +69,12 @@
 .graph-search input::placeholder {
   color: var(--color-text-faint);
 }
+.graph-search-count {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  padding: 0 2px;
+}
 .graph-search-clear {
   display: inline-flex;
   align-items: center;

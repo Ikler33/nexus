@@ -625,6 +625,30 @@ export default function GraphView() {
     (n: GraphNodeDatum) => searchQ.length > 0 && n.title.toLowerCase().includes(searchQ),
     [searchQ],
   );
+  // Совпадения в порядке отрисовки (full = по убыванию степени → top = самый связный),
+  // с учётом скрытых изолятов — чтобы Enter открыл то же, что подсвечено.
+  const searchHits = useMemo(
+    () =>
+      searchActive && graph
+        ? graph.nodes.filter((n) => (settings.showOrphans || !n.ring) && searchHit(n))
+        : [],
+    [searchActive, graph, settings.showOrphans, searchHit],
+  );
+  // GRAPH-4 quick-switcher: Enter открывает верхнее совпадение, Esc чистит запрос.
+  const onSearchKey = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter' && searchHits.length > 0) {
+        e.preventDefault();
+        close();
+        void openFile(searchHits[0].path);
+      } else if (e.key === 'Escape' && search) {
+        e.preventDefault();
+        e.stopPropagation(); // не дать будущему глобальному Esc закрыть граф вместо очистки
+        setSearch('');
+      }
+    },
+    [searchHits, close, openFile, search],
+  );
 
   const showCanvas = mode === 'full' || !!center;
   // Лейблы макета: всегда у активной/hover/drag; у остальных — только средний зум (1.25…3.2).
@@ -682,9 +706,15 @@ export default function GraphView() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={onSearchKey}
             placeholder={t('graph.searchPlaceholder')}
             aria-label={t('graph.search')}
           />
+          {searchActive && (
+            <span className="graph-search-count graph-mono" aria-live="polite">
+              {searchHits.length}
+            </span>
+          )}
           {search && (
             <button
               type="button"

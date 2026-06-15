@@ -38,6 +38,7 @@ vi.mock('d3-force', () => {
 
 import GraphView from './GraphView';
 import { tauriApi } from '../../lib/tauri-api';
+import { useWorkspaceStore } from '../../stores/workspace';
 
 describe('GraphView render-smoke (кросс-план #23)', () => {
   beforeEach(() => {
@@ -55,6 +56,11 @@ describe('GraphView render-smoke (кросс-план #23)', () => {
       truncated: false,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
+
+    // openFile-шпион ставим ДО рендера — компонент захватывает его из стора при маунте
+    // (мид-тест setState гонялся бы с ре-рендером onSearchKey).
+    const openSpy = vi.fn().mockResolvedValue(undefined);
+    useWorkspaceStore.setState({ openFile: openSpy });
 
     render(<GraphView />);
     // Переключаемся на «весь vault» (full) — там холст рисуется без открытого файла (center).
@@ -83,9 +89,17 @@ describe('GraphView render-smoke (кросс-план #23)', () => {
       expect(document.querySelectorAll('.g-node.hit').length).toBe(1);
       expect(document.querySelectorAll('.g-node.faded').length).toBe(1); // B погас
     });
-    // Очистка сбрасывает подсветку и гашение.
-    fireEvent.change(searchInput, { target: { value: '' } });
+    // Счётчик совпадений отражает 1 хит.
+    expect(document.querySelector('.graph-search-count')?.textContent).toBe('1');
+
+    // Enter → открывается верхнее совпадение (quick-switcher).
+    fireEvent.keyDown(searchInput, { key: 'Enter' });
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith('A.md'));
+
+    // Esc → очищает запрос (подсветка/гашение сбрасываются).
+    fireEvent.keyDown(searchInput, { key: 'Escape' });
     await waitFor(() => {
+      expect((searchInput as HTMLInputElement).value).toBe('');
       expect(document.querySelectorAll('.g-node.hit').length).toBe(0);
       expect(document.querySelectorAll('.g-node.faded').length).toBe(0);
     });
