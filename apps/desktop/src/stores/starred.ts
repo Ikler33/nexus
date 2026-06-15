@@ -31,8 +31,10 @@ interface StarredState {
   paths: string[];
   isStarred: (path: string) => boolean;
   toggle: (path: string) => void;
-  /** Перенос пути при rename (зовётся при переименовании из UI; watcher-rename — BACKLOG). */
+  /** Перенос путей при rename/move заметки ИЛИ каталога (точный путь + дети под `from/`). */
   rename: (from: string, to: string) => void;
+  /** Снять звёзды с удалённого пути и всех его детей (заметка/каталог в корзину). */
+  dropStarsUnder: (path: string) => void;
 }
 
 export const useStarredStore = create<StarredState>((set, get) => ({
@@ -48,7 +50,15 @@ export const useStarredStore = create<StarredState>((set, get) => ({
     }),
   rename: (from, to) =>
     set((s) => {
-      const paths = s.paths.map((p) => (p === from ? to : p));
+      const paths = s.paths.map((p) =>
+        p === from ? to : p.startsWith(`${from}/`) ? `${to}/${p.slice(from.length + 1)}` : p,
+      );
+      persist(paths);
+      return { paths };
+    }),
+  dropStarsUnder: (path) =>
+    set((s) => {
+      const paths = s.paths.filter((p) => p !== path && !p.startsWith(`${path}/`));
       persist(paths);
       return { paths };
     }),
