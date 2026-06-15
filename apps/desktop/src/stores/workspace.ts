@@ -302,7 +302,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       });
       const nonEmpty = updated.filter((g) => g.tabs.length > 0);
       const groups = nonEmpty.length ? nonEmpty : freshGroups();
-      return { groups, activeGroupId: toGroupId };
+      // Перемещённая вкладка больше не живёт в fromGroupId → перецеливаем её записи истории навигации
+      // на toGroupId, иначе back/forward открыл бы её копию в старой группе (находка аудита).
+      const navHistory = s.navHistory.map((e) =>
+        e.path === path && e.groupId === fromGroupId ? { ...e, groupId: toGroupId } : e,
+      );
+      return { groups, activeGroupId: toGroupId, navHistory };
     });
   },
 
@@ -533,6 +538,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   reset() {
     cancelAllAutosave(); // SAFE-4: гасим отложенные автосейвы — не стреляют по выброшенным буферам
+    saveRecents([]); // персист пустых недавних: иначе localStorage держит recents прошлого vault
     set({
       buffers: {},
       groups: freshGroups(),

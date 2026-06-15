@@ -16,6 +16,8 @@ interface SuggestState {
   load: (path: string | null) => Promise<void>;
   dismiss: (target: string) => void;
   accept: (target: string) => void;
+  /** Сбрасывает отклонённые цели (смена vault: относительные пути в новом vault — чужие). */
+  clearDismissed: () => void;
 }
 
 // Отклонённые цели на путь (живёт в рамках сессии).
@@ -60,5 +62,9 @@ export const useSuggestStore = create<SuggestState>((set, get) => ({
       useWorkspaceStore.getState().updateBufferDoc(buf.path, doc);
     }
     get().dismiss(target);
+  },
+
+  clearDismissed() {
+    dismissed.clear();
   },
 }));

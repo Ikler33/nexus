@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../lib/tauri-api';
 import { flushAllDirty } from './autosave';
 import { useVaultStore } from './vault';
@@ -127,6 +127,25 @@ describe('workspace store (Ф0-9, Б12)', () => {
     s = useWorkspaceStore.getState();
     expect(s.groups).toHaveLength(1);
     expect(s.groups[0].tabs.filter((p) => p === 'README.md')).toHaveLength(1);
+  });
+
+  // audit B8: записи истории навигации перемещённой вкладки должны указывать на новую группу —
+  // иначе back/forward открыл бы её копию в старой группе (где её уже нет).
+  it('moveTab перецеливает navHistory перемещённой вкладки на новую группу', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().splitRight();
+    const [g1, g2] = useWorkspaceStore.getState().groups.map((g) => g.id);
+    await useWorkspaceStore.getState().openFile('Inbox.md', g1); // navHistory: {Inbox.md, g1}
+    expect(
+      useWorkspaceStore.getState().navHistory.some((e) => e.path === 'Inbox.md' && e.groupId === g1),
+    ).toBe(true);
+
+    useWorkspaceStore.getState().moveTab(g1, g2, 'Inbox.md');
+    const nav = useWorkspaceStore.getState().navHistory;
+    expect(nav.some((e) => e.path === 'Inbox.md' && e.groupId === g1)).toBe(false);
+    expect(nav.some((e) => e.path === 'Inbox.md' && e.groupId === g2)).toBe(true);
+    // README.md (был в обеих группах, его запись истории — в активной) не задет лишним ремапом.
+    expect(nav.some((e) => e.path === 'README.md')).toBe(true);
   });
 
   // DP-3: режим source/preview — пер-группный, toggleMode без аргумента бьёт по активной.
@@ -455,5 +474,38 @@ describe('workspace renameBufferPath (CURATE-2)', () => {
     ws().setBufferCursor('Old.md', 17);
     ws().renameBufferPath('Old.md', 'New.md');
     expect(ws().buffers['New.md'].cursor).toBe(17);
+  });
+});
+
+// audit B8: reset (смена vault) обязан обнулить недавние и в localStorage, а не только в памяти —
+// иначе следующий запуск/новый vault показывает recents прошлого. localStorage под node 25 в jsdom
+// нерабочий, поэтому мокаем in-memory (как chat.test.ts).
+describe('workspace reset чистит recents и в localStorage (audit B8)', () => {
+  const RECENTS_KEY = 'nexus.recents.v1';
+  beforeEach(async () => {
+    const ls = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (ls.has(k) ? (ls.get(k) as string) : null),
+      setItem: (k: string, v: string) => void ls.set(k, String(v)),
+      removeItem: (k: string) => void ls.delete(k),
+      clear: () => ls.clear(),
+    });
+    useWorkspaceStore.getState().reset();
+    useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
+    await useVaultStore.getState().openVault('');
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('после reset recents пусты и в памяти, и в localStorage', async () => {
+    await useWorkspaceStore.getState().openFile('A.md');
+    await useWorkspaceStore.getState().openFile('B.md');
+    expect(useWorkspaceStore.getState().recents.length).toBeGreaterThan(0);
+    expect(JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]').length).toBeGreaterThan(0);
+
+    useWorkspaceStore.getState().reset();
+    expect(useWorkspaceStore.getState().recents).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(RECENTS_KEY) ?? 'null')).toEqual([]);
   });
 });

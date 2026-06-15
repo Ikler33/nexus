@@ -51,6 +51,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   async openVault(path) {
     const info = await tauriApi.vault.openVault(path);
     clearStartingQuestionsCache(); // новый vault → старые вопросы по чужим путям недействительны
+    // Сбрасываем отклонённые предложения связей: ключ — относительный путь, в новом vault он чужой
+    // (иначе dismiss «Notes/A.md» в vault A прячет связь в vault B с тем же путём — находка аудита).
+    const { useSuggestStore } = await import('./suggest');
+    useSuggestStore.getState().clearDismissed();
     const root = await tauriApi.vault.listDir('');
     set({
       info,
