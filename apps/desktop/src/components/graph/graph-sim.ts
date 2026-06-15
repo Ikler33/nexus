@@ -93,3 +93,77 @@ export function nodeRadius(deg: number): number {
 export function endpointId(end: string | GraphNodeDatum): string {
   return typeof end === 'string' ? end : end.id;
 }
+
+// ── GRAPH-1: параметры/формулы физики (общий источник правды для GraphView и тестов) ──
+// Ресёрч-ретюн (Obsidian-когезия): сильное центрирование побеждает заряд, изоляты — аккуратное гало.
+/** Кап степенного члена заряда: мега-хаб не становится «бомбой отталкивания». */
+export const CHARGE_DEG_CAP = 8;
+export const CHARGE_DEG_TERM = 30;
+/** Сирота расталкивается слабо — рыхлое кольцо-гало, а не разлёт. */
+export const CHARGE_ORPHAN_FACTOR = 0.12;
+/** Конечная отсечка отталкивания (локализует раскладку — главный рычаг против разлёта). */
+export const CHARGE_DISTANCE_MAX = 340;
+/** Нижняя отсечка: совпавшие на старте узлы не получают почти-бесконечную силу (без fling-out). */
+export const CHARGE_DISTANCE_MIN = 14;
+/** Чуть больше трения дефолтных 0.4 — гасит овершут усиленных сил. */
+export const VELOCITY_DECAY = 0.45;
+/** Radial-сила кольца сирот (мягче прежних 0.08: сильная общая гравитация держит ядро). */
+export const RADIAL_STRENGTH = 0.06;
+/** Локальный режим мягче глобального (узлов мало). */
+export const LOCAL_GRAVITY_FACTOR = 0.6;
+/** Кап радиуса связных узлов в глобале (сейфнет: при сильной гравитации почти не срабатывает). */
+export const CORE_MAX_FACTOR = 0.27;
+/** Радиус кольца-гало сирот (GRAPH-1): держим чуть СНАРУЖИ ядра (~CORE_MAX_FACTOR), а не у края сцены —
+ *  иначе при немногих сиротах они «разлетаются по углам» (жалоба владельца). 0.30 = плотный нимб у ядра. */
+export const ORPHAN_RING_FACTOR = 0.3;
+const ORPHAN_BAND_LO = 0.78;
+const ORPHAN_BAND_HI = 1.18;
+const STAGE_MARGIN = 20;
+
+/** Заряд отталкивания узла (отрицательный — d3: <0 = отталкивание). Степенной член капнут `min(deg,8)`;
+ *  сирота — слабый фактор `0.12`. `repel` — пользовательский слайдер базы. */
+export function chargeStrength(d: { deg: number; ring?: number }, repel: number): number {
+  return -(
+    repel * (d.ring ? CHARGE_ORPHAN_FACTOR : 1) +
+    Math.min(d.deg, CHARGE_DEG_CAP) * CHARGE_DEG_TERM
+  );
+}
+
+/** Сила центр-гравитации (forceX/Y): сироты — 0 (их держит кольцо); локальный режim — 0.6× глобального. */
+export function gravityStrength(d: { ring?: number }, gravity: number, isFull: boolean): number {
+  return d.ring ? 0 : isFull ? gravity : gravity * LOCAL_GRAVITY_FACTOR;
+}
+
+/** Клампы позиции узла (мутирует `x/y`): сирота — в полосе кольца `[0.78R, 1.18R]`; связный глобального —
+ *  не дальше `coreMax` от центра (никогда не в углы); общие границы сцены. Сейфнет — основную работу
+ *  делают силы. Перетаскиваемую (fx≠null) вызывающий пропускает сам. */
+export function clampNodePosition(
+  d: GraphNodeDatum,
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  isFull: boolean,
+): void {
+  const dx = (d.x ?? cx) - cx;
+  const dy = (d.y ?? cy) - cy;
+  const dist = Math.hypot(dx, dy) || 0.01;
+  if (d.ring) {
+    const lo = d.ring * ORPHAN_BAND_LO;
+    const hi = d.ring * ORPHAN_BAND_HI;
+    if (dist < lo || dist > hi) {
+      const k = (dist < lo ? lo : hi) / dist;
+      d.x = cx + dx * k;
+      d.y = cy + dy * k;
+    }
+  } else if (isFull) {
+    const coreMax = Math.min(w, h) * CORE_MAX_FACTOR;
+    if (dist > coreMax) {
+      const k = coreMax / dist;
+      d.x = cx + dx * k;
+      d.y = cy + dy * k;
+    }
+  }
+  d.x = Math.max(STAGE_MARGIN, Math.min(w - STAGE_MARGIN, d.x ?? cx));
+  d.y = Math.max(STAGE_MARGIN, Math.min(h - STAGE_MARGIN, d.y ?? cy));
+}

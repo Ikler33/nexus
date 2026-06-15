@@ -25,12 +25,20 @@ import { useUIStore } from '../../stores/ui';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
 import {
+  CHARGE_DISTANCE_MAX,
+  CHARGE_DISTANCE_MIN,
+  chargeStrength,
+  clampNodePosition,
   endpointId,
+  gravityStrength,
   kinSet,
   neighborSet,
   nodeColor,
   nodeRadius,
+  ORPHAN_RING_FACTOR,
+  RADIAL_STRENGTH,
   topTags,
+  VELOCITY_DECAY,
   type EdgeIds,
   type GraphLink,
   type GraphNodeDatum,
@@ -98,16 +106,18 @@ interface GraphSettings {
   sizeScale: number; // множитель радиуса узла
   group: boolean; // группировка по тегам (макет gs-toggle): общий центроид на первый тег
 }
-// Дефолты подогнаны под компактные «созвездия» макета (linkDist 62, мягкая гравитация).
+// GRAPH-1 (ресёрч-ретюн физики): дефолты подобраны под когезию «как Obsidian» — сильное центрирование
+// побеждает заряд, узлы держатся компактным созвездием, изоляты — аккуратное гало (не разлёт по углам).
+// gravity = сила центр-притяжения (глоб.; лок. берёт 0.6×); раньше 0.012 было в ~7× слабее заряда → разлёт.
 const DEFAULT_SETTINGS: GraphSettings = {
-  repel: 360,
-  linkDist: 62,
-  gravity: 0.012,
+  repel: 300,
+  linkDist: 46,
+  gravity: 0.085,
   sizeScale: 1,
   group: false,
 };
-// v2: новые дефолты макета не должны перекрываться старым персистом v1.
-const SETTINGS_KEY = 'nexus.graph.settings.v2';
+// v3 (GRAPH-1): ретюн физики не должен перекрываться старым персистом v1/v2 (иначе сохранённый разлёт).
+const SETTINGS_KEY = 'nexus.graph.settings.v3';
 function loadSettings(): GraphSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -256,11 +266,11 @@ export default function GraphView() {
           deg: d,
           tags: n.tags ?? [],
         };
-        // Seed-позиции макета: сироты — кольцо-гало с джиттером; связанные — у центра;
-        // локальный — круг вокруг центра.
+        // Seed-позиции: сироты — плотный нимб ЧУТЬ СНАРУЖИ ядра (GRAPH-1: не у края сцены — иначе
+        // «разлетаются по углам»); связанные — у центра; локальный — круг вокруг центра.
         if (isFull && d === 0) {
           const ang = rnd() * Math.PI * 2;
-          const ring = Math.min(stage.w, stage.h) * 0.42 * (0.8 + rnd() * 0.34);
+          const ring = Math.min(stage.w, stage.h) * ORPHAN_RING_FACTOR * (0.92 + rnd() * 0.16);
           node.ring = ring;
           node.x = cx + Math.cos(ang) * ring;
           node.y = cy + Math.sin(ang) * ring;
@@ -309,22 +319,26 @@ export default function GraphView() {
     const { stage, isFull } = graph;
     const cx = stage.w / 2;
     const cy = stage.h / 2;
-    // Отталкивание: хабы сильнее; сироты почти не расталкиваются (рыхлое гало, фактор макета 0.12).
+    // Отталкивание: хабы сильнее, НО степенной член капнут (`min(deg,8)`) — иначе мега-хаб = «бомба»
+    // (deg-40 давал −1560, рвал кластеры). Сироты почти не расталкиваются (рыхлое гало, фактор 0.12).
+    // distanceMax=340: конечная отсечка локализует раскладку (d3-док — главный рычаг против разлёта);
+    // distanceMin=14 (~радиус узла): совпавшие на старте узлы не получают почти-бесконечную силу и не вылетают.
     const charge = forceManyBody<GraphNodeDatum>()
-      .strength((d) => -(s.repel * (d.ring ? 0.12 : 1) + d.deg * 30))
-      .distanceMax(950);
+      .strength((d) => chargeStrength(d, s.repel))
+      .distanceMin(CHARGE_DISTANCE_MIN)
+      .distanceMax(CHARGE_DISTANCE_MAX);
     // ВАЖНО: НЕ задаём link.strength → d3 авто-масштабирует обратно степени (рёбра к хабам слабее).
+    // iterations(2) в глобале — чётче кластерная структура (дёшево на top-N).
     const link = forceLink<GraphNodeDatum, GraphLink>(graph.links)
       .id((d) => d.id)
-      .distance(s.linkDist);
-    // Гравитация: сироты — нет (их держит кольцо); глобальное ядро — не слабее 0.022 (макет).
-    const gravStrength = (d: GraphNodeDatum) =>
-      d.ring ? 0 : isFull ? Math.max(s.gravity, 0.022) : s.gravity;
+      .distance(s.linkDist)
+      .iterations(isFull ? 2 : 1);
+    // Гравитация (главный фикс когезии): центр-притяжение теперь СИЛЬНОЕ (дефолт 0.085) и побеждает заряд.
+    const gravStrength = (d: GraphNodeDatum) => gravityStrength(d, s.gravity, isFull);
     const gravX = forceX<GraphNodeDatum>(cx).strength(gravStrength);
     const gravY = forceY<GraphNodeDatum>(cy).strength(gravStrength);
-    // Кольцо-гало сирот: radial-притяжение к своему радиусу (strength 0.08 — макет).
     const radial = forceRadial<GraphNodeDatum>((d) => d.ring ?? 0, cx, cy).strength((d) =>
-      d.ring ? 0.08 : 0,
+      d.ring ? RADIAL_STRENGTH : 0,
     );
     const collide = forceCollide<GraphNodeDatum>()
       .radius((d) => nodeRadius(d.deg) * s.sizeScale + 6)
@@ -350,13 +364,13 @@ export default function GraphView() {
         n.vy = (n.vy ?? 0) + (c.y / c.n - (n.y ?? 0)) * 0.03 * alpha;
       }
     };
-    const coreMax = Math.min(stage.w, stage.h) * 0.27;
     // Рендер-троттл «дыхания»: первые ~1.6с (укладка) и во время drag рендерим каждый тик,
     // дальше сим жив на alphaTarget, но React-рендер — каждый 3-й тик (~20fps вместо 60:
     // на 600 узлах экономит CPU втрое, микро-движение глазом неотличимо).
     const startedAt = performance.now();
     let tickN = 0;
     const sim = forceSimulation<GraphNodeDatum, GraphLink>(graph.nodes)
+      .velocityDecay(VELOCITY_DECAY)
       .force('charge', charge)
       .force('link', link)
       .force('x', gravX)
@@ -365,30 +379,12 @@ export default function GraphView() {
       .force('group', groupForce)
       .force('collide', collide)
       .on('tick', () => {
-        // Клампы макета: сироты — в полосе кольца [0.78R, 1.18R]; связанные глобального —
-        // не дальше coreMax от центра (никогда не разлетаются по углам); общие границы сцены.
-        // Узлы симуляции === graph.nodes (переданы в forceSimulation) — без обращения к sim
-        // из тика (мок d3 в тестах зовёт тик синхронно, до присвоения const).
+        // Клампы-сейфнет (общий с тестами `clampNodePosition`): сирота — в полосе кольца, связный
+        // глобального — ≤ coreMax от центра, общие границы. Узлы симуляции === graph.nodes (переданы
+        // в forceSimulation) — без обращения к sim из тика (мок d3 в тестах зовёт тик синхронно).
         for (const n of graph.nodes) {
           if (n.fx != null) continue; // перетаскиваемую не дёргаем
-          const dx = (n.x ?? cx) - cx;
-          const dy = (n.y ?? cy) - cy;
-          const d = Math.hypot(dx, dy) || 0.01;
-          if (n.ring) {
-            const lo = n.ring * 0.78;
-            const hi = n.ring * 1.18;
-            if (d < lo || d > hi) {
-              const k = (d < lo ? lo : hi) / d;
-              n.x = cx + dx * k;
-              n.y = cy + dy * k;
-            }
-          } else if (isFull && d > coreMax) {
-            const k = coreMax / d;
-            n.x = cx + dx * k;
-            n.y = cy + dy * k;
-          }
-          n.x = Math.max(20, Math.min(stage.w - 20, n.x ?? cx));
-          n.y = Math.max(20, Math.min(stage.h - 20, n.y ?? cy));
+          clampNodePosition(n, cx, cy, stage.w, stage.h, isFull);
         }
         tickN += 1;
         const breathing = performance.now() - startedAt > 1600 && dragRef.current == null;
@@ -424,11 +420,14 @@ export default function GraphView() {
       /* нет localStorage → просто не сохраняем */
     }
     if (!simRef.current) return;
-    chargeRef.current?.strength((d) => -(settings.repel * (d.ring ? 0.12 : 1) + d.deg * 30));
+    // Те же общие хелперы, что и при первичной настройке — слайдер не откатывает к старой физике.
+    chargeRef.current
+      ?.strength((d) => chargeStrength(d, settings.repel))
+      .distanceMin(CHARGE_DISTANCE_MIN)
+      .distanceMax(CHARGE_DISTANCE_MAX);
     linkRef.current?.distance(settings.linkDist);
     const isFull = graph?.isFull ?? false;
-    const gravStrength = (d: GraphNodeDatum) =>
-      d.ring ? 0 : isFull ? Math.max(settings.gravity, 0.022) : settings.gravity;
+    const gravStrength = (d: GraphNodeDatum) => gravityStrength(d, settings.gravity, isFull);
     gravXRef.current?.strength(gravStrength);
     gravYRef.current?.strength(gravStrength);
     collideRef.current?.radius((d) => nodeRadius(d.deg) * settings.sizeScale + 6);
@@ -838,25 +837,25 @@ export default function GraphView() {
             </div>
             <SettingRow
               label={t('graph.repel')}
-              min={100}
-              max={900}
+              min={80}
+              max={600}
               step={20}
               value={settings.repel}
               onChange={(v) => setSettings((s) => ({ ...s, repel: v }))}
             />
             <SettingRow
               label={t('graph.linkDist')}
-              min={40}
-              max={190}
+              min={24}
+              max={140}
               step={2}
               value={settings.linkDist}
               onChange={(v) => setSettings((s) => ({ ...s, linkDist: v }))}
             />
             <SettingRow
               label={t('graph.gravity')}
-              min={0}
-              max={0.06}
-              step={0.002}
+              min={0.02}
+              max={0.2}
+              step={0.005}
               value={settings.gravity}
               fmt={(v) => v.toFixed(3)}
               onChange={(v) => setSettings((s) => ({ ...s, gravity: v }))}
