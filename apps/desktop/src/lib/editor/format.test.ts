@@ -90,6 +90,23 @@ describe('toggleTask (EDIT-2)', () => {
     v.destroy();
   });
 
+  // Регресс на находку аудита: нумерованный таск тогглится В МЕСТЕ, не ломаясь в `- [ ] 1. [ ] …`.
+  it('нумерованный таск тогглится, маркер `1.` сохраняется', () => {
+    const v = mkView('1. [ ] пункт', 7, 7);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('1. [x] пункт');
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('1. [ ] пункт');
+    v.destroy();
+  });
+
+  it('нумерованный пункт `2)` → нумерованный таск (маркер сохраняется)', () => {
+    const v = mkView('2) дело', 3, 3);
+    toggleTask(v);
+    expect(v.state.doc.toString()).toBe('2) [ ] дело');
+    v.destroy();
+  });
+
   it('таск незавершённый → завершённый и обратно', () => {
     const v = mkView('- [ ] дело', 6, 6);
     toggleTask(v);
