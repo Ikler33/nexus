@@ -536,6 +536,7 @@ function WebSearchBlock() {
   const [cfg, setCfg] = useState<WebSearchConfig | null>(null);
   const [url, setUrl] = useState('');
   const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null); // B16: сбой setConfig больше не глотаем
 
   useEffect(() => {
     let alive = true;
@@ -556,11 +557,15 @@ function WebSearchBlock() {
   if (!cfg) return null;
   const persist = (next: WebSearchConfig) => {
     setSaved(false);
-    void tauriApi.websearch.setConfig(next).then((applied) => {
-      setCfg(applied);
-      setUrl(applied.url);
-      setSaved(true);
-    });
+    setErr(null);
+    void tauriApi.websearch
+      .setConfig(next)
+      .then((applied) => {
+        setCfg(applied);
+        setUrl(applied.url);
+        setSaved(true);
+      })
+      .catch((e: unknown) => setErr(String(e))); // не молчим: пользователь думал, что сохранил (B16)
   };
 
   return (
@@ -591,6 +596,7 @@ function WebSearchBlock() {
         onChange={(v) => persist({ ...cfg, url: url.trim(), enabled: v })}
       />
       {saved && <span className={styles.okText}>{t('settings.web.saved')}</span>}
+      {err && <p className={styles.warnText}>{t('settings.web.saveError', { msg: err })}</p>}
     </>
   );
 }

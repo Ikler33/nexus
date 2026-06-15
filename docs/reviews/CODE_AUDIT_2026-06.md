@@ -43,7 +43,7 @@
 - [x] **reloadWidget без try/catch** — **ЗАКРЫТО (PR #233).** Обёрнут в try/catch со снятием `generating[key]` при ошибке (как `refreshWidget`). `stores/home.ts`.
 - [x] **plugin vault.writeFile неатомарен** — **ЗАКРЫТО (PR #234).** `vault::atomic_write_io` в `spawn_blocking` (окно повреждения .md устранено).
 - [x] **Конфиги egress-consent неатомарны** — **ЗАКРЫТО (PR #234).** Единый `vault::atomic_write_io` (tmp→fsync→rename) во всех 4 конфиг-врайтерах + news/chat-экспорт (7 сайтов). Тест no-leftover-tmp.
-- [ ] **Web-поиск настройки молча проглатывают ошибку записи** — пользователь думает, что сохранил. `components/settings/SettingsView.tsx:553-560`. Fix: `.catch` + error-состояние (как `EgressBlock.apply`). → **BACKLOG** (honesty-хвост, autonomous-safe; аналог SyncPanel-commit #252).
+- [x] **Web-поиск настройки молча проглатывают ошибку записи** — **ЗАКРЫТО (B16).** `persist` web-конфига получил `.catch` → `settings.web.saveError` (как egress-блок); +тест. Заодно `SyncPanel.saveRemote` (нит) — error-состояние вместо пустого catch.
 
 ---
 
@@ -96,7 +96,7 @@
 - [x] ConflictResolver без Esc + вне reading-Esc списка · `ConflictResolver.tsx` · **#249** (`useFocusTrap` + `conflictOpen` в App-гарде).
 - [-] capture/templates/versions вне TRAP_OVERLAYS_CLOSED (стек 2 модалок) · `stores/ui.ts` · **ОТСЕЯНО (false-positive):** capture/templates/versions НЕ используют `useFocusTrap` (свои Esc/autoFocus) → стека focus-trap нет (явно ограничено в #212).
 - [x] moveTab не ремапит navHistory groupId · `stores/workspace.ts` · **#248** (ремап `fromGroupId→toGroupId` записей перемещённого пути).
-- [x] SyncPanel commit молча глотает ошибку · `SyncPanel.tsx` · **#252** (error-исход в `CommitResult`). `saveRemote`-swallow — остаётся как nit → BACKLOG.
+- [x] SyncPanel commit/saveRemote молча глотают ошибку · `SyncPanel.tsx` · **#252** (commit → `CommitResult`) + **B16** (`saveRemote` → error-состояние `remoteError`).
 - [x] упавшие при скане файлы молча выпадают, прогресс 100% · `indexer/mod.rs` · **#245** (счётчик failed + warn).
 
 ## NIT (38) — фоновая чистка по мере касания модулей

@@ -168,7 +168,8 @@
       "enable": "Enable web agent",
       "enableDesc": "A third chat mode “Web”: the model decides if internet is needed, searches and answers with sources.",
       "consentWarn": "Web-search requests will go to {{host}}.",
-      "saved": "Saved."
+      "saved": "Saved.",
+      "saveError": "Not saved: {{msg}}"
     }
   },
   "sidebar": {

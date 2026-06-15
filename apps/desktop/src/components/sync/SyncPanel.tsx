@@ -35,6 +35,7 @@ export function SyncPanel() {
   const [remoteUrl, setRemoteUrl] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [connected, setConnected] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null); // B16: сбой setRemote/setToken не глотаем
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -77,6 +78,7 @@ export function SyncPanel() {
   };
 
   const saveRemote = async () => {
+    setRemoteError(null);
     try {
       if (remoteUrl.trim()) await tauriApi.git.setRemote(remoteUrl.trim());
       if (tokenInput.trim()) {
@@ -84,8 +86,8 @@ export function SyncPanel() {
         setTokenInput('');
       }
       setConnected(await tauriApi.git.hasToken());
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setRemoteError(String(e)); // не молчим: пользователь думал, что подключил remote/токен (B16)
     }
   };
 
@@ -196,6 +198,7 @@ export function SyncPanel() {
                 {t('git.connect')}
               </button>
             </div>
+            {remoteError && <p className={styles.errorMsg}>✋ {remoteError}</p>}
             {syncResult && <SyncResultView result={syncResult} />}
             {syncResult?.status === 'merge-required' && (
               <button

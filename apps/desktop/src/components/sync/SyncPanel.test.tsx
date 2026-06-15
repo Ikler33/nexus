@@ -20,4 +20,14 @@ describe('SyncPanel commit — ошибка не глотается (audit B13)'
 
     expect(await screen.findByText(/detached HEAD/)).toBeInTheDocument();
   });
+
+  // audit B16: сбой setRemote/setToken в saveRemote больше не глотается пустым catch.
+  it('сбой setRemote показывает ошибку, а не тихо проглатывается', async () => {
+    vi.spyOn(tauriApi.git, 'setRemote').mockRejectedValue(new Error('remote refused'));
+    render(<SyncPanel />);
+    const urlInput = await screen.findByPlaceholderText(/github\.com\/you\/vault/i);
+    fireEvent.change(urlInput, { target: { value: 'https://example.com/repo.git' } });
+    fireEvent.click(screen.getByRole('button', { name: /подключить|^connect$/i }));
+    expect(await screen.findByText(/remote refused/)).toBeInTheDocument();
+  });
 });
