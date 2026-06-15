@@ -37,4 +37,13 @@ describe('ContradictionsPanel (#vision)', () => {
     expect(useContradictionsStore.getState().generating).toBe(true);
     expect(await screen.findByText(/Ищу…|Searching…/i)).toBeInTheDocument();
   });
+
+  // audit B10: модалка получила focus-trap → Esc закрывает её (а не «проваливается» в reading-mode).
+  it('Esc закрывает модалку (focus-trap, audit B10)', async () => {
+    useUIStore.setState({ contradictionsOpen: true });
+    render(<ContradictionsPanel />);
+    await screen.findByText(/одна заметка устарела/i);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(useUIStore.getState().contradictionsOpen).toBe(false);
+  });
 });

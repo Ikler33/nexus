@@ -67,6 +67,12 @@ export function FileTree() {
   );
 
   const [active, setActive] = useState(0);
+  // a11y (audit B10): когда дерево схлопывается/удаляются файлы и узлов стало меньше — `active`
+  // мог указывать за пределы → `aria-activedescendant` ссылался на несуществующий treeitem, а
+  // onKeyDown читал `nodes[active] === undefined`. Держим индекс в валидном диапазоне.
+  useEffect(() => {
+    if (active >= nodes.length && nodes.length > 0) setActive(nodes.length - 1);
+  }, [nodes.length, active]);
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({

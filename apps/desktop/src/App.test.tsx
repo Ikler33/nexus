@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from './App';
 import { useUIStore } from './stores/ui';
@@ -53,5 +53,22 @@ describe('App (Ф0-3 / Ф4-11 / DP-1)', () => {
     expect(
       await screen.findByText(/добрый день|доброе утро|добрый вечер|доброй ночи|good/i),
     ).toBeInTheDocument();
+  });
+
+  // audit B10: Esc при открытой модальной панели поверх reading закрывает ПАНЕЛЬ, а не весь
+  // режим чтения — гейт reading-esc-precedence. Фокус вне панели → срабатывает оконный обработчик App.
+  it('Esc не выходит из reading, когда открыта модальная панель (audit B10)', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /Открыть vault/ }));
+    await screen.findByText('README');
+    act(() => {
+      useUIStore.getState().toggleReading();
+      useUIStore.getState().toggleDigest();
+    });
+    expect(useUIStore.getState().reading).toBe(true);
+    expect(useUIStore.getState().digestOpen).toBe(true);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(useUIStore.getState().reading).toBe(true); // модалка имеет приоритет → reading жив
   });
 });

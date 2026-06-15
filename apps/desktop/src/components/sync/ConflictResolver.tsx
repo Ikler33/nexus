@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, GitMerge } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { tauriApi } from '../../lib/tauri-api';
 import type { GitConflictFile, GitMergePreview } from '../../lib/tauri-api';
 import { useSyncStore } from '../../stores/sync';
@@ -39,6 +40,7 @@ function sideContent(f: GitConflictFile, side: Side): string {
  */
 export function ConflictResolver({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const trapRef = useFocusTrap<HTMLDivElement>(onClose); // a11y: Esc/Tab-цикл внутри модалки (audit B10)
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [sides, setSides] = useState<Record<string, Side>>({});
   const [manual, setManual] = useState<Record<string, string>>({});
@@ -108,8 +110,11 @@ export function ConflictResolver({ onClose }: { onClose: () => void }) {
   return (
     <div className={styles.backdrop} onClick={onClose} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.dialog}
         role="dialog"
+        aria-modal="true"
         aria-label={t('conflict.title')}
         onClick={(e) => e.stopPropagation()}
       >

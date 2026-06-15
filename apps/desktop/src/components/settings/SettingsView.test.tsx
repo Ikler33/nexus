@@ -144,4 +144,12 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       commands._reset();
     }
   });
+
+  // audit B10: раздел получил focus-trap → Esc закрывает модалку (а не «проваливается» в reading-mode).
+  it('Esc закрывает раздел настроек (focus-trap, audit B10)', () => {
+    useUIStore.setState({ tweaksOpen: true, settingsSection: 'general' });
+    render(<SettingsView />);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(useUIStore.getState().tweaksOpen).toBe(false);
+  });
 });

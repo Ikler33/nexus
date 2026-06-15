@@ -31,4 +31,21 @@ describe('FileTree (Ф0-3/Ф0-9)', () => {
     fireEvent.click(await screen.findByText('README'));
     await waitFor(() => expect(activePath(useWorkspaceStore.getState())).toBe('README.md'));
   });
+
+  // audit B10: при схлопывании дерева active-индекс не должен «повисать» за пределами списка —
+  // иначе aria-activedescendant ссылается на несуществующий treeitem. Кламп держит его валидным.
+  it('кламп active при схлопывании дерева (a11y, audit B10)', async () => {
+    await useVaultStore.getState().openVault('');
+    render(<FileTree />);
+    const tree = screen.getByRole('tree');
+    fireEvent.click(await screen.findByText('Projects')); // раскрыли → узлов стало больше
+    await screen.findByText('Roadmap');
+    // уводим active вниз — move() упрётся в последний узел РАЗВЁРНУТОГО дерева
+    for (let i = 0; i < 8; i++) fireEvent.keyDown(tree, { key: 'ArrowDown' });
+    fireEvent.click(screen.getByText('Projects')); // схлопнули → узлов снова мало
+    await waitFor(() => {
+      const id = tree.getAttribute('aria-activedescendant') as string;
+      expect(document.getElementById(id)).not.toBeNull(); // указывает на реально существующий узел
+    });
+  });
 });

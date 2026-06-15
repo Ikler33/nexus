@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
@@ -52,12 +53,15 @@ const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
 export function SettingsView() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeTweaks);
+  const trapRef = useFocusTrap<HTMLDivElement>(close); // a11y: Esc/Tab-цикл внутри модалки (audit B10)
   const section = useUIStore((s) => s.settingsSection);
   const setSection = useUIStore((s) => s.setSettingsSection);
 
   return (
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.modal}
         role="dialog"
         aria-modal="true"

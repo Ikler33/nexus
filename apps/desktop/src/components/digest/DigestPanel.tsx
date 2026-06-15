@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Newspaper, RefreshCw, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { renderBold } from '../../lib/render';
 import { useDigestStore } from '../../stores/digest';
 import { useUIStore } from '../../stores/ui';
@@ -27,6 +28,7 @@ function fmt(ts: number, locale: string): string {
 export function DigestPanel() {
   const { t, i18n } = useTranslation();
   const close = useUIStore((s) => s.closeDigest);
+  const trapRef = useFocusTrap<HTMLDivElement>(close); // a11y: Esc/Tab-цикл внутри модалки (audit B10)
   const latest = useDigestStore((s) => s.latest);
   const loading = useDigestStore((s) => s.loading);
   const generating = useDigestStore((s) => s.generating);
@@ -41,6 +43,8 @@ export function DigestPanel() {
   return (
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.panel}
         role="dialog"
         aria-modal="true"

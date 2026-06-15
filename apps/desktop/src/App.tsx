@@ -178,6 +178,10 @@ export function App() {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const s = useUIStore.getState();
+      // Любой оверлей поверх reading имеет приоритет на Esc (у него свой close) — иначе Esc закрыл бы
+      // весь режим чтения «сквозь» открытую модалку (находки аудита reading-esc-precedence +
+      // conflictresolver-esc). Модальные панели без собственного focus-trap (digest/contradictions/
+      // settings/conflict) особенно зависят от этого гейта.
       if (
         s.paletteOpen ||
         s.graphOpen ||
@@ -186,7 +190,14 @@ export function App() {
         s.captureOpen ||
         s.templatesOpen ||
         s.versionsOpen ||
-        s.cheatsheetOpen
+        s.cheatsheetOpen ||
+        s.conflictOpen ||
+        s.goalsOpen ||
+        s.tasksOpen ||
+        s.inboxOpen ||
+        s.digestOpen ||
+        s.contradictionsOpen ||
+        s.tweaksOpen
       )
         return;
       s.closeReading();
