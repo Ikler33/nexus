@@ -53,9 +53,12 @@ impl ReadPool {
                 .expect("read-pool invariant: connection available per permit")
         };
 
-        // rusqlite синхронен → уводим в blocking-пул; коннект возвращаем в пул после.
+        // rusqlite синхронен → уводим в blocking-пул; коннект возвращаем в пул после. Паника `f`
+        // ловится ВНУТРИ blocking-таска (catch_unwind), чтобы коннект вернулся в пул в ЛЮБОМ случае:
+        // иначе панический read терял коннект (permit освобождался, а conn — нет → инвариант
+        // permits==conns ломался, и следующий pop паниковал на exhausted-пуле). Находка аудита.
         let (conn, result) = tokio::task::spawn_blocking(move || {
-            let r = f(&conn);
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)));
             (conn, r)
         })
         .await
@@ -66,7 +69,35 @@ impl ReadPool {
             .lock()
             .expect("read pool mutex poisoned")
             .push(conn);
-        result.map_err(DbError::from)
+        match result {
+            Ok(r) => r.map_err(DbError::from),
+            Err(_) => {
+                tracing::error!("read-pool: read-замыкание паниковало — коннект возвращён в пул");
+                Err(DbError::Unavailable)
+            }
+        }
         // _permit освобождается здесь — уже ПОСЛЕ возврата коннекта в пул.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Аудит: паника read-замыкания не теряет коннект — он возвращается в пул (catch_unwind в blocking),
+    /// инвариант permits==conns цел; следующий запрос работает (иначе `pop().expect` паниковал бы на
+    /// опустошённом пуле). В release(panic=abort) неприменимо, но `cargo test` = panic=unwind.
+    #[tokio::test]
+    async fn read_pool_survives_panicking_query() {
+        let pool = ReadPool::new(vec![Connection::open_in_memory().unwrap()]); // пул из 1 коннекта
+        let panicked = pool
+            .query(|_c| -> rusqlite::Result<i64> { panic!("boom") })
+            .await;
+        assert!(panicked.is_err(), "паническое чтение → ошибка");
+        // Коннект вернулся — единственный в пуле; следующий запрос не паникует на пустом пуле.
+        let ok = pool
+            .query(|c| c.query_row("SELECT 7", [], |r| r.get::<_, i64>(0)))
+            .await;
+        assert_eq!(ok.unwrap(), 7, "пул пережил панику, коннект возвращён");
     }
 }
