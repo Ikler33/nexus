@@ -384,8 +384,11 @@ function AiSection() {
   const setAiRerank = usePrefsStore((s) => s.setAiRerank);
   const aiChatMemory = usePrefsStore((s) => s.aiChatMemory);
   const setAiChatMemory = usePrefsStore((s) => s.setAiChatMemory);
+  const aiAgentMemory = usePrefsStore((s) => s.aiAgentMemory);
+  const setAiAgentMemory = usePrefsStore((s) => s.setAiAgentMemory);
   const aiExplainRelations = usePrefsStore((s) => s.aiExplainRelations);
   const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
+  const openMemory = useUIStore((s) => s.openMemory);
   const [chatUrl, setChatUrl] = useState('');
   const [chatModel, setChatModel] = useState('');
   const [embUrl, setEmbUrl] = useState('');
@@ -510,6 +513,20 @@ function AiSection() {
         value={aiChatMemory}
         onChange={setAiChatMemory}
       />
+
+      {/* MEM (память агента): подмешивать сохранённые ЯВНЫЕ ФАКТЫ о пользователе/проектах в ответы.
+          ВЫКЛ по умолчанию (D5: приватность-first). Управление фактами — кнопка «Память ИИ». */}
+      <EgressRow
+        label={t('settings.aiSec.agentMemory')}
+        desc={t('settings.aiSec.agentMemoryDesc')}
+        value={aiAgentMemory}
+        onChange={setAiAgentMemory}
+      />
+      <div className={styles.saveBar}>
+        <button type="button" className={styles.ghostBtn} onClick={openMemory}>
+          {t('settings.aiSec.manageMemory')}
+        </button>
+      </div>
 
       {/* AIP-10: LLM-«причина связи» в «Связях»/«Похожих» (лениво, кэш). Без утилитарной модели —
           фолбэк на сниппет. */}

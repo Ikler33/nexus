@@ -90,6 +90,12 @@ interface UIState {
   toggleCheatsheet: () => void;
   closeGoals: () => void;
   toggleGoals: () => void;
+  /** Открыта ли панель «Память ИИ» (MEM-4 — явные факты памяти агента). */
+  memoryOpen: boolean;
+  closeMemory: () => void;
+  toggleMemory: () => void;
+  /** Открыть «Память ИИ» (из Настроек — поэтому закрывает раздел настроек). */
+  openMemory: () => void;
   closeTasks: () => void;
   toggleTasks: () => void;
   closeInbox: () => void;
@@ -129,6 +135,7 @@ const TRAP_OVERLAYS_CLOSED = {
   tasksOpen: false,
   inboxOpen: false,
   cheatsheetOpen: false,
+  memoryOpen: false,
 } as const;
 
 /** Глобальное UI-состояние оболочки (Command Palette, граф, RAG-чат и пр.). */
@@ -140,6 +147,7 @@ export const useUIStore = create<UIState>((set) => ({
   syncOpen: false,
   conflictOpen: false,
   goalsOpen: false,
+  memoryOpen: false,
   tasksOpen: false,
   inboxOpen: false,
   digestOpen: false,
@@ -215,6 +223,20 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('goals:toggle', open ? 'open' : 'close');
       return open ? { ...TRAP_OVERLAYS_CLOSED, goalsOpen: true } : { goalsOpen: false };
     }),
+  // «Память ИИ» (MEM-4) — focus-trap-модалка, взаимоисключаема с прочими trap-оверлеями. Закрываем и
+  // раздел настроек (`tweaksOpen`): он focus-trap, но вне TRAP_OVERLAYS_CLOSED — иначе командный путь
+  // (палитра → view.memory поверх открытых настроек) дал бы два стэкнутых focus-trap-диалога.
+  closeMemory: () => set({ memoryOpen: false }),
+  toggleMemory: () =>
+    set((s) => {
+      const open = !s.memoryOpen;
+      logUi('memory:toggle', open ? 'open' : 'close');
+      return open
+        ? { ...TRAP_OVERLAYS_CLOSED, memoryOpen: true, tweaksOpen: false }
+        : { memoryOpen: false };
+    }),
+  // Открытие из Настроек: закрываем раздел настроек, чтобы модалка не пряталась под ним.
+  openMemory: () => set({ ...TRAP_OVERLAYS_CLOSED, memoryOpen: true, tweaksOpen: false }),
   closeTasks: () => set({ tasksOpen: false }),
   toggleTasks: () =>
     set((s) => {

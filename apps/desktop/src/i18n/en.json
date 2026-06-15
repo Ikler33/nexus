@@ -144,6 +144,9 @@
       "rerankDesc": "The fast model reorders retrieved fragments before answering: sharper citations, +~2 s per question. Golden-set: nDCG 0.88 → 1.00.",
       "chatMemory": "Conversation memory",
       "chatMemoryDesc": "Mix relevant snippets from past conversations into the answer's context (your \"second brain\"). Separate index — does not affect note search.",
+      "agentMemory": "Agent memory",
+      "agentMemoryDesc": "Mix saved EXPLICIT FACTS about you and your projects (pinned + relevant) into AI answers. Off by default — privacy first. Manage facts below.",
+      "manageMemory": "AI memory…",
       "explainRelations": "Explain relations",
       "explainRelationsDesc": "In Related/Similar, show a short LLM explanation of how the notes relate instead of the raw snippet (lazy, cached). Without a utility model — falls back to the snippet."
     },
@@ -507,6 +510,25 @@
     "refresh": "Refresh",
     "close": "Close"
   },
+  "memory": {
+    "title": "AI memory",
+    "loading": "Loading memory…",
+    "empty": "Memory is empty. Add a fact about you or your projects manually — or confirm an auto-suggestion in chat.",
+    "close": "Close",
+    "add": "Add",
+    "addPlaceholder": "A new fact about you or a project…",
+    "pin": "Pin (always in context)",
+    "unpin": "Unpin",
+    "edit": "Edit",
+    "editLabel": "Fact text",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "deleteConfirm": "Delete the fact “{{text}}” from AI memory?",
+    "auto": "auto",
+    "stale": "long unused",
+    "overCap": "Memory is over capacity ({{count}} of {{cap}}). Old facts are highlighted — delete the ones you don't need."
+  },
   "digest": {
     "title": "Changes digest",
     "loading": "Loading…",
@@ -780,6 +802,7 @@
     "view.splitRight": "Split right",
     "view.graph": "Graph",
     "view.chat": "AI chat",
+    "view.memory": "AI memory",
     "view.suggest": "Link suggestions",
     "view.plugins": "Plugins",
     "view.sync": "Sync (git)",
