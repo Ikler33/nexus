@@ -470,7 +470,9 @@ struct TruncatingEmbedder {
 #[async_trait::async_trait]
 impl crate::ai::EmbeddingProvider for TruncatingEmbedder {
     async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
-        let mut v = MockEmbedder { dim: self.dim }.embed_documents(texts).await?;
+        let mut v = MockEmbedder { dim: self.dim }
+            .embed_documents(texts)
+            .await?;
         v.pop(); // рассинхрон: на один вектор меньше входов
         Ok(v)
     }
@@ -543,7 +545,11 @@ async fn rag_index_writes_chunks_fts_and_vectors() {
 async fn embedding_count_mismatch_errors_not_silent_truncation() {
     let dir = TempDir::new().unwrap();
     let root = dir.path().to_path_buf();
-    fs::write(root.join("Note.md"), "# Heading\n\nтело заметки для эмбеддинга\n").unwrap();
+    fs::write(
+        root.join("Note.md"),
+        "# Heading\n\nтело заметки для эмбеддинга\n",
+    )
+    .unwrap();
 
     let db = open(&root).await;
     let path = root.join(".nexus").join("vectors.usearch");
