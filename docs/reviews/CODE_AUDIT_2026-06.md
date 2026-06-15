@@ -27,20 +27,20 @@
 
 - [x] **delete/rename: гард служебных путей обходится через `..`** — **ЗАКРЫТО (PR #232).** `points_into_reserved` компонентная проверка ПОСЛЕ канонизации (delete + оба конца rename); `to_abs` канонизируется (parent), `..` схлопывается. Исходно: живой `nexus.db`/`.nexus` можно отправить в корзину.
 - [x] **rename/move не переносит `.nexus/history/<rel>/`** — **ЗАКРЫТО (PR #232).** `vault::history::move_history` переносит каталог истории (best-effort) после `fs::rename`; тест move+orphan-clear. Исходно: история недоступна по новому пути (ломало SAFE-5/6).
-- [ ] **Молчаливое усечение векторов** при несовпадении длины ответа эмбеддера (zip-truncation). `indexer/mod.rs:358`, `ai/embedder.rs:130-142`, `rag.rs:191`. Fix: `Err` при `data.len() != inputs.len()`; инвариант `vectors.len()==chunk_ids.len()` перед записью.
+- [x] **Молчаливое усечение векторов** (zip-truncation) — **ЗАКРЫТО (PR #235).** Контракт эмбеддера `AiError::CountMismatch` (`out.len()!=inputs.len()` в `embed_raw`) + инвариант `vectors.len()==new_chunk_ids.len()` перед usearch-upsert + guard в reconcile. Тест truncating-embedder.
 - [ ] **get_backlinks дубли** — каждое повторное `[[упоминание]]` = отдельная строка (раздут счётчик). `graph/mod.rs:53-58`. Fix: `GROUP BY l.source_id`.
-- [ ] **graph_rank неограниченные IN** → `too many SQL variables` / краш RAG-чата на супер-хабе. `search/mod.rs:405-455`. Fix: `graph::collect_in_chunks` (вынести в общий util) для обоих IN.
-- [ ] **Вотчдог-таймаут оставляет джобу в running навсегда** → «Генерирую…» залипает. `scheduler/mod.rs:681-690,169-180`. Fix: `requeue_running` в ветке таймаута (или lease/claimed_at).
+- [x] **graph_rank неограниченные IN** — **ЗАКРЫТО (PR #236).** Оба `IN` через `graph::collect_in_chunks` (стал `pub(crate)`, чанк ≤900): BFS — две одиночные стороны рёбер (`source`/`target`), chunks-query чанкуется. Тест super-hub N=1000/hops=2.
+- [x] **Вотчдог-таймаут оставляет джобу в running навсегда** — **ЗАКРЫТО (PR #238).** `requeue_running` (running→pending) в Err-ветке таймаута тика — как crash-recovery на старте воркера.
 - [ ] **git force-checkout на грязном дереве** → молчаливая потеря незакоммиченных правок. `git/mod.rs:406-416` ← `commands/git.rs:131`. Fix: `status()`-guard перед checkout (или commit-then-pull-push).
 - [x] **plugin vault.writeFile не запрещает `.nexus/`** — **ЗАКРЫТО (PR #232).** `is_escaping` блокирует сегменты `.nexus`/`.git` (case-insensitive) ДО scope — все vault-методы плагина (read/write/list) через `check_path`. Исходно: плагин с `vault:write['**']` перезаписывал секреты/БД/код плагинов.
-- [ ] **⌘L toggleTask портит нумерованные таски** `1. [ ] foo` → `- [ ] 1. [ ] foo`. `lib/editor/format.ts:63-72`. Fix: выровнять `transformTaskLine` с `TASK_LINE_RE`; тест на ordered-tasks.
+- [x] **⌘L toggleTask портит нумерованные таски** — **ЗАКРЫТО (PR #237).** `transformTaskLine` зеркалит `TASK_LINE_RE` по набору маркеров (`[-*+]`/`\d+[.)]`) и СОХРАНЯЕТ нумерованный маркер при реконструкции (`1. [ ] x`↔`1. [x] x`); буллеты `-*+` по-прежнему нормализуются в `- `. +2 теста.
 - [x] **dailyNote/quickThought перезаписывают файл при ЛЮБОЙ ошибке чтения** — **ЗАКРЫТО (PR #233).** Переведены на `openOrCreateDaily`/`openOrCreateInbox` с `fileHash`-проверкой существования (null только при отсутствии файла); дневник унифицирован с ⌘⇧D (`Journal/`). `components/home/HomeView.tsx`, `lib/daily.ts`.
 - [-] **Регенерация удаляет обмен из БД ДО переспроса** — **НЕ БАГ (отсеяно адверсариально, аудит-ревью PR #233).** `stores/chat.ts:329-342`: ждёт персист прошлого обмена, ре-чекает дрейф ленты, чистит БД (`deleteLastExchange`) только для персистнутого **не-ошибочного** обмена (`sid != null`), текст вопроса сохраняется в `question` и переспрашивается. Потери нет.
 - [x] **Quick-capture ⌘⇧N пишет Inbox.md мимо открытого грязного буфера** — **ЗАКРЫТО (PR #233).** `appendCapture` теперь буфер-aware: открыт Inbox → `updateBufferDoc`, иначе атомарный диск. `lib/daily.ts`.
 - [ ] **Избранное не переживает rename/delete** — звёзды осиротевают; `starred.rename` мёртвый код. `stores/starred.ts:49-54`, `vault.ts:115-158`. Fix: звать `rename`/`dropStarsUnder` из vault-курации.
 - [x] **reloadWidget без try/catch** — **ЗАКРЫТО (PR #233).** Обёрнут в try/catch со снятием `generating[key]` при ошибке (как `refreshWidget`). `stores/home.ts`.
-- [ ] **plugin vault.writeFile неатомарен** (`tokio::fs::write`) — окно повреждения .md. `commands/plugin.rs:247`. Fix: `vault::atomic_write` в `spawn_blocking`.
-- [ ] **Конфиги egress-consent неатомарны** (egress/news/websearch/local.json, truncate-then-write). `net/persist.rs:60`, `news/config.rs:78`, `websearch/config.rs:73`, `commands/settings.rs:148`. Fix: общий атомарный JSON-врайтер.
+- [x] **plugin vault.writeFile неатомарен** — **ЗАКРЫТО (PR #234).** `vault::atomic_write_io` в `spawn_blocking` (окно повреждения .md устранено).
+- [x] **Конфиги egress-consent неатомарны** — **ЗАКРЫТО (PR #234).** Единый `vault::atomic_write_io` (tmp→fsync→rename) во всех 4 конфиг-врайтерах + news/chat-экспорт (7 сайтов). Тест no-leftover-tmp.
 - [ ] **Web-поиск настройки молча проглатывают ошибку записи** — пользователь думает, что сохранил. `components/settings/SettingsView.tsx:553-560`. Fix: `.catch` + error-состояние (как `EgressBlock.apply`).
 
 ---
@@ -106,15 +106,15 @@ docstring-дрейф (`goals/mod.rs:5`), мёртвый код (`chat.ts` clear(
 1. ✅ **SSRF-кластер plugin-egress + is_private_host** (CRITICAL) — **PR #231.** Эксфильтрация секретов/LAN.
 2. ✅ **delete/rename path-traversal через `..`** (major) — **PR #232.** Security-граница ФС.
 3. ✅ **`.nexus` писабелен/читаем плагином** (major) — **PR #232** (один проход с #2).
-4. **Атомарность конфигов + plugin/news/export/vault.writeFile** (major+minor) — общий atomic-writer. ← следующий.
+4. ✅ **Атомарность конфигов + plugin/news/export/vault.writeFile** (major+minor) — **PR #234** (`vault::atomic_write_io`, 7 сайтов).
 5. ✅ **rename переносит `.nexus/history`** (major) — **PR #232** (`move_history`). GC корзины — в #16.
 6. ✅ **Потери данных в UI: dailyNote/quick-capture + reloadWidget** (2×major+minor) — **PR #233.** (regenerate — не баг, отсеян.)
-7. **git force-checkout на грязном дереве** (major).
-8. **zip-усечение векторов + scan silent-drop + reloadWidget залип** (major) — целостность RAG + честность.
-9. **graph_rank unbounded IN + chunk_file_meta** — общий `collect_in_chunks`.
-10. **toggleTask нумерованные + get_backlinks дубли** (major) — видимая порча/враньё.
-11. **Планировщик: watchdog requeue + recurring re-arm + contradictions seed** (major+minor).
-12. **Cross-feature синхронизация: starred/recents/navHistory/suggest при курации/смене-vault** (major+minor).
+7. **git force-checkout на грязном дереве** (major). ← следующий.
+8. ✅ **zip-усечение векторов** (major) — **PR #235** (`CountMismatch`+инвариант). (scan silent-drop — в #16; reloadWidget — в #233.)
+9. ✅ **graph_rank unbounded IN** — **PR #236** (`collect_in_chunks` pub(crate)). chunk_file_meta — уже чанкуется.
+10. ✅ **toggleTask нумерованные** (major) — **PR #237.** get_backlinks дубли — в #16 (нужна UX-сверка: список occurrences vs счётчик).
+11. ✅ **Планировщик: watchdog requeue** (major) — **PR #238.** recurring re-arm/contradictions seed — в #16.
+12. **Cross-feature синхронизация: starred/recents/navHistory/suggest при курации/смене-vault** (major+minor). ← осталось.
 13. **Фронт-гонки эпох-гард: loadSession/news/onEvent + honesty: web-save/SyncPanel/home** (minor).
 14. **a11y-проход: focus-trap+Esc модалок + reading-Esc + TRAP_OVERLAYS_CLOSED + radiogroup + FileTree** (minor).
 15. **БД-устойчивость: миграции-потолок, write_actor/read_pool catch_unwind** (minor).
