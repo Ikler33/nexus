@@ -198,13 +198,35 @@ export function ChatView() {
       {/* Web — ДОПОЛНИТЕЛЬНЫЙ флаг поверх режима (ревизия владельца 11.06): сегмент выбирает
           «По заметкам | Общий», глобус лишь разрешает модели сходить в интернет — режим не трогает. */}
       <div className={styles.modeRow}>
-        <div role="radiogroup" aria-label={t('chat.mode')} className={styles.modeSeg}>
+        <div
+          role="radiogroup"
+          aria-label={t('chat.mode')}
+          className={styles.modeSeg}
+          // a11y (audit B10): roving-tabindex + стрелки переключают режим внутри radiogroup
+          // (WAI-ARIA radio pattern) — раньше Tab останавливался на каждой кнопке, стрелки не работали.
+          onKeyDown={(e) => {
+            if (streaming) return;
+            const order = ['vault', 'general'] as const;
+            const i = order.indexOf(mode);
+            let next: (typeof order)[number] | null = null;
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = order[(i + 1) % order.length];
+            else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+              next = order[(i - 1 + order.length) % order.length];
+            if (next) {
+              e.preventDefault();
+              setMode(next);
+              e.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
+            }
+          }}
+        >
           {(['vault', 'general'] as const).map((m) => (
             <button
               key={m}
               type="button"
               role="radio"
+              data-mode={m}
               aria-checked={mode === m}
+              tabIndex={mode === m ? 0 : -1}
               className={`${styles.modeBtn} ${mode === m ? styles.modeOn : ''}`}
               onClick={() => setMode(m)}
               disabled={streaming}

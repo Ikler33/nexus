@@ -31,4 +31,14 @@ describe('ConflictResolver (Ф4-8 / DP-10, макет conflict.jsx)', () => {
     expect(await screen.findByText(/разрешено 1 из 1|1 of 1 resolved/i)).toBeInTheDocument();
     vi.restoreAllMocks();
   });
+
+  // audit B10: резолвер получил focus-trap → Esc вызывает onClose (а не «проваливается» в reading-mode).
+  it('Esc вызывает onClose (focus-trap, audit B10)', async () => {
+    const onClose = vi.fn();
+    render(<ConflictResolver onClose={onClose} />);
+    await screen.findByText(/разрешено 0 из 1|0 of 1 resolved/i);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
 });

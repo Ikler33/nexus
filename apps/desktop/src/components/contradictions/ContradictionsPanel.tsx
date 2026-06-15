@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { RefreshCw, Scale, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useContradictionsStore } from '../../stores/contradictions';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -23,6 +24,7 @@ function noteName(path: string): string {
 export function ContradictionsPanel() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeContradictions);
+  const trapRef = useFocusTrap<HTMLDivElement>(close); // a11y: Esc/Tab-цикл внутри модалки (audit B10)
   const items = useContradictionsStore((s) => s.items);
   const loading = useContradictionsStore((s) => s.loading);
   const generating = useContradictionsStore((s) => s.generating);
@@ -43,6 +45,8 @@ export function ContradictionsPanel() {
   return (
     <div className={styles.backdrop} onClick={close} role="presentation">
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className={styles.panel}
         role="dialog"
         aria-modal="true"

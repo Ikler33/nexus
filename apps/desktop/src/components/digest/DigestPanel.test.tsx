@@ -30,4 +30,13 @@ describe('DigestPanel (#35, ADR-007 slice 4)', () => {
     expect(useDigestStore.getState().generating).toBe(true);
     expect(await screen.findByText(/Генерирую…|Generating…/i)).toBeInTheDocument();
   });
+
+  // audit B10: модалка получила focus-trap → Esc закрывает её (а не «проваливается» в reading-mode).
+  it('Esc закрывает модалку (focus-trap, audit B10)', async () => {
+    useUIStore.setState({ digestOpen: true });
+    render(<DigestPanel />);
+    await screen.findByText(/введение в книге/i);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(useUIStore.getState().digestOpen).toBe(false);
+  });
 });

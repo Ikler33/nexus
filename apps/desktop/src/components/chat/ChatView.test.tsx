@@ -45,6 +45,25 @@ describe('ChatView (Ф1-8)', () => {
     expect(useChatStore.getState().mode).toBe('vault');
   });
 
+  // audit B10: radiogroup-режим — roving tabindex + стрелки переключают (WAI-ARIA radio pattern).
+  it('radiogroup: стрелки переключают режим, roving tabindex (a11y, audit B10)', () => {
+    render(<ChatView />);
+    const group = screen.getByRole('radiogroup');
+    const vaultRadio = screen.getByRole('radio', { name: /по заметкам|notes/i });
+    const generalRadio = screen.getByRole('radio', { name: /общий|general/i });
+    // выбранный режим (vault по умолчанию) — в табовом порядке, остальные изъяты.
+    expect(vaultRadio).toHaveAttribute('tabindex', '0');
+    expect(generalRadio).toHaveAttribute('tabindex', '-1');
+
+    fireEvent.keyDown(group, { key: 'ArrowRight' });
+    expect(useChatStore.getState().mode).toBe('general');
+    expect(generalRadio).toHaveAttribute('tabindex', '0');
+    expect(vaultRadio).toHaveAttribute('tabindex', '-1');
+
+    fireEvent.keyDown(group, { key: 'ArrowLeft' });
+    expect(useChatStore.getState().mode).toBe('vault');
+  });
+
   it('пустое состояние — подсказка', () => {
     render(<ChatView />);
     expect(screen.getByText(/Спросите что-нибудь о ваших заметках/)).toBeInTheDocument();
