@@ -87,6 +87,8 @@ function readRagSources(): RagSources {
 /** LLM-реранжирование RAG-источников (search::rerank, default ВКЛ — eval: nDCG .883→1.0). */
 const AI_RERANK_KEY = 'nexus.ai.rerank';
 const AI_CHAT_MEMORY_KEY = 'nexus.ai.chatMemory';
+/** Память агента (MEM, явные факты) — ВЫКЛ по умолчанию (D5: приватность-first). */
+const AI_AGENT_MEMORY_KEY = 'nexus.ai.agentMemory';
 const AI_EXPLAIN_RELATIONS_KEY = 'nexus.ai.explainRelations';
 
 function readBoolDefaultTrue(key: string): boolean {
@@ -94,6 +96,14 @@ function readBoolDefaultTrue(key: string): boolean {
     return localStorage.getItem(key) !== '0';
   } catch {
     return true;
+  }
+}
+
+function readBoolDefaultFalse(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
   }
 }
 
@@ -135,6 +145,9 @@ interface PrefsState {
   aiRerank: boolean;
   /** Память переписки (N4b): подмешивать релевантные фрагменты прошлых диалогов в контекст. ВКЛ. */
   aiChatMemory: boolean;
+  /** Память агента (MEM): подмешивать сохранённые ЯВНЫЕ ФАКТЫ о пользователе/проектах (пины + top-k)
+   *  в контекст ответа. ВЫКЛ по умолчанию (D5: приватность-first); тумблер в Настройках → AI. */
+  aiAgentMemory: boolean;
   /** AIP-10: LLM-объяснение «причины связи» в «Связях»/«Похожих» вместо сырого сниппета (лениво,
    *  кэш). ВКЛ; реально работает при наличии утилитарной модели (иначе фолбэк на сниппет). */
   aiExplainRelations: boolean;
@@ -149,6 +162,7 @@ interface PrefsState {
   setRagSources: (style: RagSources) => void;
   setAiRerank: (on: boolean) => void;
   setAiChatMemory: (on: boolean) => void;
+  setAiAgentMemory: (on: boolean) => void;
   setAiExplainRelations: (on: boolean) => void;
   setAiPanelW: (w: number) => void;
   setAiPanelH: (h: number) => void;
@@ -162,6 +176,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   ragSources: readRagSources(),
   aiRerank: readBoolDefaultTrue(AI_RERANK_KEY),
   aiChatMemory: readBoolDefaultTrue(AI_CHAT_MEMORY_KEY),
+  aiAgentMemory: readBoolDefaultFalse(AI_AGENT_MEMORY_KEY),
   aiExplainRelations: readBoolDefaultTrue(AI_EXPLAIN_RELATIONS_KEY),
   aiPanelW: readNum(AI_W_KEY, AI_PANEL_W.def, AI_PANEL_W.min, AI_PANEL_W.max),
   aiPanelH: readNum(AI_H_KEY, AI_PANEL_H.def, AI_PANEL_H.min, AI_PANEL_H.max),
@@ -222,6 +237,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       /* ignore */
     }
     set({ aiChatMemory: on });
+  },
+  setAiAgentMemory: (on) => {
+    try {
+      localStorage.setItem(AI_AGENT_MEMORY_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ aiAgentMemory: on });
   },
   setAiExplainRelations: (on) => {
     try {

@@ -907,6 +907,8 @@ export const tauriApi = {
         web?: boolean;
         rerank?: boolean;
         memory?: boolean;
+        /** MEM (AC-MEM-5): подмешивать сохранённые явные факты (память агента). ВЫКЛ по умолчанию. */
+        agentMemory?: boolean;
         sessionId?: number | null;
         /** P6-PIN: пути закреплённых заметок — их полное содержимое в гарантированный контекст. */
         pinned?: string[];
@@ -928,6 +930,7 @@ export const tauriApi = {
         web: opts?.web,
         rerank: opts?.rerank,
         memory: opts?.memory,
+        agentMemory: opts?.agentMemory,
         sessionId: opts?.sessionId,
         pinned: opts?.pinned,
         channel,
