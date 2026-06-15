@@ -34,11 +34,11 @@
 - [ ] **git force-checkout на грязном дереве** → молчаливая потеря незакоммиченных правок. `git/mod.rs:406-416` ← `commands/git.rs:131`. Fix: `status()`-guard перед checkout (или commit-then-pull-push).
 - [x] **plugin vault.writeFile не запрещает `.nexus/`** — **ЗАКРЫТО (PR #232).** `is_escaping` блокирует сегменты `.nexus`/`.git` (case-insensitive) ДО scope — все vault-методы плагина (read/write/list) через `check_path`. Исходно: плагин с `vault:write['**']` перезаписывал секреты/БД/код плагинов.
 - [ ] **⌘L toggleTask портит нумерованные таски** `1. [ ] foo` → `- [ ] 1. [ ] foo`. `lib/editor/format.ts:63-72`. Fix: выровнять `transformTaskLine` с `TASK_LINE_RE`; тест на ordered-tasks.
-- [ ] **dailyNote/quickThought перезаписывают файл при ЛЮБОЙ ошибке чтения** (try read / catch write). `components/home/HomeView.tsx:155-173`. Fix: проверять существование через `fileHash` (null только когда файла нет), как `lib/daily.ts:38`.
-- [ ] **Регенерация удаляет обмен из БД ДО переспроса** — при сбое генерации обмен потерян. `stores/chat.ts:329-342`. Fix: `deleteLastExchange` в success-ветке (или восстановить при ошибке).
-- [ ] **Quick-capture ⌘⇧N пишет Inbox.md мимо открытого грязного буфера** — мысль теряется при «Оставить мои». `lib/daily.ts:60-69`. Fix: буфер-aware `appendCapture` (как `inbox/actions.ts`).
+- [x] **dailyNote/quickThought перезаписывают файл при ЛЮБОЙ ошибке чтения** — **ЗАКРЫТО (PR #233).** Переведены на `openOrCreateDaily`/`openOrCreateInbox` с `fileHash`-проверкой существования (null только при отсутствии файла); дневник унифицирован с ⌘⇧D (`Journal/`). `components/home/HomeView.tsx`, `lib/daily.ts`.
+- [-] **Регенерация удаляет обмен из БД ДО переспроса** — **НЕ БАГ (отсеяно адверсариально, аудит-ревью PR #233).** `stores/chat.ts:329-342`: ждёт персист прошлого обмена, ре-чекает дрейф ленты, чистит БД (`deleteLastExchange`) только для персистнутого **не-ошибочного** обмена (`sid != null`), текст вопроса сохраняется в `question` и переспрашивается. Потери нет.
+- [x] **Quick-capture ⌘⇧N пишет Inbox.md мимо открытого грязного буфера** — **ЗАКРЫТО (PR #233).** `appendCapture` теперь буфер-aware: открыт Inbox → `updateBufferDoc`, иначе атомарный диск. `lib/daily.ts`.
 - [ ] **Избранное не переживает rename/delete** — звёзды осиротевают; `starred.rename` мёртвый код. `stores/starred.ts:49-54`, `vault.ts:115-158`. Fix: звать `rename`/`dropStarsUnder` из vault-курации.
-- [ ] **reloadWidget без try/catch** — спиннер «генерирую…» залипает при ошибке refetch. `stores/home.ts:103-117`. Fix: try/catch со снятием `generating` (как `refreshWidget`).
+- [x] **reloadWidget без try/catch** — **ЗАКРЫТО (PR #233).** Обёрнут в try/catch со снятием `generating[key]` при ошибке (как `refreshWidget`). `stores/home.ts`.
 - [ ] **plugin vault.writeFile неатомарен** (`tokio::fs::write`) — окно повреждения .md. `commands/plugin.rs:247`. Fix: `vault::atomic_write` в `spawn_blocking`.
 - [ ] **Конфиги egress-consent неатомарны** (egress/news/websearch/local.json, truncate-then-write). `net/persist.rs:60`, `news/config.rs:78`, `websearch/config.rs:73`, `commands/settings.rs:148`. Fix: общий атомарный JSON-врайтер.
 - [ ] **Web-поиск настройки молча проглатывают ошибку записи** — пользователь думает, что сохранил. `components/settings/SettingsView.tsx:553-560`. Fix: `.catch` + error-состояние (как `EgressBlock.apply`).
@@ -103,12 +103,12 @@ docstring-дрейф (`goals/mod.rs:5`), мёртвый код (`chat.ts` clear(
 ---
 
 ## Порядок исправления (фикс-батчи)
-1. **SSRF-кластер plugin-egress + is_private_host** (CRITICAL) — первым, эксфильтрация секретов/LAN.
-2. **delete/rename path-traversal через `..`** (major) — security-граница ФС.
-3. **`.nexus` писабелен/читаем плагином** (major) — вторая половина plugin-sandbox (один проход с #1/#2).
-4. **Атомарность конфигов + plugin/news/export/vault.writeFile** (major+minor) — общий atomic-writer.
-5. **rename переносит `.nexus/history` + GC истории/корзины** (major+minor) — зависит от #2.
-6. **Потери данных в UI: dailyNote/regenerate/quick-capture** (3×major) — высокий impact / низкая цена.
+1. ✅ **SSRF-кластер plugin-egress + is_private_host** (CRITICAL) — **PR #231.** Эксфильтрация секретов/LAN.
+2. ✅ **delete/rename path-traversal через `..`** (major) — **PR #232.** Security-граница ФС.
+3. ✅ **`.nexus` писабелен/читаем плагином** (major) — **PR #232** (один проход с #2).
+4. **Атомарность конфигов + plugin/news/export/vault.writeFile** (major+minor) — общий atomic-writer. ← следующий.
+5. ✅ **rename переносит `.nexus/history`** (major) — **PR #232** (`move_history`). GC корзины — в #16.
+6. ✅ **Потери данных в UI: dailyNote/quick-capture + reloadWidget** (2×major+minor) — **PR #233.** (regenerate — не баг, отсеян.)
 7. **git force-checkout на грязном дереве** (major).
 8. **zip-усечение векторов + scan silent-drop + reloadWidget залип** (major) — целостность RAG + честность.
 9. **graph_rank unbounded IN + chunk_file_meta** — общий `collect_in_chunks`.

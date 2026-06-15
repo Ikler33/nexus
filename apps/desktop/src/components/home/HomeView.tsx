@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { openOrCreateDaily, openOrCreateInbox } from '../../lib/daily';
 import { renderBold } from '../../lib/render';
 import { relTime } from '../../lib/time';
 import { isTauri, tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
@@ -152,24 +153,17 @@ export function HomeView() {
     openNote(path);
   };
 
+  // Дневник и Inbox — через безопасные хелперы lib/daily (file_hash-проверка существования вместо
+  // read/catch-перезаписи: прежний код затирал файл пустым шаблоном при ЛЮБОЙ ошибке чтения — audit
+  // data-loss). Дневник единый с командой ⌘⇧D: Journal/YYYY-MM-DD.md (не разрозненный Daily/).
   const dailyNote = async () => {
-    const date = new Date().toISOString().slice(0, 10);
-    const path = `Daily/${date}.md`;
-    try {
-      await tauriApi.vault.readFile(path);
-    } catch {
-      await tauriApi.vault.writeFile(path, `# ${date}\n\n`);
-    }
-    openNote(path);
+    await openOrCreateDaily();
+    closeHome();
   };
 
   const quickThought = async () => {
-    try {
-      await tauriApi.vault.readFile('Inbox.md');
-    } catch {
-      await tauriApi.vault.writeFile('Inbox.md', '# Inbox\n\n');
-    }
-    openNote('Inbox.md');
+    await openOrCreateInbox();
+    closeHome();
   };
 
   // Quick action «Переиндексировать» (#37, макет home.jsx): фоновый rescan; спиннер гаснет по

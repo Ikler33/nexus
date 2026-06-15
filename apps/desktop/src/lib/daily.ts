@@ -47,6 +47,20 @@ export async function openOrCreateDaily(now = new Date()): Promise<string> {
   return path;
 }
 
+/**
+ * Открыть Inbox.md в редакторе, создав «# Inbox», если файла ещё нет. Существование проверяем через
+ * file_hash (→ null = файла нет), НЕ через read/catch — иначе любая ошибка чтения (транзиентный I/O,
+ * права) затёрла бы существующий Inbox пустым шаблоном (audit data-loss). Зеркало [`openOrCreateDaily`].
+ */
+export async function openOrCreateInbox(): Promise<void> {
+  const exists = (await tauriApi.vault.fileHash(INBOX).catch(() => null)) !== null;
+  if (!exists) {
+    await tauriApi.vault.writeFile(INBOX, '# Inbox\n', true);
+    await useVaultStore.getState().refreshDir('');
+  }
+  await useWorkspaceStore.getState().openFile(INBOX);
+}
+
 /** Время HH:MM по локальному времени. */
 function timeStamp(now: Date): string {
   return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
@@ -54,16 +68,25 @@ function timeStamp(now: Date): string {
 
 /**
  * Quick-capture: дозаписывает мысль строкой «- HH:MM текст» в конец Inbox.md (создаёт «# Inbox»,
- * если файла нет) — мгновенный захват без открытия файла. Запись атомарна (SAFE-1); если Inbox
- * открыт в редакторе, watcher-reload/guard (SAFE-3) подхватят изменение.
+ * если файла нет) — мгновенный захват без открытия файла. Буфер-aware (как lib/inbox/actions.ts):
+ * если Inbox открыт в редакторе, пишем в его буфер через updateBufferDoc — иначе диск-запись затёрлась
+ * бы грязным буфером при автосейве/guard (SAFE-3/4) и захват бы пропал. Закрытый файл — атомарно (SAFE-1).
  */
 export async function appendCapture(text: string, now = new Date()): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
+  const line = `- ${timeStamp(now)} ${trimmed}`;
+  const ws = useWorkspaceStore.getState();
+  const buf = ws.buffers[INBOX];
+  if (buf) {
+    // Inbox открыт → дозапись в буфер (источник правды для открытого файла).
+    const sep = buf.doc.endsWith('\n') || buf.doc === '' ? '' : '\n';
+    ws.updateBufferDoc(INBOX, `${buf.doc}${sep}${line}\n`);
+    return;
+  }
   const had = (await tauriApi.vault.fileHash(INBOX).catch(() => null)) !== null;
   const existing = had ? await tauriApi.vault.readFile(INBOX) : '# Inbox\n';
   const sep = existing.endsWith('\n') || existing === '' ? '' : '\n';
-  const next = `${existing}${sep}- ${timeStamp(now)} ${trimmed}\n`;
-  await tauriApi.vault.writeFile(INBOX, next, true);
+  await tauriApi.vault.writeFile(INBOX, `${existing}${sep}${line}\n`, true);
   if (!had) await useVaultStore.getState().refreshDir('');
 }
