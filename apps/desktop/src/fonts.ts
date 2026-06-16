@@ -9,3 +9,5 @@ import '@fontsource-variable/source-serif-4/wght-italic.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/600.css';
+// STIX Two Math для MathML (KaTeX) на Win/Linux — свой @font-face БЕЗ latin-unicode-range (см. файл).
+import './math-font.css';

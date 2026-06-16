@@ -275,3 +275,10 @@
   max-width: 100%;
   height: auto;
 }
+
+/* MathML (KaTeX output:'mathml') — STIX Two Math с OpenType-MATH-таблицей: на Chromium/WebKitGTK без
+   math-шрифта ломались растяжимые скобки/интегралы (на macOS WebKit берёт системный). `math` —
+   generic-фолбэк. CSP не трогаем (шрифт self-hosted, font-src 'self'). */
+.preview math {
+  font-family: 'STIX Two Math', math;
+}

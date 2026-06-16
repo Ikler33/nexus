@@ -37,6 +37,9 @@ importers:
       '@fontsource/jetbrains-mono':
         specifier: ^5.2.8
         version: 5.2.8
+      '@fontsource/stix-two-math':
+        specifier: ^5.2.1
+        version: 5.2.1
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
@@ -528,6 +531,9 @@ packages:
 
   '@fontsource/jetbrains-mono@5.2.8':
     resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
+
+  '@fontsource/stix-two-math@5.2.1':
+    resolution: {integrity: sha512-liFZoFv72UvKwmKc68uGaxBsuoZUYZnSK58Y7Kn6ZKG/ZrJnOh0ZigY+R7deQeoQucP5i30117UbuWzTTWtBcQ==}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -3140,6 +3146,8 @@ snapshots:
   '@fontsource-variable/source-serif-4@5.2.9': {}
 
   '@fontsource/jetbrains-mono@5.2.8': {}
+
+  '@fontsource/stix-two-math@5.2.1': {}
 
   '@humanfs/core@0.19.2':
     dependencies:

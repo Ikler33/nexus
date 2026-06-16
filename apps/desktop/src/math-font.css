@@ -1,0 +1,18 @@
+/*
+ * Math-шрифт для MathML (KaTeX `output:'mathml'`) на Win/Linux. На macOS WebKit `<math>` берёт системный
+ * math-шрифт из коробки, а на Chromium/WebView2 и WebKitGTK без шрифта с OpenType-MATH-таблицей ломаются
+ * растяжимые скобки/интегралы/большие операторы. Бандлим **STIX Two Math** (self-hosted woff2 из
+ * `@fontsource/stix-two-math` — CSP `font-src 'self'` уже разрешает).
+ *
+ * ВАЖНО: пакет @fontsource тегает woff2 как «latin» с `unicode-range: U+0000-00FF,…`, НО сам файл содержит
+ * ПОЛНЫЙ шрифт (4605 глифов + MATH-таблица; проверено fonttools). Поэтому НЕ импортируем его `index.css`
+ * (та ограничит шрифт латиницей → math-символы не покроются), а объявляем СВОЙ `@font-face` БЕЗ
+ * `unicode-range` — чтобы STIX Two Math покрывал и math-блоки (∫ ∑ √ ⎛ …).
+ */
+@font-face {
+  font-family: 'STIX Two Math';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('@fontsource/stix-two-math/files/stix-two-math-latin-400-normal.woff2') format('woff2');
+}
