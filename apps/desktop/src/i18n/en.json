@@ -842,6 +842,12 @@
       "already": "Note already on board → “{{column}}”",
       "failed": "Could not add to board",
       "noNote": "No open note to add to the board"
+    },
+    "stale": {
+      "title": "Stale tasks",
+      "heading": "Untouched for a while",
+      "count": "Stale · {{count}}",
+      "days": "{{count}}d untouched"
     }
   },
   "prop": {

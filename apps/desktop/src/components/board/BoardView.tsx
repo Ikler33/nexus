@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CalendarClock, FolderClosed, LayoutGrid, RefreshCw } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarClock,
+  FolderClosed,
+  Hourglass,
+  LayoutGrid,
+  RefreshCw,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { tauriApi, type BoardData } from '../../lib/tauri-api';
+import { tauriApi, type BoardData, type StaleTask } from '../../lib/tauri-api';
 import { useToastStore } from '../../stores/toast';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -11,6 +18,7 @@ import { TaskPeek } from './TaskPeek';
 import {
   applyOrder,
   basename,
+  filterStuck,
   groupIntoColumns,
   isOverdue,
   knownPriority,
@@ -67,6 +75,9 @@ export function BoardView() {
   };
   // BOARD-6: путь карточки в превью-панели (peek). Клик по карточке открывает превью, не уводит с доски.
   const [peekPath, setPeekPath] = useState<string | null>(null);
+  // AI-2a: «застрявшие» задачи (бэкенд) + раскрытие панели. Done-like отсеивается на рендере (filterStuck).
+  const [stale, setStale] = useState<StaleTask[]>([]);
+  const [staleOpen, setStaleOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,6 +85,12 @@ export function BoardView() {
       const next = await tauriApi.board.get();
       setData(next);
       setError(false);
+      // AI-2a: застрявшие — отдельный best-effort запрос (его сбой НЕ рушит доску); statusKey из конфига.
+      try {
+        setStale(await tauriApi.board.stale(next.config.statusKey || undefined));
+      } catch {
+        setStale([]);
+      }
     } catch {
       // Не обнуляем data — последняя валидная доска остаётся видимой (§14.6).
       setError(true);
@@ -127,6 +144,10 @@ export function BoardView() {
     if (LOCALIZED_COL_IDS.has(id)) return t(`board.col.${id}`);
     return id; // кастомный id без метки — показываем как есть
   };
+
+  // AI-2a: «застрявшие» задачи в работе — из бэкенд-списка убираем терминальные (done-like) статусы по
+  // конфигу доски (filterStuck). Открывшаяся карточка/удаление → следующий load перечитает.
+  const stuck = config ? filterStuck(stale, config.columns) : [];
 
   const clearDrag = () => {
     dragRef.current = null;
@@ -225,17 +246,59 @@ export function BoardView() {
             </span>
           )}
         </div>
-        <button
-          type="button"
-          className={styles.refresh}
-          onClick={() => void load()}
-          title={t('board.refresh')}
-          aria-label={t('board.refresh')}
-          disabled={loading}
-        >
-          <RefreshCw size={15} className={loading ? styles.spin : ''} aria-hidden />
-        </button>
+        <div className={styles.headActions}>
+          {/* AI-2a: «застрявшие» — задачи в работе без правок дольше порога. Кнопка только если есть. */}
+          {stuck.length > 0 && (
+            <button
+              type="button"
+              className={styles.staleBtn}
+              onClick={() => setStaleOpen((o) => !o)}
+              title={t('board.stale.title')}
+              aria-expanded={staleOpen}
+            >
+              <Hourglass size={13} aria-hidden />
+              {t('board.stale.count', { count: stuck.length })}
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.refresh}
+            onClick={() => void load()}
+            title={t('board.refresh')}
+            aria-label={t('board.refresh')}
+            disabled={loading}
+          >
+            <RefreshCw size={15} className={loading ? styles.spin : ''} aria-hidden />
+          </button>
+        </div>
       </header>
+
+      {/* AI-2a: раскрытый список застрявших — клик по задаче открывает её. Сорт «застряло дольше» — с бэка. */}
+      {staleOpen && stuck.length > 0 && (
+        <div className={styles.stalePanel} role="region" aria-label={t('board.stale.title')}>
+          <div className={styles.stalePanelHead}>
+            <Hourglass size={13} aria-hidden /> {t('board.stale.heading')}
+          </div>
+          <ul className={styles.staleList}>
+            {stuck.map((s) => (
+              <li key={s.path}>
+                <button
+                  type="button"
+                  className={styles.staleItem}
+                  onClick={() => openNote(s.path)}
+                >
+                  <span className={styles.staleItemTitle}>
+                    {s.title || basename(s.path) || s.path}
+                  </span>
+                  <span className={styles.staleItemMeta}>
+                    {t('board.stale.days', { count: s.daysStale })}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {error && !data && (
         <div className={styles.state} role="alert">

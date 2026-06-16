@@ -167,6 +167,16 @@ export interface TaskCard {
   tags: string[];
 }
 
+/** Застрявшая задача (AI-2a, зеркалит Rust `board::StaleTask`): не правленная дольше порога. `lastEdit` —
+ *  unix-сек последнего наблюдённого изменения (edit_events, фолбэк mtime); `daysStale` = дней простоя. */
+export interface StaleTask {
+  path: string;
+  title: string | null;
+  status: string;
+  lastEdit: number;
+  daysStale: number;
+}
+
 /** Колонка доски (зеркалит Rust `board::config::BoardColumn`, BOARD-3). `id` = raw-значение `status`;
  *  `label` пусто → локализация на фронте; `doneLike` — терминальная колонка. */
 export interface BoardColumn {
@@ -811,6 +821,11 @@ export const tauriApi = {
     /** Список досок (всегда ≥1 — синтетический дефолт). */
     boards: (): Promise<BoardSummary[]> =>
       isTauri() ? invoke<BoardSummary[]>('list_boards') : mockBoard.listBoards(),
+    /** AI-2a: «застрявшие» задачи — не правленные ≥ thresholdDays (умолч. 14) дней по edit_events. */
+    stale: (statusKey?: string, thresholdDays?: number): Promise<StaleTask[]> =>
+      isTauri()
+        ? invoke<StaleTask[]>('stale_tasks', { statusKey, thresholdDays })
+        : mockBoard.staleTasks(),
   },
 
   /** Реестр типов свойств (PROP-2, Obsidian Properties). Тип глобален по имени; иначе — эвристика. */

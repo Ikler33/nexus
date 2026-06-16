@@ -70,6 +70,59 @@ pub async fn list_board(reader: &ReadPool, status_key: String) -> DbResult<Vec<T
         .await
 }
 
+/// Застрявшая задача (AI-2a, спека §10 A2): заметка-задача, не правленная дольше порога. `last_edit` —
+/// max наблюдённого `edit_events.ts` (фолбэк `files.updated_at`, если событий ещё нет — заметка
+/// проиндексирована до P2/мигр.015); `days_stale` = floor((now − last_edit)/86400). Терминальные
+/// (`done`-like) статусы здесь НЕ отсеиваются — бэкенд не знает колонок доски; фронт фильтрует по конфигу.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleTask {
+    pub path: String,
+    pub title: Option<String>,
+    pub status: String,
+    pub last_edit: i64,
+    pub days_stale: i64,
+}
+
+/// Задачи (есть `status_key`), не правленные ≥ `threshold_days` дней относительно `now` (unix-сек).
+/// Детерминированный SQL-read из индекса (без LLM/сети). `last_edit` = `COALESCE(MAX(edit_events.ts),
+/// files.updated_at)`. Сорт «застряло дольше» (самые старые сверху), затем путь — детерминизм. Пусто, если
+/// нет задач старше порога.
+pub async fn stale_tasks(
+    reader: &ReadPool,
+    status_key: String,
+    threshold_days: i64,
+    now: i64,
+) -> DbResult<Vec<StaleTask>> {
+    // saturating — устойчивость к экстремальному порогу при прямом вызове lib-функции (команда клампит ≥1).
+    let cutoff = now.saturating_sub(threshold_days.max(0).saturating_mul(86_400));
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT f.path, f.title, st.value, COALESCE(MAX(e.ts), f.updated_at) AS last_edit \
+                 FROM files f \
+                 JOIN frontmatter_fields st ON st.file_id = f.id AND st.key = ?1 \
+                 LEFT JOIN edit_events e ON e.file_id = f.id \
+                 WHERE f.is_deleted = 0 \
+                 GROUP BY f.id \
+                 HAVING last_edit <= ?2 \
+                 ORDER BY last_edit ASC, f.path ASC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![&status_key, cutoff], |r| {
+                let last_edit: i64 = r.get(3)?;
+                Ok(StaleTask {
+                    path: r.get(0)?,
+                    title: r.get(1)?,
+                    status: r.get(2)?,
+                    last_edit,
+                    days_stale: (now - last_edit).max(0) / 86_400,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<StaleTask>>>()
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +214,85 @@ mod tests {
         // Кастомный status_key, которого нет → пусто.
         let none = list_board(db.reader(), "phase".to_string()).await.unwrap();
         assert!(none.is_empty(), "нет ключа phase → нет карточек");
+    }
+
+    const DAY: i64 = 86_400;
+
+    /// Засевает files(updated_at) + frontmatter_fields(status) + опц. edit_events(ts) напрямую — чтобы
+    /// детерминированно контролировать «возраст» задачи (индексатор пишет ts≈сейчас, для stale-теста нужны
+    /// заданные времена). `(path, status_opt, updated_at, edit_ts_opt)`.
+    async fn db_with_tasks(rows: &[(&str, Option<&str>, i64, Option<i64>)]) -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join("nexus.db")).await.unwrap();
+        let rows: Vec<(String, Option<String>, i64, Option<i64>)> = rows
+            .iter()
+            .map(|(p, s, u, e)| (p.to_string(), s.map(str::to_string), *u, *e))
+            .collect();
+        db.writer()
+            .call(move |c| {
+                for (path, status, updated_at, edit_ts) in &rows {
+                    c.execute(
+                        "INSERT INTO files (path,hash,title,created_at,updated_at,indexed_at,size_bytes,word_count) \
+                         VALUES (?1,'h',?1,0,?2,0,1,42)",
+                        rusqlite::params![path, updated_at],
+                    )?;
+                    let fid = c.last_insert_rowid();
+                    if let Some(s) = status {
+                        c.execute(
+                            "INSERT INTO frontmatter_fields (file_id,key,value) VALUES (?1,'status',?2)",
+                            rusqlite::params![fid, s],
+                        )?;
+                    }
+                    if let Some(ts) = edit_ts {
+                        c.execute(
+                            "INSERT INTO edit_events (file_id,ts,kind) VALUES (?1,?2,'modify')",
+                            rusqlite::params![fid, ts],
+                        )?;
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        (dir, db)
+    }
+
+    /// AI-2a: задача застряла, если последнее НАБЛЮДЁННОЕ изменение (`MAX(edit_events.ts)`, фолбэк mtime)
+    /// старше порога. edit_events перебивает mtime (touch без смены контента не «освежает»); не-задача и
+    /// свежая задача исключены; done-like НЕ фильтруется бэкендом; сорт — самые старые сверху.
+    #[tokio::test]
+    async fn stale_tasks_threshold_and_edit_events_fallback() {
+        let now = 1_780_000_000;
+        let (_d, db) = db_with_tasks(&[
+            ("stale.md", Some("todo"), now - 40 * DAY, None), // фолбэк mtime: 40д → застряла
+            ("done.md", Some("done"), now - 20 * DAY, None), // 20д → застряла (done не фильтруем тут)
+            (
+                "fresh-mtime.md",
+                Some("doing"),
+                now - 50 * DAY,
+                Some(now - 2 * DAY),
+            ), // edit 2д назад → НЕ застряла
+            ("touched.md", Some("todo"), now - DAY, Some(now - 30 * DAY)), // mtime свежий, но edit 30д → застряла
+            ("notask.md", None, now - 99 * DAY, None),                     // не задача → исключена
+        ])
+        .await;
+
+        let stale = stale_tasks(db.reader(), DEFAULT_STATUS_KEY.to_string(), 14, now)
+            .await
+            .unwrap();
+        let paths: Vec<&str> = stale.iter().map(|s| s.path.as_str()).collect();
+        // last_edit ASC (самые старые сверху): stale(now−40d) < touched(now−30d) < done(now−20d).
+        assert_eq!(paths, vec!["stale.md", "touched.md", "done.md"]);
+        let by: HashMap<&str, &StaleTask> = stale.iter().map(|s| (s.path.as_str(), s)).collect();
+        assert_eq!(by["stale.md"].days_stale, 40);
+        assert_eq!(
+            by["touched.md"].days_stale, 30,
+            "edit_events перебивает свежий mtime"
+        );
+        assert!(
+            !by.contains_key("fresh-mtime.md"),
+            "свежий edit_event → не застряла"
+        );
+        assert!(!by.contains_key("notask.md"), "не задача исключена");
     }
 }
