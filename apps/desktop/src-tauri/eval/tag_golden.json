@@ -1,0 +1,11 @@
+{
+  "vocabulary": ["rust", "frontend", "ai", "design", "ops", "docs"],
+  "cases": [
+    { "path": "notes/a.md", "gold": ["rust", "ops"] },
+    { "path": "notes/b.md", "gold": ["frontend", "design"] },
+    { "path": "notes/c.md", "gold": ["ai"] },
+    { "path": "notes/d.md", "gold": ["docs"] },
+    { "path": "notes/e.md", "gold": ["rust", "ai"] },
+    { "path": "notes/f.md", "gold": [] }
+  ]
+}
