@@ -39,6 +39,26 @@ export function isBlockAnchor(anchor: string | null): boolean {
   return anchor != null && anchor.startsWith('^');
 }
 
+/** Параметры картинки-вставки `![[img.png|alt|300]]`: `alt`-текст и `width` (Obsidian-синтаксис —
+ *  числовой сегмент = ширина в px, `ШxВ` → берём ширину; нечисловой = alt). Сегменты после первого `|`. */
+export function parseImageParams(inner: string): { alt: string; width: number | null } {
+  const segs = inner.split('|').slice(1); // [0] — имя файла, его берём из parseEmbedTarget.note
+  let alt = '';
+  let width: number | null = null;
+  for (const seg of segs) {
+    const t = seg.trim();
+    const m = /^(\d+)(?:x\d+)?$/.exec(t); // ширина или ШxВ
+    if (m) {
+      // Числовой сегмент — ВСЕГДА спецификатор ширины (не alt). `0` невалиден → игнор (натуральный
+      // размер), но `0` НЕ становится alt-текстом «0» (ревью: иначе 0px-картинка / мусорный alt).
+      if (Number(m[1]) > 0) width = Number(m[1]);
+    } else if (t) {
+      alt = t;
+    }
+  }
+  return { alt, width };
+}
+
 /** Нормализация текста заголовка для сравнения: срез закрывающих `#`, trim, lower. */
 function normHeading(s: string): string {
   return s

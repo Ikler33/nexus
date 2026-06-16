@@ -1,4 +1,5 @@
 import { createElement, useContext, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
@@ -57,7 +58,7 @@ function ownTaskChecked(node: HastNode | undefined): boolean {
  * `data:`-URL через `read_attachment` (CSP разрешает `data:`, asset-протокол не нужен); внешние
  * `http(s):`/`data:` остаются как есть. `alt` прокидывается из markdown — без нарушений CSP.
  */
-function VaultImage({ src, alt }: { src?: string; alt?: string }) {
+function VaultImage({ src, alt, width }: { src?: string; alt?: string; width?: number }) {
   const external = !src || /^(https?:|data:)/i.test(src);
   const [resolved, setResolved] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -73,7 +74,50 @@ function VaultImage({ src, alt }: { src?: string; alt?: string }) {
       alive = false;
     };
   }, [src, external]);
-  return <img className={styles.image} src={external ? src : resolved} alt={alt ?? ''} loading="lazy" />;
+  // `width` — HTML-атрибут (презентационный), НЕ inline-style → CSP `style-src` не нарушаем.
+  return (
+    <img
+      className={styles.image}
+      src={external ? src : resolved}
+      alt={alt ?? ''}
+      width={width}
+      loading="lazy"
+    />
+  );
+}
+
+/**
+ * Картинка-вставка `![[pic.png]]` / `![[pic.png|alt|300]]` (IMG-EMBED, Live-Preview). Резолвит basename
+ * → относительный путь vault командой `resolve_attachment` (картинки НЕ в индексе — обход ФС), затем
+ * рендерит через `VaultImage` (тот же `read_attachment` → `data:`-URL). Не найдено → честная заглушка.
+ */
+function EmbedImage({ name, alt, width }: { name: string; alt: string; width?: number }) {
+  const { t } = useTranslation();
+  const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading');
+  const [path, setPath] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    void tauriApi.attachments
+      .resolve(name)
+      .then((p) => {
+        if (!alive) return;
+        if (p) {
+          setPath(p);
+          setState('ok');
+        } else {
+          setState('missing');
+        }
+      })
+      .catch(() => {
+        if (alive) setState('missing');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [name]);
+  if (state === 'missing') return <span className={styles.embedNote}>{t('embed.imageMissing', { name })}</span>;
+  if (state === 'loading') return <span className={styles.embedNote}>{t('embed.loading')}</span>;
+  return <VaultImage src={path} alt={alt || name} width={width} />;
 }
 
 export function MarkdownPreview({
@@ -189,6 +233,17 @@ export function MarkdownPreview({
         )}
       />
     );
+  };
+
+  // Картинка-вставка `nexus-image` (из remarkEmbeds) → резолв basename + рендер `<img>`.
+  (components as Record<string, Components['div']>)['nexus-image'] = ({ node }) => {
+    const props = (node?.properties ?? {}) as Record<string, unknown>;
+    const name = typeof props.name === 'string' ? props.name : '';
+    const alt = typeof props.alt === 'string' ? props.alt : '';
+    const widthStr = typeof props.width === 'string' ? props.width : '';
+    if (!name) return null;
+    const width = /^\d+$/.test(widthStr) ? Number(widthStr) : undefined;
+    return <EmbedImage name={name} alt={alt} width={width} />;
   };
 
   if (onToggleTask) {

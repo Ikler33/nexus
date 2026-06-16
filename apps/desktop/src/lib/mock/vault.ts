@@ -651,3 +651,52 @@ export async function resolveNote(target: string): Promise<string | null> {
     null
   );
 }
+
+const IMG_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
+
+/** Все файлы (не-папки) из TREE — для резолва вложений по basename (мок не индексирует картинки). */
+function allFilePaths(): string[] {
+  return Object.values(TREE)
+    .flat()
+    .filter((e) => !e.isDir)
+    .map((e) => e.path);
+}
+
+/** Зеркало бэкенд-`watcher::is_ignored` (служебные пути): компонент `.nexus`/`.git`, dot-basename,
+ *  `.conflict`. Ревью IMG-EMBED — мок обязан отвергать `.nexus/x.png` так же, как бэкенд (анти-утечка). */
+function isIgnoredPath(p: string): boolean {
+  const segs = p.split('/');
+  if (segs.some((s) => s === '.nexus' || s === '.git')) return true;
+  const base = segs[segs.length - 1] ?? '';
+  return base.startsWith('.') || base.endsWith('.conflict');
+}
+
+/** Зеркало бэкенд-`resolve_attachment` (IMG-EMBED): путь-с-сепаратором → как есть (если существует и не
+ *  служебный); голый basename → поиск картинки в TREE (кратчайший путь, регистронезависимо, мимо
+ *  служебных). null — не найдено / служебное. */
+export async function resolveAttachment(name: string): Promise<string | null> {
+  if (!IMG_RE.test(name)) return null;
+  if (name.includes('/') || name.includes('\\')) {
+    const norm = name.replace(/\\/g, '/');
+    if (isIgnoredPath(norm)) return null;
+    return allFilePaths().includes(norm) ? norm : null;
+  }
+  const lower = name.toLowerCase();
+  const hits = allFilePaths()
+    .filter((p) => !isIgnoredPath(p) && p.slice(p.lastIndexOf('/') + 1).toLowerCase() === lower)
+    .sort((a, b) => a.length - b.length);
+  return hits[0] ?? null;
+}
+
+/** Зеркало бэкенд-`read_attachment` (мок): видимый placeholder-SVG для известной картинки (превью без
+ *  Tauri показывает «картинку» с именем), иначе пусто (служебное/недоступное вложение). */
+export async function readAttachment(path: string): Promise<string> {
+  if (!IMG_RE.test(path) || isIgnoredPath(path) || !allFilePaths().includes(path)) return '';
+  const label = path.slice(path.lastIndexOf('/') + 1);
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="140">` +
+    `<rect width="220" height="140" rx="8" fill="#3b82f6" opacity="0.18"/>` +
+    `<text x="110" y="74" font-family="sans-serif" font-size="13" fill="#3b82f6" ` +
+    `text-anchor="middle">${label}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}

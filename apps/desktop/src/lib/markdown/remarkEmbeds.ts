@@ -1,7 +1,7 @@
 import type { Paragraph, Root } from 'mdast';
 import { visit } from 'unist-util-visit';
 
-import { EMBED_PARAGRAPH_RE, isImageTarget, parseEmbedTarget } from './embed';
+import { EMBED_PARAGRAPH_RE, isImageTarget, parseEmbedTarget, parseImageParams } from './embed';
 
 /** Минимальная форма VFile (без прямой зависимости от пакета `vfile`): нужен только исходный текст. */
 type SourceFile = { toString(): string };
@@ -20,9 +20,10 @@ const MAX_EMBEDS_PER_NOTE = 50;
  * (вложенные `linkReference`-узлы от `[ … ]`), поэтому берём ТОЧНЫЙ срез исходника по `node.position`
  * (react-markdown кладёт исходник в `VFile`) и матчим регэкспом — без зависимости от токенизации.
  *
- * Охват слайса: блок-вставка (абзац = один `![[…]]`). Инлайн-вставка в середине текста и несколько
- * `![[…]]` в одном абзаце (через мягкие переводы строк) НЕ матчатся — падают в прежнее поведение
- * (`!` + `[[wikilink]]` из remarkNexus), без регрессии. Картинки `![[pic.png]]` тоже пропускаются.
+ * Картинки `![[pic.png]]` / `![[pic.png|alt|300]]` → узел `nexus-image` (рендер компонентом `EmbedImage`:
+ * резолв basename → `read_attachment` → `<img>`). Охват слайса: блок-вставка (абзац = один `![[…]]`).
+ * Инлайн-вставка в середине текста и несколько `![[…]]` в одном абзаце (через мягкие переводы строк) НЕ
+ * матчатся — падают в прежнее поведение (`!` + `[[wikilink]]` из remarkNexus), без регрессии.
  */
 export function remarkEmbeds() {
   return (tree: Root, file: SourceFile): void => {
@@ -38,18 +39,30 @@ export function remarkEmbeds() {
       const m = EMBED_PARAGRAPH_RE.exec(raw);
       if (!m) return;
       const { note, anchor } = parseEmbedTarget(m[1]);
-      if (note.length === 0 || isImageTarget(note)) return; // пусто (`![[#H]]`) / картинка — не наш случай
-      // Кастомный узел: пустые children + hName → mdast-util-to-hast создаёт <nexus-embed>, который
-      // react-markdown рендерит через components['nexus-embed']. Полезную нагрузку (target/anchor)
-      // читаем в компоненте из `node.properties` (hProperties копируются туда дословно).
-      parent.children[index] = {
-        type: 'paragraph', // тип игнорируется — рендер идёт по data.hName; держим валидный mdast-узел
-        children: [],
-        data: {
-          hName: 'nexus-embed',
-          hProperties: { target: note, anchor: anchor ?? '' },
-        },
-      } as Paragraph;
+      if (note.length === 0) return; // пусто (`![[#H]]`, вставка той же заметки) — пока не наш случай
+      // Кастомный узел: пустые children + hName → mdast-util-to-hast создаёт <nexus-embed>/<nexus-image>,
+      // который react-markdown рендерит через components[...]. Полезную нагрузку читаем в компоненте из
+      // `node.properties` (hProperties копируются туда дословно).
+      if (isImageTarget(note)) {
+        const { alt, width } = parseImageParams(m[1]);
+        parent.children[index] = {
+          type: 'paragraph',
+          children: [],
+          data: {
+            hName: 'nexus-image',
+            hProperties: { name: note, alt, width: width != null ? String(width) : '' },
+          },
+        } as Paragraph;
+      } else {
+        parent.children[index] = {
+          type: 'paragraph', // тип игнорируется — рендер идёт по data.hName; держим валидный mdast-узел
+          children: [],
+          data: {
+            hName: 'nexus-embed',
+            hProperties: { target: note, anchor: anchor ?? '' },
+          },
+        } as Paragraph;
+      }
       emitted += 1;
     });
   };

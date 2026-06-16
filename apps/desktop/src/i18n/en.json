@@ -361,7 +361,8 @@
     "depth": "Embed nesting too deep",
     "headingMissing": "Heading not found: {{anchor}}",
     "blockUnsupported": "Block references aren’t supported yet",
-    "error": "Couldn’t load embed"
+    "error": "Couldn’t load embed",
+    "imageMissing": "Image not found: {{name}}"
   },
   "capture": {
     "title": "Quick capture",

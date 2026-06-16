@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### Live Preview — картинки-вставки `![[pic.png]]` в режиме чтения (эпик §13, срез 2)
+
+Следующий autonomy-safe срез после транклюзии (выбран скоуп-анализом 3 кандидатов: картинки · Ctrl+E ·
+Mermaid — последний отложен владельцу как CSP-nonce-решение). Obsidian-синтаксис вставки картинок теперь
+рендерится в reading-режиме: `![[diagram.png]]` и `![[pic.png|подпись|300]]` → `<img>` (alt + ширина
+HTML-атрибутом, без inline-style — строгий CSP не трогаем).
+- **Резолв по basename**: картинки НЕ в индексе (`files` — только `.md`), поэтому новая read-only команда
+  `resolve_attachment` обходит vault за картинкой с таким именем — как basename-шорткат `[[ссылок]]`:
+  КРАТЧАЙШИЙ путь, регистронезависимо, мимо служебных папок (`.nexus`/`.git`). Путь-с-сепаратором
+  (`![[attachments/x.png]]`) — явный, через `resolve_vault_path` (анти-traversal). Рендер — существующим
+  `read_attachment` → `data:`-URL (CSP уже разрешает `data:`).
+- Маршрутизация в `remarkEmbeds`: image-расширение → узел `nexus-image` (картинка), иначе → `nexus-embed`
+  (транклюзия заметки, срез 1). Потолок `MAX_EMBEDS_PER_NOTE` теперь общий для картинок и заметок.
+- Мок (`mock/vault.ts`) зеркалит контракт обеих команд (basename-обход + placeholder-SVG) — превью без Tauri
+  показывает картинку.
+- **Adversarial-ревью (3 линзы × верификация): 1 MAJOR + нит'ы — все пофикшены.** MAJOR — `read_attachment`/
+  `resolve_attachment` читали `.nexus`/`.git` (напрямую `![](.nexus/x.png)` И через симлинк `lnk.png→../.nexus/`,
+  т.к. `resolve_vault_path` канонизирует, но не отвергает служебные папки): закрыто `is_ignored`-гардом на
+  канон-пути в ОБОИХ путях чтения (паритет с `is_pinnable`/permission; +unix-тест на симлинк). Нит'ы:
+  `![[img|0]]` больше не 0px-картинка (фолбэк на натуральный размер); `ico` добавлен в backend `mime_for_ext`
+  (паритет мок↔бэкенд по набору расширений).
+- Тесты: 6 Rust (TempDir-обход: подпапка/регистр/коллизия-кратчайший/`.nexus`-скип/не-найдено/не-картинка) +
+  5 `parseImageParams` + 4 интеграционных (резолв→img / alt+width / не-найдено-заглушка / image-путь≠транклюзия).
+Файлы: `commands/attachments.rs` (+`resolve_attachment`/`find_image_by_basename`), `lib/markdown/{embed,remarkEmbeds}.ts`,
+`MarkdownPreview.tsx` (`EmbedImage`+`VaultImage` width), `tauri-api.ts`, `mock/vault.ts`, i18n `embed.imageMissing`.
+
 ### Live Preview — транклюзия `![[embed]]` в режиме чтения (эпик §13, срез 1)
 
 После walk-through больших пост-v1 эпиков (мультиагентная оценка: Live Preview · Home · плагины/marketplace ·

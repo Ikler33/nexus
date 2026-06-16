@@ -272,3 +272,48 @@ describe('MarkdownPreview: транклюзия ![[embed]] (Live-Preview, реж
     await waitFor(() => expect(resolve).toHaveBeenCalledTimes(50));
   });
 });
+
+describe('MarkdownPreview: картинки-вставки ![[pic.png]] (IMG-EMBED)', () => {
+  it('![[diagram.png]] → резолв basename + рендер <img> с data-URL', async () => {
+    vi.spyOn(tauriApi.attachments, 'resolve').mockResolvedValue('Notes/diagram.png');
+    const read = vi
+      .spyOn(tauriApi.attachments, 'read')
+      .mockResolvedValue('data:image/png;base64,AAAA');
+    render(<MarkdownPreview source={'![[diagram.png]]'} onOpenLink={() => {}} />);
+
+    const img = await screen.findByRole('img');
+    expect(tauriApi.attachments.resolve).toHaveBeenCalledWith('diagram.png');
+    await waitFor(() => expect(read).toHaveBeenCalledWith('Notes/diagram.png'));
+    await waitFor(() => expect(img).toHaveAttribute('src', 'data:image/png;base64,AAAA'));
+  });
+
+  it('![[pic.png|подпись|250]] → alt и width(атрибут, CSP-safe)', async () => {
+    vi.spyOn(tauriApi.attachments, 'resolve').mockResolvedValue('attachments/pic.png');
+    vi.spyOn(tauriApi.attachments, 'read').mockResolvedValue('data:image/png;base64,BBBB');
+    render(<MarkdownPreview source={'![[pic.png|подпись|250]]'} onOpenLink={() => {}} />);
+
+    const img = await screen.findByRole('img', { name: 'подпись' });
+    expect(img).toHaveAttribute('width', '250');
+    // ширина — HTML-атрибут, не inline-style (строгий CSP)
+    expect(img.getAttribute('style')).toBeNull();
+  });
+
+  it('картинка не найдена → честная заглушка, не битый <img>', async () => {
+    vi.spyOn(tauriApi.attachments, 'resolve').mockResolvedValue(null);
+    const read = vi.spyOn(tauriApi.attachments, 'read');
+    render(<MarkdownPreview source={'![[ghost.png]]'} onOpenLink={() => {}} />);
+
+    expect(await screen.findByText(/ghost\.png/)).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('![[pic.png]] идёт по image-пути, не через транклюзию заметок', async () => {
+    vi.spyOn(tauriApi.attachments, 'resolve').mockResolvedValue('attachments/pic.png');
+    vi.spyOn(tauriApi.attachments, 'read').mockResolvedValue('data:image/png;base64,CCCC');
+    const resolveNote = vi.spyOn(tauriApi.vault, 'resolveNote');
+    render(<MarkdownPreview source={'![[pic.png]]'} onOpenLink={() => {}} />);
+    await screen.findByRole('img');
+    expect(resolveNote).not.toHaveBeenCalled();
+  });
+});
