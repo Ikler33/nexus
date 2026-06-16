@@ -103,6 +103,21 @@ Properties-паритет (реестр типов + 5 виджетов); AI MVP
   битый JSON → пустой реестр (fail-safe). Браузер-мок `mock/properties.ts` зеркалит эвристику (MEM-5).
   Rust 4 теста (эвристика/resolve/note_properties/round-trip) + clippy/fmt; фронт мок-тест + tsc/eslint.
   Properties-панель с виджетами + инлайн-правкой — PROP-3 (потребитель этого read-пути).
+- **PROP-3** — Properties-панель (Obsidian, спека §7): в превью задачи (BOARD-6) типизированные виджеты
+  frontmatter-свойств с ИНЛАЙН-правкой через `set_frontmatter_field`. Виджеты MVP: text/number/checkbox/
+  date (datetime — как текст); список/теги — read-only (чип-правка PROP-4); значение не под типом → жёлтое
+  invalid-поле + «Править в source». Общий безопасный путь записи `lib/frontmatter-edit.ts`
+  (`writeFrontmatterField`) — инкапсулирует урок BOARD-5 R1 (флаш грязного буфера, не удалось →
+  `FlushFailedError`, frontmatter не тронут) + анти-эхо `syncBufferAfterWrite` (SAFE-3) в ОДНОМ тестируемом
+  месте. Чистый `prop-widgets.ts` (`isValidForType`/`isChecked`/`isCalendarDate`). Правка свойства →
+  доска перечитывается (карточка едет в новую колонку). Adversarial-ревью (3 линзы, MANDATORY §14.7):
+  data-safety цела (бэкенд режет пустое/`[…]`/перевод-строки/край-кавычки; флаш-гард airtight — НЕ
+  data-loss). FIX-FIRST по 3 MAJOR валидации (корень — `isValidForType` была слабее виджета/бэкенда):
+  R1 date — календарная валидация (`2026-02-30` → invalid, не пустой date-input с ложной ошибкой); R2
+  list/tags — read-only ветка с escape-в-source (не текст-инпут, который бэкенд отвергнет); R3 number —
+  грамматика (без `0x`/`0b`/`Infinity`). + хвосты hygiene (осиротевшие i18n/CSS). R5/R6/R7 (минорный UX —
+  фокус/флеш/дрейф) — в бэклог. Фронт 575 тестов (prop-widgets/frontmatter-edit-флаш-гард/PropertiesEditor
+  3); превью verified (date-пикеры, инлайн-правка, доска видна). PROP-4 — автокомплит тегов.
 
 ### MEM-5 — захват факта в память прямо из чата (фидбэк владельца)
 

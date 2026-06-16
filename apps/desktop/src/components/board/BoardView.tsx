@@ -373,6 +373,7 @@ export function BoardView() {
               onClose={() => setPeekPath(null)}
               onOpenFull={openNote}
               onOpenLink={openLink}
+              onChanged={() => void load()}
             />
           )}
         </div>

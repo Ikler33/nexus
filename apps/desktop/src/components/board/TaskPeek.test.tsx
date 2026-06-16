@@ -21,19 +21,22 @@ describe('TaskPeek (BOARD-6 — превью задачи, §9)', () => {
     vi.restoreAllMocks();
   });
 
-  it('рендерит свойства + ТЕЛО (frontmatter срезан) + «Открыть в редакторе»', async () => {
+  it('рендерит Properties-панель + теги + ТЕЛО (frontmatter срезан) + «Открыть в редакторе»', async () => {
     vi.spyOn(tauriApi.vault, 'readFileMeta').mockResolvedValue({
       content: '---\nstatus: doing\npriority: high\n---\n# Раздел\nтекст задачи',
       hash: 'h1',
     });
+    vi.spyOn(tauriApi.properties, 'forNote').mockResolvedValue([
+      { key: 'status', value: 'doing', type: 'text' },
+    ]);
     const onOpenFull = vi.fn();
     render(<TaskPeek card={card} onClose={() => {}} onOpenFull={onOpenFull} onOpenLink={() => {}} />);
 
-    // Свойства из карточки.
+    // Заголовок карточки + тег-чип (вне frontmatter-скаляров).
     expect(screen.getByText('Дизайн доски')).toBeInTheDocument();
-    expect(screen.getByText('doing')).toBeInTheDocument();
-    expect(screen.getByText('Nexus')).toBeInTheDocument();
     expect(screen.getByText('#design')).toBeInTheDocument();
+    // Properties-панель (PROP-3): свойство status редактируемым полем.
+    await waitFor(() => expect(screen.getByLabelText('status')).toBeInTheDocument());
 
     // Тело отрендерилось без frontmatter (заголовок «Раздел» есть, «status: doing» как текст — нет).
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Раздел' })).toBeInTheDocument());
@@ -49,6 +52,7 @@ describe('TaskPeek (BOARD-6 — превью задачи, §9)', () => {
       content: '---\nstatus: doing\n---\n',
       hash: 'h2',
     });
+    vi.spyOn(tauriApi.properties, 'forNote').mockResolvedValue([]);
     render(<TaskPeek card={card} onClose={() => {}} onOpenFull={() => {}} onOpenLink={() => {}} />);
     await waitFor(() => expect(screen.getByText(/нет тела/i)).toBeInTheDocument());
   });
