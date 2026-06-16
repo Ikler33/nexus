@@ -699,3 +699,70 @@ async fn live_eval_llm_rerank_experiment() {
         r_m / n_cases,
     );
 }
+
+/// AI-2c (A4) live-гейт: прогоняет РЕАЛЬНЫЙ `chat_util`-классификатор (Qwen3-4B :8084) по зашитой
+/// `eval/tag_golden.json` и проверяет closed-vocab-харнесс — `out_of_vocab==0` И микро-precision/recall не
+/// ниже порогов (§10 A4). Это «боевая» точка подключения, дополняющая детерминированный
+/// `fixture_runs_through_gate_and_discriminates` (тот в CI проверяет, что гейт ловит регресс БЕЗ LLM).
+/// Запуск: `NEXUS_FAST_URL=http://192.168.0.31:8084 cargo test live_classify_tags_meets_gate -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "live-llm авто-тег (AI-2c): нужен chat_util (NEXUS_FAST_URL / 192.168.0.31:8084)"]
+async fn live_classify_tags_meets_gate() {
+    use super::classify::{
+        evaluate_tags, load_tag_golden, meets_thresholds, MIN_PRECISION, MIN_RECALL,
+    };
+    use crate::ai::{ChatProvider, OpenAiChatProvider};
+    use crate::net::{EgressFeature, GuardedClient};
+    use std::collections::HashSet;
+    use std::sync::atomic::AtomicBool;
+
+    let fast_url =
+        std::env::var("NEXUS_FAST_URL").unwrap_or_else(|_| "http://192.168.0.31:8084".into());
+    let chat: Arc<dyn ChatProvider> = Arc::new(
+        OpenAiChatProvider::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Chat,
+            &fast_url,
+            "qwen3-4b",
+            Some(0.0),
+        )
+        .without_reasoning(),
+    );
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    let golden = load_tag_golden();
+    let vocab_set: HashSet<String> = golden.vocabulary.iter().cloned().collect();
+
+    let mut predictions: Vec<(String, HashSet<String>)> = Vec::new();
+    let mut gold: Vec<(String, Vec<String>)> = Vec::new();
+    let mut dropped_total = 0usize; // реальные out-of-vocab выдачи модели (до фильтра)
+    for case in &golden.cases {
+        let s = crate::tagger::classify_tags(&chat, &golden.vocabulary, &case.body, &cancel).await;
+        dropped_total += s.dropped;
+        predictions.push((case.path.clone(), s.tags.into_iter().collect()));
+        gold.push((case.path.clone(), case.gold.clone()));
+    }
+
+    let report = evaluate_tags(&predictions, &gold, &vocab_set);
+    // dropped = сколько тегов модель выдала ВНЕ словаря (отсеяно фильтром); oov по отчёту — всегда 0
+    // (production-выход уже vocab-фильтрован), это инвариант-санити, а не «сколько отброшено».
+    eprintln!(
+        "AI-2c авто-тег: precision={:.3} recall={:.3} f1={:.3} (tp={} fp={} fn={} dropped={} oov={})",
+        report.precision,
+        report.recall,
+        report.f1,
+        report.tp,
+        report.fp,
+        report.fn_count,
+        dropped_total,
+        report.out_of_vocab,
+    );
+    assert_eq!(
+        report.out_of_vocab, 0,
+        "production-выход всегда vocab-отфильтрован"
+    );
+    assert!(
+        meets_thresholds(&report, MIN_PRECISION, MIN_RECALL),
+        "авто-тег не прошёл гейт precision≥{MIN_PRECISION}/recall≥{MIN_RECALL}"
+    );
+}

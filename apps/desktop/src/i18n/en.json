@@ -278,6 +278,18 @@
     "discussWithAi": "Discuss with AI",
     "discussDriftPrompt": "How do I refocus on my goals? Here's the current drift: {{drift}}"
   },
+  "tagSuggest": {
+    "suggest": "Suggest tags",
+    "loading": "Suggesting tags…",
+    "none": "No matching tags",
+    "apply": "Apply",
+    "dismiss": "Dismiss",
+    "applied": "Tags added: {{count}}",
+    "nothing": "Tags already present",
+    "failed": "Could not suggest tags",
+    "applyFailed": "Could not write tags",
+    "flushFailed": "Save the note first — write cancelled"
+  },
   "tree": {
     "label": "Vault files",
     "empty": "This vault is empty.",

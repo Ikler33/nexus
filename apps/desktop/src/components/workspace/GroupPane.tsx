@@ -16,6 +16,7 @@ import { isViewable } from '../../lib/file-kind';
 import { BacklinksBar } from '../editor/BacklinksBar';
 import { MentionsBar } from '../editor/MentionsBar';
 import { OutlineBar } from '../editor/OutlineBar';
+import { TagSuggest } from '../editor/TagSuggest';
 import styles from './GroupPane.module.css';
 
 // Preview грузится лениво (react-markdown+micromark ~160KB) — нужен только при включении режима «Просмотр».
@@ -318,6 +319,12 @@ export function GroupPane({ groupId }: { groupId: string }) {
           {!isViewable(active.path) && !reading && <BacklinksBar path={active.path} />}
           {/* UNLINK-1: незалинкованные упоминания заголовка — скрыты, если их нет. */}
           {!isViewable(active.path) && !reading && <MentionsBar path={active.path} />}
+          {/* AI-2c: авто-тег (closed-vocab) — по клику; пишет инлайн-теги в тело. `key`=путь обязателен:
+              иначе при смене вкладки в полёте suggest() «Применить» записал бы теги ЗАМЕТКИ-А в заметку-Б
+              (стейт переживает смену path, ревью AI-2c MAJOR). key форсит ремоунт → сброс состояния. */}
+          {!isViewable(active.path) && !reading && (
+            <TagSuggest key={active.path} path={active.path} doc={active.doc} />
+          )}
         </>
       ) : (
         <p className={styles.empty}>{t('editor.emptyGroup')}</p>

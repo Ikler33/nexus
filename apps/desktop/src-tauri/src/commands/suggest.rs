@@ -1,10 +1,18 @@
 //! Команда предложений связей (Ф1-9, режим 1 max-sim). Считается из готовых векторов usearch.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 use tauri::State;
 
 use crate::error::AppResult;
 use crate::state::AppState;
 use crate::suggest::{self, LinkSuggestion};
+use crate::tagger::{self, TagSuggestion};
+
+/// Максимум тегов словаря в промпте авто-тега (бюджет токенов): `list_tags` возвращает по убыванию частоты,
+/// берём топ — самые «обжитые» теги полезнее для классификации; редкие хвосты в промпт не тащим.
+const AUTOTAG_VOCAB_CAP: usize = 120;
 
 /// Кандидаты на связь для файла `path` (семантически близкие незалинкованные заметки).
 /// `limit` по умолчанию 5, потолок 20. Без RAG-индекса (нет векторов) — пусто.
@@ -84,4 +92,28 @@ pub async fn get_starting_questions(
         crate::starting_questions::starting_questions(&reader, chat.as_ref(), center.as_deref())
             .await?,
     )
+}
+
+/// AI-2c (A4): closed-vocab авто-тег. По содержимому заметки `path` `chat_util` предлагает теги ТОЛЬКО из
+/// словаря vault (топ-частотных, кап `AUTOTAG_VOCAB_CAP`). Нет утилитарной модели / нет контента / нет
+/// тегов в vault → пусто (НЕ ошибка) — фронт покажет «нет предложений». Никогда НЕ пишет (применение — по
+/// явному клику на фронте через `write_file`). Закрытость словаря — на выходе `tagger::parse_and_filter`.
+#[tauri::command]
+pub async fn suggest_tags(state: State<'_, AppState>, path: String) -> AppResult<TagSuggestion> {
+    let (reader, chat) = {
+        let ctx = state.vault().await?;
+        (ctx.db.reader().clone(), ctx.ai.chat_util.clone())
+    };
+    let Some(chat) = chat else {
+        return Ok(TagSuggestion::default()); // нет утилитарной модели → нет предложений
+    };
+    let snippet = crate::contradictions::note_snippet(&reader, &path).await?;
+    let vocab: Vec<String> = crate::tags::list_tags(&reader)
+        .await?
+        .into_iter()
+        .take(AUTOTAG_VOCAB_CAP)
+        .map(|t| t.name)
+        .collect();
+    let cancel = Arc::new(AtomicBool::new(false));
+    Ok(tagger::classify_tags(&chat, &vocab, &snippet, &cancel).await)
 }

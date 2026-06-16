@@ -190,6 +190,34 @@ Properties-паритет (реестр типов + 5 виджетов); AI MVP
   (эталон по зашитой фикстуре проходит, ленивый по ней же — падает) + точка подключения AI-2c; MINOR —
   zero-gold-кейс в фикстуру + документ предусловия уникальности путей. Бэкенд +7 тестов; cargo fmt/clippy/
   test зелёные. AI-2c подставит сюда реальный `chat_util`-классификатор и сверит его отчёт с порогами.
+- **AI-2c (A4)** — **closed-vocabulary авто-тег** (спека §10 A4, ФИНАЛ AI-набора, mandatory-ревью §14.7).
+  «Тесная интеграция AI», ради которой владелец и заказал канбан: по содержимому заметки `chat_util`
+  (Qwen3-4B :8084) ПРЕДЛАГАЕТ теги ТОЛЬКО из существующего словаря vault. Спроектирован decision-complete
+  через мультиагентный understand→design-Workflow (4 разведчика + синтез — ключевое решение write-back).
+  **Бэкенд** `tagger/mod.rs`: `build_messages` (словарь — в system; тело — НЕДОВЕРЕННОЕ, между случайными
+  `injection_marker()`, как `news/llm.rs`); `parse_and_filter` — ЧИСТЫЙ chokepoint closed-vocab: парсит
+  JSON-объект `{"tags":[…]}` (терпит ```json```), нормализует (`trim`/снять `#`/lowercase — как
+  `parser::push_tag`), оставляет ТОЛЬКО члены словаря (вне → `dropped`, `suggested_new` ВЫКЛ — owner-
+  critical, гарантия на ВЫХОДЕ, модели НЕ доверяем); `classify_tags` (graceful-empty как
+  `starting_questions`). Команда `suggest_tags(path)` (chat_util / topNvocab `list_tags` / `note_snippet`;
+  НЕ пишет). Egress — переиспользует `EgressFeature::Chat` (без нового consent). **Write-back** — инлайн
+  `#tag` в ТЕЛО (`lib/tag-apply.ts`): frontmatter-список невозможен (`set_frontmatter_field` режектит
+  `[...]`; новый YAML-писатель вернул бы класс порчи, ради которого скаляр-примитив и сделан). `applyTags`
+  флашит грязный буфер ДО записи (урок AI-1 R1), идемпотентен (уже-присутствующие теги не дублирует),
+  атомарный `write_file` + анти-эхо `syncBufferAfterWrite` (SAFE-3). **UI** — «Предложить теги» в пейне
+  редактора (по клику — LLM-вызов не на каждом открытии): чипы (отсев уже-в-теле) → «Применить». **Eval** —
+  детерминир. мок-тесты (парс/closed-vocab-фильтр/инъекция-фенсинг) + live-гейт `live_classify_tags_meets_gate`
+  (#[ignore], реальный chat_util по `tag_golden.json` → `evaluate_tags`/`meets_thresholds`). Мок зеркалит
+  контракт (vocab-фильтр + dropped). Бэкенд +6 / фронт +7 тестов; cargo fmt/clippy/test + tsc/eslint/597
+  зелёные; превью verified end-to-end (out-of-vocab отсеян, инлайн-запись + буфер-sync + тост).
+  **Mandatory-ревью §14.7 (Workflow, 3 линзы: security/инъекция · data-safety/write-back · eval/closed-vocab
+  → синтез):** security-линза ЧИСТА (фенсинг/output-chokepoint/char-safe-запись/egress подтверждены);
+  вердикт FIX-FIRST на 1 MAJOR + 2 MINOR — **исправлено ПЕРЕД мержем:** MAJOR — гонка смены вкладки
+  (`TagSuggest` без `key` → «Применить» после переключения заметки писал теги ЗАМЕТКИ-А в заметку-Б) →
+  `key={active.path}` форсит ремоунт/сброс; MINOR — `existingInlineTags` regex ровняется на индексатор
+  (нужна ≥1 буква, `#2024`≠тег); MINOR — мок-`suggestTags` зеркалит нормализацию+дедуп `parse_and_filter`;
+  NIT — live-тест печатает реальный `dropped`. Frontmatter↔inline-дедуп тегов — в BACKLOG. **Завершает
+  MVP канбана** (BOARD-1..6 · PROP-1..4 · AI-1/2a/2b/EVAL-AI/2c) — «тесная интеграция AI» закрыта.
 
 ### MEM-5 — захват факта в память прямо из чата (фидбэк владельца)
 
