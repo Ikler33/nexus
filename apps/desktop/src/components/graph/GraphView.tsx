@@ -654,10 +654,10 @@ export default function GraphView() {
   // с учётом скрытых изолятов — чтобы Enter открыл то же, что подсвечено.
   const searchHits = useMemo(
     () =>
-      searchActive && graph
-        ? graph.nodes.filter((n) => (settings.showOrphans || !n.ring) && searchHit(n))
-        : [],
-    [searchActive, graph, settings.showOrphans, searchHit],
+      // GRAPH-4: при активном поиске изолят-совпадения тоже считаются (они подсвечиваются в рендере даже при
+      // выкл. «показывать изоляты») — иначе счётчик/Enter их игнорировали бы, а на холсте они горят.
+      searchActive && graph ? graph.nodes.filter((n) => searchHit(n)) : [],
+    [searchActive, graph, searchHit],
   );
   // GRAPH-4 quick-switcher: Enter открывает верхнее совпадение, Esc чистит запрос.
   const onSearchKey = useCallback(
@@ -848,10 +848,11 @@ export default function GraphView() {
             })()}
             {graph.nodes.map((n) => {
               if (n.x == null || n.y == null) return null;
-              if (!settings.showOrphans && n.ring) return null; // GRAPH-3: сироты скрыты
+              const hit = searchHit(n);
+              // GRAPH-3/4: сироты скрыты, КРОМЕ совпадений активного поиска (иначе изолят-хит не подсветить).
+              if (!settings.showOrphans && n.ring && !hit) return null;
               const isActive = n.id === graph.activeId;
               const r = nodeRadius(n.deg) * settings.sizeScale;
-              const hit = searchHit(n);
               // Поиск доминирует: при активном запросе совпадения горят, остальное гаснет —
               // и hit никогда не faded (иначе акцент+0.28 = противоречивый полу-гашёный вид).
               const faded = searchActive

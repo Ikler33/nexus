@@ -7,14 +7,18 @@ import { tauriApi, type BoardData, type NoteProperty } from './tauri-api';
 import { useWorkspaceStore } from '../stores/workspace';
 
 /** Минимальная BoardData с заданными статус-ключом и колонками (остальное — заглушки). */
-function board(statusKey: string, colIds: string[]): BoardData {
+function board(
+  statusKey: string,
+  colIds: string[],
+  scope: BoardData['config']['scope'] = { folder: null, project: null, tags: [] },
+): BoardData {
   return {
     config: {
       id: 'personal',
       title: '',
       statusKey,
       columns: colIds.map((id) => ({ id, label: '', wip: null, color: null, doneLike: false })),
-      scope: { folder: null, project: null, tags: [] },
+      scope,
       order: {},
       sort: 'manual',
       cardFields: [],
@@ -42,7 +46,21 @@ describe('promoteToBoard (AI-1 — «На доску», спека §10)', () =>
     const r = await promoteToBoard('Notes/A.md');
 
     expect(write).toHaveBeenCalledWith('Notes/A.md', 'status', 'todo');
-    expect(r).toEqual({ kind: 'promoted', statusKey: 'status', column: 'todo' });
+    expect(r).toEqual({ kind: 'promoted', statusKey: 'status', column: 'todo', inScope: true });
+  });
+
+  it('scope доски сужен по folder и путь вне него → promoted, но inScope=false (ревью AI-1)', async () => {
+    vi.spyOn(tauriApi.board, 'get').mockResolvedValue(
+      board('status', ['todo'], { folder: 'Projects', project: null, tags: [] }),
+    );
+    vi.spyOn(tauriApi.properties, 'forNote').mockResolvedValue([]);
+    vi.spyOn(fmEdit, 'writeFrontmatterField').mockResolvedValue();
+
+    const inFolder = await promoteToBoard('Projects/A.md');
+    const outFolder = await promoteToBoard('Notes/B.md');
+
+    expect(inFolder).toMatchObject({ kind: 'promoted', inScope: true });
+    expect(outFolder).toMatchObject({ kind: 'promoted', inScope: false });
   });
 
   it('уважает кастомный statusKey и первую колонку конфига', async () => {

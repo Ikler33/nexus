@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { appendInlineTags, applyTags, existingInlineTags } from './tag-apply';
+import { appendInlineTags, applyTags, existingInlineTags, frontmatterTags } from './tag-apply';
 import * as fmEdit from './frontmatter-edit';
 import { FlushFailedError } from './frontmatter-edit';
 import { tauriApi } from './tauri-api';
@@ -29,6 +29,22 @@ describe('tag-apply: чистая раскладка', () => {
 
   it('пустое тело → строка тегов без ведущих пустых строк', () => {
     expect(appendInlineTags('   ', ['ai']).content).toBe('#ai\n');
+  });
+
+  it('frontmatterTags читает инлайн-список и блочный список (lowercase, ≥1 буква)', () => {
+    expect([...frontmatterTags('---\ntags: [Rust, "AI", 2024]\n---\nтело')].sort()).toEqual([
+      'ai',
+      'rust',
+    ]); // '2024' — не тег (нужна буква), кавычки/регистр сняты
+    const block = '---\ntitle: x\ntags:\n  - ops\n  - docs\n---\nтело';
+    expect([...frontmatterTags(block)].sort()).toEqual(['docs', 'ops']);
+    expect(frontmatterTags('нет frontmatter').size).toBe(0);
+  });
+
+  it('AI-2c дедуп: тег уже в frontmatter → не дописываем инлайн (ревью)', () => {
+    const r = appendInlineTags('---\ntags: [rust, ai]\n---\nтело', ['rust', 'design']);
+    expect(r.added).toEqual(['design']); // rust уже во frontmatter → пропущен
+    expect(r.content).toBe('---\ntags: [rust, ai]\n---\nтело\n\n#design\n');
   });
 });
 

@@ -294,7 +294,7 @@ export function CommandPalette() {
               <X size={14} aria-hidden />
             </button>
           ) : (
-            <kbd className={styles.kbd}>Esc</kbd>
+            <kbd className={styles.kbd} aria-label="Escape">Esc</kbd>
           )}
         </div>
         <ul className={styles.list} id="command-list" role="listbox">
@@ -333,7 +333,10 @@ export function CommandPalette() {
         </ul>
         <div className={styles.foot}>
           <span className={styles.footHint}>
-            <kbd className={styles.kbd}>↑↓</kbd> {t('palette.navigate')}
+            <kbd className={styles.kbd} aria-hidden>
+              ↑↓
+            </kbd>{' '}
+            {t('palette.navigate')}
           </span>
           <span className={styles.footHint}>
             <CornerDownLeft size={11} aria-hidden /> {t('palette.open')}

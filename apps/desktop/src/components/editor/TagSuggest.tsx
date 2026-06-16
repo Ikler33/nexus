@@ -3,7 +3,7 @@ import { Loader2, Tags } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { FlushFailedError } from '../../lib/frontmatter-edit';
-import { applyTags, existingInlineTags } from '../../lib/tag-apply';
+import { applyTags, existingTags } from '../../lib/tag-apply';
 import { tauriApi } from '../../lib/tauri-api';
 import { useToastStore } from '../../stores/toast';
 import styles from './TagSuggest.module.css';
@@ -26,7 +26,7 @@ export function TagSuggest({ path, doc }: { path: string; doc: string }) {
     setPhase('loading');
     try {
       const res = await tauriApi.suggest.suggestTags(path);
-      const present = existingInlineTags(doc);
+      const present = existingTags(doc); // тело-инлайн ∪ frontmatter — не предлагаем уже-присутствующий
       const fresh = res.tags.filter((x) => !present.has(x.toLowerCase()));
       setTags(fresh);
       setSelected(new Set(fresh));

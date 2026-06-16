@@ -852,6 +852,7 @@
     "promote": {
       "done": "Note added to board → “{{column}}”",
       "already": "Note already on board → “{{column}}”",
+      "outOfScope": "Note became a “{{column}}” task, but outside this board's filter",
       "failed": "Could not add to board",
       "noNote": "No open note to add to the board"
     },

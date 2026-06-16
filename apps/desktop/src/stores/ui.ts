@@ -142,6 +142,7 @@ const TRAP_OVERLAYS_CLOSED = {
   inboxOpen: false,
   cheatsheetOpen: false,
   memoryOpen: false,
+  tweaksOpen: false, // ревью MEM-4: иначе trap-оверлей поверх открытых Настроек = два стэкнутых focus-trap
 } as const;
 
 /** Глобальное UI-состояние оболочки (Command Palette, граф, RAG-чат и пр.). */
@@ -231,9 +232,8 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('goals:toggle', open ? 'open' : 'close');
       return open ? { ...TRAP_OVERLAYS_CLOSED, goalsOpen: true } : { goalsOpen: false };
     }),
-  // «Память ИИ» (MEM-4) — focus-trap-модалка, взаимоисключаема с прочими trap-оверлеями. Закрываем и
-  // раздел настроек (`tweaksOpen`): он focus-trap, но вне TRAP_OVERLAYS_CLOSED — иначе командный путь
-  // (палитра → view.memory поверх открытых настроек) дал бы два стэкнутых focus-trap-диалога.
+  // «Память ИИ» (MEM-4) — focus-trap-модалка, взаимоисключаема с прочими trap-оверлеями (включая Настройки
+  // `tweaksOpen` — теперь в TRAP_OVERLAYS_CLOSED, чтобы НИ ОДИН trap-оверлей не стэкался поверх Настроек).
   closeMemory: () => set({ memoryOpen: false }),
   toggleMemory: () =>
     set((s) => {
