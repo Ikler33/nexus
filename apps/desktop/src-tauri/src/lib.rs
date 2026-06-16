@@ -7,12 +7,12 @@
 
 /// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
 pub mod ai;
+/// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
+pub mod board;
 /// Сессии чата в vault-БД («второй мозг» переписки, решение владельца 2026-06-12).
 pub mod chat_log;
 /// Markdown-чанкер для RAG (§6.1).
 pub mod chunker;
-/// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
-pub mod board;
 /// Tauri IPC-команды.
 mod commands;
 /// «Поиск противоречий» (#vision): фоновый LLM-kind — пары-кандидаты → судья → таблица `contradictions`.

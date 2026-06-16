@@ -130,7 +130,10 @@ mod tests {
         assert_eq!(t2.project, None);
         assert!(t2.tags.is_empty());
 
-        assert_eq!(by["t3.md"].status, "готово", "raw-значение статуса как в файле");
+        assert_eq!(
+            by["t3.md"].status, "готово",
+            "raw-значение статуса как в файле"
+        );
     }
 
     /// Сорт по пути — детерминирован; пустой vault → пустой список.
