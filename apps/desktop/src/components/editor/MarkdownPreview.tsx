@@ -9,10 +9,12 @@ import remarkMath from 'remark-math';
 import { isTaskLine } from '../../lib/editor/format';
 import { EmbedContext } from '../../lib/markdown/embed-context';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
+import { remarkCallouts } from '../../lib/markdown/remarkCallouts';
 import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi } from '../../lib/tauri-api';
+import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
 import styles from './MarkdownPreview.module.css';
@@ -254,6 +256,29 @@ export function MarkdownPreview({
     return typeof code === 'string' && code.trim() ? <MermaidDiagram code={code} /> : null;
   };
 
+  // Callout `nexus-callout` (из remarkCallouts) → admonition-блок: иконка/цвет по типу, опц. сворачивание.
+  (components as Record<string, Components['div']>)['nexus-callout'] = ({ node, children }) => {
+    const props = (node?.properties ?? {}) as Record<string, unknown>;
+    const kind = typeof props.kind === 'string' ? props.kind : 'note';
+    const fold = typeof props.fold === 'string' ? props.fold : '';
+    return (
+      <Callout kind={kind} fold={fold}>
+        {children}
+      </Callout>
+    );
+  };
+  // Заголовок callout `nexus-callout-title` (иконка + подпись; пустой → дефолтная подпись по типу).
+  (components as Record<string, Components['div']>)['nexus-callout-title'] = ({ node, children }) => {
+    const props = (node?.properties ?? {}) as Record<string, unknown>;
+    const kind = typeof props.kind === 'string' ? props.kind : 'note';
+    const label = typeof props.label === 'string' ? props.label : kind;
+    return (
+      <CalloutTitle kind={kind} label={label}>
+        {children}
+      </CalloutTitle>
+    );
+  };
+
   if (onToggleTask) {
     // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,
     // в т.ч. вложенный в `<p>` у loose-списков) — единственный чекбокс рисуем в `li`.
@@ -286,7 +311,7 @@ export function MarkdownPreview({
     <EmbedContext.Provider value={embedCtx}>
       <div className={styles.preview}>
         <ReactMarkdown
-          remarkPlugins={[remarkEmbeds, remarkMermaid, remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+          remarkPlugins={[remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
           rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
           urlTransform={urlTransform}
           components={components}

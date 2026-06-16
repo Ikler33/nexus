@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### Live Preview — Callouts/admonitions `> [!note]` в режиме чтения (эпик §13, срез 5)
+
+Цитаты вида `> [!note] Заголовок` (Obsidian-callouts) теперь рендерятся цветными admonition-блоками с
+иконкой по типу. Поддержаны типы note/abstract/info/todo/tip/success/question/warning/failure/danger/
+bug/example/quote + алиасы (`hint`→tip, `error`→danger, `summary`→abstract, …); неизвестный тип → нейтральный
+note. Сворачивание `[!note]-` (свёрнут) / `[!note]+` (развёрнут) — клик/Enter/Space по шапке.
+- `lib/markdown/remarkCallouts.ts`: mdast-трансформер (чистые `parseCalloutMarker` + `splitInlineAtNewline`,
+  тестируются) → кастомный узел `nexus-callout` (приём data.hName/hProperties, как у транклюзии); поставлен
+  ДО `remarkGfm` — тело callout проходит обычный GFM/wikilink/math-конвейер.
+- `components/editor/Callout.tsx`: иконка — инлайновый SVG (lucide, `currentColor`); цвет/тинт — классами +
+  `data-callout`-селекторами (`color-mix` поверх поверхности + solid-фолбэк), **без inline-style**;
+  сворачивание — React-state. Никакого `dangerouslySetInnerHTML`/rehype-raw — **CSP не трогаем**.
+- Тесты: 20 юнитов (маркер/сплит/трансформ-дерево, в т.ч. **жёсткий перенос `break`-узлом**) + 6 рендер-тестов
+  (data-callout, инлайн-SVG иконка, дефолтная подпись, сворачивание, обычная цитата не трогается, `[[wikilink]]`
+  в теле). Adversarial-ревью (4 линзы): найден и закрыт MAJOR — hard-break после маркера поглощал тело в заголовок.
+- Пиксельный скриншот не снят (welcome-экран без открытого vault) — путь рендера покрыт jsdom-тестами, CSS собран.
+
 ### Live Preview — math-шрифт (STIX Two Math) для MathML на Win/Linux (эпик §13, срез 4)
 
 KaTeX в режиме чтения рендерит `output:'mathml'` (нативный `<math>` без inline-стилей — CSP не трогаем).

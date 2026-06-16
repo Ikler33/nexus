@@ -342,4 +342,47 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
     expect(container.querySelector('code')).not.toBeNull();
     expect(container.querySelector('svg[data-mmd]')).toBeNull();
   });
+
+  it('callout > [!warning]: data-callout, иконка-svg, заголовок и тело', () => {
+    const { container } = render(
+      <MarkdownPreview source={'> [!warning] Осторожно\n> тело предупреждения'} onOpenLink={() => {}} />,
+    );
+    const callout = container.querySelector('[data-callout]');
+    expect(callout).not.toBeNull();
+    expect(callout?.getAttribute('data-callout')).toBe('warning');
+    expect(callout?.querySelector('svg')).not.toBeNull(); // lucide-иконка (инлайновый SVG, CSP-safe)
+    expect(screen.getByText('Осторожно')).toBeInTheDocument();
+    expect(screen.getByText('тело предупреждения')).toBeInTheDocument();
+    expect(container.querySelector('blockquote')).toBeNull(); // не осталась обычной цитатой
+  });
+
+  it('callout-алиас > [!error] нормализуется в canonical danger', () => {
+    const { container } = render(<MarkdownPreview source={'> [!error] Сбой'} onOpenLink={() => {}} />);
+    expect(container.querySelector('[data-callout]')?.getAttribute('data-callout')).toBe('danger');
+  });
+
+  it('callout без заголовка → дефолтная подпись по типу', () => {
+    render(<MarkdownPreview source={'> [!note]\n> текст'} onOpenLink={() => {}} />);
+    expect(screen.getByText('Note')).toBeInTheDocument();
+  });
+
+  it('сворачиваемый callout [!info]-: тело скрыто, клик по шапке раскрывает', () => {
+    render(<MarkdownPreview source={'> [!info]- Детали\n> скрытое тело'} onOpenLink={() => {}} />);
+    expect(screen.queryByText('скрытое тело')).not.toBeInTheDocument(); // свёрнут по умолчанию
+    fireEvent.click(screen.getByRole('button', { name: /Детали/ }));
+    expect(screen.getByText('скрытое тело')).toBeInTheDocument();
+  });
+
+  it('обычная цитата (без маркера) остаётся blockquote', () => {
+    const { container } = render(<MarkdownPreview source={'> просто цитата'} onOpenLink={() => {}} />);
+    expect(container.querySelector('blockquote')).not.toBeNull();
+    expect(container.querySelector('[data-callout]')).toBeNull();
+  });
+
+  it('[[wikilink]] внутри тела callout кликается', () => {
+    const onOpen = vi.fn();
+    render(<MarkdownPreview source={'> [!tip] Совет\n> см. [[Другая]]'} onOpenLink={onOpen} />);
+    fireEvent.click(screen.getByText('Другая'));
+    expect(onOpen).toHaveBeenCalledWith('Другая');
+  });
 });
