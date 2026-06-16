@@ -118,3 +118,71 @@ export function knownPriority(priority: string | null): (typeof KNOWN_PRIORITIES
     ? (p as (typeof KNOWN_PRIORITIES)[number])
     : null;
 }
+
+/** Корзина плана дня: причина попадания задачи в фокус (для бейджа + группировки). */
+export type PlanBucket = 'overdue' | 'today' | 'priority';
+
+/** Элемент плана дня (AI-2b): карточка + причина отбора. */
+export interface PlanItem {
+  card: TaskCard;
+  bucket: PlanBucket;
+}
+
+/** Ранг приоритета для сортировки (меньше = важнее); нестандартный/нет — в конец. */
+function priorityRank(priority: string | null): number {
+  switch (knownPriority(priority)) {
+    case 'urgent':
+      return 0;
+    case 'high':
+      return 1;
+    case 'medium':
+      return 2;
+    case 'low':
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+/**
+ * AI-2b (A3, спека §10): детерминированный «план на день» — отбор и раскладка активных задач в фокус.
+ * Чистая функция (без LLM/IO): из карточек берём НЕ-терминальные (done-like убраны по конфигу) и
+ * относим в одну из корзин по приоритету причины: `overdue` (дедлайн в прошлом) → `today` (дедлайн
+ * сегодня) → `priority` (urgent/high без срочного дедлайна). Внутри `overdue`/`today` — по дате (раньше
+ * выше), затем по приоритету; в `priority` — по приоритету; всюду тай-брейк по пути. Задачи без причины
+ * (нет дедлайна и не высокий приоритет) в план НЕ попадают — план сфокусирован. Обрезка до `limit`.
+ */
+export function planDay(
+  cards: TaskCard[],
+  columns: { id: string; doneLike: boolean }[],
+  todayIso: string,
+  limit = 7,
+): PlanItem[] {
+  const doneLike = new Set(columns.filter((c) => c.doneLike).map((c) => normalizeStatus(c.id)));
+  const items: PlanItem[] = [];
+  for (const card of cards) {
+    if (doneLike.has(normalizeStatus(card.status))) continue; // терминальная — не в план
+    let bucket: PlanBucket | null = null;
+    if (card.due && isOverdue(card.due, todayIso)) bucket = 'overdue';
+    else if (card.due && card.due === todayIso) bucket = 'today';
+    else {
+      const p = knownPriority(card.priority);
+      if (p === 'urgent' || p === 'high') bucket = 'priority';
+    }
+    if (bucket) items.push({ card, bucket });
+  }
+  const bucketRank: Record<PlanBucket, number> = { overdue: 0, today: 1, priority: 2 };
+  items.sort((a, b) => {
+    const br = bucketRank[a.bucket] - bucketRank[b.bucket];
+    if (br) return br;
+    // overdue/today: сначала по дате (раньше = важнее); priority: дата не различает.
+    if (a.bucket !== 'priority') {
+      const d = (a.card.due ?? '').localeCompare(b.card.due ?? '');
+      if (d) return d;
+    }
+    const pr = priorityRank(a.card.priority) - priorityRank(b.card.priority);
+    if (pr) return pr;
+    return a.card.path.localeCompare(b.card.path);
+  });
+  return items.slice(0, Math.max(0, limit));
+}
