@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { useUIStore } from './ui';
 
 afterEach(() => {
-  useUIStore.setState({ chatOpen: false, homeOpen: true, newsOpen: false });
+  useUIStore.setState({ chatOpen: false, homeOpen: true, newsOpen: false, boardOpen: false });
 });
 
 describe('ui-стор: открытие AI-панели из полноэкранных вью (баг владельца 2026-06-11)', () => {
@@ -32,6 +32,31 @@ describe('ui-стор: открытие AI-панели из полноэкра�
     const s = useUIStore.getState();
     expect(s.chatOpen).toBe(true);
     expect(s.homeOpen).toBe(false);
+  });
+});
+
+describe('ui-стор: взаимоисключение примарных вью home/news/board (BOARD-4)', () => {
+  it('openBoard гасит home и news (одновременно открыта только одна примарная вью)', () => {
+    useUIStore.setState({ homeOpen: true, newsOpen: false, boardOpen: false });
+    useUIStore.getState().openBoard();
+    const s = useUIStore.getState();
+    expect(s.boardOpen).toBe(true);
+    expect(s.homeOpen).toBe(false);
+    expect(s.newsOpen).toBe(false);
+  });
+
+  it('openHome/openNews/openChat гасят board (не остаётся два примарных вью true)', () => {
+    useUIStore.setState({ boardOpen: true, homeOpen: false, newsOpen: false });
+    useUIStore.getState().openHome();
+    expect(useUIStore.getState().boardOpen).toBe(false);
+
+    useUIStore.setState({ boardOpen: true, homeOpen: false, newsOpen: false });
+    useUIStore.getState().openNews();
+    expect(useUIStore.getState().boardOpen).toBe(false);
+
+    useUIStore.setState({ boardOpen: true, homeOpen: false, newsOpen: false, chatOpen: false });
+    useUIStore.getState().openChat();
+    expect(useUIStore.getState().boardOpen).toBe(false);
   });
 });
 

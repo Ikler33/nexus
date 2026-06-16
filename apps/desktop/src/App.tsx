@@ -16,6 +16,7 @@ import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
+import { BoardView } from './components/board/BoardView';
 import { HomeView } from './components/home/HomeView';
 import { NewsView } from './components/news/NewsView';
 import { AiPanel } from './components/chat/AiPanel';
@@ -73,6 +74,7 @@ export function App() {
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
   const newsOpen = useUIStore((s) => s.newsOpen);
   const homeOpen = useUIStore((s) => s.homeOpen);
+  const boardOpen = useUIStore((s) => s.boardOpen);
   const onboardingActive = useUIStore((s) => s.onboardingActive);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -215,7 +217,7 @@ export function App() {
 
   // DP-12 (макет): расположение AI-панели — side / bottom / overlay; панель живёт только
   // в workspace-вью (Home/News — без неё, как `view === "workspace"` макета).
-  const aiVisible = chatOpen && !reading && !homeOpen && !newsOpen;
+  const aiVisible = chatOpen && !reading && !homeOpen && !newsOpen && !boardOpen;
   const aiSide = aiVisible && aiLayout === 'side';
   const aiBottom = aiVisible && aiLayout === 'bottom';
   const aiOverlay = aiVisible && aiLayout === 'overlay';
@@ -243,7 +245,15 @@ export function App() {
             </aside>
           )}
           <main className={styles.main}>
-            {homeOpen ? <HomeView /> : newsOpen ? <NewsView /> : <EditorArea />}
+            {homeOpen ? (
+              <HomeView />
+            ) : newsOpen ? (
+              <NewsView />
+            ) : boardOpen ? (
+              <BoardView />
+            ) : (
+              <EditorArea />
+            )}
           </main>
           {aiSide && <AiPanel />}
           {aiBottom && (

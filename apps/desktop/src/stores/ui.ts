@@ -37,6 +37,8 @@ interface UIState {
   contradictionsOpen: boolean;
   /** Открыта ли страница «Новости» (NF-5) — полная вью вместо редактора. */
   newsOpen: boolean;
+  /** Открыта ли «Доска» (BOARD-4) — канбан-вью заметок-задач вместо редактора. */
+  boardOpen: boolean;
   /** Открыт ли HOME-дашборд (DP-1) — лендинг-вью вместо редактора (стартовая после vault). */
   homeOpen: boolean;
   /** Онбординг пройден (DP-7, персист): welcome ведёт сразу к открытию vault. */
@@ -108,6 +110,10 @@ interface UIState {
   toggleNews: () => void;
   /** Открыть «Новости» (activity-bar: клик = переход на вью, не тоггл — как setView макета). */
   openNews: () => void;
+  closeBoard: () => void;
+  toggleBoard: () => void;
+  /** Открыть «Доску» (activity-bar: клик = переход на вью, гасит home/news/chat). */
+  openBoard: () => void;
   toggleSidebar: () => void;
   closeHome: () => void;
   toggleHome: () => void;
@@ -153,6 +159,7 @@ export const useUIStore = create<UIState>((set) => ({
   digestOpen: false,
   contradictionsOpen: false,
   newsOpen: false,
+  boardOpen: false,
   // HOME — стартовый лендинг после открытия vault (макет: Home-вью по умолчанию).
   homeOpen: true,
   onboardingDone: readOnboarded(),
@@ -178,15 +185,16 @@ export const useUIStore = create<UIState>((set) => ({
   // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
   openChat: () => {
     logUi('chat:open');
-    set({ chatOpen: true, homeOpen: false, newsOpen: false });
+    set({ chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false });
   },
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () =>
     set((s) => {
       logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
-      if (!s.chatOpen) return { chatOpen: true, homeOpen: false, newsOpen: false };
-      // Панель уже «открыта», но скрыта за Home/News → клик возвращает её в поле зрения.
-      if (s.homeOpen || s.newsOpen) return { homeOpen: false, newsOpen: false };
+      if (!s.chatOpen) return { chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false };
+      // Панель уже «открыта», но скрыта за Home/News/Board → клик возвращает её в поле зрения.
+      if (s.homeOpen || s.newsOpen || s.boardOpen)
+        return { homeOpen: false, newsOpen: false, boardOpen: false };
       return { chatOpen: false };
     }),
   openPlugins: () => set({ pluginsOpen: true }),
@@ -263,21 +271,31 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('contradictions:toggle', s.contradictionsOpen ? 'close' : 'open');
       return { contradictionsOpen: !s.contradictionsOpen };
     }),
-  // Полные вьюхи main-области взаимоисключающие: news ↔ home (редактор — когда обе закрыты).
+  // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board (редактор — когда все закрыты).
   closeNews: () => set({ newsOpen: false }),
-  toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false })),
+  toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false, boardOpen: false })),
   openNews: () => {
     logUi('news:open');
-    set({ newsOpen: true, homeOpen: false });
+    set({ newsOpen: true, homeOpen: false, boardOpen: false });
+  },
+  closeBoard: () => set({ boardOpen: false }),
+  toggleBoard: () =>
+    set((s) => {
+      logUi('board:toggle', s.boardOpen ? 'close' : 'open');
+      return { boardOpen: !s.boardOpen, homeOpen: false, newsOpen: false };
+    }),
+  openBoard: () => {
+    logUi('board:open');
+    set({ boardOpen: true, homeOpen: false, newsOpen: false });
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () =>
     set((s) => {
       logUi('home:toggle', s.homeOpen ? 'close' : 'open');
-      return { homeOpen: !s.homeOpen, newsOpen: false };
+      return { homeOpen: !s.homeOpen, newsOpen: false, boardOpen: false };
     }),
-  openHome: () => set({ homeOpen: true, newsOpen: false }),
+  openHome: () => set({ homeOpen: true, newsOpen: false, boardOpen: false }),
   startOnboarding: () => set({ onboardingActive: true }),
   finishOnboarding: () => {
     try {

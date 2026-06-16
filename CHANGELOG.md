@@ -43,6 +43,19 @@ Properties-паритет (реестр типов + 5 виджетов); AI MVP
   last-key-wins → правим последнее; **F5** — mixed-EOL при добавлении в CRLF-файл. Браузер-мок
   `setFrontmatterField` зеркалит контракт байт-в-байт. UI-консьюмер отложен в BOARD-5 (DnD с baseHash-sync).
   Rust 400 зелёных + clippy, фронт tsc/eslint/vitest (23 мок-теста).
+- **BOARD-2 + BOARD-4** — выборка задач + top-level раздел «Доска». Бэкенд `board::list_board` (клон
+  `goals::list_goals`): INNER JOIN `frontmatter_fields` по `status` = «только задачи», LEFT JOIN
+  project/priority/due, теги — коррелированный `group_concat` из `file_tags`; параметр `status_key`
+  (умолч. `status`); сорт по пути (ручной порядок — BOARD-3). Команда `list_board`. Фронт: новый
+  активити-бар-вход «Доска» (mutually-exclusive primary-view рядом с Home/News в `ui.ts`: `boardOpen` +
+  `openBoard`/`toggleBoard`/`closeBoard`, гасит chat/home/news), `BoardView` с колонками по статусу
+  (дефолт todo/doing/done + виртуальная «Прочее» для статусов вне набора, §12 — задачи не теряются),
+  карточки (приоритет с цветом, дедлайн с overdue-подсветкой, проект, теги), состояния
+  загрузка/ошибка(последняя доска цела)/пусто, refetch на фокус окна (§14.6). Чистая модель
+  `board-model.ts` (группировка/overdue/basename — юнит-тест 8 кейсов) + i18n `board.*` в en+ru
+  (parity-тест). Браузер-мок `mock/board.ts` зеркалит контракт (сид под превью). Клик по карточке
+  открывает заметку (peek/side-panel — BOARD-6). DnD/конфиг/порядок — BOARD-5/3. Rust 402 + clippy/fmt,
+  фронт 545 тестов; превью verified (4 колонки, overdue красным).
 
 ### MEM-5 — захват факта в память прямо из чата (фидбэк владельца)
 

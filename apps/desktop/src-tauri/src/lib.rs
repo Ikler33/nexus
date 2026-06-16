@@ -11,6 +11,8 @@ pub mod ai;
 pub mod chat_log;
 /// Markdown-чанкер для RAG (§6.1).
 pub mod chunker;
+/// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
+pub mod board;
 /// Tauri IPC-команды.
 mod commands;
 /// «Поиск противоречий» (#vision): фоновый LLM-kind — пары-кандидаты → судья → таблица `contradictions`.
@@ -213,6 +215,7 @@ pub fn run() {
             commands::suggest::explain_relation,
             commands::suggest::get_starting_questions,
             commands::goals::list_goals,
+            commands::board::list_board,
             commands::home::get_home_data,
             commands::home::get_home_activity,
             commands::home::get_widget,

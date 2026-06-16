@@ -797,6 +797,34 @@
       "manual": "Manual"
     }
   },
+  "board": {
+    "title": "Board",
+    "taskCount_one": "{{count}} task",
+    "taskCount_other": "{{count}} tasks",
+    "refresh": "Refresh",
+    "loading": "Loading the board…",
+    "loadError": "Failed to load the board",
+    "refreshError": "Refresh failed — showing last board",
+    "retry": "Retry",
+    "overdue": "overdue",
+    "colEmpty": "No tasks",
+    "empty": {
+      "title": "No tasks yet",
+      "body": "A task is a note with a “status” property. Add status: to a note's frontmatter and it shows up here as a card."
+    },
+    "col": {
+      "todo": "To do",
+      "doing": "In progress",
+      "done": "Done",
+      "other": "Other"
+    },
+    "priority": {
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "urgent": "urgent"
+    }
+  },
   "commands": {
     "palette.open": "Command palette",
     "recents.open": "Go to recent…",
@@ -827,6 +855,7 @@
     "view.digest": "Changes digest",
     "view.contradictions": "Contradiction finder",
     "view.news": "News feed",
+    "view.board": "Board",
     "view.home": "Home",
     "view.tasks": "Tasks",
     "view.inbox": "Inbox",

@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import * as mockBoard from './mock/board';
 import * as mockEgress from './mock/egress';
 import * as mockMemory from './mock/memory';
 import * as mockGit from './mock/git';
@@ -151,6 +152,18 @@ export interface GoalEntry {
   path: string;
   title: string | null;
   progress: number | null;
+}
+
+/** Карточка задачи доски (зеркалит Rust `board::TaskCard`, BOARD-2). `status` — raw-значение frontmatter
+ *  (колонкование на фронте); project/priority/due опц.; tags из `file_tags` (отсортированы). */
+export interface TaskCard {
+  path: string;
+  title: string | null;
+  status: string;
+  project: string | null;
+  priority: string | null;
+  due: string | null;
+  tags: string[];
 }
 
 /** HOME-дашборд: статические/динамические виджеты (зеркалит Rust `home::HomeData`, H1/DP-1). LLM-виджеты —
@@ -735,6 +748,12 @@ export const tauriApi = {
     /** Все заметки-цели (инлайн-тег `#goal`) с прогрессом (#35). Офлайн, без LLM. Вне Tauri — мок. */
     list: (): Promise<GoalEntry[]> =>
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
+  },
+
+  /** Канбан-доска (BOARD-2): кросс-файловый список заметок-задач (frontmatter `status`). Офлайн, без LLM. */
+  board: {
+    list: (statusKey?: string): Promise<TaskCard[]> =>
+      isTauri() ? invoke<TaskCard[]>('list_board', { statusKey }) : mockBoard.listBoard(),
   },
 
   /** HOME-дашборд (бэкенд H1/H2/H6; страница — DP-1). Вне Tauri — стейтфул-мок с контентом макета. */
