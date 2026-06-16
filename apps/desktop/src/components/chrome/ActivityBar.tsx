@@ -4,6 +4,7 @@ import {
   GitBranch,
   Home,
   Inbox,
+  LayoutGrid,
   ListChecks,
   Newspaper,
   Settings,
@@ -22,12 +23,14 @@ export function ActivityBar() {
   const { t } = useTranslation();
   const homeOpen = useUIStore((s) => s.homeOpen);
   const newsOpen = useUIStore((s) => s.newsOpen);
+  const boardOpen = useUIStore((s) => s.boardOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const graphOpen = useUIStore((s) => s.graphOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
   const inboxOpen = useUIStore((s) => s.inboxOpen);
   const openHome = useUIStore((s) => s.openHome);
   const openNews = useUIStore((s) => s.openNews);
+  const openBoard = useUIStore((s) => s.openBoard);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const toggleGraph = useUIStore((s) => s.toggleGraph);
   const toggleTasks = useUIStore((s) => s.toggleTasks);
@@ -59,10 +62,16 @@ export function ActivityBar() {
           newsOpen,
         )}
         {btn(
+          <LayoutGrid size={19} aria-hidden />,
+          t('commands.view.board'),
+          openBoard,
+          boardOpen,
+        )}
+        {btn(
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),
           toggleSidebar,
-          !homeOpen && !newsOpen && sidebarOpen,
+          !homeOpen && !newsOpen && !boardOpen && sidebarOpen,
         )}
         {btn(
           <Share2 size={19} aria-hidden />,

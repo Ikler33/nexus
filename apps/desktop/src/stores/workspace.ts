@@ -199,10 +199,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   async openFile(path, groupId, opts) {
-    // Открытие файла переключает main-область на редактор (Home/News — полные вьюхи, DP-1).
+    // Открытие файла переключает main-область на редактор (Home/News/Доска — полные вьюхи поверх
+    // редактора). Гасим ВСЕ три, иначе при открытом примарном вью файл откроется ЗА ним = «мёртвый
+    // клик» из дерева/палитры/⌘O (adversarial-ревью BOARD-4: closeBoard забыли).
     const { useUIStore } = await import('./ui');
     useUIStore.getState().closeHome();
     useUIStore.getState().closeNews();
+    useUIStore.getState().closeBoard();
     const gid = groupId ?? get().activeGroupId;
     let buffers = get().buffers;
     if (!buffers[path]) {

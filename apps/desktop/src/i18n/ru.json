@@ -813,6 +813,35 @@
       "manual": "Вручную"
     }
   },
+  "board": {
+    "title": "Доска",
+    "taskCount_one": "{{count}} задача",
+    "taskCount_few": "{{count}} задачи",
+    "taskCount_many": "{{count}} задач",
+    "refresh": "Обновить",
+    "loading": "Загрузка доски…",
+    "loadError": "Не удалось загрузить доску",
+    "refreshError": "Обновление не удалось — показана прошлая доска",
+    "retry": "Повторить",
+    "overdue": "просрочено",
+    "colEmpty": "Нет задач",
+    "empty": {
+      "title": "Пока нет задач",
+      "body": "Задача — это заметка со свойством «status». Добавьте status: во frontmatter заметки — она появится здесь карточкой."
+    },
+    "col": {
+      "todo": "К выполнению",
+      "doing": "В работе",
+      "done": "Готово",
+      "other": "Прочее"
+    },
+    "priority": {
+      "low": "низкий",
+      "medium": "средний",
+      "high": "высокий",
+      "urgent": "срочно"
+    }
+  },
   "commands": {
     "palette.open": "Палитра команд",
     "recents.open": "Перейти к недавним…",
@@ -843,6 +872,7 @@
     "view.digest": "Дайджест изменений",
     "view.contradictions": "Поиск противоречий",
     "view.news": "Новости",
+    "view.board": "Доска",
     "view.home": "Home",
     "view.tasks": "Задачи",
     "view.inbox": "Входящие",
