@@ -385,4 +385,26 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
     fireEvent.click(screen.getByText('Другая'));
     expect(onOpen).toHaveBeenCalledWith('Другая');
   });
+
+  it('==выделение== рендерится <mark>', () => {
+    const { container } = render(<MarkdownPreview source={'обычный ==жёлтый== текст'} onOpenLink={() => {}} />);
+    const mark = container.querySelector('mark');
+    expect(mark).not.toBeNull();
+    expect(mark?.textContent).toBe('жёлтый');
+  });
+
+  it('== не ломает ~~strike~~ и **bold** (отдельные узлы)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'~~зачёрк~~ **жирн** ==марк=='} onOpenLink={() => {}} />,
+    );
+    expect(container.querySelector('del')).not.toBeNull();
+    expect(container.querySelector('strong')).not.toBeNull();
+    expect(container.querySelector('mark')?.textContent).toBe('марк');
+  });
+
+  it('== внутри code-fence НЕ становится <mark> (mdast-уровень)', () => {
+    const { container } = render(<MarkdownPreview source={'```\nx ==y== z\n```'} onOpenLink={() => {}} />);
+    expect(container.querySelector('mark')).toBeNull();
+    expect(screen.getByText(/==y==/)).toBeInTheDocument();
+  });
 });

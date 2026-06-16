@@ -11,6 +11,7 @@ import { EmbedContext } from '../../lib/markdown/embed-context';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
 import { remarkCallouts } from '../../lib/markdown/remarkCallouts';
 import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
+import { remarkHighlight } from '../../lib/markdown/remarkHighlight';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi } from '../../lib/tauri-api';
@@ -311,7 +312,7 @@ export function MarkdownPreview({
     <EmbedContext.Provider value={embedCtx}>
       <div className={styles.preview}>
         <ReactMarkdown
-          remarkPlugins={[remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+          remarkPlugins={[remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
           rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
           urlTransform={urlTransform}
           components={components}
