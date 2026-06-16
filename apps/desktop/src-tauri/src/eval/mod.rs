@@ -5,6 +5,9 @@
 //! Метрики бинарной релевантности на уровне ФАЙЛОВ (выдача чанков схлопывается в файлы). Прогон —
 //! `run_eval` над уже проиндексированным vault; сборка корпуса в temp-vault — `index_corpus`.
 
+/// EVAL-AI (§14.3): classification-харнесс closed-vocab авто-тега (precision/recall/F1 + гейт) — для AI-2c.
+pub mod classify;
+
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
