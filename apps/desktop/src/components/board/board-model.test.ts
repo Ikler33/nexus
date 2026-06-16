@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { TaskCard } from '../../lib/tauri-api';
 import {
+  applyOrder,
   basename,
   DEFAULT_COLUMN_IDS,
   groupIntoColumns,
@@ -71,5 +72,13 @@ describe('board-model: утилиты', () => {
     expect(knownPriority('High')).toBe('high');
     expect(knownPriority('срочно')).toBeNull();
     expect(knownPriority(null)).toBeNull();
+  });
+
+  it('applyOrder: в-order первыми по индексу, новые — после стабильно по пути', () => {
+    const cs = [card('a.md', 'todo'), card('b.md', 'todo'), card('c.md', 'todo'), card('d.md', 'todo')];
+    const out = applyOrder(cs, ['c.md', 'a.md']).map((c) => c.path);
+    expect(out).toEqual(['c.md', 'a.md', 'b.md', 'd.md']); // c,a из order; b,d — по пути
+    expect(applyOrder(cs, undefined).map((c) => c.path)).toEqual(['a.md', 'b.md', 'c.md', 'd.md']); // нет order → как есть
+    expect(applyOrder(cs, []).map((c) => c.path)).toEqual(['a.md', 'b.md', 'c.md', 'd.md']);
   });
 });

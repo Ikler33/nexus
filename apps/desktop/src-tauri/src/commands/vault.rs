@@ -848,6 +848,16 @@ pub async fn delete_path(state: State<'_, AppState>, path: String) -> AppResult<
             let _ = tx.send(crate::watcher::VaultEvent::Deleted(root.join(rel)));
         }
     }
+    // BOARD-3 delete-хук: точечно убираем удалённые пути из board JSON order (БЕЗОПАСНЫЙ self-heal —
+    // по реальному удалению, не по «отсутствию в выборке», см. ревью F1). Best-effort.
+    let (root_b, rels_b) = (root.clone(), rels.clone());
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        crate::board::config::remove_from_orders(&root_b, &rels_b)
+    })
+    .await
+    {
+        tracing::warn!(error = %e, "board order delete-хук не выполнился");
+    }
     Ok(())
 }
 
@@ -918,6 +928,16 @@ pub async fn rename_path(state: State<'_, AppState>, from: String, to: String) -
                 to: root.join(rel_to),
             });
         }
+    }
+    // BOARD-3 rename-хук: путь карточки в board JSON патчится from→to, ПОЗИЦИЯ в колонке сохраняется
+    // (§14.6). Best-effort: доски вторичны, сбой не валит rename.
+    let (root_b, pairs_b) = (root.clone(), pairs.clone());
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        crate::board::config::rename_in_orders(&root_b, &pairs_b)
+    })
+    .await
+    {
+        tracing::warn!(error = %e, "board order rename-хук не выполнился");
     }
     Ok(())
 }

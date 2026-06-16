@@ -3,7 +3,7 @@
 // (todo/doing/done), off-set статус («ожидание» → виртуальная «Прочее»), проекты, приоритеты,
 // дедлайны (в т.ч. просроченный) и теги — чтобы превью BoardView было содержательным.
 
-import type { TaskCard } from '../tauri-api';
+import type { BoardConfig, BoardData, BoardSummary, TaskCard } from '../tauri-api';
 
 const SEED: TaskCard[] = [
   {
@@ -66,4 +66,39 @@ const SEED: TaskCard[] = [
 export async function listBoard(): Promise<TaskCard[]> {
   // Возвращаем копию, чтобы потребитель не мутировал сид.
   return SEED.map((c) => ({ ...c, tags: [...c.tags] }));
+}
+
+// BOARD-3: персист-конфиг доски — мутабельный мок (saveBoard переживает в рамках сессии, как бэкенд-файл).
+let CONFIG: BoardConfig = {
+  id: 'personal',
+  title: '',
+  statusKey: 'status',
+  columns: [
+    { id: 'todo', label: '', wip: null, color: null, doneLike: false },
+    { id: 'doing', label: '', wip: null, color: null, doneLike: false },
+    { id: 'done', label: '', wip: null, color: null, doneLike: true },
+  ],
+  scope: { folder: null, project: null, tags: [] },
+  order: { doing: ['Tasks/Релиз 0.9.md', 'Tasks/Дизайн доски.md'] }, // показываем ручной порядок в превью
+  sort: 'manual',
+  cardFields: ['due', 'priority', 'tags'],
+};
+
+/** Доска целиком (зеркало `get_board`): конфиг + карточки в scope + corrupt. Мок — scope пустой → все. */
+export async function getBoard(): Promise<BoardData> {
+  return {
+    config: structuredClone(CONFIG),
+    cards: SEED.map((c) => ({ ...c, tags: [...c.tags] })),
+    corrupt: false,
+  };
+}
+
+/** Персист конфига (зеркало `save_board`) — мутирует мок-стейт. */
+export async function saveBoard(config: BoardConfig): Promise<void> {
+  CONFIG = structuredClone(config);
+}
+
+/** Список досок (зеркало `list_boards`) — всегда ≥1. */
+export async function listBoards(): Promise<BoardSummary[]> {
+  return [{ id: CONFIG.id, title: CONFIG.title }];
 }

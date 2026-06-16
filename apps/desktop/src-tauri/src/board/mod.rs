@@ -10,6 +10,9 @@ use serde::Serialize;
 
 use crate::db::{DbResult, ReadPool};
 
+/// Персист доски (BOARD-3): конфиг колонок/порядка/scope в `.nexus/boards/<id>.json`.
+pub mod config;
+
 /// Ключ статуса по умолчанию (колонка доски = его значение).
 pub const DEFAULT_STATUS_KEY: &str = "status";
 
