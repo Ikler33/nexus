@@ -1,4 +1,4 @@
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useContext, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
@@ -6,9 +6,12 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { isTaskLine } from '../../lib/editor/format';
+import { EmbedContext } from '../../lib/markdown/embed-context';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
+import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi } from '../../lib/tauri-api';
+import { NoteEmbed } from './NoteEmbed';
 import styles from './MarkdownPreview.module.css';
 
 /**
@@ -77,13 +80,28 @@ export function MarkdownPreview({
   source,
   onOpenLink,
   onToggleTask,
+  notePath,
 }: {
   source: string;
   onOpenLink: (target: string) => void;
   /** EDIT-5: клик по чекбоксу таска в превью → 1-based номер исходной строки. Не задан — чекбоксы
    *  остаются read-only (дефолтный disabled-рендер GFM), как в любых не-редактируемых контекстах. */
   onToggleTask?: (line: number) => void;
+  /** Путь ЭТОЙ заметки — заносится в предки гард-цикла транклюзии (`![[self]]` ловится). Не задан
+   *  (доска/peek) — гард работает по глубине и по предкам вложенных вставок, без само-вставки корня. */
+  notePath?: string;
 }) {
+  // Транклюзия: добавляем свой путь в множество предков (гард-цикл A→B→A). Мемо — стабильная
+  // идентичность Set'а, иначе вложенный NoteEmbed перефетчивал бы на каждый ре-рендер родителя.
+  const inheritedEmbed = useContext(EmbedContext);
+  const embedCtx = useMemo(
+    () =>
+      notePath
+        ? { ancestors: new Set([...inheritedEmbed.ancestors, notePath]), depth: inheritedEmbed.depth }
+        : inheritedEmbed,
+    [inheritedEmbed, notePath],
+  );
+
   const sourceLines = onToggleTask ? source.split('\n') : null;
   const components: Components = {
     // IMG-1: картинки-вложения через VaultImage (vault-путь → data:-URL).
@@ -153,6 +171,26 @@ export function MarkdownPreview({
   components.h5 = headingWithLine('h5');
   components.h6 = headingWithLine('h6');
 
+  // Транклюзия: кастомный блок `nexus-embed` (из remarkEmbeds) → рекурсивный рендер вставленной
+  // заметки. Кастомный тег вне `Components`-типа → регистрируем индексом. Нагрузку (target/anchor)
+  // берём из hast-properties (hProperties копируются в node.properties дословно).
+  (components as Record<string, Components['div']>)['nexus-embed'] = ({ node }) => {
+    const props = (node?.properties ?? {}) as Record<string, unknown>;
+    const target = typeof props.target === 'string' ? props.target : '';
+    const anchor = typeof props.anchor === 'string' ? props.anchor : '';
+    if (!target) return null;
+    return (
+      <NoteEmbed
+        target={target}
+        anchor={anchor}
+        onOpenLink={onOpenLink}
+        renderBody={(section, np) => (
+          <MarkdownPreview source={section} onOpenLink={onOpenLink} notePath={np} />
+        )}
+      />
+    );
+  };
+
   if (onToggleTask) {
     // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,
     // в т.ч. вложенный в `<p>` у loose-списков) — единственный чекбокс рисуем в `li`.
@@ -182,15 +220,17 @@ export function MarkdownPreview({
   }
 
   return (
-    <div className={styles.preview}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
-        rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
-        urlTransform={urlTransform}
-        components={components}
-      >
-        {source}
-      </ReactMarkdown>
-    </div>
+    <EmbedContext.Provider value={embedCtx}>
+      <div className={styles.preview}>
+        <ReactMarkdown
+          remarkPlugins={[remarkEmbeds, remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+          rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
+          urlTransform={urlTransform}
+          components={components}
+        >
+          {source}
+        </ReactMarkdown>
+      </div>
+    </EmbedContext.Provider>
   );
 }

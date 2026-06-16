@@ -197,3 +197,78 @@ describe('MarkdownPreview: формулы (#4, MathML под строгим CSP)
     expect(container.querySelectorAll('[style]')).toHaveLength(0);
   });
 });
+
+describe('MarkdownPreview: транклюзия ![[embed]] (Live-Preview, режим чтения)', () => {
+  it('блок-вставка ![[Note]] рекурсивно рендерит тело + заголовок-ссылку', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Target.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('---\nstatus: x\n---\n# Hello\n\nWorld body');
+    const onOpen = vi.fn();
+    render(<MarkdownPreview source={'![[Target]]'} onOpenLink={onOpen} />);
+
+    // тело вставки появляется асинхронно (резолв + чтение)
+    expect(await screen.findByText('World body')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Hello' })).toBeInTheDocument();
+    // frontmatter срезан — `status: x` не отрисован
+    expect(screen.queryByText(/status: x/)).not.toBeInTheDocument();
+    // заголовок-ссылка ведёт к исходной заметке (как клик по вики-ссылке)
+    fireEvent.click(screen.getByText('Target'));
+    expect(onOpen).toHaveBeenCalledWith('Target');
+  });
+
+  it('![[Note#Heading]] вставляет только секцию заголовка', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/T.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue(
+      '# A\n\nalpha\n\n## Section\n\ninside body\n\n## Other\n\noutside body',
+    );
+    render(<MarkdownPreview source={'![[T#Section]]'} onOpenLink={() => {}} />);
+
+    expect(await screen.findByText('inside body')).toBeInTheDocument();
+    expect(screen.queryByText('outside body')).not.toBeInTheDocument();
+    expect(screen.queryByText('alpha')).not.toBeInTheDocument();
+  });
+
+  it('несуществующая заметка → заглушка «не найдена» с целью', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue(null);
+    const read = vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('x');
+    render(<MarkdownPreview source={'![[Ghost]]'} onOpenLink={() => {}} />);
+
+    expect(await screen.findByText(/Ghost/)).toBeInTheDocument();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('гард-цикл: ![[self]] в своей же заметке → «циклическая», файл НЕ читается', async () => {
+    const resolve = vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Self.md');
+    const read = vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('# Self\n\nloop');
+    render(<MarkdownPreview source={'![[Self]]'} notePath={'Notes/Self.md'} onOpenLink={() => {}} />);
+
+    await waitFor(() => expect(resolve).toHaveBeenCalled());
+    expect(await screen.findByText(/[Цц]иклическая/)).toBeInTheDocument();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('инлайн ![[X]] (не отдельный абзац) НЕ становится вставкой → старое поведение', async () => {
+    const resolve = vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/X.md');
+    render(<MarkdownPreview source={'текст ![[X]] дальше'} onOpenLink={() => {}} />);
+
+    // вики-ссылка X есть (remarkNexus), а вставку не резолвили
+    expect(screen.getByText('X')).toBeInTheDocument();
+    await Promise.resolve();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('![[pic.png]] (картинка) НЕ резолвится как заметка (вне охвата слайса)', async () => {
+    const resolve = vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/pic.md');
+    render(<MarkdownPreview source={'![[pic.png]]'} onOpenLink={() => {}} />);
+    await Promise.resolve();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  // Ревью транклюзии (нит fan-out): потолок 50 вставок на заметку — 55 абзацев → резолвится ровно 50.
+  it('потолок вставок на заметку: 55 ![[…]] → не более 50 резолвов (остальные — fallback)', async () => {
+    const resolve = vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/x.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('# x\n\ny');
+    const src = Array.from({ length: 55 }, (_, i) => `![[N${i}]]`).join('\n\n');
+    render(<MarkdownPreview source={src} onOpenLink={() => {}} />);
+    await waitFor(() => expect(resolve).toHaveBeenCalledTimes(50));
+  });
+});
