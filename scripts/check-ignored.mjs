@@ -20,7 +20,10 @@ import { dirname, resolve } from 'node:path';
 // 17→19: + `live_chat_memory_recall_end_to_end` (живая проверка N4: gemma вспоминает факт из
 // прошлой сессии через врезку памяти) + `bench_local_pipeline_scale` (cold-bench #19: масштаб
 // локального пайплайна на моке без сети — ловит O(N²) в индексации; запускать через NEXUS_BENCH_FILES).
-const EXPECTED = 19;
+// 19→20: + `live_classify_tags_meets_gate` (AI-2c: реальный chat_util Qwen3-4B :8084 классифицирует
+// `tag_golden.json` closed-vocab → eval-гейт `out_of_vocab==0 && precision≥0.8/recall≥0.5`; в CI не
+// исполняется — нужен живой LLM; запуск `NEXUS_FAST_URL=… cargo test live_classify_tags_meets_gate -- --ignored`).
+const EXPECTED = 20;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');
