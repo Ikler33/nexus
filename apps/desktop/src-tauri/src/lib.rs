@@ -47,6 +47,8 @@ pub mod news;
 pub mod parser;
 /// Plugin loader (минимум): manifest + совместимость версии API (без broker — Ф2).
 pub mod plugin;
+/// Реестр типов свойств (PROP-2, спека §7): `.nexus/property-types.json` + эвристика (Obsidian Properties).
+pub mod properties;
 /// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
 pub mod redact;
 /// LLM-объяснения связи пары заметок (AIP-10): кэш `relation_reasons`, переиспользует примитивы `contradictions`.
@@ -219,6 +221,9 @@ pub fn run() {
             commands::board::get_board,
             commands::board::save_board,
             commands::board::list_boards,
+            commands::properties::get_property_types,
+            commands::properties::set_property_type,
+            commands::properties::get_note_properties,
             commands::home::get_home_data,
             commands::home::get_home_activity,
             commands::home::get_widget,
