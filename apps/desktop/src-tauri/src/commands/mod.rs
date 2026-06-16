@@ -18,6 +18,7 @@ pub mod inline;
 pub mod memory;
 pub mod news;
 pub mod plugin;
+pub mod properties;
 pub mod scheduler;
 pub mod search;
 pub mod settings;

@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import * as mockBoard from './mock/board';
+import * as mockProps from './mock/properties';
 import * as mockEgress from './mock/egress';
 import * as mockMemory from './mock/memory';
 import * as mockGit from './mock/git';
@@ -202,6 +203,15 @@ export interface BoardData {
 export interface BoardSummary {
   id: string;
   title: string;
+}
+
+/** Тип свойства (виджет Properties-панели, PROP-2; зеркалит Rust `properties::PropertyType`). */
+export type PropertyType = 'text' | 'list' | 'number' | 'checkbox' | 'date' | 'datetime' | 'tags';
+/** Свойство заметки: плоский frontmatter-скаляр + разрешённый тип (реестр+эвристика). */
+export interface NoteProperty {
+  key: string;
+  value: string;
+  type: PropertyType;
 }
 
 /** HOME-дашборд: статические/динамические виджеты (зеркалит Rust `home::HomeData`, H1/DP-1). LLM-виджеты —
@@ -801,6 +811,19 @@ export const tauriApi = {
     /** Список досок (всегда ≥1 — синтетический дефолт). */
     boards: (): Promise<BoardSummary[]> =>
       isTauri() ? invoke<BoardSummary[]>('list_boards') : mockBoard.listBoards(),
+  },
+
+  /** Реестр типов свойств (PROP-2, Obsidian Properties). Тип глобален по имени; иначе — эвристика. */
+  properties: {
+    /** Весь реестр явных типов (имя → тип). */
+    types: (): Promise<Record<string, PropertyType>> =>
+      isTauri() ? invoke<Record<string, PropertyType>>('get_property_types') : mockProps.types(),
+    /** Задать явный тип свойства (глобально по имени). */
+    setType: (key: string, type: PropertyType): Promise<void> =>
+      isTauri() ? invoke<void>('set_property_type', { key, ty: type }) : mockProps.setType(key, type),
+    /** Свойства заметки с разрешённым типом (для Properties-панели PROP-3). */
+    forNote: (path: string): Promise<NoteProperty[]> =>
+      isTauri() ? invoke<NoteProperty[]>('get_note_properties', { path }) : mockProps.forNote(),
   },
 
   /** HOME-дашборд (бэкенд H1/H2/H6; страница — DP-1). Вне Tauri — стейтфул-мок с контентом макета. */

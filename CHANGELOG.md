@@ -94,6 +94,15 @@ Properties-паритет (реестр типов + 5 виджетов); AI MVP
   БЕЗ frontmatter — недостижимо для карточек доски: у задачи всегда есть `status`-frontmatter; в бэклог как
   робастность хелпера). Фронт 563 теста (stripFrontmatter, TaskPeek 2, BoardView peek-клик), tsc/eslint;
   превью verified (панель + свойства + тело, доска видна).
+- **PROP-2** — реестр типов свойств (Obsidian Properties, спека §7): фундамент Properties-панели (PROP-3).
+  Модуль `properties` — тип свойства ГЛОБАЛЕН по ИМЕНИ в `.nexus/property-types.json` (явные), иначе
+  эвристика по значению `infer_type` (порядок: forced-tags `tags/aliases/cssclasses` → bool→checkbox →
+  ISO-datetime → ISO-date → number → `[…]`-list → text; CSV-текст НЕ список — убрана ложная ветка).
+  `resolve_type` (реестр > эвристика), `note_properties` (frontmatter-скаляры заметки → типизированные).
+  Команды `get_property_types`/`set_property_type`/`get_note_properties`. load/save через `atomic_write_io`,
+  битый JSON → пустой реестр (fail-safe). Браузер-мок `mock/properties.ts` зеркалит эвристику (MEM-5).
+  Rust 4 теста (эвристика/resolve/note_properties/round-trip) + clippy/fmt; фронт мок-тест + tsc/eslint.
+  Properties-панель с виджетами + инлайн-правкой — PROP-3 (потребитель этого read-пути).
 
 ### MEM-5 — захват факта в память прямо из чата (фидбэк владельца)
 
