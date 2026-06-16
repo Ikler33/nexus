@@ -364,6 +364,10 @@
     "error": "Couldn’t load embed",
     "imageMissing": "Image not found: {{name}}"
   },
+  "mermaid": {
+    "loading": "Rendering diagram…",
+    "error": "Couldn’t render the Mermaid diagram (check the syntax)"
+  },
   "capture": {
     "title": "Quick capture",
     "placeholder": "Jot a thought — Enter adds it to your Inbox…",

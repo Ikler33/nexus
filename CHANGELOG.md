@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### Live Preview — Mermaid-диаграммы под строгим CSP (эпик §13, срез 3)
+
+Блоки ` ```mermaid ` теперь рендерятся диаграммами в режиме чтения. Владелец выбрал полосу **SVG-санитайз
+без ослабления CSP** (vs CSP-nonce): mermaid эмитит SVG со встроенным `<style>` (под `style-src 'self'`
+заблокирован), мы **переносим эти стили в SVG presentation-атрибуты** (`fill`/`stroke`/`font-*` — это
+АТРИБУТЫ, не подчиняются `style-src`) и срезаем `<style>`/`style=`/`<script>`/`<foreignObject>`/`on*`/
+`javascript:`-ссылки. Итог: полностью стилизованная диаграмма под строгим CSP, **0 нарушений CSP** (проверено
+в превью: флоучарт + sequence рендерятся с темой mermaid, fill/border/стрелки на месте).
+- `lib/markdown/mermaid.ts`: `parseCss` (лёгкий парсер, пропускает `@media`/`@keyframes`) + `cspSafeSvg`
+  (строка→CSP-безопасная строка, тестируется на фикстуре) + ленивый `renderMermaid` (тяжёлый mermaid —
+  отдельный async-чанк, `securityLevel:'strict'` + `htmlLabels:false` → `<text>` вместо `<foreignObject>`).
+- `remarkMermaid` → узел `nexus-mermaid`; `MermaidDiagram.tsx` — ленивый рендер + `dangerouslySetInnerHTML`
+  уже-санитизированного SVG (единственный осознанный, с XSS-гардом) + заглушки loading/error.
+- Тесты: 10 транзформ-юнитов (presentation-перенос, strip `<style>`/`<script>`/`on*`, **XSS — `javascript:`
+  вырезан**, невалидный вход) + 2 интеграционных (фенс→SVG / чужой язык остаётся кодом).
+- **Дань:** mermaid тяжёлый (~100 транзит. пакетов) — поэтому ленивый импорт (вне основного бандла).
+
 ### Live Preview — картинки-вставки `![[pic.png]]` в режиме чтения (эпик §13, срез 2)
 
 Следующий autonomy-safe срез после транклюзии (выбран скоуп-анализом 3 кандидатов: картинки · Ctrl+E ·

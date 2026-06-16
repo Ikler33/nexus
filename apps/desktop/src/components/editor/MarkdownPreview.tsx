@@ -10,8 +10,10 @@ import { isTaskLine } from '../../lib/editor/format';
 import { EmbedContext } from '../../lib/markdown/embed-context';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
 import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
+import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi } from '../../lib/tauri-api';
+import { MermaidDiagram } from './MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
 import styles from './MarkdownPreview.module.css';
 
@@ -246,6 +248,12 @@ export function MarkdownPreview({
     return <EmbedImage name={name} alt={alt} width={width} />;
   };
 
+  // Mermaid-диаграмма `nexus-mermaid` (из remarkMermaid) → ленивый рендер CSP-безопасного SVG.
+  (components as Record<string, Components['div']>)['nexus-mermaid'] = ({ node }) => {
+    const code = (node?.properties as Record<string, unknown> | undefined)?.code;
+    return typeof code === 'string' && code.trim() ? <MermaidDiagram code={code} /> : null;
+  };
+
   if (onToggleTask) {
     // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,
     // в т.ч. вложенный в `<p>` у loose-списков) — единственный чекбокс рисуем в `li`.
@@ -278,7 +286,7 @@ export function MarkdownPreview({
     <EmbedContext.Provider value={embedCtx}>
       <div className={styles.preview}>
         <ReactMarkdown
-          remarkPlugins={[remarkEmbeds, remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+          remarkPlugins={[remarkEmbeds, remarkMermaid, remarkGfm, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
           rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
           urlTransform={urlTransform}
           components={components}

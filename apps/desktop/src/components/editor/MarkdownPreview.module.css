@@ -264,3 +264,14 @@
   font-size: var(--text-sm, 0.85em);
   font-style: italic;
 }
+
+/* Mermaid-диаграмма (Live-Preview): центрированный адаптивный SVG. */
+.mermaid {
+  margin: 0 0 1em;
+  text-align: center;
+  overflow-x: auto;
+}
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
