@@ -62,6 +62,13 @@ export interface TagCount {
   count: number;
 }
 
+/** Предложение авто-тега (AI-2c, зеркалит Rust `tagger::TagSuggestion`). `tags` УЖЕ отфильтрованы по
+ *  словарю vault (closed-vocab); `dropped` — сколько модель выдала вне словаря (телеметрия). */
+export interface TagSuggestion {
+  tags: string[];
+  dropped: number;
+}
+
 /** Чип права плагина (зеркалит Rust `plugin::PermissionChip`, DP-8): уровень риска для UI. */
 export interface PermissionChip {
   kind: string;
@@ -800,6 +807,12 @@ export const tauriApi = {
      *  статические подсказки. Вне Tauri — [] (естественный фолбэк на статику). */
     startingQuestions: (center?: string): Promise<string[]> =>
       isTauri() ? invoke<string[]>('get_starting_questions', { center }) : Promise.resolve([]),
+
+    /** AI-2c: closed-vocab авто-тег — `chat_util` предлагает теги ТОЛЬКО из словаря vault. `tags` уже
+     *  отфильтрованы по словарю; пустой список = нет утилитарной модели / нет контента / нет тегов → фронт
+     *  показывает «нет предложений». НЕ пишет. Вне Tauri — мок (зеркалит контракт: vocab-фильтр + пусто). */
+    suggestTags: (path: string): Promise<TagSuggestion> =>
+      isTauri() ? invoke<TagSuggestion>('suggest_tags', { path }) : mockTags.suggestTags(),
   },
 
   goals: {

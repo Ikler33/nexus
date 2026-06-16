@@ -1,11 +1,35 @@
 {
   "vocabulary": ["rust", "frontend", "ai", "design", "ops", "docs"],
   "cases": [
-    { "path": "notes/a.md", "gold": ["rust", "ops"] },
-    { "path": "notes/b.md", "gold": ["frontend", "design"] },
-    { "path": "notes/c.md", "gold": ["ai"] },
-    { "path": "notes/d.md", "gold": ["docs"] },
-    { "path": "notes/e.md", "gold": ["rust", "ai"] },
-    { "path": "notes/f.md", "gold": [] }
+    {
+      "path": "notes/a.md",
+      "gold": ["rust", "ops"],
+      "body": "Переписал воркер планировщика на Rust: tokio-таски, graceful shutdown, systemd-юнит и healthcheck. Настроил деплой на сервере, логи через journald, перезапуск по сбою."
+    },
+    {
+      "path": "notes/b.md",
+      "gold": ["frontend", "design"],
+      "body": "Свёрстал новую панель настроек на React: токены тем, отступы по 8px-сетке, состояния hover/focus. Свёл визуальный язык кнопок и чипов к единому стилю, проверил контраст."
+    },
+    {
+      "path": "notes/c.md",
+      "gold": ["ai"],
+      "body": "Заметки про RAG и эмбеддинги: bge-m3, переранжирование выдачи, замер recall@k на golden-наборе. Промпт классификатора с закрытым словарём и защитой от инъекций."
+    },
+    {
+      "path": "notes/d.md",
+      "gold": ["docs"],
+      "body": "Обновил README и руководство пользователя: как открыть vault, горячие клавиши, формат frontmatter. Добавил раздел FAQ и ссылки на спецификацию."
+    },
+    {
+      "path": "notes/e.md",
+      "gold": ["rust", "ai"],
+      "body": "Встроил локальную LLM в Rust-бэкенд: вызов chat-провайдера через guarded-клиент, стрим токенов, парсинг JSON-ответа модели. Юнит-тесты на разбор и фильтрацию."
+    },
+    {
+      "path": "notes/f.md",
+      "gold": [],
+      "body": "Купить молоко и хлеб по дороге домой. Позвонить в сервис насчёт записи на четверг."
+    }
   ]
 }

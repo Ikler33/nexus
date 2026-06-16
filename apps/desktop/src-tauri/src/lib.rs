@@ -64,6 +64,8 @@ pub mod state;
 /// Предложения связей (режим 1 max-sim) — §6.
 pub mod suggest;
 /// Теги vault: список с количеством для панели «Теги» сайдбара (DP-2).
+pub mod tagger;
+
 pub mod tags;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
@@ -216,6 +218,7 @@ pub fn run() {
             commands::suggest::get_related_notes,
             commands::suggest::explain_relation,
             commands::suggest::get_starting_questions,
+            commands::suggest::suggest_tags,
             commands::goals::list_goals,
             commands::board::list_board,
             commands::board::get_board,

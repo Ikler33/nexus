@@ -15,11 +15,14 @@ pub const MIN_PRECISION: f32 = 0.8;
 /// Порог микро-recall гейта авто-тега (спека §10 A4).
 pub const MIN_RECALL: f32 = 0.5;
 
-/// Один кейс: заметка + ОЖИДАЕМЫЕ теги (gold) из закрытого словаря.
+/// Один кейс: заметка + ОЖИДАЕМЫЕ теги (gold) из закрытого словаря. `body` — содержимое заметки для
+/// LIVE-классификатора (AI-2c live-тест); детерминированные гейт-тесты `body` не используют (default "").
 #[derive(Debug, Clone, Deserialize)]
 pub struct TagCase {
     pub path: String,
     pub gold: Vec<String>,
+    #[serde(default)]
+    pub body: String,
 }
 
 /// Golden-набор тег-классификации: закрытый словарь допустимых тегов + кейсы.
