@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { commands, eventToCombo, normalizeCombo, spellCombo } from './commands';
+import { registerCoreCommands } from './commands-core';
+import { useWorkspaceStore } from '../stores/workspace';
 
 describe('spellCombo (a11y: произносимая метка хоткея)', () => {
   it('разворачивает модификаторы в слова для скринридера', () => {
@@ -82,5 +84,24 @@ describe('command registry (Ф0-8)', () => {
     const raw = localStorage.getItem('nexus.hotkeys.v1');
     expect(raw).toBeTruthy();
     expect(JSON.parse(raw as string)).toEqual({ 'ctrl+shift+k': 'c.k' });
+  });
+});
+
+describe('editor.toggleMode (⌘E — source/preview, регресс)', () => {
+  it('mod+e резолвится в команду и тогглит режим активной группы туда-обратно', async () => {
+    const reg = registerCoreCommands();
+    try {
+      expect(commands.resolve(normalizeCombo('mod+e'))).toBe('editor.toggleMode');
+      const gid = useWorkspaceStore.getState().activeGroupId;
+      const before = useWorkspaceStore.getState().modes[gid] ?? 'source';
+      await commands.run('editor.toggleMode');
+      const after = useWorkspaceStore.getState().modes[gid] ?? 'source';
+      expect(after).not.toBe(before);
+      // повторный вызов возвращает обратно (это тоггл)
+      await commands.run('editor.toggleMode');
+      expect(useWorkspaceStore.getState().modes[gid] ?? 'source').toBe(before);
+    } finally {
+      reg.dispose();
+    }
   });
 });
