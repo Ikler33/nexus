@@ -26,6 +26,7 @@
     "@fontsource-variable/onest": "^5.2.11",
     "@fontsource-variable/source-serif-4": "^5.2.9",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/stix-two-math": "^5.2.1",
     "@lezer/highlight": "^1.2.3",
     "@tanstack/react-virtual": "^3.13.26",
     "@tauri-apps/api": "^2",

@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### Live Preview — math-шрифт (STIX Two Math) для MathML на Win/Linux (эпик §13, срез 4)
+
+KaTeX в режиме чтения рендерит `output:'mathml'` (нативный `<math>` без inline-стилей — CSP не трогаем).
+На macOS WebKit `<math>` берёт системный math-шрифт из коробки, а на **Chromium/WebView2 и WebKitGTK без
+шрифта с OpenType-MATH-таблицей** ломаются растяжимые скобки/интегралы/большие операторы. Забандлен
+**STIX Two Math** (self-hosted woff2 из `@fontsource/stix-two-math` — CSP `font-src 'self'` уже разрешает),
+применён к `.preview math`.
+- Грабля: пакет `@fontsource` тегает woff2 как «latin» (`unicode-range: U+0000-00FF`), что отрезало бы
+  math-символы — НО сам файл содержит ПОЛНЫЙ шрифт (4605 глифов + MATH-таблица, проверено fonttools).
+  Поэтому свой `@font-face` БЕЗ `unicode-range` (`src/math-font.css`), а не импорт его `index.css`.
+- Без бинаря в репо (шрифт — npm-зависимость), без изменения CSP. Build бандлит woff2 (394K), `document.fonts`
+  регистрирует+грузит STIX. **Визуальную правку скобок на Win/Linux с macOS не проверить** (там MathML и так
+  ок) — механизм стандартный (font-family с MATH-таблицей).
+
 ### Live Preview — Mermaid-диаграммы под строгим CSP (эпик §13, срез 3)
 
 Блоки ` ```mermaid ` теперь рендерятся диаграммами в режиме чтения. Владелец выбрал полосу **SVG-санитайз
