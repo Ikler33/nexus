@@ -17,6 +17,7 @@ import {
 import type { NoteRef } from '../../lib/tauri-api';
 import { noteName } from '../../stores/vault';
 import { slashSource } from './slashCommands';
+import { tagCompletionQuery } from './tag-complete';
 
 // `[[Target]]`, `[[Target#H|Alias]]`, `![[Embed]]`
 const WIKILINK_RE = /(!?)\[\[([^\]\n]+?)\]\]/g;
@@ -198,10 +199,32 @@ const editorTheme = EditorView.theme({
   '&.cm-focused': { outline: 'none' },
 });
 
+/** CompletionSource автокомплита тегов (PROP-4, §8): инлайн `#tag` + frontmatter `tags:`-список из
+ *  `list_tags`. Регекс-контекст в `tagCompletionQuery` (заголовок/code-span исключены). Монтируется в
+ *  ЕДИНЫЙ autocompletion() рядом с wikilink/slash (EDIT-6 — два инстанса конфликтуют). */
+function tagSource(fetchTags: () => Promise<string[]>): CompletionSource {
+  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
+    const line = ctx.state.doc.lineAt(ctx.pos);
+    const before = ctx.state.sliceDoc(line.from, ctx.pos);
+    const query = tagCompletionQuery(before);
+    if (query === null) return null;
+    const from = ctx.pos - query.length; // заменяем только набранный префикс (# / `[` сохраняются)
+    const q = query.toLowerCase();
+    const tags = await fetchTags();
+    const options = tags
+      .filter((t) => t.toLowerCase().includes(q))
+      .slice(0, 50)
+      .map((t) => ({ label: t, type: 'keyword' }));
+    return { from, options, validFor: /^[\p{L}\p{N}_/-]*$/u };
+  };
+}
+
 /** Колбэки редактора (через ref-геттеры — всегда актуальны без пересоздания view). */
 export interface EditorCallbacks {
   /** Заметки по подстроке для автокомплита `[[…` (бэкенд-фильтр + лимит, #22). */
   fetchNotes: (query: string) => Promise<NoteRef[]>;
+  /** Имена тегов vault для автокомплита `#tag` / `tags:` (PROP-4, плоский `list_tags`). */
+  fetchTags: () => Promise<string[]>;
   getOpenLink: () => ((target: string) => void) | undefined;
 }
 
@@ -212,9 +235,9 @@ export function nexusExtensions(cb: EditorCallbacks): Extension[] {
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     decorationPlugin,
     wikilinkClick(cb.getOpenLink),
-    // EDIT-6: ЕДИНЫЙ autocompletion() с двумя источниками — wikilink (`[[…`) и slash (`/…`). Их
-    // контексты взаимоисключающие (по regex), монтировать два autocompletion() нельзя (конфликт конфигов).
-    autocompletion({ override: [wikilinkSource(cb.fetchNotes), slashSource()] }),
+    // EDIT-6/PROP-4: ЕДИНЫЙ autocompletion() с источниками wikilink (`[[…`), slash (`/…`), tag (`#…`).
+    // Контексты взаимоисключающие (по regex); монтировать два autocompletion() нельзя (конфликт конфигов).
+    autocompletion({ override: [wikilinkSource(cb.fetchNotes), tagSource(cb.fetchTags), slashSource()] }),
     editorTheme,
     EditorView.lineWrapping,
   ];

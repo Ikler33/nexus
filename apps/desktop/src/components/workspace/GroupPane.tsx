@@ -309,6 +309,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                 onBlur={() => void flush(active.path)}
                 onOpenLink={(t) => void openLink(t)}
                 fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
+                fetchTags={() => tauriApi.vault.listTags().then((ts) => ts.map((t) => t.name))}
               />
             )}
           </div>

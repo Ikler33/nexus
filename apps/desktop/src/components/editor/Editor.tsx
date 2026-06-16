@@ -27,6 +27,8 @@ export interface EditorProps {
   onOpenLink?: (target: string) => void;
   /** Заметки по подстроке для автокомплита `[[…` (бэкенд-фильтр + лимит, #22). */
   fetchNotes?: (query: string) => Promise<NoteRef[]>;
+  /** Имена тегов vault для автокомплита `#tag` / `tags:` (PROP-4). */
+  fetchTags?: () => Promise<string[]>;
 }
 
 /**
@@ -43,11 +45,12 @@ export function Editor({
   onBlur,
   onOpenLink,
   fetchNotes,
+  fetchTags,
 }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const cb = useRef({ onChange, onSave, onBlur, onOpenLink, fetchNotes });
-  cb.current = { onChange, onSave, onBlur, onOpenLink, fetchNotes };
+  const cb = useRef({ onChange, onSave, onBlur, onOpenLink, fetchNotes, fetchTags });
+  cb.current = { onChange, onSave, onBlur, onOpenLink, fetchNotes, fetchTags };
   const loadedPath = useRef(path);
   const loadedDoc = useRef(initialDoc);
   loadedDoc.current = initialDoc;
@@ -137,6 +140,7 @@ export function Editor({
           imagePaste(),
           ...nexusExtensions({
             fetchNotes: (q) => cb.current.fetchNotes?.(q) ?? Promise.resolve([]),
+            fetchTags: () => cb.current.fetchTags?.() ?? Promise.resolve([]),
             getOpenLink: () => cb.current.onOpenLink,
           }),
           EditorView.updateListener.of((u) => {
