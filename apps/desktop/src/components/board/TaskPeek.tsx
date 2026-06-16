@@ -1,22 +1,24 @@
 import { useEffect, useState } from 'react';
-import { CalendarClock, FolderClosed, SquarePen, X } from 'lucide-react';
+import { SquarePen, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { MarkdownPreview } from '../editor/MarkdownPreview';
 import { tauriApi, type TaskCard } from '../../lib/tauri-api';
-import { basename, isOverdue, knownPriority, stripFrontmatter, todayIsoLocal } from './board-model';
+import { basename, stripFrontmatter } from './board-model';
+import { PropertiesEditor } from './PropertiesEditor';
 import styles from './TaskPeek.module.css';
 
 /**
- * Превью задачи (BOARD-6, спека §9): side-panel по клику на карточку — рендер ТЕЛА заметки
- * (`MarkdownPreview`, frontmatter срезан) + сводка свойств. НЕ модалка-трап: доска видна рядом.
- * Инлайн-правка свойств — PROP-3; здесь read-only + «Открыть в редакторе» для полного.
+ * Превью задачи (BOARD-6 + PROP-3, спека §9/§7): side-panel по клику на карточку — Properties-панель
+ * (типизированные виджеты + инлайн-правка через `set_frontmatter_field`) + рендер ТЕЛА заметки
+ * (`MarkdownPreview`, frontmatter срезан) + теги. НЕ модалка-трап: доска видна рядом.
  */
 export function TaskPeek({
   card,
   onClose,
   onOpenFull,
   onOpenLink,
+  onChanged,
 }: {
   card: TaskCard;
   onClose: () => void;
@@ -24,6 +26,8 @@ export function TaskPeek({
   onOpenFull: (path: string) => void;
   /** Клик по `[[вики-ссылке]]` в теле — цель резолвится отдельно (openLink). */
   onOpenLink: (target: string) => void;
+  /** После инлайн-правки свойства (доска перечитывает карточки). */
+  onChanged?: () => void;
 }) {
   const { t } = useTranslation();
   const [body, setBody] = useState<string | null>(null);
@@ -46,9 +50,6 @@ export function TaskPeek({
     };
   }, [card.path]);
 
-  const prio = knownPriority(card.priority);
-  const overdue = isOverdue(card.due, todayIsoLocal());
-
   return (
     <aside className={styles.peek} aria-label={t('board.peek.title')}>
       <header className={styles.head}>
@@ -64,36 +65,15 @@ export function TaskPeek({
         </button>
       </header>
 
-      <div className={styles.props}>
-        <div className={styles.prop}>
-          <span className={styles.propKey}>{t('board.peek.status')}</span>
-          <span className={styles.propVal}>{card.status}</span>
-        </div>
-        {card.priority && (
-          <div className={styles.prop}>
-            <span className={styles.propKey}>{t('board.peek.priority')}</span>
-            <span className={styles.propVal}>
-              {prio ? t(`board.priority.${prio}`) : card.priority}
-            </span>
-          </div>
-        )}
-        {card.project && (
-          <div className={styles.prop}>
-            <span className={styles.propKey}>{t('board.peek.project')}</span>
-            <span className={styles.propVal}>
-              <FolderClosed size={12} aria-hidden /> {card.project}
-            </span>
-          </div>
-        )}
-        {card.due && (
-          <div className={styles.prop}>
-            <span className={styles.propKey}>{t('board.peek.due')}</span>
-            <span className={`${styles.propVal} ${overdue ? styles.overdue : ''}`}>
-              <CalendarClock size={12} aria-hidden /> {card.due}
-              {overdue ? ` · ${t('board.overdue')}` : ''}
-            </span>
-          </div>
-        )}
+      {/* PROP-3: типизированные свойства с инлайн-правкой (status/priority/due/…). */}
+      <div className={styles.propsArea}>
+        <PropertiesEditor
+          key={card.path}
+          path={card.path}
+          onOpenSource={() => onOpenFull(card.path)}
+          onChanged={onChanged}
+        />
+        {/* Теги — список (вне frontmatter-скаляров); инлайн-чип-правка — PROP-4. */}
         {card.tags.length > 0 && (
           <div className={styles.tags}>
             {card.tags.map((tag) => (

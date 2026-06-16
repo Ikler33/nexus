@@ -816,10 +816,6 @@
     "peek": {
       "title": "Task preview",
       "close": "Close preview",
-      "status": "Status",
-      "priority": "Priority",
-      "project": "Project",
-      "due": "Due",
       "empty": "This note has no body yet.",
       "error": "Couldn't load the note.",
       "openFull": "Open in editor"
@@ -840,6 +836,12 @@
       "high": "high",
       "urgent": "urgent"
     }
+  },
+  "prop": {
+    "empty": "No properties yet",
+    "editSource": "Edit in source",
+    "saveError": "Couldn't save the property",
+    "flushError": "Save the note first (it has unsaved changes)"
   },
   "commands": {
     "palette.open": "Command palette",
