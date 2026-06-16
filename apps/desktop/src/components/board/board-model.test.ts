@@ -10,6 +10,7 @@ import {
   knownPriority,
   normalizeStatus,
   OTHER_COLUMN_ID,
+  stripFrontmatter,
   todayIsoLocal,
 } from './board-model';
 
@@ -62,6 +63,13 @@ describe('board-model: утилиты', () => {
   it('basename убирает путь и .md', () => {
     expect(basename('Tasks/Sub/Заметка.md')).toBe('Заметка');
     expect(basename('a.MD')).toBe('a');
+  });
+
+  it('stripFrontmatter убирает ведущий блок --- (для превью тела)', () => {
+    expect(stripFrontmatter('---\nstatus: todo\n---\n# Тело\nтекст')).toBe('# Тело\nтекст');
+    expect(stripFrontmatter('# Без frontmatter\nтекст')).toBe('# Без frontmatter\nтекст');
+    expect(stripFrontmatter('---\nx: 1\nбез закрытия\n')).toBe('---\nx: 1\nбез закрытия\n'); // незакрытый → как есть
+    expect(stripFrontmatter('---\r\nstatus: todo\r\n---\r\nтело\r\n')).toBe('тело\r\n'); // CRLF
   });
 
   it('todayIsoLocal форматирует YYYY-MM-DD по локальной дате', () => {

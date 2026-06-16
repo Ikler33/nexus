@@ -7,6 +7,7 @@ import { useToastStore } from '../../stores/toast';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { type DragData, planMove } from './board-dnd';
+import { TaskPeek } from './TaskPeek';
 import {
   applyOrder,
   basename,
@@ -64,6 +65,8 @@ export function BoardView() {
     busyRef.current = v;
     setBusy(v);
   };
+  // BOARD-6: путь карточки в превью-панели (peek). Клик по карточке открывает превью, не уводит с доски.
+  const [peekPath, setPeekPath] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +101,11 @@ export function BoardView() {
     void useWorkspaceStore.getState().openFile(path);
     closeBoard();
   };
+  // Клик по `[[ссылке]]` в превью — резолв вики-цели через openLink (та сама закроет доску → редактор).
+  const openLink = (target: string) => {
+    void useWorkspaceStore.getState().openLink(target);
+    closeBoard();
+  };
 
   const today = todayIsoLocal();
   const total = data?.cards.length ?? 0;
@@ -109,6 +117,8 @@ export function BoardView() {
         config!.columns.map((c) => c.id),
       ).map((col) => ({ ...col, cards: applyOrder(col.cards, config!.order[col.id]) }))
     : [];
+  // Карточка в превью (если открыта и ещё существует — иначе панель просто не рендерится, напр. после удаления).
+  const peekCard = peekPath ? (data?.cards.find((c) => c.path === peekPath) ?? null) : null;
   const labelById = new Map((config?.columns ?? []).map((c) => [c.id, c.label]));
   const columnLabel = (id: string): string => {
     if (id === OTHER_COLUMN_ID) return t('board.col.other');
@@ -248,6 +258,7 @@ export function BoardView() {
       )}
 
       {data && total > 0 && (
+        <div className={styles.bodyRow}>
         <div className={styles.columns}>
           {columns.map((col) => {
             const droppable = col.id !== OTHER_COLUMN_ID; // в «Прочее» ронять нельзя (нет статуса)
@@ -287,9 +298,9 @@ export function BoardView() {
                     <button
                       key={card.path}
                       type="button"
-                      className={styles.card}
+                      className={`${styles.card} ${peekPath === card.path ? styles.cardActive : ''}`}
                       draggable={!busy}
-                      onClick={() => openNote(card.path)}
+                      onClick={() => setPeekPath(card.path)}
                       onDragStart={(e) => {
                         const drag: DragData = { path: card.path, fromCol: col.id };
                         dragRef.current = drag;
@@ -355,6 +366,15 @@ export function BoardView() {
               </section>
             );
           })}
+        </div>
+          {peekCard && (
+            <TaskPeek
+              card={peekCard}
+              onClose={() => setPeekPath(null)}
+              onOpenFull={openNote}
+              onOpenLink={openLink}
+            />
+          )}
         </div>
       )}
     </div>
