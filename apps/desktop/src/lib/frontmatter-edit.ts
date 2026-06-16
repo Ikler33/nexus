@@ -13,6 +13,22 @@ export class FlushFailedError extends Error {
 }
 
 /**
+ * Флашит грязный открытый буфер `path` на диск; не удалось снять dirty → `FlushFailedError`. Нужно перед
+ * ЛЮБЫМ нашим чтением/записью диска по этому пути — иначе прочитаем/затрём несохранённые правки тела/свойств
+ * (урок BOARD-5 R1: запись читала старый диск; AI-1: guard «уже задача» читал старый status и откатывал бы
+ * только что набранное значение колонки). No-op для чистого/закрытого буфера.
+ */
+export async function flushBufferIfDirty(path: string): Promise<void> {
+  const ws = useWorkspaceStore.getState();
+  if (ws.buffers[path]?.dirty) {
+    await ws.saveBuffer(path, true);
+    if (useWorkspaceStore.getState().buffers[path]?.dirty) {
+      throw new FlushFailedError();
+    }
+  }
+}
+
+/**
  * Пишет один плоский frontmatter-ключ заметки через `set_frontmatter_field`:
  * 1) если заметка открыта и ГРЯЗНАЯ — сперва флашит тело на диск; не удалось → `FlushFailedError`
  *    (иначе `set_frontmatter_field` прочитал бы старый диск без правок тела, а sync затёр бы их — R1);
@@ -25,13 +41,7 @@ export async function writeFrontmatterField(
   key: string,
   value: string,
 ): Promise<void> {
-  const ws = useWorkspaceStore.getState();
-  if (ws.buffers[path]?.dirty) {
-    await ws.saveBuffer(path, true);
-    if (useWorkspaceStore.getState().buffers[path]?.dirty) {
-      throw new FlushFailedError();
-    }
-  }
+  await flushBufferIfDirty(path);
   const res = await tauriApi.vault.setFrontmatterField(path, key, value);
   useWorkspaceStore.getState().syncBufferAfterWrite(path, res.content, res.hash);
 }

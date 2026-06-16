@@ -1,3 +1,4 @@
+import { promoteToBoard } from './board-promote';
 import { commands, type Disposable } from './commands';
 import { openOrCreateDaily } from './daily';
 import { getActiveEditorView } from './editor/activeView';
@@ -54,6 +55,25 @@ async function saveSelectionToMemory(): Promise<void> {
     useToastStore.getState().addToast(i18n.t('chat.memorySaved'), { kind: 'success' });
   } catch {
     useToastStore.getState().addToast(i18n.t('chat.memorySaveFailed'), { kind: 'error' });
+  }
+}
+
+/** AI-1 (A1): продвинуть заметку `path` на доску (`board-promote`) + тост исхода + открыть доску. Сбой
+ *  записи (флаш грязного буфера/диск) → тост-ошибка. Экспортируется для контекст-меню дерева (FileTree) —
+ *  единый orchestration с командой палитры. Локализация колонки: `board.col.<id>` с фолбэком на raw-статус. */
+export async function promoteNoteToBoard(path: string): Promise<void> {
+  const toast = useToastStore.getState().addToast;
+  try {
+    const r = await promoteToBoard(path);
+    const column = i18n.t(`board.col.${r.column}`, { defaultValue: r.column });
+    if (r.kind === 'already') {
+      toast(i18n.t('board.promote.already', { column }), { kind: 'info' });
+    } else {
+      toast(i18n.t('board.promote.done', { column }), { kind: 'success' });
+    }
+    useUIStore.getState().openBoard();
+  } catch {
+    toast(i18n.t('board.promote.failed'), { kind: 'error' });
   }
 }
 
@@ -175,6 +195,22 @@ export function registerCoreCommands(): Disposable {
       titleKey: 'commands.file.print',
       source: 'core',
       run: () => printActiveNote(),
+    }),
+    commands.register({
+      // AI-1 (A1): «На доску» — активная заметка → задача канбана (первая колонка дефолт-доски).
+      id: 'board.promote',
+      title: 'Add note to board',
+      titleKey: 'commands.board.promote',
+      source: 'core',
+      run: () => {
+        if (!useVaultStore.getState().info) return; // нет vault — нечего продвигать
+        const buffer = activeBuffer(useWorkspaceStore.getState());
+        if (!buffer) {
+          useToastStore.getState().addToast(i18n.t('board.promote.noNote'), { kind: 'error' });
+          return;
+        }
+        return promoteNoteToBoard(buffer.path);
+      },
     }),
     commands.register({
       id: 'editor.inline.continue',

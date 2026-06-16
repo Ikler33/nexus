@@ -282,6 +282,7 @@
     "label": "Vault files",
     "empty": "This vault is empty.",
     "rename": "Rename",
+    "toBoard": "Add to board",
     "delete": "Move to trash",
     "deleteConfirm": "Move “{{name}}” to trash? You can restore it from .nexus/.trash.",
     "newNote": "New note",
@@ -835,6 +836,12 @@
       "medium": "medium",
       "high": "high",
       "urgent": "urgent"
+    },
+    "promote": {
+      "done": "Note added to board → “{{column}}”",
+      "already": "Note already on board → “{{column}}”",
+      "failed": "Could not add to board",
+      "noNote": "No open note to add to the board"
     }
   },
   "prop": {
@@ -857,6 +864,7 @@
     "note.fromTemplate": "New note from template",
     "file.save": "Save file",
     "file.print": "Print / Export PDF",
+    "board.promote": "Add note to board (note → task)",
     "inline.continue": "AI: continue text",
     "inline.rewrite": "AI: rewrite selection",
     "inline.summarize": "AI: summarize selection",

@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronRight, File as FileIcon, Folder, Pencil, Star, Trash2 } from 'lucide-react';
+import {
+  ChevronRight,
+  File as FileIcon,
+  Folder,
+  LayoutGrid,
+  Pencil,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { promoteNoteToBoard } from '../../lib/commands-core';
 import { useStarredStore } from '../../stores/starred';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
@@ -30,9 +39,13 @@ export function FileTree() {
   const { t } = useTranslation();
 
   // Контекст-меню (right-click): позиция + цель. Закрывается кликом вне и Escape.
-  const [menu, setMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(
-    null,
-  );
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+    name: string;
+    isDir: boolean;
+  } | null>(null);
   // Инлайн-переименование: путь редактируемой строки + текущее значение (имя без .md).
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
 
@@ -196,6 +209,7 @@ export function FileTree() {
                   y: e.clientY,
                   path: entry.path,
                   name: entry.name.replace(/\.md$/, ''),
+                  isDir: entry.isDir,
                 });
               }}
             >
@@ -255,6 +269,20 @@ export function FileTree() {
         role="menu"
         onClick={(e) => e.stopPropagation()}
       >
+        {!menu.isDir && (
+          <button
+            type="button"
+            className={styles.ctxItemNeutral}
+            role="menuitem"
+            onClick={() => {
+              const target = menu;
+              setMenu(null);
+              void promoteNoteToBoard(target.path);
+            }}
+          >
+            <LayoutGrid size={14} aria-hidden /> {t('tree.toBoard')}
+          </button>
+        )}
         <button
           type="button"
           className={styles.ctxItemNeutral}
