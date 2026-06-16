@@ -728,9 +728,15 @@ export const tauriApi = {
         ? invoke<string>('write_attachment', { name, dataBase64 })
         : Promise.resolve(`attachments/${name}`),
 
-    /** Читает вложение-картинку как `data:`-URL для превью (IMG-1). Вне Tauri — пусто. */
+    /** Читает вложение-картинку как `data:`-URL для превью (IMG-1). */
     read: (path: string) =>
-      isTauri() ? invoke<string>('read_attachment', { path }) : Promise.resolve(''),
+      isTauri() ? invoke<string>('read_attachment', { path }) : mockVault.readAttachment(path),
+
+    /** Резолвит цель `![[pic.png]]` → относительный путь vault (basename-обход) или null (IMG-EMBED). */
+    resolve: (name: string) =>
+      isTauri()
+        ? invoke<string | null>('resolve_attachment', { name })
+        : mockVault.resolveAttachment(name),
   },
 
   graph: {

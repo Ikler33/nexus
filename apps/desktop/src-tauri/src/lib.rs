@@ -173,6 +173,7 @@ pub fn run() {
             commands::tasks::list_tasks,
             commands::attachments::write_attachment,
             commands::attachments::read_attachment,
+            commands::attachments::resolve_attachment,
             commands::vault::resolve_note,
             commands::vault::list_tags,
             commands::vault::notes_by_tag,

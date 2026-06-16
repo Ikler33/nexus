@@ -6,6 +6,7 @@ import {
   isBlockAnchor,
   isImageTarget,
   parseEmbedTarget,
+  parseImageParams,
 } from './embed';
 
 describe('parseEmbedTarget', () => {
@@ -63,6 +64,27 @@ describe('isBlockAnchor', () => {
   it('^id → блок', () => expect(isBlockAnchor('^abc')).toBe(true));
   it('заголовок → не блок', () => expect(isBlockAnchor('Heading')).toBe(false));
   it('null → не блок', () => expect(isBlockAnchor(null)).toBe(false));
+});
+
+describe('parseImageParams (![[img.png|alt|300]])', () => {
+  it('без параметров', () => {
+    expect(parseImageParams('img.png')).toEqual({ alt: '', width: null });
+  });
+  it('только ширина (число)', () => {
+    expect(parseImageParams('img.png|300')).toEqual({ alt: '', width: 300 });
+  });
+  it('ШxВ → берём ширину', () => {
+    expect(parseImageParams('img.png|200x100')).toEqual({ alt: '', width: 200 });
+  });
+  it('только alt (нечисло)', () => {
+    expect(parseImageParams('img.png|схема')).toEqual({ alt: 'схема', width: null });
+  });
+  it('alt + ширина', () => {
+    expect(parseImageParams('img.png|схема|250')).toEqual({ alt: 'схема', width: 250 });
+  });
+  it('ширина 0 → null (не делаем 0px-невидимую картинку, ревью)', () => {
+    expect(parseImageParams('img.png|0')).toEqual({ alt: '', width: null });
+  });
 });
 
 describe('extractSection', () => {
