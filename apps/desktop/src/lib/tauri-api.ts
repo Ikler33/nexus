@@ -166,6 +166,44 @@ export interface TaskCard {
   tags: string[];
 }
 
+/** Колонка доски (зеркалит Rust `board::config::BoardColumn`, BOARD-3). `id` = raw-значение `status`;
+ *  `label` пусто → локализация на фронте; `doneLike` — терминальная колонка. */
+export interface BoardColumn {
+  id: string;
+  label: string;
+  wip: number | null;
+  color: string | null;
+  doneLike: boolean;
+}
+/** Scope доски (folder-префикс / project / superset тегов). */
+export interface BoardScope {
+  folder: string | null;
+  project: string | null;
+  tags: string[];
+}
+/** Конфиг доски (персист `.nexus/boards/<id>.json`, BOARD-3). */
+export interface BoardConfig {
+  id: string;
+  title: string;
+  statusKey: string;
+  columns: BoardColumn[];
+  scope: BoardScope;
+  order: Record<string, string[]>;
+  sort: string;
+  cardFields: string[];
+}
+/** Доска целиком: конфиг + карточки в его scope; `corrupt` — JSON битый (фронт-тост, дефолт). */
+export interface BoardData {
+  config: BoardConfig;
+  cards: TaskCard[];
+  corrupt: boolean;
+}
+/** Сводка доски для списка/переключателя. */
+export interface BoardSummary {
+  id: string;
+  title: string;
+}
+
 /** HOME-дашборд: статические/динамические виджеты (зеркалит Rust `home::HomeData`, H1/DP-1). LLM-виджеты —
  *  отдельным API (H2+, см. `docs/dev/HOME_BACKEND_PLAN.md`). */
 export interface HomeStats {
@@ -750,10 +788,19 @@ export const tauriApi = {
       isTauri() ? invoke<GoalEntry[]>('list_goals') : mockVault.getGoals(),
   },
 
-  /** Канбан-доска (BOARD-2): кросс-файловый список заметок-задач (frontmatter `status`). Офлайн, без LLM. */
+  /** Канбан-доска (BOARD-2/3): задачи + персист-конфиг (колонки/порядок/scope). Офлайн, без LLM. */
   board: {
     list: (statusKey?: string): Promise<TaskCard[]> =>
       isTauri() ? invoke<TaskCard[]>('list_board', { statusKey }) : mockBoard.listBoard(),
+    /** Доска целиком: конфиг + карточки в scope; order самозалечивается (GC удалённых). */
+    get: (slug?: string): Promise<BoardData> =>
+      isTauri() ? invoke<BoardData>('get_board', { slug }) : mockBoard.getBoard(),
+    /** Персист конфига доски (переименование колонок, ручной порядок DnD). */
+    save: (config: BoardConfig): Promise<void> =>
+      isTauri() ? invoke<void>('save_board', { config }) : mockBoard.saveBoard(config),
+    /** Список досок (всегда ≥1 — синтетический дефолт). */
+    boards: (): Promise<BoardSummary[]> =>
+      isTauri() ? invoke<BoardSummary[]>('list_boards') : mockBoard.listBoards(),
   },
 
   /** HOME-дашборд (бэкенд H1/H2/H6; страница — DP-1). Вне Tauri — стейтфул-мок с контентом макета. */

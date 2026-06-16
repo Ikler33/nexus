@@ -805,6 +805,7 @@
     "loading": "Loading the board…",
     "loadError": "Failed to load the board",
     "refreshError": "Refresh failed — showing last board",
+    "corruptConfig": "Board config is broken — using defaults",
     "retry": "Retry",
     "overdue": "overdue",
     "colEmpty": "No tasks",

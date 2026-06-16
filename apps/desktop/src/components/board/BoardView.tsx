@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CalendarClock, FolderClosed, LayoutGrid, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { tauriApi, type TaskCard } from '../../lib/tauri-api';
+import { tauriApi, type BoardData } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import {
+  applyOrder,
   basename,
-  DEFAULT_COLUMN_IDS,
   groupIntoColumns,
   isOverdue,
   knownPriority,
@@ -15,6 +15,9 @@ import {
   todayIsoLocal,
 } from './board-model';
 import styles from './BoardView.module.css';
+
+/** Дефолтные id колонок, для которых есть локализованная метка `board.col.*` (пустой label → локализуем). */
+const LOCALIZED_COL_IDS = new Set(['todo', 'doing', 'done']);
 
 /** Класс цвета приоритета (известный набор → свой; прочее → нейтральный). */
 function prioClass(priority: string | null): string {
@@ -33,27 +36,27 @@ function prioClass(priority: string | null): string {
 }
 
 /**
- * «Доска» (BOARD-4, спека `docs/specs/kanban-board.md`): канбан-вью заметок-задач (frontmatter `status`).
- * Колонки — дефолтный набор todo/doing/done + виртуальная «Прочее» для статусов вне набора (§12);
- * конфигурируемые доски/переименование/порядок/DnD — следующие срезы (BOARD-3/5). Состояния: загрузка,
- * ошибка (последняя валидная доска цела, §14.6), пустая доска (CTA «как добавить задачу»). Клик по
- * карточке открывает заметку (превью-панель — BOARD-6). Refetch на фокус окна (`.nexus` невидим watcher).
+ * «Доска» (BOARD-4 + BOARD-3, спека `docs/specs/kanban-board.md`): канбан-вью заметок-задач. Колонки и
+ * ручной порядок — из персист-конфига `.nexus/boards/<id>.json` (`get_board`); статусы вне набора колонок
+ * → виртуальная «Прочее» (§12, задачи не теряются). DnD/реордер/редактор колонок — BOARD-5. Состояния:
+ * загрузка, ошибка (последняя валидная доска цела, §14.6), битый конфиг (пилюля), пусто. Клик по карточке
+ * открывает заметку (превью — BOARD-6). Refetch на фокус окна (`.nexus` невидим watcher).
  */
 export function BoardView() {
   const { t } = useTranslation();
   const closeBoard = useUIStore((s) => s.closeBoard);
-  const [cards, setCards] = useState<TaskCard[] | null>(null);
+  const [data, setData] = useState<BoardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await tauriApi.board.list();
-      setCards(data);
+      const next = await tauriApi.board.get();
+      setData(next);
       setError(false);
     } catch {
-      // Не обнуляем cards — последняя валидная доска остаётся видимой (§14.6).
+      // Не обнуляем data — последняя валидная доска остаётся видимой (§14.6).
       setError(true);
     } finally {
       setLoading(false);
@@ -77,10 +80,23 @@ export function BoardView() {
   };
 
   const today = todayIsoLocal();
-  const total = cards?.length ?? 0;
-  const columns = cards ? groupIntoColumns(cards, DEFAULT_COLUMN_IDS) : [];
-  const columnLabel = (id: string) =>
-    id === OTHER_COLUMN_ID ? t('board.col.other') : t(`board.col.${id}`);
+  const total = data?.cards.length ?? 0;
+  const config = data?.config;
+  // Колонки из конфига; карточки — группировка по статусу + ручной порядок колонки.
+  const columns = data
+    ? groupIntoColumns(
+        data.cards,
+        config!.columns.map((c) => c.id),
+      ).map((col) => ({ ...col, cards: applyOrder(col.cards, config!.order[col.id]) }))
+    : [];
+  const labelById = new Map((config?.columns ?? []).map((c) => [c.id, c.label]));
+  const columnLabel = (id: string): string => {
+    if (id === OTHER_COLUMN_ID) return t('board.col.other');
+    const label = labelById.get(id);
+    if (label) return label; // пользовательская метка (переименование без правки файлов)
+    if (LOCALIZED_COL_IDS.has(id)) return t(`board.col.${id}`);
+    return id; // кастомный id без метки — показываем как есть
+  };
 
   return (
     <div className={styles.board}>
@@ -88,12 +104,19 @@ export function BoardView() {
         <div className={styles.titleWrap}>
           <LayoutGrid size={20} aria-hidden />
           <h1 className={styles.title}>{t('board.title')}</h1>
-          {cards && (
+          {data && (
             <span className={styles.total}>{t('board.taskCount', { count: total })}</span>
+          )}
+          {/* Битый JSON конфига (§14.6) — используется дефолт, файл НЕ перезаписан; видимый хинт. */}
+          {data?.corrupt && (
+            <span className={styles.errPill}>
+              <AlertTriangle size={12} aria-hidden />
+              {t('board.corruptConfig')}
+            </span>
           )}
           {/* §14.6: ошибка ре-фетча при уже загруженной доске — последняя валидная доска цела, но
               провал виден (не молчит). Полноэкранная ошибка — только когда доски ещё нет. */}
-          {error && cards && (
+          {error && data && (
             <span className={styles.errPill}>
               <AlertTriangle size={12} aria-hidden />
               {t('board.refreshError')}
@@ -112,7 +135,7 @@ export function BoardView() {
         </button>
       </header>
 
-      {error && !cards && (
+      {error && !data && (
         <div className={styles.state} role="alert">
           <AlertTriangle size={26} aria-hidden />
           <p>{t('board.loadError')}</p>
@@ -122,9 +145,9 @@ export function BoardView() {
         </div>
       )}
 
-      {loading && !cards && <div className={styles.state}>{t('board.loading')}</div>}
+      {loading && !data && <div className={styles.state}>{t('board.loading')}</div>}
 
-      {cards && total === 0 && (
+      {data && total === 0 && (
         <div className={styles.state}>
           <LayoutGrid size={30} aria-hidden />
           <p className={styles.emptyTitle}>{t('board.empty.title')}</p>
@@ -132,7 +155,7 @@ export function BoardView() {
         </div>
       )}
 
-      {cards && total > 0 && (
+      {data && total > 0 && (
         <div className={styles.columns}>
           {columns.map((col) => (
             <section key={col.id} className={styles.column} aria-label={columnLabel(col.id)}>

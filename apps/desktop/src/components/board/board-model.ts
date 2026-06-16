@@ -38,6 +38,21 @@ export function groupIntoColumns(cards: TaskCard[], columnIds: readonly string[]
   return cols;
 }
 
+/**
+ * Применяет ручной порядок колонки (BOARD-3): карточки из `orderPaths` идут первыми в их порядке;
+ * остальные (новые, ещё не в order) — после, стабильно по пути. Чистая сортировка копии (не мутирует).
+ */
+export function applyOrder(cards: TaskCard[], orderPaths: string[] | undefined): TaskCard[] {
+  if (!orderPaths || orderPaths.length === 0) return cards;
+  const idx = new Map(orderPaths.map((p, i) => [p, i]));
+  return [...cards].sort((a, b) => {
+    const ia = idx.get(a.path) ?? Number.POSITIVE_INFINITY;
+    const ib = idx.get(b.path) ?? Number.POSITIVE_INFINITY;
+    if (ia !== ib) return ia - ib;
+    return a.path.localeCompare(b.path); // стабильный тай-брейк для не-в-order
+  });
+}
+
 /** Дедлайн просрочен? Сравнение ISO-дат `YYYY-MM-DD` (лексикографически верно); сегодня — НЕ просрочено;
  *  невалидная дата → false (бейдж не рисуем как overdue). */
 export function isOverdue(due: string | null, todayIso: string): boolean {
