@@ -282,3 +282,90 @@
 .preview math {
   font-family: 'STIX Two Math', math;
 }
+
+/* Callout/admonition `> [!note]` (Live-Preview). Цвет вида — в `--callout-color` (per-kind ниже);
+   тинт фона/шапки — `color-mix` поверх поверхности (адаптируется ко всем темам), c solid-фолбэком для
+   движков без color-mix. Иконка — инлайновый SVG (lucide, currentColor). CSP: без inline-style. */
+.callout {
+  --callout-color: var(--color-accent);
+  margin: 0.9em 0;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--callout-color);
+  border-radius: var(--radius-md);
+  background: var(--color-surface); /* фолбэк, если color-mix не поддержан */
+  background: color-mix(in srgb, var(--callout-color) 7%, var(--color-surface));
+  overflow: hidden;
+}
+.calloutHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.45em 0.8em;
+  font-weight: 600;
+  color: var(--callout-color);
+  background: color-mix(in srgb, var(--callout-color) 10%, transparent);
+}
+.calloutHeader[role='button'] {
+  cursor: pointer;
+  user-select: none;
+}
+.calloutHeader[role='button']:hover {
+  background: color-mix(in srgb, var(--callout-color) 16%, transparent);
+}
+.calloutIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+.calloutTitleText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.calloutFold {
+  display: inline-flex;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.calloutBody {
+  padding: 0.5em 0.85em 0.65em;
+  color: var(--color-text);
+}
+.calloutBody > :first-child {
+  margin-top: 0;
+}
+.calloutBody > :last-child {
+  margin-bottom: 0;
+}
+
+/* Цвет по каноническому виду (алиасы сведены в Callout.tsx). Где есть семантический токен — берём его
+   (адаптация к темам); cyan/purple собственные — у палитры нет токена, фиксируем как у Obsidian. */
+.callout[data-callout='note'] {
+  --callout-color: var(--color-accent);
+}
+.callout[data-callout='abstract'] {
+  --callout-color: #41b3d9;
+}
+.callout[data-callout='info'],
+.callout[data-callout='todo'] {
+  --callout-color: var(--color-link);
+}
+.callout[data-callout='tip'],
+.callout[data-callout='success'] {
+  --callout-color: var(--color-success);
+}
+.callout[data-callout='question'],
+.callout[data-callout='warning'] {
+  --callout-color: var(--color-warning);
+}
+.callout[data-callout='failure'],
+.callout[data-callout='danger'],
+.callout[data-callout='bug'] {
+  --callout-color: var(--color-danger);
+}
+.callout[data-callout='example'] {
+  --callout-color: #9a72e6;
+}
+.callout[data-callout='quote'] {
+  --callout-color: var(--color-text-faint);
+}
