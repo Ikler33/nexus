@@ -75,6 +75,89 @@
   cursor: default;
 }
 
+.headActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* AI-2a: «застрявшие» — пилюля-кнопка с числом задач в работе без правок дольше порога. */
+.staleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-warning, var(--color-text-muted));
+  background: var(--color-warning-soft, var(--color-surface));
+  border: 1px solid var(--color-border);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
+}
+.staleBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* Раскрытая панель застрявших — под шапкой, не перекрывает доску (in-flow). */
+.stalePanel {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.stalePanelHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-2);
+}
+.staleList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.staleItem {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  cursor: pointer;
+  color: var(--color-text);
+  transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
+}
+.staleItem:hover {
+  background: var(--color-surface-hover);
+}
+.staleItemTitle {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.staleItemMeta {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 .spin {
   animation: board-spin 0.9s linear infinite;
 }

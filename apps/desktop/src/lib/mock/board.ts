@@ -3,7 +3,7 @@
 // (todo/doing/done), off-set статус («ожидание» → виртуальная «Прочее»), проекты, приоритеты,
 // дедлайны (в т.ч. просроченный) и теги — чтобы превью BoardView было содержательным.
 
-import type { BoardConfig, BoardData, BoardSummary, TaskCard } from '../tauri-api';
+import type { BoardConfig, BoardData, BoardSummary, StaleTask, TaskCard } from '../tauri-api';
 
 const SEED: TaskCard[] = [
   {
@@ -101,4 +101,33 @@ export async function saveBoard(config: BoardConfig): Promise<void> {
 /** Список досок (зеркало `list_boards`) — всегда ≥1. */
 export async function listBoards(): Promise<BoardSummary[]> {
   return [{ id: CONFIG.id, title: CONFIG.title }];
+}
+
+/** AI-2a: «застрявшие» задачи (зеркало `stale_tasks`). Сид включает done-задачу — фронт ОБЯЗАН её
+ *  отсеять (done-like колонка), демонстрируя контракт фильтрации; статусы зеркалят SEED. */
+export async function staleTasks(): Promise<StaleTask[]> {
+  return [
+    {
+      path: 'Tasks/Согласовать смету.md',
+      title: 'Согласовать смету с подрядчиком',
+      status: 'ожидание',
+      lastEdit: 1_747_000_000,
+      daysStale: 42,
+    },
+    {
+      path: 'Tasks/Перенести заметки.md',
+      title: 'Перенести старые заметки',
+      status: 'todo',
+      lastEdit: 1_748_000_000,
+      daysStale: 21,
+    },
+    {
+      // done-задача застряла по времени, но фронт её НЕ покажет (done-like).
+      path: 'Tasks/Прочитать статью.md',
+      title: 'Прочитать статью про RAG',
+      status: 'done',
+      lastEdit: 1_746_000_000,
+      daysStale: 50,
+    },
+  ];
 }

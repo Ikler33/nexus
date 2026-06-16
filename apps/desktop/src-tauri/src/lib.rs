@@ -221,6 +221,7 @@ pub fn run() {
             commands::board::get_board,
             commands::board::save_board,
             commands::board::list_boards,
+            commands::board::stale_tasks,
             commands::properties::get_property_types,
             commands::properties::set_property_type,
             commands::properties::get_note_properties,

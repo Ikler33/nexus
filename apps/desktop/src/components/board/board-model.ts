@@ -1,7 +1,7 @@
 // Чистая модель доски (BOARD-4): группировка карточек по колонкам + утилиты карточек. Без React/IO —
 // юнит-тестируемо. Колонкование делает фронт (бэкенд `list_board` отдаёт плоский список, §5 спеки).
 
-import type { TaskCard } from '../../lib/tauri-api';
+import type { StaleTask, TaskCard } from '../../lib/tauri-api';
 
 /** Дефолтные колонки доски (BOARD-4; конфигурируемые доски/переименование — BOARD-3). id = значение `status`. */
 export const DEFAULT_COLUMN_IDS = ['todo', 'doing', 'done'] as const;
@@ -18,6 +18,21 @@ export interface BoardColumn {
 /** Нормализация статуса для матчинга колонок: trim + lowercase (§1 — сравнение колонок case-insensitive). */
 export function normalizeStatus(status: string): string {
   return status.trim().toLowerCase();
+}
+
+/**
+ * AI-2a: из «застрявших» задач (бэкенд отдаёт ВСЕ старше порога) убираем терминальные — «застряло» только
+ * то, что ещё в работе. Done-like-статусы берём из конфига доски (id done-like-колонки = raw-значение
+ * `status`), сверяем по `normalizeStatus`. Чистая фильтрация — без мутации входа.
+ */
+export function filterStuck(
+  stale: StaleTask[],
+  columns: { id: string; doneLike: boolean }[],
+): StaleTask[] {
+  const doneLike = new Set(
+    columns.filter((c) => c.doneLike).map((c) => normalizeStatus(c.id)),
+  );
+  return stale.filter((s) => !doneLike.has(normalizeStatus(s.status)));
 }
 
 /**

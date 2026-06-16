@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { TaskCard } from '../../lib/tauri-api';
+import type { StaleTask, TaskCard } from '../../lib/tauri-api';
 import {
   applyOrder,
   basename,
   DEFAULT_COLUMN_IDS,
+  filterStuck,
   groupIntoColumns,
   isOverdue,
   knownPriority,
@@ -88,5 +89,38 @@ describe('board-model: утилиты', () => {
     expect(out).toEqual(['c.md', 'a.md', 'b.md', 'd.md']); // c,a из order; b,d — по пути
     expect(applyOrder(cs, undefined).map((c) => c.path)).toEqual(['a.md', 'b.md', 'c.md', 'd.md']); // нет order → как есть
     expect(applyOrder(cs, []).map((c) => c.path)).toEqual(['a.md', 'b.md', 'c.md', 'd.md']);
+  });
+});
+
+describe('board-model: filterStuck (AI-2a)', () => {
+  const stale = (path: string, status: string): StaleTask => ({
+    path,
+    title: null,
+    status,
+    lastEdit: 0,
+    daysStale: 30,
+  });
+  const cols = [
+    { id: 'todo', doneLike: false },
+    { id: 'doing', doneLike: false },
+    { id: 'Done', doneLike: true }, // регистр id — сверка через normalizeStatus
+  ];
+
+  it('убирает задачи в done-like колонках (сверка по normalizeStatus), оставляет в работе', () => {
+    const out = filterStuck(
+      [stale('a.md', 'todo'), stale('b.md', 'done'), stale('c.md', 'DONE'), stale('d.md', 'doing')],
+      cols,
+    ).map((s) => s.path);
+    expect(out).toEqual(['a.md', 'd.md']); // done/DONE отсеяны
+  });
+
+  it('статус вне колонок (виртуальная «Прочее») считается застрявшим — он в работе', () => {
+    const out = filterStuck([stale('x.md', 'ожидание')], cols).map((s) => s.path);
+    expect(out).toEqual(['x.md']);
+  });
+
+  it('нет done-like колонок → ничего не отсеивается', () => {
+    const out = filterStuck([stale('a.md', 'done')], [{ id: 'todo', doneLike: false }]);
+    expect(out).toHaveLength(1);
   });
 });

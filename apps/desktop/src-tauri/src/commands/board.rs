@@ -6,9 +6,12 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::board::config::{self, BoardConfig, BoardSummary};
-use crate::board::{self, TaskCard, DEFAULT_STATUS_KEY};
+use crate::board::{self, StaleTask, TaskCard, DEFAULT_STATUS_KEY};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+
+/// Порог «застряло» по умолчанию (дней) — AI-2a; фронт может переопределить.
+const DEFAULT_STALE_DAYS: i64 = 14;
 
 /// Все заметки-задачи (есть frontmatter-ключ `status_key`, по умолч. `status`) с полями для доски.
 /// Без открытого vault — ошибка. Чистый SQL-read (офлайн, без LLM/сети). Колонкование — на фронте.
@@ -22,6 +25,23 @@ pub async fn list_board(
         .filter(|k| !k.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_STATUS_KEY.to_string());
     Ok(board::list_board(&reader, key).await?)
+}
+
+/// AI-2a (A2): «застрявшие» задачи — заметки-задачи, не правленные ≥ `threshold_days` (умолч. 14) дней по
+/// `edit_events` (фолбэк mtime). Детерминированный SQL-read (без LLM/сети). `now` — серверное время.
+/// Done-like-статусы НЕ отсеиваются здесь (фронт фильтрует по конфигу доски).
+#[tauri::command]
+pub async fn stale_tasks(
+    state: State<'_, AppState>,
+    status_key: Option<String>,
+    threshold_days: Option<i64>,
+) -> AppResult<Vec<StaleTask>> {
+    let reader = state.vault().await?.db.reader().clone();
+    let key = status_key
+        .filter(|k| !k.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_STATUS_KEY.to_string());
+    let days = threshold_days.unwrap_or(DEFAULT_STALE_DAYS).max(1);
+    Ok(board::stale_tasks(&reader, key, days, crate::scheduler::now_secs()).await?)
 }
 
 /// Доска целиком (BOARD-3): персист-конфиг (колонки/порядок/scope) + карточки в его scope/statusKey.
