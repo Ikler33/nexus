@@ -62,6 +62,23 @@ export function isOverdue(due: string | null, todayIso: string): boolean {
   return d < todayIso;
 }
 
+/** Убирает ведущий frontmatter-блок (`---\n…\n---`) — для превью ТЕЛА заметки (BOARD-6). Незакрытый блок
+ *  или его отсутствие → контент как есть. Ведущие пустые строки тела срезаются. */
+export function stripFrontmatter(content: string): string {
+  if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) return content;
+  const open = content.indexOf('\n') + 1;
+  const lines = content.slice(open).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].replace(/\r$/, '') === '---') {
+      return lines
+        .slice(i + 1)
+        .join('\n')
+        .replace(/^\s*\n/, '');
+    }
+  }
+  return content; // незакрытый блок — не угадываем, показываем как есть
+}
+
 /** Имя файла без пути и расширения `.md` — фолбэк-заголовок карточки. */
 export function basename(path: string): string {
   const file = path.slice(path.lastIndexOf('/') + 1);

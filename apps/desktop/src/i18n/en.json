@@ -813,6 +813,17 @@
       "statusError": "Couldn't change status (broken frontmatter?) — card reverted",
       "orderError": "Couldn't save card order"
     },
+    "peek": {
+      "title": "Task preview",
+      "close": "Close preview",
+      "status": "Status",
+      "priority": "Priority",
+      "project": "Project",
+      "due": "Due",
+      "empty": "This note has no body yet.",
+      "error": "Couldn't load the note.",
+      "openFull": "Open in editor"
+    },
     "empty": {
       "title": "No tasks yet",
       "body": "A task is a note with a “status” property. Add status: to a note's frontmatter and it shows up here as a card."

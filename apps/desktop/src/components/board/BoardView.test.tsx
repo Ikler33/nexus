@@ -101,6 +101,19 @@ describe('BoardView DnD (BOARD-5 — optimistic + rollback, §14.6)', () => {
     expect(useWorkspaceStore.getState().buffers['t.md'].doc).toBe('мои правки тела');
   });
 
+  it('BOARD-6: клик по карточке открывает превью (peek), не уводит с доски', async () => {
+    vi.spyOn(tauriApi.vault, 'readFileMeta').mockResolvedValue({
+      content: '---\nstatus: todo\n---\n# Тело\nтекст',
+      hash: 'h1',
+    });
+    render(<BoardView />);
+    const card = (await screen.findByText('Task T')).closest('button')!;
+    fireEvent.click(card);
+    // Панель превью появилась (доска не закрыта — заголовок «Board» на месте).
+    expect(await screen.findByRole('complementary', { name: /Task preview/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Board/i })).toBeInTheDocument();
+  });
+
   it('R3: фокус во время хода НЕ рефетчит доску (busy-гард против гонки)', async () => {
     let resolveFm: (v: { content: string; hash: string }) => void = () => {};
     vi.spyOn(tauriApi.vault, 'setFrontmatterField').mockReturnValue(
