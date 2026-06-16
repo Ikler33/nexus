@@ -12,15 +12,65 @@ import { useWorkspaceStore } from '../stores/workspace';
 /** Tag-символы: те же, что у индексатора (буквы/цифры/`_`/`-`/`/`, Unicode). */
 const TAG_TOKEN = /(?:^|\s)#([\p{L}\p{N}_/-]+)/gu;
 
-/** Инлайн-теги, УЖЕ присутствующие в тексте (нормализованные lowercase, без `#`). Зеркалит инвариант
+/** Инлайн-теги, УЖЕ присутствующие в ТЕЛЕ (нормализованные lowercase, без `#`). Зеркалит инвариант
  *  индексатора (`parser::scan_wiki_and_tags`): тег обязан содержать ≥1 БУКВУ — `#2024` тегом НЕ считается
- *  (иначе мы бы зря отсеивали валидное предложение). Frontmatter `tags:`-список здесь не виден (тело-скан) —
- *  возможный дубль frontmatter↔inline безвреден (append-only, индекс дедупит) — в BACKLOG. */
+ *  (иначе мы бы зря отсеивали валидное предложение). */
 export function existingInlineTags(content: string): Set<string> {
   const out = new Set<string>();
   for (const m of content.matchAll(TAG_TOKEN)) {
     if (/\p{L}/u.test(m[1])) out.add(m[1].toLowerCase()); // как индексатор: нужна ≥1 буква
   }
+  return out;
+}
+
+/** Нормализует frontmatter-тег к виду индекса; добавляет в `set`, если валиден (≥1 буква). */
+function addFmTag(set: Set<string>, raw: string): void {
+  const t = raw
+    .trim()
+    .replace(/^['"]|['"]$/g, '') // снять обрамляющие кавычки YAML
+    .replace(/^#/, '')
+    .trim()
+    .toLowerCase();
+  if (t && /\p{L}/u.test(t)) set.add(t);
+}
+
+/** Теги из frontmatter `tags:`-списка (инлайн `[a, b]` ИЛИ блочный `- a`), нормализованные. Сканит ТОЛЬКО
+ *  ведущий `---`-блок. Индексатор тоже считает их file_tag — без этого авто-тег предложил бы дубль того,
+ *  что уже в frontmatter (AI-2c, ревью). Тупой строковый скан (serde_yaml архивирован), как у читателя. */
+export function frontmatterTags(content: string): Set<string> {
+  const out = new Set<string>();
+  const lines = content.split('\n');
+  if (lines[0]?.replace(/\r$/, '') !== '---') return out;
+  let inTagsBlock = false;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, '');
+    if (line === '---') break; // конец frontmatter
+    const inline = /^\s*tags:\s*\[([^\]]*)\]/.exec(line);
+    if (inline) {
+      inline[1].split(',').forEach((it) => addFmTag(out, it));
+      inTagsBlock = false;
+      continue;
+    }
+    if (/^\s*tags:\s*$/.test(line)) {
+      inTagsBlock = true;
+      continue;
+    }
+    if (inTagsBlock) {
+      const item = /^\s*-\s*(.+)$/.exec(line);
+      if (item) {
+        addFmTag(out, item[1]);
+        continue;
+      }
+      inTagsBlock = false; // блочный список кончился
+    }
+  }
+  return out;
+}
+
+/** Все теги заметки, уже учтённые индексатором: инлайн `#tag` в теле ∪ frontmatter `tags:`-список. */
+export function existingTags(content: string): Set<string> {
+  const out = existingInlineTags(content);
+  for (const t of frontmatterTags(content)) out.add(t);
   return out;
 }
 
@@ -31,7 +81,7 @@ export function appendInlineTags(
   content: string,
   tags: string[],
 ): { content: string; added: string[] } {
-  const present = existingInlineTags(content);
+  const present = existingTags(content); // тело-инлайн ∪ frontmatter — не дублируем уже-присутствующий тег
   const seen = new Set<string>();
   const added: string[] = [];
   for (const raw of tags) {

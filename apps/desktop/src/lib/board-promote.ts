@@ -6,12 +6,27 @@
 // открытия доски) — юнит-тестируема.
 
 import { flushBufferIfDirty, writeFrontmatterField } from './frontmatter-edit';
-import { tauriApi } from './tauri-api';
+import { type BoardScope, tauriApi } from './tauri-api';
 
-/** Исход промоута: `promoted` — статус проставлен; `already` — заметка уже задача (её текущая колонка). */
+/** Исход промоута: `promoted` — статус проставлен (`inScope` — попадёт ли карточка в scope дефолт-доски);
+ *  `already` — заметка уже задача (её текущая колонка). */
 export type PromoteOutcome =
-  | { kind: 'promoted'; statusKey: string; column: string }
+  | { kind: 'promoted'; statusKey: string; column: string; inScope: boolean }
   | { kind: 'already'; statusKey: string; column: string };
+
+/** Попадает ли заметка в scope доски по ПУТИ (folder-префикс) и project. Tags-scope здесь НЕ проверяется
+ *  (теги заметки тут недоступны — forNote отдаёт только скаляры) — крайний случай в BACKLOG. Пустой scope
+ *  = вся база → всегда true. */
+function inBoardScope(path: string, project: string | undefined, scope: BoardScope): boolean {
+  if (scope.folder) {
+    const folder = scope.folder.replace(/\/+$/, '');
+    if (path !== folder && !path.startsWith(`${folder}/`)) return false;
+  }
+  if (scope.project) {
+    if ((project ?? '').trim().toLowerCase() !== scope.project.trim().toLowerCase()) return false;
+  }
+  return true;
+}
 
 /** Резолвит заметку на доску. `column` всегда = id колонки (для `already` — текущее raw-значение status,
  *  для `promoted` — id первой колонки конфига). Бросает (как `writeFrontmatterField`) при сбое флаша/записи —
@@ -31,6 +46,10 @@ export async function promoteToBoard(path: string): Promise<PromoteOutcome> {
   if (cur && cur.value.trim() !== '') {
     return { kind: 'already', statusKey, column: cur.value.trim() };
   }
+  // Заметка станет задачей, но если scope доски сужен (folder/project) и не совпадает — карточка не
+  // покажется на ЭТОЙ доске (тост честно предупредит, ревью AI-1). Дефолт-scope пуст → inScope=true.
+  const project = props.find((p) => p.key === 'project')?.value;
+  const inScope = inBoardScope(path, project, board.config.scope);
   await writeFrontmatterField(path, statusKey, column);
-  return { kind: 'promoted', statusKey, column };
+  return { kind: 'promoted', statusKey, column, inScope };
 }

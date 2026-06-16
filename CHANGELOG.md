@@ -218,6 +218,16 @@ Properties-паритет (реестр типов + 5 виджетов); AI MVP
   (нужна ≥1 буква, `#2024`≠тег); MINOR — мок-`suggestTags` зеркалит нормализацию+дедуп `parse_and_filter`;
   NIT — live-тест печатает реальный `dropped`. Frontmatter↔inline-дедуп тегов — в BACKLOG. **Завершает
   MVP канбана** (BOARD-1..6 · PROP-1..4 · AI-1/2a/2b/EVAL-AI/2c) — «тесная интеграция AI» закрыта.
+- **Backlog cleanup (Batch A, frontend)** — добивание автономно-безопасных ✂️-хвостов adversarial-ревью
+  (триаж — мультиагентный Workflow, 12 пунктов: 4 оказались уже сделаны → вычеркнуты, 5 фронтовых закрыты):
+  (1) **trap-оверлеи vs Настройки** — `tweaksOpen: false` в `TRAP_OVERLAYS_CLOSED` → ни один focus-trap-
+  оверлей не стэкается поверх Настроек (ревью MEM-4); (2) **GRAPH-4 поиск изолятов** — `hit` считается ДО
+  скрытия сирот (`!showOrphans && n.ring && !hit`), `searchHits` включает изолят-совпадения (счётчик/Enter
+  консистентны); (3) **kbd-aria палитры** — `aria-label="Escape"` + `↑↓`-глиф `aria-hidden`; (4) **AI-2c
+  дедуп frontmatter** — `frontmatterTags()`/`existingTags()` (инлайн+блочный `tags:`-список), `appendInlineTags`
+  и `TagSuggest` дедупят против тело∪frontmatter; (5) **AI-1 out-of-scope** — `inBoardScope()` (folder+project),
+  `promoted.inScope=false` → честный тост `board.promote.outOfScope`. Фронт +3 теста (frontmatterTags / fm-дедуп
+  / out-of-scope); tsc/eslint/600 зелёные; превью — приложение грузится, без console-ошибок.
 
 ### MEM-5 — захват факта в память прямо из чата (фидбэк владельца)
 

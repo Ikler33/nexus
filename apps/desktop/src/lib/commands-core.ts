@@ -68,6 +68,9 @@ export async function promoteNoteToBoard(path: string): Promise<void> {
     const column = i18n.t(`board.col.${r.column}`, { defaultValue: r.column });
     if (r.kind === 'already') {
       toast(i18n.t('board.promote.already', { column }), { kind: 'info' });
+    } else if (!r.inScope) {
+      // Статус проставлен, но scope доски сужен и не совпал → карточка не на доске (честно, ревью AI-1).
+      toast(i18n.t('board.promote.outOfScope', { column }), { kind: 'info' });
     } else {
       toast(i18n.t('board.promote.done', { column }), { kind: 'success' });
     }
