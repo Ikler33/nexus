@@ -4,6 +4,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../../lib/tauri-api';
 import { MarkdownPreview } from './MarkdownPreview';
 
+// mermaid рендерится через тяжёлый dynamic-import + getBBox (jsdom не умеет) — мокаем renderMermaid
+// фейковым CSP-безопасным SVG, проверяем только конвейер фенс→компонент (сам рендер — в превью).
+vi.mock('../../lib/markdown/mermaid', () => ({
+  renderMermaid: vi.fn(
+    async () => '<svg xmlns="http://www.w3.org/2000/svg" data-mmd="1"><rect width="10" height="10"/></svg>',
+  ),
+}));
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('MarkdownPreview (#20)', () => {
@@ -315,5 +323,23 @@ describe('MarkdownPreview: картинки-вставки ![[pic.png]] (IMG-EMB
     render(<MarkdownPreview source={'![[pic.png]]'} onOpenLink={() => {}} />);
     await screen.findByRole('img');
     expect(resolveNote).not.toHaveBeenCalled();
+  });
+});
+
+describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
+  it('```mermaid фенс → рендерит SVG (а не код-блок)', async () => {
+    const { container } = render(
+      <MarkdownPreview source={'```mermaid\ngraph TD; A-->B;\n```'} onOpenLink={() => {}} />,
+    );
+    await waitFor(() => expect(container.querySelector('svg[data-mmd]')).not.toBeNull());
+    expect(container.querySelector('code')).toBeNull(); // не остался обычным код-блоком
+  });
+
+  it('обычный ```js фенс остаётся код-блоком (mermaid не трогает чужие языки)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'```js\nconst x = 1;\n```'} onOpenLink={() => {}} />,
+    );
+    expect(container.querySelector('code')).not.toBeNull();
+    expect(container.querySelector('svg[data-mmd]')).toBeNull();
   });
 });
