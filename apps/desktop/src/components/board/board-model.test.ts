@@ -11,6 +11,7 @@ import {
   knownPriority,
   normalizeStatus,
   OTHER_COLUMN_ID,
+  planDay,
   stripFrontmatter,
   todayIsoLocal,
 } from './board-model';
@@ -122,5 +123,70 @@ describe('board-model: filterStuck (AI-2a)', () => {
   it('нет done-like колонок → ничего не отсеивается', () => {
     const out = filterStuck([stale('a.md', 'done')], [{ id: 'todo', doneLike: false }]);
     expect(out).toHaveLength(1);
+  });
+});
+
+describe('board-model: planDay (AI-2b)', () => {
+  const cols = [
+    { id: 'todo', doneLike: false },
+    { id: 'doing', doneLike: false },
+    { id: 'done', doneLike: true },
+  ];
+  const task = (
+    path: string,
+    o: { status?: string; due?: string | null; priority?: string | null } = {},
+  ): TaskCard => ({
+    path,
+    title: null,
+    status: o.status ?? 'todo',
+    project: null,
+    priority: o.priority ?? null,
+    due: o.due ?? null,
+    tags: [],
+  });
+  const today = '2026-06-16';
+
+  it('корзины overdue → today → priority; внутри overdue раньше-дата выше', () => {
+    const out = planDay(
+      [
+        task('prio.md', { priority: 'high' }), // priority (нет дедлайна)
+        task('due-today.md', { due: today }), // today
+        task('overdue-late.md', { due: '2026-06-15' }), // overdue (вчера)
+        task('overdue-early.md', { due: '2026-06-01' }), // overdue (раньше → выше)
+      ],
+      cols,
+      today,
+    );
+    expect(out.map((i) => i.card.path)).toEqual([
+      'overdue-early.md',
+      'overdue-late.md',
+      'due-today.md',
+      'prio.md',
+    ]);
+    expect(out.map((i) => i.bucket)).toEqual(['overdue', 'overdue', 'today', 'priority']);
+  });
+
+  it('задачи без причины (нет дедлайна, низкий/нет приоритета) НЕ попадают в план', () => {
+    const out = planDay(
+      [task('a.md', { priority: 'low' }), task('b.md', { priority: null }), task('c.md', {})],
+      cols,
+      today,
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it('done-like задача исключается даже если просрочена', () => {
+    const out = planDay([task('d.md', { status: 'done', due: '2026-06-01' })], cols, today);
+    expect(out).toHaveLength(0);
+  });
+
+  it('priority-корзина: urgent выше high; обрезка по limit', () => {
+    const out = planDay(
+      [task('h.md', { priority: 'high' }), task('u.md', { priority: 'urgent' })],
+      cols,
+      today,
+      1,
+    );
+    expect(out.map((i) => i.card.path)).toEqual(['u.md']); // urgent важнее, limit=1
   });
 });

@@ -158,6 +158,47 @@
   color: var(--color-text-muted);
 }
 
+/* AI-2b: пилюля «План дня» — акцентная (фокус на сегодня). */
+.planBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: var(--color-accent-soft, var(--color-surface));
+  border: 1px solid var(--color-border);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
+}
+.planBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* Бейдж причины задачи в плане дня. */
+.planBadge {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+}
+.planOverdue {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+.planToday {
+  color: var(--color-accent);
+  background: var(--color-accent-soft, var(--color-surface));
+}
+.planPriority {
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+
 .spin {
   animation: board-spin 0.9s linear infinite;
 }

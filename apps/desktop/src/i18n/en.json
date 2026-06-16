@@ -848,6 +848,16 @@
       "heading": "Untouched for a while",
       "count": "Stale · {{count}}",
       "days": "{{count}}d untouched"
+    },
+    "plan": {
+      "title": "Day plan",
+      "heading": "Focus today",
+      "count": "Day plan · {{count}}",
+      "bucket": {
+        "overdue": "overdue",
+        "today": "today",
+        "priority": "priority"
+      }
     }
   },
   "prop": {

@@ -23,6 +23,8 @@ import {
   isOverdue,
   knownPriority,
   OTHER_COLUMN_ID,
+  type PlanBucket,
+  planDay,
   todayIsoLocal,
 } from './board-model';
 import styles from './BoardView.module.css';
@@ -46,6 +48,18 @@ function prioClass(priority: string | null): string {
       return styles.prioUrgent;
     default:
       return styles.prioOther;
+  }
+}
+
+/** Класс бейджа причины в плане дня (AI-2b): overdue — опасность, today — акцент, priority — нейтраль. */
+function planBadgeClass(bucket: PlanBucket): string {
+  switch (bucket) {
+    case 'overdue':
+      return styles.planOverdue;
+    case 'today':
+      return styles.planToday;
+    default:
+      return styles.planPriority;
   }
 }
 
@@ -75,9 +89,9 @@ export function BoardView() {
   };
   // BOARD-6: путь карточки в превью-панели (peek). Клик по карточке открывает превью, не уводит с доски.
   const [peekPath, setPeekPath] = useState<string | null>(null);
-  // AI-2a: «застрявшие» задачи (бэкенд) + раскрытие панели. Done-like отсеивается на рендере (filterStuck).
+  // AI-2a/2b: «застрявшие» (бэкенд) + раскрытая AI-панель (взаимоисключимы). План дня — чисто из карточек.
   const [stale, setStale] = useState<StaleTask[]>([]);
-  const [staleOpen, setStaleOpen] = useState(false);
+  const [aiPanel, setAiPanel] = useState<'stale' | 'plan' | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -148,6 +162,16 @@ export function BoardView() {
   // AI-2a: «застрявшие» задачи в работе — из бэкенд-списка убираем терминальные (done-like) статусы по
   // конфигу доски (filterStuck). Открывшаяся карточка/удаление → следующий load перечитает.
   const stuck = config ? filterStuck(stale, config.columns) : [];
+  // AI-2b: «план дня» — детерминированный отбор (overdue/today/priority) ИЗ загруженных карточек (без сети).
+  const plan = data && config ? planDay(data.cards, config.columns, today) : [];
+
+  // AI-2a/2b: если открытая AI-панель опустела (рефетч/ход убрал последнюю задачу) — сбрасываем состояние,
+  // иначе панель «вспомнит» открытость и сама раскроется при следующем наполнении списка (ревью AI-2b).
+  useEffect(() => {
+    if ((aiPanel === 'stale' && stuck.length === 0) || (aiPanel === 'plan' && plan.length === 0)) {
+      setAiPanel(null);
+    }
+  }, [aiPanel, stuck.length, plan.length]);
 
   const clearDrag = () => {
     dragRef.current = null;
@@ -166,21 +190,23 @@ export function BoardView() {
     const displayed: Record<string, string[]> = Object.fromEntries(
       columns.map((c) => [c.id, c.cards.map((card) => card.path)]),
     );
-    const plan = planMove(displayed, drag, toCol, toIndex);
-    if (!plan) return;
+    const movePlan = planMove(displayed, drag, toCol, toIndex);
+    if (!movePlan) return;
 
     const snapshot = data;
-    const nextCards = plan.statusChange
+    const nextCards = movePlan.statusChange
       ? data.cards.map((c) =>
-          c.path === plan.statusChange!.path ? { ...c, status: plan.statusChange!.status } : c,
+          c.path === movePlan.statusChange!.path
+            ? { ...c, status: movePlan.statusChange!.status }
+            : c,
         )
       : data.cards;
-    const nextConfig = { ...config, order: { ...config.order, ...plan.order } };
+    const nextConfig = { ...config, order: { ...config.order, ...movePlan.order } };
     setData({ ...data, cards: nextCards, config: nextConfig });
     setMoving(true);
     try {
-      if (plan.statusChange) {
-        const path = plan.statusChange.path;
+      if (movePlan.statusChange) {
+        const path = movePlan.statusChange.path;
         const ws = useWorkspaceStore.getState();
         // Не теряем несохранённые правки тела: сперва флашим открытый грязный буфер на диск.
         if (ws.buffers[path]?.dirty) {
@@ -198,7 +224,7 @@ export function BoardView() {
         const res = await tauriApi.vault.setFrontmatterField(
           path,
           config.statusKey,
-          plan.statusChange.status,
+          movePlan.statusChange.status,
         );
         // SAFE-3 анти-эхо: синхронизируем открытый буфер новым контентом/хешем ДО watcher-события.
         useWorkspaceStore.getState().syncBufferAfterWrite(path, res.content, res.hash);
@@ -215,7 +241,7 @@ export function BoardView() {
     } catch {
       // Статус (если был) УЖЕ на диске — карточку не возвращаем; не сохранён лишь ручной порядок.
       // Чистый реордер без статуса — откатываем (на диске ничего не менялось).
-      if (!plan.statusChange) setData(snapshot);
+      if (!movePlan.statusChange) setData(snapshot);
       addToast(t('board.dnd.orderError'), { kind: 'error' });
     }
     setMoving(false);
@@ -247,14 +273,27 @@ export function BoardView() {
           )}
         </div>
         <div className={styles.headActions}>
+          {/* AI-2b: «план дня» — детерминированный фокус (overdue/today/priority). Кнопка только если есть. */}
+          {plan.length > 0 && (
+            <button
+              type="button"
+              className={styles.planBtn}
+              onClick={() => setAiPanel((p) => (p === 'plan' ? null : 'plan'))}
+              title={t('board.plan.title')}
+              aria-expanded={aiPanel === 'plan'}
+            >
+              <CalendarClock size={13} aria-hidden />
+              {t('board.plan.count', { count: plan.length })}
+            </button>
+          )}
           {/* AI-2a: «застрявшие» — задачи в работе без правок дольше порога. Кнопка только если есть. */}
           {stuck.length > 0 && (
             <button
               type="button"
               className={styles.staleBtn}
-              onClick={() => setStaleOpen((o) => !o)}
+              onClick={() => setAiPanel((p) => (p === 'stale' ? null : 'stale'))}
               title={t('board.stale.title')}
-              aria-expanded={staleOpen}
+              aria-expanded={aiPanel === 'stale'}
             >
               <Hourglass size={13} aria-hidden />
               {t('board.stale.count', { count: stuck.length })}
@@ -274,7 +313,7 @@ export function BoardView() {
       </header>
 
       {/* AI-2a: раскрытый список застрявших — клик по задаче открывает её. Сорт «застряло дольше» — с бэка. */}
-      {staleOpen && stuck.length > 0 && (
+      {aiPanel === 'stale' && stuck.length > 0 && (
         <div className={styles.stalePanel} role="region" aria-label={t('board.stale.title')}>
           <div className={styles.stalePanelHead}>
             <Hourglass size={13} aria-hidden /> {t('board.stale.heading')}
@@ -292,6 +331,33 @@ export function BoardView() {
                   </span>
                   <span className={styles.staleItemMeta}>
                     {t('board.stale.days', { count: s.daysStale })}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* AI-2b: раскрытый план дня — задачи в фокусе с бейджем причины (overdue/today/priority). */}
+      {aiPanel === 'plan' && plan.length > 0 && (
+        <div className={styles.stalePanel} role="region" aria-label={t('board.plan.title')}>
+          <div className={styles.stalePanelHead}>
+            <CalendarClock size={13} aria-hidden /> {t('board.plan.heading')}
+          </div>
+          <ul className={styles.staleList}>
+            {plan.map((item) => (
+              <li key={item.card.path}>
+                <button
+                  type="button"
+                  className={styles.staleItem}
+                  onClick={() => openNote(item.card.path)}
+                >
+                  <span className={styles.staleItemTitle}>
+                    {item.card.title || basename(item.card.path) || item.card.path}
+                  </span>
+                  <span className={`${styles.planBadge} ${planBadgeClass(item.bucket)}`}>
+                    {t(`board.plan.bucket.${item.bucket}`)}
                   </span>
                 </button>
               </li>
