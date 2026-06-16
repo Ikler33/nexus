@@ -145,6 +145,12 @@
   border-radius: var(--radius-lg);
 }
 
+/* BOARD-5: подсветка колонки-цели при перетаскивании карточки. */
+.dropActive {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
 .colHead {
   display: flex;
   align-items: center;
@@ -210,6 +216,12 @@
 .card:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
+}
+.card[draggable='true'] {
+  cursor: grab;
+}
+.card:active {
+  cursor: grabbing;
 }
 
 .cardTitle {
