@@ -288,6 +288,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                 </div>
                 <MarkdownPreview
                   source={active.doc}
+                  notePath={active.path}
                   onOpenLink={(target) => void openLink(target)}
                   onToggleTask={(line) => {
                     // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
