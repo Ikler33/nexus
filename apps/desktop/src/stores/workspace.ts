@@ -129,6 +129,10 @@ interface WorkspaceState {
   /** «Оставить мои»: сдвинуть baseHash к текущему диску (следующий сейв перезапишет осознанно),
    *  снять баннер; правки и dirty сохраняются. */
   keepMine: (path: string) => Promise<void>;
+  /** BOARD-5: синхронизировать буфер после ВНЕШНЕЙ записи файла нами (set_frontmatter_field при DnD):
+   *  если заметка открыта — doc=новый контент, baseHash=новый хеш, dirty снят. Анти-эхо SAFE-3: следующий
+   *  `vault:file-changed` с тем же хешем = эхо → guard молчит. No-op, если буфера нет. */
+  syncBufferAfterWrite: (path: string, content: string, hash: string) => void;
   /** Выбросить буферы/вкладки удалённого пути (файл) или поддерева (каталог) — CURATE-1. */
   dropPathsUnder: (path: string) => void;
   /** Перенести открытые буферы/вкладки при rename/move пути (своп префикса) — CURATE-2. */
@@ -452,6 +456,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
               [path]: {
                 ...s.buffers[path],
                 baseHash: hash ?? s.buffers[path].baseHash,
+                externalChange: false,
+              },
+            },
+          }
+        : {},
+    );
+  },
+
+  syncBufferAfterWrite(path, content, hash) {
+    set((s) =>
+      s.buffers[path]
+        ? {
+            buffers: {
+              ...s.buffers,
+              [path]: {
+                ...s.buffers[path],
+                doc: content,
+                baseHash: hash,
+                dirty: false,
                 externalChange: false,
               },
             },
