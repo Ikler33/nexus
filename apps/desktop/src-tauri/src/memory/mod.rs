@@ -27,6 +27,12 @@ pub const MEM_CAP: usize = 200;
 /// видны в выдаче) под eval-гейтом. Пины порогом НЕ режутся (D2 — всегда в контексте).
 pub const MEM_SIM_THRESHOLD: f32 = 0.30;
 
+/// MEM-10: кап числа ПИНОВ в инъекции контекста. Пины — «всегда» (D2), но при десятках пинов они
+/// раздували бы промпт и вытесняли заметочный RAG. Берём свежайшие (пины упорядочены `created_at DESC`).
+/// Щедрый дефолт — обычный пользователь пинит единицы; остальные остаются видимы в панели, просто не
+/// инжектятся все разом. Топ-k не-пинов и так ограничен `k`.
+pub const MEM_MAX_PINS: usize = 12;
+
 /// Источник факта (D1).
 pub const SOURCE_EXPLICIT: &str = "explicit";
 pub const SOURCE_AUTO: &str = "auto";
@@ -323,6 +329,9 @@ pub async fn context_facts(
             rows.collect::<rusqlite::Result<Vec<_>>>()
         })
         .await?;
+    // MEM-10: кап числа пинов в инъекции (свежайшие — список уже `created_at DESC`); пины «всегда»,
+    // но не десятками — иначе раздувают промпт и вытесняют заметочный RAG.
+    pinned.truncate(MEM_MAX_PINS);
 
     // top-k не-пинов по близости.
     let mut topk: Vec<MemoryFact> = Vec::new();

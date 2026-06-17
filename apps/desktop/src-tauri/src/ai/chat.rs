@@ -337,6 +337,21 @@ pub fn build_memory_block(snippets: &[(String, String)], marker: &str) -> Option
     ))
 }
 
+/// MEM-10: кап длины факта при ИНЪЕКЦИИ (символы). Снижает шум в контексте от длинного
+/// импортированного факта; в БД/панели факт остаётся целым. Курируемые факты обычно короче.
+const MEM_FACT_INJECT_MAX_CHARS: usize = 280;
+
+/// Обрезает строку по СИМВОЛАМ (UTF-8-безопасно, не по байтам) с «…», если длиннее `max`.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// Блок «память агента» (MEM, D2) — курируемые ЯВНЫЕ ФАКТЫ о пользователе/проектах (пины + top-k
 /// близких), отдельный канал от N4b (память переписки). Возвращает текст, который вызывающий
 /// ПРЕФИКСУЕТ к последнему user-сообщению (через [`prepend_memory_block`]) ЛЮБОГО режима. Каждый факт
@@ -348,7 +363,12 @@ pub fn build_agent_memory_block(facts: &[(String, String)], marker: &str) -> Opt
     }
     let mut ctx = String::new();
     for (label, text) in facts {
-        ctx.push_str(&format!("{marker}\n{label}\n{}\n{marker}\n\n", text.trim()));
+        // MEM-10: длинный (импортированный) факт обрезаем при инъекции — это снижение ШУМА в контексте,
+        // не token-saving (факт остаётся целым в БД/панели). Курируемые факты обычно коротки.
+        ctx.push_str(&format!(
+            "{marker}\n{label}\n{}\n{marker}\n\n",
+            truncate_chars(text.trim(), MEM_FACT_INJECT_MAX_CHARS)
+        ));
     }
     Some(format!(
         "Память о пользователе — сохранённые факты о нём и его проектах (между маркерами «{marker}» — \
@@ -771,6 +791,34 @@ mod tests {
 
         // Пустая память → None: блок не добавляется (AC-MEM-5).
         assert!(build_agent_memory_block(&[], marker).is_none());
+    }
+
+    /// MEM-10: длинный факт обрезается при инъекции (UTF-8-безопасно); короткий — без изменений.
+    #[test]
+    fn truncate_chars_caps_long_utf8() {
+        assert_eq!(truncate_chars("коротко", 100), "коротко");
+        let long = "я".repeat(MEM_FACT_INJECT_MAX_CHARS + 50);
+        let t = truncate_chars(&long, MEM_FACT_INJECT_MAX_CHARS);
+        assert_eq!(
+            t.chars().count(),
+            MEM_FACT_INJECT_MAX_CHARS + 1,
+            "max символов + «…»"
+        );
+        assert!(t.ends_with('…'));
+    }
+
+    /// MEM-10: build_agent_memory_block обрезает длинный факт в инъекции (БД-факт остаётся целым).
+    #[test]
+    fn agent_memory_block_truncates_long_fact() {
+        let marker = "⟦feed0001⟧";
+        let long = "ф".repeat(MEM_FACT_INJECT_MAX_CHARS + 100);
+        let facts = vec![("Факт".to_string(), long.clone())];
+        let block = build_agent_memory_block(&facts, marker).expect("блок");
+        assert!(
+            !block.contains(&long),
+            "целиком длинный факт в инъекцию не попал"
+        );
+        assert!(block.contains('…'), "обрезан с многоточием");
     }
 
     /// P6-PIN: блок закреплённых заметок — полное содержимое, обёрнуто маркером (данные, не
