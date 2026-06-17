@@ -1,6 +1,6 @@
 /**
  * Мок памяти агента (MEM) для браузерного dev/vitest: in-memory список фактов с той же семантикой,
- * что бэкенд-команды (`memory_list/add/set_pinned/edit/delete`). Без LLM — `propose` всегда `null`
+ * что бэкенд-команды (`memory_list/add/set_pinned/edit/delete`). Без LLM — `propose` всегда `[]`
  * (фронт упадёт на эвристический фолбэк). Пины — сверху, затем по дате создания (как в SQL ORDER BY).
  */
 import type { MemoryAddResult, MemoryFact } from '../tauri-api';
@@ -45,8 +45,8 @@ export async function remove(id: number): Promise<void> {
   facts = facts.filter((f) => f.id !== id);
 }
 
-export async function propose(): Promise<string | null> {
-  return null; // нет мок-LLM → фронт берёт эвристический фолбэк (срез команды)
+export async function propose(): Promise<string[]> {
+  return []; // нет мок-LLM → фронт берёт эвристический фолбэк (срез команды); MEM-9: массив
 }
 
 /** Сброс для тестов. */

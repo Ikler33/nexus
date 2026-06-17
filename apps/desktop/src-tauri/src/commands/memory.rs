@@ -54,20 +54,20 @@ pub async fn memory_add(
     Ok(added.map(|(id, inserted)| MemoryAddResult { id, inserted }))
 }
 
-/// AC-MEM-6 (D1): авто-ПРЕДЛОЖЕНИЕ факта по последнему обмену — «быстрая» модель извлекает ≤1 кандидат.
-/// НИЧЕГО НЕ ПИШЕТ: фронт показывает чип «Запомнить? ✓/✗», запись — лишь после ✓ через `memory_add`.
-/// Нет утилитарной модели / нечего предлагать / ошибка LLM → `None` (фронт не показывает чип, без toast).
+/// AC-MEM-6 (D1, MEM-9): авто-ПРЕДЛОЖЕНИЕ фактов по последнему обмену — «быстрая» модель извлекает
+/// 0..N кандидатов. НИЧЕГО НЕ ПИШЕТ: фронт показывает чипы «Запомнить? ✓/✗», запись — лишь после ✓
+/// через `memory_add`. Нет утилитарной модели / нечего предлагать / ошибка LLM → пустой список.
 #[tauri::command]
 pub async fn memory_propose(
     state: State<'_, AppState>,
     user_text: String,
     assistant_text: String,
-) -> AppResult<Option<String>> {
+) -> AppResult<Vec<String>> {
     let chat = state.vault().await?.ai.chat_util.clone();
     let Some(chat) = chat else {
-        return Ok(None); // нет «быстрой» модели → без авто-предложений
+        return Ok(Vec::new()); // нет «быстрой» модели → без авто-предложений
     };
-    Ok(memory::extract::propose_fact(&chat, &user_text, &assistant_text).await)
+    Ok(memory::extract::propose_facts(&chat, &user_text, &assistant_text).await)
 }
 
 /// AC-MEM-3: пин/анпин факта.

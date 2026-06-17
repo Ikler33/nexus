@@ -1309,10 +1309,11 @@ export const tauriApi = {
     delete: (id: number): Promise<void> =>
       isTauri() ? invoke<void>('memory_delete', { id }) : mockMemory.remove(id),
 
-    /** AC-MEM-6: предложить ≤1 факт-кандидат по обмену (быстрая модель). `null` — нечего предлагать. */
-    propose: (userText: string, assistantText: string): Promise<string | null> =>
+    /** AC-MEM-6 (MEM-9): предложить 0..N факт-кандидатов по обмену (быстрая модель). Пустой массив —
+     *  нечего предлагать / нет модели. */
+    propose: (userText: string, assistantText: string): Promise<string[]> =>
       isTauri()
-        ? invoke<string | null>('memory_propose', { userText, assistantText })
+        ? invoke<string[]>('memory_propose', { userText, assistantText })
         : mockMemory.propose(),
   },
 
