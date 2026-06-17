@@ -180,6 +180,33 @@ export function registerCoreCommands(): Disposable {
       },
     }),
     commands.register({
+      id: 'file.copyMarkdown',
+      title: 'Copy note as Markdown',
+      titleKey: 'commands.file.copyMarkdown',
+      source: 'core',
+      // COPY-AS-MARKDOWN: копирует ИСХОДНЫЙ markdown активной заметки в буфер обмена (полезно в режиме
+      // чтения, где нет редактора для select-all; и одним действием на весь документ). Берём `doc` из
+      // буфера (живой текст с несохранёнными правками), не читаем диск.
+      run: async () => {
+        const buf = activeBuffer(useWorkspaceStore.getState());
+        const toast = useToastStore.getState().addToast;
+        if (!buf) {
+          toast(i18n.t('file.noActiveNote'), { kind: 'error' });
+          return;
+        }
+        if (!navigator.clipboard) {
+          toast(i18n.t('file.copyFailed'), { kind: 'error' });
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(buf.doc);
+          toast(i18n.t('file.copied'), { kind: 'success' });
+        } catch {
+          toast(i18n.t('file.copyFailed'), { kind: 'error' });
+        }
+      },
+    }),
+    commands.register({
       id: 'note.daily',
       title: 'Daily note',
       titleKey: 'commands.note.daily',

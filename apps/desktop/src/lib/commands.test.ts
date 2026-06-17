@@ -1,6 +1,7 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { commands, eventToCombo, normalizeCombo, spellCombo } from './commands';
 import { registerCoreCommands } from './commands-core';
+import { useToastStore } from '../stores/toast';
 import { useWorkspaceStore } from '../stores/workspace';
 
 describe('spellCombo (a11y: произносимая метка хоткея)', () => {
@@ -100,6 +101,50 @@ describe('editor.toggleMode (⌘E — source/preview, регресс)', () => {
       // повторный вызов возвращает обратно (это тоггл)
       await commands.run('editor.toggleMode');
       expect(useWorkspaceStore.getState().modes[gid] ?? 'source').toBe(before);
+    } finally {
+      reg.dispose();
+    }
+  });
+});
+
+describe('file.copyMarkdown (COPY-AS-MARKDOWN)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useToastStore.setState({ toasts: [] });
+  });
+
+  function setActiveNote(doc: string) {
+    const gid = useWorkspaceStore.getState().activeGroupId;
+    useWorkspaceStore.setState({
+      buffers: { 'Note.md': { path: 'Note.md', doc, dirty: false, baseHash: '' } },
+      groups: [{ id: gid, tabs: ['Note.md'], activeTab: 'Note.md' }],
+      activeGroupId: gid,
+    });
+  }
+
+  it('копирует ИСХОДНЫЙ markdown активной заметки в буфер обмена + toast успеха', async () => {
+    const reg = registerCoreCommands();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      setActiveNote('# Заголовок\n\nтело **жирное**');
+      await commands.run('file.copyMarkdown');
+      expect(writeText).toHaveBeenCalledWith('# Заголовок\n\nтело **жирное**');
+      expect(useToastStore.getState().toasts.at(-1)?.kind).toBe('success');
+    } finally {
+      reg.dispose();
+    }
+  });
+
+  it('нет активной заметки → toast-ошибка, в буфер не пишем', async () => {
+    const reg = registerCoreCommands();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      useWorkspaceStore.getState().reset();
+      await commands.run('file.copyMarkdown');
+      expect(writeText).not.toHaveBeenCalled();
+      expect(useToastStore.getState().toasts.at(-1)?.kind).toBe('error');
     } finally {
       reg.dispose();
     }
