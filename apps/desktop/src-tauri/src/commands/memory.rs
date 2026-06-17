@@ -6,7 +6,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::memory::{self, MemoryFact, SOURCE_AUTO, SOURCE_EXPLICIT};
+use crate::memory::{self, FactEvent, MemoryFact, SOURCE_AUTO, SOURCE_EXPLICIT};
 use crate::state::AppState;
 
 /// AC-MEM-2: список фактов (пины сверху, затем по дате).
@@ -114,4 +114,11 @@ pub async fn memory_delete(state: State<'_, AppState>, id: i64) -> AppResult<()>
         let _ = memory::unindex_fact(&vec, id);
     }
     Ok(())
+}
+
+/// MEM-7: история событий факта (правки/удаление/замещение) — для «истории факта» в панели.
+#[tauri::command]
+pub async fn memory_fact_history(state: State<'_, AppState>, id: i64) -> AppResult<Vec<FactEvent>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(memory::fact_history(&reader, id).await?)
 }

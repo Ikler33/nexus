@@ -122,6 +122,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/017_memory_facts.sql"),
         rebuild_fts: false, // память агента (MEM): отдельный слой фактов, заметочных производных не трогает
     },
+    Migration {
+        version: 18,
+        name: "memory_fact_events",
+        sql: include_str!("migrations/018_memory_fact_events.sql"),
+        rebuild_fts: false, // история/supersede фактов памяти (MEM-7), заметочных производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
