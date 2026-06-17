@@ -7,6 +7,7 @@
 
 /// EVAL-AI (§14.3): classification-харнесс closed-vocab авто-тега (precision/recall/F1 + гейт) — для AI-2c.
 pub mod classify;
+pub mod consolidation;
 
 use std::collections::HashSet;
 use std::path::Path;

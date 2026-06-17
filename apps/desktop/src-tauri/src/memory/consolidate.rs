@@ -224,6 +224,35 @@ fn normalize_merged(s: &str) -> String {
     collapsed.chars().take(MAX_MERGED_CHARS).collect()
 }
 
+/// MEM-8c eval: голое LLM-решение op по (кандидат, тексты существующих фактов) — без БД/эмбеддингов, для
+/// `consolidation_eval` (live-гейт §4.5). Тот же `decide`/`parse_op`, что в проде. Возврат:
+/// (op_label, target_idx, merged_text для UPDATE). Только для тестов (live-гейт, ignored-прогон).
+#[cfg(test)]
+pub(crate) async fn decide_eval(
+    chat: &Arc<dyn ChatProvider>,
+    candidate: &str,
+    existing: &[String],
+) -> (&'static str, Option<usize>, Option<String>) {
+    let facts: Vec<MemoryFact> = existing
+        .iter()
+        .enumerate()
+        .map(|(i, t)| MemoryFact {
+            id: i as i64,
+            text: t.clone(),
+            pinned: false,
+            source: super::SOURCE_EXPLICIT.to_string(),
+            created_at: 0,
+            used_at: 0,
+        })
+        .collect();
+    match decide(chat, candidate, &facts, &injection_marker()).await {
+        ConsolidationOp::Add => ("ADD", None, None),
+        ConsolidationOp::Update { idx, text } => ("UPDATE", Some(idx), Some(text)),
+        ConsolidationOp::Delete { idx } => ("DELETE", Some(idx), None),
+        ConsolidationOp::Noop { idx } => ("NOOP", idx, None),
+    }
+}
+
 /// Зовёт LLM (основная модель) и парсит операцию. Ошибка/egress-deny → пустая строка → fail-closed ADD.
 async fn decide(
     chat: &Arc<dyn ChatProvider>,

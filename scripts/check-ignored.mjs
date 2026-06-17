@@ -23,7 +23,10 @@ import { dirname, resolve } from 'node:path';
 // 19→20: + `live_classify_tags_meets_gate` (AI-2c: реальный chat_util Qwen3-4B :8084 классифицирует
 // `tag_golden.json` closed-vocab → eval-гейт `out_of_vocab==0 && precision≥0.8/recall≥0.5`; в CI не
 // исполняется — нужен живой LLM; запуск `NEXUS_FAST_URL=… cargo test live_classify_tags_meets_gate -- --ignored`).
-const EXPECTED = 20;
+// 20→21: + `live_consolidation_meets_gate` (MEM-8c-a: реальный consolidate::decide основной модели :8080
+// по `consolidation_eval.json` → гейт DELETE-precision≥0.9/UPDATE-quality≥0.8 разблокирует авто-DELETE;
+// нужен живой LLM; запуск `NEXUS_CHAT_URL=… cargo test live_consolidation_meets_gate -- --ignored`).
+const EXPECTED = 21;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');
