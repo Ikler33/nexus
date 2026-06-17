@@ -19,6 +19,14 @@ use crate::vector::VectorIndex;
 /// Мягкий кап числа фактов (D6): не авто-эвикция, а подсветка старых для ручной чистки. Пины не считаются.
 pub const MEM_CAP: usize = 200;
 
+/// MEM-6: порог косинусной близости (bge-m3, `score = 1 − cos_dist`, выше = ближе) для подмешивания
+/// НЕ-пин-факта в контекст ответа ИИ. Раньше top-k добивался до `k` любыми хитами, даже нерелевантными
+/// (при непустом индексе в контекст всегда лезли k фактов) — теперь факты ниже порога отсекаются.
+/// КОНСЕРВАТИВНЫЙ дефолт: режет только near-orthogonal шум, релевантные факты сидят заметно выше →
+/// recall не регрессирует. Точное значение калибруется на dev-vault по наблюдаемым `score` (теперь
+/// видны в выдаче) под eval-гейтом. Пины порогом НЕ режутся (D2 — всегда в контексте).
+pub const MEM_SIM_THRESHOLD: f32 = 0.30;
+
 /// Источник факта (D1).
 pub const SOURCE_EXPLICIT: &str = "explicit";
 pub const SOURCE_AUTO: &str = "auto";
@@ -189,6 +197,16 @@ pub fn unindex_fact(vectors: &VectorIndex, id: i64) -> DbResult<()> {
     Ok(())
 }
 
+/// MEM-6: id хитов с similarity ≥ порога, в порядке ранга (хиты уже отсортированы по убыванию score).
+/// Ниже порога — факт нерелевантен запросу, не инжектим. Пины фильтруются отдельно (вызывающим).
+/// Чистая функция — тестируется синтетическими `VectorHit` без эмбеддера.
+pub(crate) fn ids_above_threshold(hits: Vec<crate::vector::VectorHit>, threshold: f32) -> Vec<i64> {
+    hits.into_iter()
+        .filter(|h| h.score >= threshold)
+        .map(|h| h.chunk_id as i64)
+        .collect()
+}
+
 /// Достаёт факты по id, сохраняя порядок `ids` (для ранжированной выдачи поиска).
 async fn facts_by_ids(reader: &ReadPool, ids: Vec<i64>) -> DbResult<Vec<MemoryFact>> {
     if ids.is_empty() {
@@ -242,9 +260,10 @@ pub async fn context_facts(
             .search(&qvec, (k * 4).max(8))
             .map_err(|e| DbError::External(e.to_string()))?;
         let pinned_ids: std::collections::HashSet<i64> = pinned.iter().map(|f| f.id).collect();
-        let ranked: Vec<i64> = hits
+        // MEM-6: отсекаем хиты ниже порога близости (раньше брали top-k любыми) — нерелевантные факты
+        // больше не лезут в контекст. Пины фильтруем отдельно (они инжектятся безусловно).
+        let ranked: Vec<i64> = ids_above_threshold(hits, MEM_SIM_THRESHOLD)
             .into_iter()
-            .map(|h| h.chunk_id as i64)
             .filter(|id| !pinned_ids.contains(id))
             .collect();
         topk = facts_by_ids(reader, ranked).await?;
