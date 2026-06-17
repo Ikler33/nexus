@@ -9,10 +9,12 @@ import remarkMath from 'remark-math';
 import { isTaskLine } from '../../lib/editor/format';
 import { makeSlugger } from '../../lib/editor/slug';
 import { EmbedContext } from '../../lib/markdown/embed-context';
+import { extractFrontmatter, parseFrontmatterFields } from '../../lib/markdown/frontmatter';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
 import { remarkCallouts } from '../../lib/markdown/remarkCallouts';
 import { remarkComments } from '../../lib/markdown/remarkComments';
 import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
+import { remarkFrontmatter } from '../../lib/markdown/remarkFrontmatter';
 import { remarkHighlight } from '../../lib/markdown/remarkHighlight';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
@@ -20,6 +22,7 @@ import { tauriApi } from '../../lib/tauri-api';
 import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
+import { PropertiesTable } from './PropertiesTable';
 import styles from './MarkdownPreview.module.css';
 
 /**
@@ -375,14 +378,23 @@ export function MarkdownPreview({
     };
   }
 
+  // FRONTMATTER-1: поля frontmatter для Properties-таблицы (сам блок убирается из рендера remarkFrontmatter,
+  // строки тела не сдвигаются). У вложенных embed'ов frontmatter уже срезан (NoteEmbed) → таблицы нет.
+  const fmFields = useMemo(() => {
+    const fm = extractFrontmatter(source);
+    return fm ? parseFrontmatterFields(fm.raw) : [];
+  }, [source]);
+
   return (
     <EmbedContext.Provider value={embedCtx}>
       <div className={styles.preview}>
+        {fmFields.length > 0 && <PropertiesTable fields={fmFields} onOpenTag={onOpenTag} />}
         <ReactMarkdown
-          // ПОРЯДОК ВАЖЕН: remarkComments — ПЕРВЫЙ (вырезать `%%…%%` до того, как embed/callout/nexus
-          // обработают закомментированное; его pass-2 чистит пустые абзацы — а remarkEmbeds позже делает
-          // embed-узлы «пустыми» абзацами, так что reorder remarkComments ПОСЛЕ embeds стёр бы вставки).
-          remarkPlugins={[remarkComments, remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+          // ПОРЯДОК ВАЖЕН: remarkFrontmatter/remarkComments — ПЕРВЫМИ (убрать frontmatter и вырезать
+          // `%%…%%` до embed/callout/nexus). Оба чистят узлы по позиции/тексту, тело по строкам сохранено
+          // (EDIT-5/7). pass-2 remarkComments чистит пустые абзацы — а remarkEmbeds позже делает embed-узлы
+          // «пустыми» абзацами, так что reorder remarkComments/remarkFrontmatter ПОСЛЕ embeds стёр бы вставки.
+          remarkPlugins={[remarkFrontmatter, remarkComments, remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
           rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
           urlTransform={urlTransform}
           components={components}

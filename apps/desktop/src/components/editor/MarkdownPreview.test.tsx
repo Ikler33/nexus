@@ -489,4 +489,44 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
     // Клик не должен бросать URIError (битое %-кодирование ловится try/catch).
     expect(() => fireEvent.click(screen.getByText('go'))).not.toThrow();
   });
+
+  it('FRONTMATTER-1: frontmatter → Properties-таблица, сырой YAML и лишний hr не показываются', () => {
+    const { container } = render(
+      <MarkdownPreview source={'---\ntitle: Моя\nstatus: doing\n---\n\n# Тело'} onOpenLink={() => {}} />,
+    );
+    expect(screen.getByText('title')).toBeInTheDocument();
+    expect(screen.getByText('Моя')).toBeInTheDocument();
+    expect(screen.getByText('status')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Тело' })).toBeInTheDocument();
+    expect(container.querySelector('hr')).toBeNull(); // нет спурьёзного thematicBreak от ---
+    expect(screen.queryByText(/^---$/)).toBeNull();
+  });
+
+  it('FRONTMATTER-1: строки тела НЕ сдвигаются — таск после frontmatter тоглится по верной строке', () => {
+    const onToggleTask = vi.fn();
+    // Строки: 1 `---`, 2 `title: X`, 3 `---`, 4 пусто, 5 `- [ ] дело`.
+    render(
+      <MarkdownPreview
+        source={'---\ntitle: X\n---\n\n- [ ] дело'}
+        onOpenLink={() => {}}
+        onToggleTask={onToggleTask}
+      />,
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onToggleTask).toHaveBeenCalledWith(5); // 1-based строка ПОЛНОГО исходника (не срезанного)
+  });
+
+  it('FRONTMATTER-1: поле tags — кликабельные чипы через onOpenTag (lowercase)', () => {
+    const onOpenTag = vi.fn();
+    render(
+      <MarkdownPreview source={'---\ntags: [Work, Idea]\n---\n\nтекст'} onOpenLink={() => {}} onOpenTag={onOpenTag} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '#Work' }));
+    expect(onOpenTag).toHaveBeenCalledWith('work');
+  });
+
+  it('FRONTMATTER-1: без frontmatter таблицы нет', () => {
+    const { container } = render(<MarkdownPreview source={'# Просто заголовок'} onOpenLink={() => {}} />);
+    expect(container.querySelector('[class*=properties]')).toBeNull();
+  });
 });

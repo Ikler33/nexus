@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+### Live Preview — frontmatter как Properties-таблица (эпик §13, срез 9)
+
+Ведущий YAML-frontmatter в режиме чтения рендерится **Properties-таблицей** (ключ→значение, по образцу
+Obsidian) вместо утечки сырого `---\nkey: val\n---` текстом + лишнего `<hr>`.
+- `lib/markdown/remarkFrontmatter.ts` — убирает frontmatter из markdown-рендера **БЕЗ сдвига строк тела**:
+  НЕ режет исходник (это сломало бы 1-based строки EDIT-5 тогл-тасков и EDIT-7 оглавления), а удаляет
+  top-узлы целиком в строках `[1..endLine]` блока (тело строки > endLine сохраняет позиции). Удаление по
+  ДИАПАЗОНУ строк, а не типам узлов — без remark-frontmatter `---\nk:v\n---` парсится неоднозначно.
+- `lib/markdown/frontmatter.ts` — лёгкий разбор (`k: v` / `k: [a,b]` / `k:`+`  - item`, не полный YAML).
+- `components/editor/PropertiesTable.tsx` — div-grid (не `<table>`, чтобы не конфликтовать с GFM-таблицами);
+  поля-теги (tags/aliases) — кликабельные `#`-чипы (фильтр сайдбара, lowercase). У embed'ов frontmatter
+  уже срезан (NoteEmbed) → таблицы нет.
+- Тесты: 12 юнитов (extract/parse/remove-без-сдвига) + 5 рендер-тестов, **в т.ч. критический line-offset**:
+  таск после frontmatter тоглит строку 5 ПОЛНОГО исходника. Adversarial-скептик сверил инвариант строк
+  против РЕАЛЬНОГО remark-парсера (adjacency/setext/CRLF/пустой/body-`---`) — defects не найдены. Сюита 748 зелёная.
+
 ### Live Preview — комменты `%%…%%`, сноски `[^1]`, якоря заголовков (эпик §13, срез 8)
 
 Три добивки режима чтения одним срезом (все autonomy-safe, без новых зависимостей/CSP):
