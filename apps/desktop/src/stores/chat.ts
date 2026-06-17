@@ -314,8 +314,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     async confirmFact() {
       const pf = get().pendingFact;
       if (!pf) return 'noop';
+      // Консолидация требует И своего флага, И включённой памяти агента — тот же предикат, что
+      // показывает тоггл в Настройках (disabled без памяти). Иначе runtime-гейт и UI разошлись бы.
+      const prefs = usePrefsStore.getState();
       // Без консолидации (MEM-3): подтверждённое авто пишем сразу (`source='auto'`).
-      if (!usePrefsStore.getState().aiMemoryConsolidation) {
+      if (!(prefs.aiMemoryConsolidation && prefs.aiAgentMemory)) {
         advanceQueue(pf.messageId);
         try {
           await tauriApi.memory.add(pf.text, 'auto');

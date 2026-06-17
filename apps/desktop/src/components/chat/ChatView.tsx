@@ -626,6 +626,9 @@ function FactChip({ messageId }: { messageId: string }) {
     // MEM-8b: confirmFact может (а) записать сразу — тост «сохранено»; (б) при консолидации показать
     // чип-предложение (`proposed`) — без тоста; (в) `noop` — «уже в памяти»; (г) `error` — честный тост.
     void confirmFact().then((r) => {
+      // epoch-гард тоста: за время async-confirm (consolidate_plan может быть секундным) лента могла
+      // смениться — не вешаем тост на чужой экран (как captureFromMessage). Запись решена гардом стора.
+      if (!useChatStore.getState().messages.some((m) => m.id === messageId)) return;
       const addToast = useToastStore.getState().addToast;
       if (r === 'written') addToast(t('chat.memorySaved'), { kind: 'success' });
       else if (r === 'noop') addToast(t('chat.memoryAlready'), { kind: 'info' });
@@ -666,6 +669,8 @@ function ConsolidationChip({ messageId }: { messageId: string }) {
   if (op.kind !== 'update' && op.kind !== 'supersede') return null;
   const apply = (choice: 'accept' | 'keepSeparate') => {
     void resolve(choice).then((r) => {
+      // epoch-гард тоста (см. FactChip): не вешаем результат на сменившуюся ленту.
+      if (!useChatStore.getState().messages.some((m) => m.id === messageId)) return;
       const addToast = useToastStore.getState().addToast;
       if (r === 'written') addToast(t('chat.memorySaved'), { kind: 'success' });
       else if (r === 'error') addToast(t('chat.memorySaveFailed'), { kind: 'error' });
