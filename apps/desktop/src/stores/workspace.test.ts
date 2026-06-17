@@ -106,6 +106,32 @@ describe('workspace store (Ф0-9, Б12)', () => {
     expect(activePath(useWorkspaceStore.getState())).toBe('Projects/Roadmap.md');
   });
 
+  it('openLink на несуществующую заметку создаёт её и открывает (anti-dead-click)', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue(null); // заметки нет
+    const { useVaultStore } = await import('./vault');
+    const create = vi.spyOn(useVaultStore.getState(), 'createNote').mockResolvedValue('Новая идея.md');
+    await useWorkspaceStore.getState().openLink('Новая идея');
+    expect(create).toHaveBeenCalledWith('', { baseName: 'Новая идея' });
+    expect(activePath(useWorkspaceStore.getState())).toBe('Новая идея.md');
+  });
+
+  it('openLink на [[folder/note]] создаёт заметку в подкаталоге', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue(null);
+    const { useVaultStore } = await import('./vault');
+    const create = vi.spyOn(useVaultStore.getState(), 'createNote').mockResolvedValue('Проекты/Идея.md');
+    await useWorkspaceStore.getState().openLink('Проекты/Идея');
+    expect(create).toHaveBeenCalledWith('Проекты', { baseName: 'Идея' });
+  });
+
+  it('openLink с пустым/мусорным target не создаёт заметку', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue(null);
+    const { useVaultStore } = await import('./vault');
+    const create = vi.spyOn(useVaultStore.getState(), 'createNote');
+    await useWorkspaceStore.getState().openLink('   ');
+    await useWorkspaceStore.getState().openLink('***'); // только недопустимые символы → пусто
+    expect(create).not.toHaveBeenCalled();
+  });
+
   // DP-3: DnD вкладок между панами — без дублей, буфер жив, пустая группа схлопывается.
   it('moveTab переносит вкладку между группами и схлопывает пустую', async () => {
     await useWorkspaceStore.getState().openFile('README.md');
