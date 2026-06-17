@@ -124,6 +124,16 @@
   font-size: 0.9em;
 }
 
+/* Выделение `==текст==` (Obsidian highlight): мягкая жёлтая плашка, читаемая во всех темах. Тинт через
+   color-mix поверх прозрачного (адаптируется к фону); solid-фолбэк для движков без color-mix. */
+.preview mark {
+  background: rgba(255, 213, 0, 0.28); /* фолбэк, если color-mix не поддержан */
+  background: color-mix(in srgb, var(--color-warning) 30%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
 .preview a {
   color: var(--color-link);
   text-decoration: none;
