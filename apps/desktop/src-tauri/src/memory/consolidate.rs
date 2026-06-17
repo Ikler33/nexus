@@ -226,7 +226,7 @@ fn normalize_merged(s: &str) -> String {
 
 /// MEM-8c eval: голое LLM-решение op по (кандидат, тексты существующих фактов) — без БД/эмбеддингов, для
 /// `consolidation_eval` (live-гейт §4.5). Тот же `decide`/`parse_op`, что в проде. Возврат:
-/// (op_label, target_idx, merged_text для UPDATE). Только для тестов (live-гейт под `#[ignore]`).
+/// (op_label, target_idx, merged_text для UPDATE). Только для тестов (live-гейт, ignored-прогон).
 #[cfg(test)]
 pub(crate) async fn decide_eval(
     chat: &Arc<dyn ChatProvider>,
