@@ -8,3 +8,45 @@
 .editor :global(.cm-editor) {
   height: 100%;
 }
+
+/* Панель поиска/замены CM6 (@codemirror/search) под токены приложения — иначе дефолт CM не попадает
+   в темы. Минимально: фон/границы/инпуты/кнопки/совпадения. CSP: обычный CSS, без inline-стилей. */
+.editor :global(.cm-panels) {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+}
+.editor :global(.cm-panel.cm-search) {
+  padding: 6px 8px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm, 0.85em);
+}
+.editor :global(.cm-panel.cm-search) input,
+.editor :global(.cm-panel.cm-search) button,
+.editor :global(.cm-panel.cm-search) label {
+  color: var(--color-text);
+}
+.editor :global(.cm-panel.cm-search) input[type='text'] {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+.editor :global(.cm-panel.cm-search) button {
+  background: var(--color-surface-hover, var(--color-surface));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.editor :global(.cm-panel.cm-search) button:hover {
+  background: var(--color-accent-soft);
+}
+.editor :global(.cm-searchMatch) {
+  background: color-mix(in srgb, var(--color-warning) 30%, transparent);
+}
+.editor :global(.cm-searchMatch.cm-searchMatch-selected) {
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.editor :global(.cm-selectionMatch) {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}

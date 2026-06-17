@@ -9,6 +9,10 @@ import { commands, eventToCombo } from '../lib/commands';
 export function useKeymap(): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Уже обработано ближе к фокусу (CM6-редактор, инпут панели и т.п. сделали preventDefault) —
+      // глобальную команду НЕ дублируем. Иначе, напр., ⌘G «найти дальше» в редакторе (searchKeymap не
+      // ставит stopPropagation) ещё и тоглил бы граф (`view.graph` = mod+g). Находка ревью.
+      if (e.defaultPrevented) return;
       if (!(e.ctrlKey || e.metaKey || e.altKey)) return;
       const id = commands.resolve(eventToCombo(e));
       if (id) {

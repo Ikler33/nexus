@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdownKeymap } from '@codemirror/lang-markdown';
+import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
 import { Annotation, EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { clearActiveEditorView, setActiveEditorView } from '../../lib/editor/activeView';
@@ -131,6 +132,13 @@ export function Editor({
           history(),
           markupKeymap,
           keymap.of([...baseKeymap, ...historyKeymap, indentWithTab]),
+          // Поиск/замена в заметке (⌘F / панель с заменой) — стандартная панель CM6 (DOM-средствами,
+          // CSP-безопасно, без сети/бэкенда). Убираем бинды, которым нужен мультикурсор (его НЕ включаем,
+          // отложен на отдельный визуальный срез): `Mod-d` selectNextOccurrence и `Mod-Shift-l`
+          // selectSelectionMatches (без allowMultipleSelections тихо схлопываются в одно выделение).
+          search({ top: true }),
+          highlightSelectionMatches(),
+          keymap.of(searchKeymap.filter((b) => b.key !== 'Mod-d' && b.key !== 'Mod-Shift-l')),
           saveKey,
           inlineTrigger,
           ghostField,
