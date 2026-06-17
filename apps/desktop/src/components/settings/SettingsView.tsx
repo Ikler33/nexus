@@ -386,6 +386,8 @@ function AiSection() {
   const setAiChatMemory = usePrefsStore((s) => s.setAiChatMemory);
   const aiAgentMemory = usePrefsStore((s) => s.aiAgentMemory);
   const setAiAgentMemory = usePrefsStore((s) => s.setAiAgentMemory);
+  const aiMemoryConsolidation = usePrefsStore((s) => s.aiMemoryConsolidation);
+  const setAiMemoryConsolidation = usePrefsStore((s) => s.setAiMemoryConsolidation);
   const aiExplainRelations = usePrefsStore((s) => s.aiExplainRelations);
   const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
   const openMemory = useUIStore((s) => s.openMemory);
@@ -521,6 +523,16 @@ function AiSection() {
         desc={t('settings.aiSec.agentMemoryDesc')}
         value={aiAgentMemory}
         onChange={setAiAgentMemory}
+      />
+      {/* MEM-8b (owner-gated): консолидация — при подтверждении факта ИИ предлагает объединить/заменить
+          близкий существующий (режим «Предлагать»: каждое слияние/замещение через клик, обратимо).
+          Имеет смысл только при включённой памяти агента → дизейблим без неё. */}
+      <EgressRow
+        label={t('settings.aiSec.memoryConsolidation')}
+        desc={t('settings.aiSec.memoryConsolidationDesc')}
+        value={aiMemoryConsolidation && aiAgentMemory}
+        onChange={setAiMemoryConsolidation}
+        disabled={!aiAgentMemory}
       />
       <div className={styles.saveBar}>
         <button type="button" className={styles.ghostBtn} onClick={openMemory}>
@@ -686,10 +698,13 @@ function EgressRow(props: {
   desc: string;
   value: boolean;
   onChange: (v: boolean) => void;
+  /** MEM-8b: задизейблить весь ряд (зависимая настройка недоступна — напр. консолидация без памяти). */
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
+  const disabled = props.disabled ?? false;
   return (
-    <section className={styles.group}>
+    <section className={styles.group} aria-disabled={disabled || undefined}>
       <div className={styles.rowText}>
         <span className={styles.label}>{props.label}</span>
         <span className={styles.rowDesc}>{props.desc}</span>
@@ -700,6 +715,7 @@ function EgressRow(props: {
           className={`${styles.segBtn} ${!props.value ? styles.on : ''}`}
           onClick={() => props.onChange(false)}
           aria-pressed={!props.value}
+          disabled={disabled}
         >
           {t('settings.off')}
         </button>
@@ -708,6 +724,7 @@ function EgressRow(props: {
           className={`${styles.segBtn} ${props.value ? styles.on : ''}`}
           onClick={() => props.onChange(true)}
           aria-pressed={props.value}
+          disabled={disabled}
         >
           {t('settings.on')}
         </button>

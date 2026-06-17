@@ -469,6 +469,41 @@ export interface MemoryAddResult {
   inserted: boolean;
 }
 
+/** MEM-8: предложенная операция консолидации (зеркалит Rust `consolidate::PlanOp`, serde tag `kind`).
+ *  `add` — добавить новый; `update` — дополнить `targetId` («было `oldText` → станет `newText`»);
+ *  `supersede` — новый противоречит `targetId` (старый устарел); `noop` — уже покрыт `coveredBy`. */
+export type ConsolidationPlanOp =
+  | { kind: 'add' }
+  | { kind: 'update'; targetId: number; oldText: string; newText: string }
+  | { kind: 'supersede'; targetId: number; oldText: string }
+  | { kind: 'noop'; coveredBy: number };
+
+/** MEM-8: предложение консолидации (round-trip plan → чип → apply). */
+export interface ConsolidationPlan {
+  candidate: string;
+  source: string;
+  op: ConsolidationPlanOp;
+}
+
+/** MEM-8: выбор пользователя на чипе предложения — `accept` (применить op) / `keepSeparate`
+ *  (оставить как есть, просто добавить кандидата новым фактом). */
+export type ConsolidationChoice = 'accept' | 'keepSeparate';
+
+/** MEM-8: что РЕАЛЬНО произошло в БД (зеркалит Rust `ConsolidationOutcome`, serde tag `op`). */
+export type ConsolidationOutcome =
+  | { op: 'add'; id: number; inserted: boolean }
+  | { op: 'update'; id: number; oldText: string; newText: string; opGroup: number }
+  | {
+      op: 'supersede';
+      id: number;
+      supersededId: number;
+      oldText: string;
+      newText: string;
+      inserted: boolean;
+      opGroup: number;
+    }
+  | { op: 'noop' };
+
 export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'webSources'; sources: WebSource[] }
@@ -1315,6 +1350,23 @@ export const tauriApi = {
       isTauri()
         ? invoke<string[]>('memory_propose', { userText, assistantText })
         : mockMemory.propose(),
+
+    /** MEM-8 (флаг `aiMemoryConsolidation`): посчитать предложение консолидации факта (read-only,
+     *  НИЧЕГО не пишет). Нет основной модели/эмбеддера/индекса → fail-closed `{op:{kind:'add'}}`. */
+    consolidatePlan: (text: string, source?: 'explicit' | 'auto'): Promise<ConsolidationPlan> =>
+      isTauri()
+        ? invoke<ConsolidationPlan>('memory_consolidate_plan', { text, source })
+        : mockMemory.consolidatePlan(text, source),
+
+    /** MEM-8: применить выбор пользователя к предложению (одна транзакция + индексация); возвращает,
+     *  что РЕАЛЬНО произошло. */
+    consolidateApply: (
+      plan: ConsolidationPlan,
+      choice: ConsolidationChoice,
+    ): Promise<ConsolidationOutcome> =>
+      isTauri()
+        ? invoke<ConsolidationOutcome>('memory_consolidate_apply', { plan, choice })
+        : mockMemory.consolidateApply(plan, choice),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).

@@ -623,9 +623,14 @@ function FactChip({ messageId }: { messageId: string }) {
   const dismissFact = useChatStore((s) => s.dismissFact);
   if (!pendingFact || pendingFact.messageId !== messageId) return null;
   const save = () => {
-    void confirmFact()
-      .then(() => useToastStore.getState().addToast(t('chat.memorySaved'), { kind: 'success' }))
-      .catch(() => useToastStore.getState().addToast(t('chat.memorySaveFailed'), { kind: 'error' }));
+    // MEM-8b: confirmFact может (а) записать сразу — тост «сохранено»; (б) при консолидации показать
+    // чип-предложение (`proposed`) — без тоста; (в) `noop` — «уже в памяти»; (г) `error` — честный тост.
+    void confirmFact().then((r) => {
+      const addToast = useToastStore.getState().addToast;
+      if (r === 'written') addToast(t('chat.memorySaved'), { kind: 'success' });
+      else if (r === 'noop') addToast(t('chat.memoryAlready'), { kind: 'info' });
+      else if (r === 'error') addToast(t('chat.memorySaveFailed'), { kind: 'error' });
+    });
   };
   return (
     <div className={styles.factChip} role="group" aria-label={t('chat.memoryProposeAria')}>
@@ -640,6 +645,68 @@ function FactChip({ messageId }: { messageId: string }) {
         type="button"
         className={styles.factChipDismiss}
         onClick={dismissFact}
+        aria-label={t('chat.memoryDismiss')}
+      >
+        <X size={13} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+/** MEM-8b: чип-ПРЕДЛОЖЕНИЕ консолидации под ответом — ИИ предлагает ДОПОЛНИТЬ (`update`) или ЗАМЕНИТЬ
+ *  устаревший (`supersede`) близкий факт. Показывает diff «было → станет»; ничего не применяется без
+ *  клика (обратимо). «Оставить оба/отдельно» = `keepSeparate` (добавить новым, старый не трогать). */
+function ConsolidationChip({ messageId }: { messageId: string }) {
+  const { t } = useTranslation();
+  const pending = useChatStore((s) => s.pendingConsolidation);
+  const resolve = useChatStore((s) => s.resolveConsolidation);
+  const dismiss = useChatStore((s) => s.dismissConsolidation);
+  if (!pending || pending.messageId !== messageId) return null;
+  const op = pending.plan.op;
+  if (op.kind !== 'update' && op.kind !== 'supersede') return null;
+  const apply = (choice: 'accept' | 'keepSeparate') => {
+    void resolve(choice).then((r) => {
+      const addToast = useToastStore.getState().addToast;
+      if (r === 'written') addToast(t('chat.memorySaved'), { kind: 'success' });
+      else if (r === 'error') addToast(t('chat.memorySaveFailed'), { kind: 'error' });
+    });
+  };
+  const isUpdate = op.kind === 'update';
+  return (
+    <div className={styles.factChip} role="group" aria-label={t('chat.consolidateAria')}>
+      <Brain size={14} aria-hidden className={styles.factChipIcon} />
+      <span className={styles.factChipText}>
+        {isUpdate ? (
+          <>
+            {t('chat.consolidateUpdate')}{' '}
+            <span className={styles.factChipQuoteOld}>«{op.oldText}»</span>
+            {' → '}
+            <span className={styles.factChipQuote}>«{op.newText}»</span>
+          </>
+        ) : (
+          <>
+            {t('chat.consolidateSupersede')}{' '}
+            <span className={styles.factChipQuoteOld}>«{op.oldText}»</span>{' '}
+            {t('chat.consolidateSupersedeBecause')}{' '}
+            <span className={styles.factChipQuote}>«{pending.plan.candidate}»</span>
+          </>
+        )}
+      </span>
+      <button type="button" className={styles.factChipSave} onClick={() => apply('accept')}>
+        <Check size={13} aria-hidden />{' '}
+        {isUpdate ? t('chat.consolidateMerge') : t('chat.consolidateReplace')}
+      </button>
+      <button
+        type="button"
+        className={styles.factChipSecondary}
+        onClick={() => apply('keepSeparate')}
+      >
+        {t('chat.consolidateKeepBoth')}
+      </button>
+      <button
+        type="button"
+        className={styles.factChipDismiss}
+        onClick={dismiss}
         aria-label={t('chat.memoryDismiss')}
       >
         <X size={13} aria-hidden />
@@ -795,6 +862,9 @@ function Message({
           )}
           {/* MEM-3: авто-предложение факта в память — только под последним ответом (стор гейтит по id). */}
           {!message.streaming && message.content && <FactChip messageId={message.id} />}
+          {!message.streaming && message.content && (
+            <ConsolidationChip messageId={message.id} />
+          )}
           {message.sources && message.sources.length > 0 && (
             <Disclosure
               id={`${message.id}:src`}

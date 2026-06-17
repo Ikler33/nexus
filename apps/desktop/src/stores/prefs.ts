@@ -89,6 +89,8 @@ const AI_RERANK_KEY = 'nexus.ai.rerank';
 const AI_CHAT_MEMORY_KEY = 'nexus.ai.chatMemory';
 /** Память агента (MEM, явные факты) — ВЫКЛ по умолчанию (D5: приватность-first). */
 const AI_AGENT_MEMORY_KEY = 'nexus.ai.agentMemory';
+/** Консолидация памяти (MEM-8) — ВЫКЛ по умолчанию (owner-gated: LLM сливает/замещает факты). */
+const AI_MEMORY_CONSOLIDATION_KEY = 'nexus.ai.memoryConsolidation';
 const AI_EXPLAIN_RELATIONS_KEY = 'nexus.ai.explainRelations';
 
 function readBoolDefaultTrue(key: string): boolean {
@@ -148,6 +150,10 @@ interface PrefsState {
   /** Память агента (MEM): подмешивать сохранённые ЯВНЫЕ ФАКТЫ о пользователе/проектах (пины + top-k)
    *  в контекст ответа. ВЫКЛ по умолчанию (D5: приватность-first); тумблер в Настройках → AI. */
   aiAgentMemory: boolean;
+  /** Консолидация памяти (MEM-8): при подтверждении факта ИИ предлагает объединить/заменить близкий
+   *  существующий (режим «Предлагать» — каждое слияние/замещение через подтверждение, обратимо). ВЫКЛ
+   *  по умолчанию (owner-gated). Работает только при `aiAgentMemory` + наличии основной модели. */
+  aiMemoryConsolidation: boolean;
   /** AIP-10: LLM-объяснение «причины связи» в «Связях»/«Похожих» вместо сырого сниппета (лениво,
    *  кэш). ВКЛ; реально работает при наличии утилитарной модели (иначе фолбэк на сниппет). */
   aiExplainRelations: boolean;
@@ -163,6 +169,7 @@ interface PrefsState {
   setAiRerank: (on: boolean) => void;
   setAiChatMemory: (on: boolean) => void;
   setAiAgentMemory: (on: boolean) => void;
+  setAiMemoryConsolidation: (on: boolean) => void;
   setAiExplainRelations: (on: boolean) => void;
   setAiPanelW: (w: number) => void;
   setAiPanelH: (h: number) => void;
@@ -177,6 +184,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   aiRerank: readBoolDefaultTrue(AI_RERANK_KEY),
   aiChatMemory: readBoolDefaultTrue(AI_CHAT_MEMORY_KEY),
   aiAgentMemory: readBoolDefaultFalse(AI_AGENT_MEMORY_KEY),
+  aiMemoryConsolidation: readBoolDefaultFalse(AI_MEMORY_CONSOLIDATION_KEY),
   aiExplainRelations: readBoolDefaultTrue(AI_EXPLAIN_RELATIONS_KEY),
   aiPanelW: readNum(AI_W_KEY, AI_PANEL_W.def, AI_PANEL_W.min, AI_PANEL_W.max),
   aiPanelH: readNum(AI_H_KEY, AI_PANEL_H.def, AI_PANEL_H.min, AI_PANEL_H.max),
@@ -245,6 +253,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       /* ignore */
     }
     set({ aiAgentMemory: on });
+  },
+  setAiMemoryConsolidation: (on) => {
+    try {
+      localStorage.setItem(AI_MEMORY_CONSOLIDATION_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ aiMemoryConsolidation: on });
   },
   setAiExplainRelations: (on) => {
     try {

@@ -7,6 +7,8 @@ import { usePrefsStore } from './prefs';
 
 import type {
   ChatStreamEvent,
+  ConsolidationChoice,
+  ConsolidationPlan,
   EgressDeniedKind,
   MemoryHit,
   SearchHit,
@@ -30,6 +32,11 @@ export type SaveResult =
   | { status: 'duplicate'; text: string }
   | { status: 'error' }
   | { status: 'nothing' };
+
+/** MEM-8b: исход подтверждения авто-факта. `written` — факт записан (тост «сохранено»);
+ *  `proposed` — консолидация предложила слияние/замещение, показан чип-предложение (без тоста);
+ *  `noop` — нечего/уже покрыто; `error` — сбой записи. ChatView маппит на тост. */
+export type ConfirmFactResult = 'written' | 'proposed' | 'noop' | 'error';
 
 export interface ChatMessage {
   id: string;
@@ -128,11 +135,21 @@ interface ChatState {
    *  Показываем по одному чипу (`pendingFact`); подтверждение/отклонение продвигает очередь к
    *  следующему. Привязана к `pendingFact.messageId`; чистится теми же путями, что `pendingFact`. */
   pendingFactQueue: string[];
-  /** MEM-3: подтвердить предложенный факт → пишем в память агента (`source='auto'`), чип убираем
-   *  (или продвигаем к следующему из очереди MEM-9). Промис реджектится при сбое записи. */
-  confirmFact: () => Promise<void>;
+  /** MEM-3/8b: подтвердить предложенный факт. Без консолидации — пишем сразу (`source='auto'`). При
+   *  `aiMemoryConsolidation` — считаем `consolidate_plan`: тривиальные op (`add`/`noop`) применяем сразу,
+   *  а `update`/`supersede` показываем чипом-предложением (`pendingConsolidation`). Возвращает исход. */
+  confirmFact: () => Promise<ConfirmFactResult>;
   /** MEM-3: отклонить предложенный факт — в БД НИЧЕГО не пишем (D1), убираем чип (или следующий из очереди). */
   dismissFact: () => void;
+  /** MEM-8b: предложение консолидации для подтверждённого факта (показывается чипом с diff). `null` —
+   *  нет предложения. `messageId` привязывает к ответу (как `pendingFact`). Только op `update`/`supersede`
+   *  попадают сюда — `add`/`noop` применяются молча в `confirmFact`. */
+  pendingConsolidation: { messageId: string; plan: ConsolidationPlan } | null;
+  /** MEM-8b: применить выбор на чипе предложения (`accept` — слить/заменить; `keepSeparate` — оставить
+   *  оба, добавить новый отдельно). Продвигает очередь фактов обмена. */
+  resolveConsolidation: (choice: ConsolidationChoice) => Promise<ConfirmFactResult>;
+  /** MEM-8b: отклонить предложение целиком — НИЧЕГО не пишем (юзер передумал), продвигаем очередь. */
+  dismissConsolidation: () => void;
   /** MEM-5: результат сразу-сохранения (явная команда «запомни …» / кнопка «В память»). ChatView
    *  показывает тост по `status` и сбрасывает. `saved` несёт `id` для «Отменить» (удаляем ТОЛЬКО реально
    *  созданный факт — `duplicate` уже был, без отмены; `error`/`nothing` — честные тосты). */
@@ -289,21 +306,79 @@ export const useChatStore = create<ChatState>((set, get) => {
     sessionId: null,
     pendingFact: null,
     pendingFactQueue: [],
+    pendingConsolidation: null,
     savedFact: null,
     explicitSaving: false,
     capturingId: null,
 
-    confirmFact() {
+    async confirmFact() {
       const pf = get().pendingFact;
-      if (!pf) return Promise.resolve();
-      advanceQueue(pf.messageId); // MEM-9: показать следующий факт обмена (или снять чип)
-      // Подтверждённое авто (D1): пишем с source='auto'. Промис наверх — компонент решает про toast.
-      return tauriApi.memory.add(pf.text, 'auto').then(() => {});
+      if (!pf) return 'noop';
+      // Без консолидации (MEM-3): подтверждённое авто пишем сразу (`source='auto'`).
+      if (!usePrefsStore.getState().aiMemoryConsolidation) {
+        advanceQueue(pf.messageId);
+        try {
+          await tauriApi.memory.add(pf.text, 'auto');
+          void useMemoryStore.getState().load();
+          return 'written';
+        } catch {
+          return 'error';
+        }
+      }
+      // MEM-8b: считаем предложение консолидации (read-only — ничего не пишет).
+      let plan: ConsolidationPlan | null = null;
+      try {
+        plan = await tauriApi.memory.consolidatePlan(pf.text, 'auto');
+      } catch {
+        plan = null;
+      }
+      // epoch-гард: за время await чип мог смениться (новый обмен/сессия/dismiss) — не действуем устаревшим.
+      const cur = get().pendingFact;
+      if (!cur || cur.messageId !== pf.messageId || cur.text !== pf.text) return 'noop';
+      if (!plan || plan.op.kind === 'add') {
+        advanceQueue(pf.messageId);
+        try {
+          // plan упал → fail-safe обычный add (как MEM-3); иначе apply(accept) = тот же add.
+          if (plan) await tauriApi.memory.consolidateApply(plan, 'accept');
+          else await tauriApi.memory.add(pf.text, 'auto');
+          void useMemoryStore.getState().load();
+          return 'written';
+        } catch {
+          return 'error';
+        }
+      }
+      if (plan.op.kind === 'noop') {
+        advanceQueue(pf.messageId); // уже покрыто близким фактом — Accept-noop ничего не пишет
+        return 'noop';
+      }
+      // update / supersede → предложение пользователю (прячем fact-чип, очередь НЕ двигаем до решения).
+      set({ pendingConsolidation: { messageId: pf.messageId, plan }, pendingFact: null });
+      return 'proposed';
     },
     dismissFact() {
       // Отказ (D1): ничего не пишем, продвигаем очередь к следующему (или снимаем чип).
       const pf = get().pendingFact;
       if (pf) advanceQueue(pf.messageId);
+    },
+    async resolveConsolidation(choice) {
+      const pc = get().pendingConsolidation;
+      if (!pc) return 'noop';
+      set({ pendingConsolidation: null });
+      advanceQueue(pc.messageId); // следующий факт обмена (или снять чип)
+      try {
+        await tauriApi.memory.consolidateApply(pc.plan, choice);
+        void useMemoryStore.getState().load();
+        return 'written';
+      } catch {
+        return 'error';
+      }
+    },
+    dismissConsolidation() {
+      // Юзер передумал применять предложение — ничего не пишем, продвигаем очередь.
+      const pc = get().pendingConsolidation;
+      if (!pc) return;
+      set({ pendingConsolidation: null });
+      advanceQueue(pc.messageId);
     },
     acknowledgeSavedFact() {
       if (get().savedFact) set({ savedFact: null });
@@ -395,6 +470,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         streaming: true,
         pendingFact: null,
         pendingFactQueue: [],
+        pendingConsolidation: null,
         explicitSaving: explicit,
       }));
 
@@ -568,6 +644,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         messages: [],
         pendingFact: null,
         pendingFactQueue: [],
+        pendingConsolidation: null,
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
@@ -589,6 +666,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         pinned: [],
         pendingFact: null,
         pendingFactQueue: [],
+        pendingConsolidation: null,
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
@@ -645,6 +723,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           sessionId: id,
           pendingFact: null,
           pendingFactQueue: [],
+          pendingConsolidation: null,
           savedFact: null,
           explicitSaving: false,
           capturingId: null,
@@ -663,6 +742,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         sessionId: null,
         pendingFact: null,
         pendingFactQueue: [],
+        pendingConsolidation: null,
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
