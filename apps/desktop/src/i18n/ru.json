@@ -921,6 +921,7 @@
     "view.toggleSidebar": "Свернуть боковую панель",
     "file.new": "Новая заметка",
     "file.reveal": "Показать файл в дереве",
+    "file.rename": "Переименовать активный файл",
     "note.daily": "Заметка дня",
     "capture.quick": "Быстрая запись",
     "note.fromTemplate": "Новая заметка из шаблона",

@@ -113,6 +113,22 @@ export function FileTree() {
     consumeReveal();
   }, [revealTarget, nodes, consumeReveal, virtualizer]);
 
+  // FILE-RENAME-COMMAND: команда `file.rename` (F2) раскрывает предков и просит инлайн-переименование
+  // (ui.requestRename → renameTarget). Здесь — когда строка появилась в nodes, скроллим и открываем
+  // input с именем без `.md` (как в контекст-меню; commitRename вернёт расширение для файла).
+  const renameTarget = useUIStore((s) => s.renameTarget);
+  const consumeRename = useUIStore((s) => s.consumeRename);
+  useEffect(() => {
+    if (!renameTarget) return;
+    const idx = nodes.findIndex((n) => n.entry.path === renameTarget.path);
+    if (idx < 0) return; // строка ещё не видна — дождёмся пересчёта nodes
+    const entry = nodes[idx].entry;
+    setActive(idx);
+    virtualizer.scrollToIndex(idx, { align: 'center' });
+    setRenaming({ path: entry.path, value: entry.name.replace(/\.md$/, '') });
+    consumeRename();
+  }, [renameTarget, nodes, consumeRename, virtualizer]);
+
   if (nodes.length === 0) {
     return (
       <div className={styles.empty} role="note">
