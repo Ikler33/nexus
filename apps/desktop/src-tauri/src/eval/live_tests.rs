@@ -766,3 +766,70 @@ async fn live_classify_tags_meets_gate() {
         "авто-тег не прошёл гейт precision≥{MIN_PRECISION}/recall≥{MIN_RECALL}"
     );
 }
+
+/// MEM-8c live-гейт консолидации (§4.5): прогоняет РЕАЛЬНУЮ основную модель (`consolidate::decide`,
+/// Qwen3 27B :8080) по зашитой `eval/consolidation_eval.json` при t=0 и проверяет DELETE-precision /
+/// UPDATE-quality / op-accuracy не ниже порогов. Прохождение РАЗБЛОКИРУЕТ авто-DELETE (MEM-8c) — доверие
+/// к авто-удалению фактов = это число на наших данных. Дополняет детерминированные тесты
+/// `consolidation.rs` (те в CI ловят регресс гейта БЕЗ LLM).
+/// Запуск: `NEXUS_CHAT_URL=http://192.168.0.31:8080 NEXUS_CHAT_MODEL=gemma cargo test live_consolidation_meets_gate -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "live-llm консолидация (MEM-8c): нужна основная модель (NEXUS_CHAT_URL / 192.168.0.31:8080)"]
+async fn live_consolidation_meets_gate() {
+    use super::consolidation::{
+        evaluate_consolidation, load_consolidation_golden, meets_consolidation_gate, OpPrediction,
+        MIN_DELETE_PRECISION, MIN_OP_ACCURACY, MIN_UPDATE_QUALITY,
+    };
+    use crate::ai::{ChatProvider, OpenAiChatProvider};
+    use crate::net::{EgressFeature, GuardedClient};
+
+    let chat_url =
+        std::env::var("NEXUS_CHAT_URL").unwrap_or_else(|_| "http://192.168.0.31:8080".into());
+    let model = std::env::var("NEXUS_CHAT_MODEL").unwrap_or_else(|_| "gemma".into());
+    // t=0 (детерминизм гейта, §4.5) + без reasoning (нужен только JSON-вердикт, не CoT).
+    let chat: Arc<dyn ChatProvider> = Arc::new(
+        OpenAiChatProvider::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Chat,
+            &chat_url,
+            &model,
+            Some(0.0),
+        )
+        .without_reasoning(),
+    );
+
+    let golden = load_consolidation_golden();
+    let mut predictions: Vec<OpPrediction> = Vec::with_capacity(golden.cases.len());
+    for case in &golden.cases {
+        let (op, target, merged) =
+            crate::memory::consolidate::decide_eval(&chat, &case.candidate, &case.existing).await;
+        predictions.push(OpPrediction {
+            op: op.to_string(),
+            target,
+            merged,
+        });
+    }
+
+    let report = evaluate_consolidation(&predictions, &golden);
+    eprintln!(
+        "MEM-8c консолидация: op_acc={:.3} DELETE-precision={:.3} (correct={} false={} predicted={}/gold={}) UPDATE-quality={:.3} ({}/{})",
+        report.op_accuracy,
+        report.delete_precision,
+        report.correct_delete,
+        report.false_delete,
+        report.predicted_delete,
+        report.gold_delete,
+        report.update_quality,
+        report.update_good,
+        report.update_cases,
+    );
+    assert!(
+        meets_consolidation_gate(
+            &report,
+            MIN_DELETE_PRECISION,
+            MIN_UPDATE_QUALITY,
+            MIN_OP_ACCURACY
+        ),
+        "консолидация не прошла гейт: DELETE-precision≥{MIN_DELETE_PRECISION}, UPDATE-quality≥{MIN_UPDATE_QUALITY}, op-accuracy≥{MIN_OP_ACCURACY}"
+    );
+}

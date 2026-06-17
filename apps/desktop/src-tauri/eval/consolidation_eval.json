@@ -1,0 +1,228 @@
+{
+  "cases": [
+    {
+      "name": "delete-deadline-shift",
+      "existing": ["дедлайн проекта X — пятница"],
+      "candidate": "дедлайн проекта X перенесли на среду",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-relocation",
+      "existing": ["живёт в Москве"],
+      "candidate": "переехал в Тбилиси",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-job-change",
+      "existing": ["работает в компании Acme"],
+      "candidate": "уволился из Acme, теперь работает в Globex",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-db-switch",
+      "existing": ["для проекта использует Postgres"],
+      "candidate": "перешли с Postgres на ClickHouse",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-meeting-day",
+      "existing": ["встреча команды по понедельникам"],
+      "candidate": "встречи команды перенесли на четверг",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-editor",
+      "existing": ["основной редактор — Vim"],
+      "candidate": "теперь основной редактор — VS Code",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-project-cancelled",
+      "existing": ["проект Y в статусе планирования"],
+      "candidate": "проект Y закрыли, реализовываться не будет",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "delete-budget-cut",
+      "existing": ["бюджет на маркетинг — 100 тысяч"],
+      "candidate": "бюджет на маркетинг урезали до 40 тысяч",
+      "expectedOp": "DELETE",
+      "expectedTarget": 0
+    },
+    {
+      "name": "update-coffee-detail",
+      "existing": ["пьёт кофе"],
+      "candidate": "пьёт кофе только по утрам и без сахара",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["кофе", "утр"]
+    },
+    {
+      "name": "update-rust-level",
+      "existing": ["изучает Rust"],
+      "candidate": "изучает Rust, уже разобрался с асинхронностью",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["rust"]
+    },
+    {
+      "name": "update-deadline-detail",
+      "existing": ["у проекта Z есть дедлайн"],
+      "candidate": "дедлайн проекта Z — конец квартала",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["z", "квартал"]
+    },
+    {
+      "name": "update-dog-detail",
+      "existing": ["у него есть собака"],
+      "candidate": "у него собака породы корги по кличке Бакс",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["собак", "корги"]
+    },
+    {
+      "name": "update-blog-detail",
+      "existing": ["ведёт блог"],
+      "candidate": "ведёт блог о программировании на Substack",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["блог"]
+    },
+    {
+      "name": "update-vacation-detail",
+      "existing": ["планирует отпуск"],
+      "candidate": "планирует отпуск в сентябре на две недели",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["отпуск", "сентябр"]
+    },
+    {
+      "name": "update-book-detail",
+      "existing": ["читает книгу по архитектуре систем"],
+      "candidate": "читает «Designing Data-Intensive Applications»",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["чита"]
+    },
+    {
+      "name": "update-sport-detail",
+      "existing": ["занимается спортом"],
+      "candidate": "занимается спортом — бегает по утрам три раза в неделю",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 0,
+      "mergeMustContain": ["спорт", "бег"]
+    },
+    {
+      "name": "noop-rust-paraphrase",
+      "existing": ["пишет на Rust"],
+      "candidate": "программирует на Rust",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-city-paraphrase",
+      "existing": ["живёт в Тбилиси"],
+      "candidate": "его город — Тбилиси",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-tea-paraphrase",
+      "existing": ["любит зелёный чай"],
+      "candidate": "предпочитает зелёный чай",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-project-paraphrase",
+      "existing": ["работает над проектом Nexus"],
+      "candidate": "сейчас занят проектом Nexus",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-deadline-paraphrase",
+      "existing": ["дедлайн в пятницу"],
+      "candidate": "крайний срок — пятница",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-name-paraphrase",
+      "existing": ["имя пользователя — Артан"],
+      "candidate": "его зовут Артан",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-os-paraphrase",
+      "existing": ["использует macOS"],
+      "candidate": "работает на маке",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "noop-early-paraphrase",
+      "existing": ["встаёт рано"],
+      "candidate": "у него ранний подъём",
+      "expectedOp": "NOOP",
+      "expectedTarget": 0
+    },
+    {
+      "name": "add-hobby-vs-lang",
+      "existing": ["пишет на Rust"],
+      "candidate": "любит горный туризм",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-allergy-vs-city",
+      "existing": ["живёт в Тбилиси"],
+      "candidate": "у него аллергия на орехи",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-guitar-vs-project",
+      "existing": ["работает над Nexus"],
+      "candidate": "играет на гитаре",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-call-pref-vs-deadline",
+      "existing": ["дедлайн в пятницу"],
+      "candidate": "предпочитает созвоны во второй половине дня",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-spanish-vs-coffee",
+      "existing": ["пьёт кофе по утрам"],
+      "candidate": "изучает испанский язык",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-car-vs-dog",
+      "existing": ["у него есть собака"],
+      "candidate": "копит на новую машину",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-empty-existing",
+      "existing": [],
+      "candidate": "родился в 1990 году",
+      "expectedOp": "ADD"
+    },
+    {
+      "name": "add-movie-vs-multi",
+      "existing": ["любит Rust", "живёт в Тбилиси"],
+      "candidate": "его любимый фильм — «Интерстеллар»",
+      "expectedOp": "ADD"
+    }
+  ]
+}
