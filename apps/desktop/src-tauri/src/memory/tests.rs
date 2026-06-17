@@ -301,6 +301,29 @@ async fn superseded_fact_excluded_everywhere() {
     );
 }
 
+/// MEM-10: число пинов в контексте ограничено `MEM_MAX_PINS` (раньше — все пины безусловно).
+#[tokio::test]
+async fn context_facts_caps_pins() {
+    let (_d, db) = open().await;
+    let dir = TempDir::new().unwrap();
+    let vectors = VectorIndex::open(dir.path().join("memcap.usearch"), 16).unwrap();
+    let emb = MockEmbedder { dim: 16 };
+    for i in 0..(MEM_MAX_PINS + 3) {
+        let id = add(db.writer(), &format!("пин-факт {i}"), SOURCE_EXPLICIT)
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        set_pinned(db.writer(), id, true).await.unwrap();
+    }
+    // Пустой индекс → только пины, но не больше капа.
+    let facts = context_facts(db.reader(), db.writer(), &vectors, &emb, "", 3)
+        .await
+        .unwrap();
+    assert_eq!(facts.len(), MEM_MAX_PINS, "пины обрезаны до капа");
+    assert!(facts.iter().all(|f| f.pinned));
+}
+
 /// AC-MEM-9: clear вычищает все факты (смена vault).
 #[tokio::test]
 async fn clear_wipes_all() {
