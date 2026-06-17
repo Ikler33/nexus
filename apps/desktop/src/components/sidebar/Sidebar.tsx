@@ -55,6 +55,8 @@ export function Sidebar() {
   const vaultRoot = useVaultStore((s) => s.info?.root ?? null);
   const homeOpen = useUIStore((s) => s.homeOpen);
   const openHome = useUIStore((s) => s.openHome);
+  const pendingTagFilter = useUIStore((s) => s.pendingTagFilter);
+  const consumeTagFilter = useUIStore((s) => s.consumeTagFilter);
   const starred = useStarredStore((s) => s.paths);
   const q = query.trim();
 
@@ -115,6 +117,20 @@ export function Sidebar() {
     setTagFilter(null);
     setResults([]);
   }, [vaultRoot]);
+
+  // TAGCLICK-1: клик по `#tag`-чипу в превью кладёт тег в pendingTagFilter (UI-store) → открываем
+  // панель поиска с ТОЧНЫМ фильтром и сбрасываем запрос. Сеттеры стабильны → searchByTag заинлайнен,
+  // чтобы не тянуть его в deps. Без vault не применяем (фильтр из чужого/пустого хранилища бессмыслен).
+  useEffect(() => {
+    if (pendingTagFilter == null) return;
+    if (vaultOpen) {
+      setPanel('search');
+      setQuery('');
+      setResults([]);
+      setTagFilter(pendingTagFilter);
+    }
+    consumeTagFilter();
+  }, [pendingTagFilter, vaultOpen, consumeTagFilter]);
 
   const rail: { id: Panel; icon: typeof Files; label: string }[] = [
     { id: 'files', icon: Files, label: t('sidebar.files') },

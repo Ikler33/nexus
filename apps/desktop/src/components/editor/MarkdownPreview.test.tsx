@@ -407,4 +407,32 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
     expect(container.querySelector('mark')).toBeNull();
     expect(screen.getByText(/==y==/)).toBeInTheDocument();
   });
+
+  it('TAGCLICK-1: #tag-чип кликабелен при onOpenTag → вызывает с именем тега (без #)', () => {
+    const onOpenTag = vi.fn();
+    render(<MarkdownPreview source={'topic #ideas end'} onOpenLink={() => {}} onOpenTag={onOpenTag} />);
+    const chip = screen.getByRole('button', { name: '#ideas' });
+    fireEvent.click(chip);
+    expect(onOpenTag).toHaveBeenCalledWith('ideas');
+  });
+
+  it('TAGCLICK-1: #tag-чип кликается с клавиатуры (Enter)', () => {
+    const onOpenTag = vi.fn();
+    render(<MarkdownPreview source={'#project'} onOpenLink={() => {}} onOpenTag={onOpenTag} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: '#project' }), { key: 'Enter' });
+    expect(onOpenTag).toHaveBeenCalledWith('project');
+  });
+
+  it('TAGCLICK-1: тег нормализуется в нижний регистр (бэкенд хранит lowercase)', () => {
+    const onOpenTag = vi.fn();
+    render(<MarkdownPreview source={'#TODO note'} onOpenLink={() => {}} onOpenTag={onOpenTag} />);
+    fireEvent.click(screen.getByRole('button', { name: '#TODO' })); // показывается как написано
+    expect(onOpenTag).toHaveBeenCalledWith('todo'); // но фильтр — в нижнем регистре
+  });
+
+  it('TAGCLICK-1: без onOpenTag чип НЕ кликабелен (не button, честно)', () => {
+    render(<MarkdownPreview source={'topic #ideas end'} onOpenLink={() => {}} />);
+    expect(screen.queryByRole('button', { name: '#ideas' })).toBeNull();
+    expect(screen.getByText('#ideas')).toBeInTheDocument();
+  });
 });

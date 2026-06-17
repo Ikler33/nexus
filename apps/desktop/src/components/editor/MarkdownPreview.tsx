@@ -128,11 +128,15 @@ function EmbedImage({ name, alt, width }: { name: string; alt: string; width?: n
 export function MarkdownPreview({
   source,
   onOpenLink,
+  onOpenTag,
   onToggleTask,
   notePath,
 }: {
   source: string;
   onOpenLink: (target: string) => void;
+  /** TAGCLICK-1: клик по `#tag`-чипу → имя тега (без `#`). Не задан (доска/peek/вложенный embed без
+   *  проброса) — чип остаётся НЕ-кликабельным `<span>` (честно, как onToggleTask-absence у чекбоксов). */
+  onOpenTag?: (tag: string) => void;
   /** EDIT-5: клик по чекбоксу таска в превью → 1-based номер исходной строки. Не задан — чекбоксы
    *  остаются read-only (дефолтный disabled-рендер GFM), как в любых не-редактируемых контекстах. */
   onToggleTask?: (line: number) => void;
@@ -179,7 +183,29 @@ export function MarkdownPreview({
         );
       }
       if (href && href.startsWith(TAG_SCHEME)) {
-        return <span className={styles.tag}>{children}</span>;
+        // TAGCLICK-1: кликабельный чип (фильтр сайдбара по тегу), если задан onOpenTag. Иначе —
+        // не-кликабельный `<span>` (embed/peek-контексты): честно, без мёртвого клика. `<span
+        // role=button>` (а не `<a>`) — чтобы `.preview a` не перебивал стиль .tag своей специфичностью.
+        // `.toLowerCase()` ОБЯЗАТЕЛЕН: бэкенд хранит теги в нижнем регистре (parser `tag.to_lowercase()`),
+        // а `notes_by_tag` — точный матч; без нормализации `#TODO` дал бы пустую выдачу (ревью MAJOR).
+        const tag = decodeURIComponent(href.slice(TAG_SCHEME.length)).toLowerCase();
+        if (!onOpenTag) return <span className={styles.tag}>{children}</span>;
+        return (
+          <span
+            className={styles.tag}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpenTag(tag)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onOpenTag(tag);
+              }
+            }}
+          >
+            {children}
+          </span>
+        );
       }
       // Внешняя http(s)-ссылка: в Tauri-вебвью target=_blank мёртв → системный браузер через
       // opener. Прочие схемы (mailto/tel) и относительные — обычный `<a>` (их opener не берёт).
@@ -234,7 +260,7 @@ export function MarkdownPreview({
         anchor={anchor}
         onOpenLink={onOpenLink}
         renderBody={(section, np) => (
-          <MarkdownPreview source={section} onOpenLink={onOpenLink} notePath={np} />
+          <MarkdownPreview source={section} onOpenLink={onOpenLink} onOpenTag={onOpenTag} notePath={np} />
         )}
       />
     );
