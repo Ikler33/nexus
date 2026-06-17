@@ -727,6 +727,11 @@
 .factChipQuote {
   color: var(--color-text);
 }
+/* MEM-8b: «было» в diff предложения консолидации — приглушённый зачёркнутый текст. */
+.factChipQuoteOld {
+  color: var(--color-text-faint);
+  text-decoration: line-through;
+}
 .factChipSave {
   display: inline-flex;
   align-items: center;
@@ -743,6 +748,24 @@
 }
 .factChipSave:hover {
   filter: brightness(1.08);
+}
+/* MEM-8b: вторичная кнопка предложения консолидации («оставить оба/отдельно») — outline-стиль. */
+.factChipSecondary {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  padding: 3px 9px;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.factChipSecondary:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 .factChipDismiss {
   display: inline-flex;
