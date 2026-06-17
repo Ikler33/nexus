@@ -134,6 +134,42 @@
   padding: 0 2px;
 }
 
+/* Сноски GFM `[^1]` (FOOTNOTE-1): ссылка-надстрочник в тексте + блок определений снизу. remark-gfm их
+   уже парсит — здесь только типографика классами (структурные классы GFM глобальные → :global). */
+.preview sup {
+  line-height: 0;
+}
+.preview :global(.data-footnote-backref) {
+  text-decoration: none;
+  margin-left: 0.3em;
+  font-size: 0.85em;
+}
+.preview :global(.footnotes) {
+  margin-top: 2em;
+  padding-top: 0.8em;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.88em;
+  color: var(--color-text-muted);
+}
+.preview :global(.footnotes) ol {
+  padding-left: 1.4em;
+}
+.preview :global(.footnotes) li {
+  margin: 0.2em 0;
+}
+/* Скрытый GFM-заголовок секции сносок («Footnotes») — визуально не нужен (есть разделитель). */
+.preview :global(.sr-only) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .preview a {
   color: var(--color-link);
   text-decoration: none;

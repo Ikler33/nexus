@@ -7,9 +7,11 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { isTaskLine } from '../../lib/editor/format';
+import { makeSlugger } from '../../lib/editor/slug';
 import { EmbedContext } from '../../lib/markdown/embed-context';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
 import { remarkCallouts } from '../../lib/markdown/remarkCallouts';
+import { remarkComments } from '../../lib/markdown/remarkComments';
 import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
 import { remarkHighlight } from '../../lib/markdown/remarkHighlight';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
@@ -42,6 +44,13 @@ function urlTransform(url: string): string {
 
 /** Минимальная форма hast-узла, по которой ищем состояние GFM-чекбокса (без зависимости от типов hast). */
 type HastNode = { tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
+
+/** Плоский текст hast-узла (для slug заголовка, HEADANCHOR-1): рекурсивно собираем `value` text-узлов. */
+function hastText(node: { value?: string; children?: unknown[] }): string {
+  if (typeof node.value === 'string') return node.value;
+  if (Array.isArray(node.children)) return node.children.map((c) => hastText(c as { value?: string })).join('');
+  return '';
+}
 
 /** Состояние СОБСТВЕННОГО таск-чекбокса `li` из GFM-парса: первый `<input type=checkbox>` среди
  *  потомков, НЕ спускаясь во вложенные подсписки (`ul`/`ol`) — иначе отметка дочернего таска ложно
@@ -207,6 +216,32 @@ export function MarkdownPreview({
           </span>
         );
       }
+      // FOOTNOTE-1/HEADANCHOR-1: внутренний якорь `#id` (back-ref сносок GFM, заголовки) → плавный
+      // скролл В ПРЕДЕЛАХ этого превью. Не `target=_blank` (он ломал бы хеш-навигацию); область —
+      // ближайший `.preview`, чтобы сноски двух embed'ов с одинаковым `#fn-1` не прыгали в чужой блок.
+      if (href && href.startsWith('#') && href.length > 1) {
+        return (
+          <a
+            href={href}
+            onClick={(e) => {
+              e.preventDefault();
+              // RAW user-href: `decodeURIComponent` бросает URIError на литеральном `%` (`#50%`) →
+              // гард, иначе клик молча падает (находка ревью). CSS.escape — против селектор-инъекции.
+              let id = href.slice(1);
+              try {
+                id = decodeURIComponent(id);
+              } catch {
+                /* кривое %-кодирование — берём как есть */
+              }
+              const root = (e.currentTarget as HTMLElement).closest('[class*="preview"]') ?? document;
+              const el = (root as ParentNode).querySelector(`[id="${CSS.escape(id)}"]`);
+              if (el instanceof HTMLElement) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }}
+          >
+            {children}
+          </a>
+        );
+      }
       // Внешняя http(s)-ссылка: в Tauri-вебвью target=_blank мёртв → системный браузер через
       // opener. Прочие схемы (mailto/tel) и относительные — обычный `<a>` (их opener не берёт).
       const external = href && /^https?:\/\//i.test(href);
@@ -230,6 +265,9 @@ export function MarkdownPreview({
     },
   };
 
+  // HEADANCHOR-1: slug-id на заголовок (per-render дедуп) — якорь для `#heading`-навигации/сносок.
+  // Новый slugger на каждый рендер (без утечки счётчиков между нотами/ре-рендерами).
+  const slugger = makeSlugger();
   // EDIT-7: помечаем заголовки исходной строкой (`data-outline-line`) — панель Outline скроллит к
   // ним в режиме чтения/превью (в source-режиме переход идёт через CM6). `node.position.start.line` —
   // тот же источник позиции, что у тасков (EDIT-5); атрибут невидимый, рендер заголовков не меняет.
@@ -237,7 +275,10 @@ export function MarkdownPreview({
     (tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'): Components['h1'] =>
     ({ node, children }) => {
       const line = node?.position?.start?.line;
-      return createElement(tag, typeof line === 'number' ? { 'data-outline-line': line } : {}, children);
+      const props: Record<string, unknown> = {};
+      if (typeof line === 'number') props['data-outline-line'] = line;
+      if (node) props.id = slugger(hastText(node)); // HEADANCHOR-1
+      return createElement(tag, props, children);
     };
   components.h1 = headingWithLine('h1');
   components.h2 = headingWithLine('h2');
@@ -338,7 +379,10 @@ export function MarkdownPreview({
     <EmbedContext.Provider value={embedCtx}>
       <div className={styles.preview}>
         <ReactMarkdown
-          remarkPlugins={[remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+          // ПОРЯДОК ВАЖЕН: remarkComments — ПЕРВЫЙ (вырезать `%%…%%` до того, как embed/callout/nexus
+          // обработают закомментированное; его pass-2 чистит пустые абзацы — а remarkEmbeds позже делает
+          // embed-узлы «пустыми» абзацами, так что reorder remarkComments ПОСЛЕ embeds стёр бы вставки).
+          remarkPlugins={[remarkComments, remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
           rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
           urlTransform={urlTransform}
           components={components}
