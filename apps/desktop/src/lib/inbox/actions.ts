@@ -88,14 +88,18 @@ async function uniquePath(slug: string): Promise<string> {
   return `${slug} ${Date.now()}.md`;
 }
 
-/** Общий путь: drift-guard по тексту → эффект → вырезание строки из Inbox. */
+/** Общий путь: drift-guard по СТАБИЛЬНОМУ ключу (time+text) → эффект → вырезание ФАКТИЧЕСКОЙ строки.
+ *  Матч по `line` был багом: после первого разбора (toTask/discard и т.п.) номера строк сдвигаются, а
+ *  панель держит исходные `item.line` → поиск по line брал чужую строку и вторая операция была no-op.
+ *  Эффект не трогает сам Inbox-`doc` (пишет в дневник/новую заметку), поэтому `cur.line` валиден для
+ *  `removeLine(doc, …)` на том же `doc`. Дубликаты (одинаковые time+text) — берём первый (GTD сверху вниз). */
 async function consume(item: InboxItem, effect?: () => Promise<void>): Promise<boolean> {
   try {
     const doc = await readInbox();
-    const cur = parseInbox(doc).find((x) => x.line === item.line);
-    if (!cur || cur.text !== item.text) return false; // строка сдвинулась/изменилась
+    const cur = parseInbox(doc).find((x) => x.time === item.time && x.text === item.text);
+    if (!cur) return false; // строки уже нет (удалена/изменена снаружи)
     if (effect) await effect();
-    const next = removeLine(doc, item.line);
+    const next = removeLine(doc, cur.line);
     if (next == null) return false;
     await writeInbox(next);
     return true;

@@ -41,6 +41,16 @@ describe('inbox actions (INBOX-1)', () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it('сдвиг номеров: вторая операция со СТАРЫМ item.line НЕ no-op (матч по time+text)', async () => {
+    // Панель загрузила оба элемента с исходными line (2 и 3). Триажим первый…
+    setBuffers([{ path: INBOX, doc: INBOX_DOC, dirty: false }]);
+    expect(await discard({ line: 2, time: '09:00', text: 'a' })).toBe(true);
+    expect(useWorkspaceStore.getState().buffers[INBOX].doc).toBe('# Inbox\n- 10:00 b'); // b уехал на строку 2
+    // …второй элемент держит УСТАРЕВШИЙ line:3, но матчится по time+text и режет фактическую строку.
+    expect(await discard({ line: 3, time: '10:00', text: 'b' })).toBe(true);
+    expect(useWorkspaceStore.getState().buffers[INBOX].doc).toBe('# Inbox');
+  });
+
   it('toTask: дозаписывает `- [ ] текст` в дневник и убирает из Inbox', async () => {
     vi.spyOn(tauriApi.vault, 'fileHash').mockResolvedValue('h'); // дневник существует
     vi.spyOn(tauriApi.vault, 'readFile').mockImplementation((p: string) =>
