@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Безопасность: git2 0.20 → 0.21 (RUSTSEC-2026-0183/0184)
+
+Два свежих unsound-адвайзори против `git2 0.20.4` (потенциальный UB в `Remote::list()` и в `Signature`
+из buffer-созданного `BlameHunk`) роняли `cargo-deny` репо-широко (на main и всех PR). Бамп до 0.21.0
+закрывает оба. API-правки: `StatusEntry::path()` и `Remote::url()` теперь возвращают `Result` вместо
+`Option` — поправлено в `git/mod.rs` (чтение статуса/URL origin), логика push/pull не затронута.
+Vendored libgit2 + vendored openssl как были. 9 git-тестов зелёные.
+
 ### Команда «Скопировать заметку как Markdown» (COPY-AS-MARKDOWN)
 
 Палитра → «Скопировать заметку как Markdown» кладёт исходный markdown активной заметки в буфер обмена
