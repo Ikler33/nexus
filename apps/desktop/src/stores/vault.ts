@@ -39,6 +39,38 @@ function parentDir(path: string): string {
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 }
 
+/**
+ * Персист свёрнутости дерева между перезапусками (TREE-EXPANDED-PERSIST), по образцу starred.ts, но
+ * с привязкой к vaultRoot: `{ [root]: string[] }` в localStorage. Иначе раскрытие одного vault протекло
+ * бы в другой с тем же относительным путём. Несуществующие после внешних правок пути отсеиваются лениво
+ * при загрузке (listDir упадёт → каталог пропускается).
+ */
+/** Монотонный токен открытия vault: защита от гонки re-entrant `openVault` (быстрое A→B). Поздняя
+ *  continuation устаревшего открытия (после `await Promise.all` догрузки) НЕ затирает актуальный vault. */
+let openSeq = 0;
+const EXPANDED_KEY = 'nexus.tree-expanded.v1';
+function readExpandedMap(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string[]>) : {};
+  } catch {
+    return {};
+  }
+}
+function persistExpanded(root: string | null | undefined, expanded: Record<string, true>): void {
+  if (!root) return;
+  try {
+    const map = readExpandedMap();
+    const keys = Object.keys(expanded);
+    if (keys.length) map[root] = keys;
+    else delete map[root];
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
 export const useVaultStore = create<VaultState>((set, get) => ({
   info: null,
   childrenByPath: {},
@@ -49,6 +81,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   // (`listNotes(query, limit)`), клик по ссылке резолвит бэкенд (`resolveNote`) — payload открытия
   // vault не растёт с числом файлов.
   async openVault(path) {
+    const token = ++openSeq; // ловим устаревшую continuation при быстром переключении vault
     const info = await tauriApi.vault.openVault(path);
     clearStartingQuestionsCache(); // новый vault → старые вопросы по чужим путям недействительны
     // Сбрасываем отклонённые предложения связей: ключ — относительный путь, в новом vault он чужой
@@ -56,24 +89,41 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     const { useSuggestStore } = await import('./suggest');
     useSuggestStore.getState().clearDismissed();
     const root = await tauriApi.vault.listDir('');
-    set({
-      info,
-      childrenByPath: { '': [...root].sort(compareEntries) },
-      expanded: {},
-      loading: {},
-    });
+    const childrenByPath: Record<string, FileEntry[]> = { '': [...root].sort(compareEntries) };
+    // TREE-EXPANDED-PERSIST: восстанавливаем свёрнутость прошлой сессии — грузим детей раскрытых
+    // каталогов (иначе пометка expanded без children ничего не покажет). Каталог удалён снаружи →
+    // listDir упадёт → пропускаем (заодно чистим устаревший путь из персиста на следующем сохранении).
+    const expanded: Record<string, true> = {};
+    const persisted = readExpandedMap()[info.root] ?? [];
+    await Promise.all(
+      persisted.map(async (p) => {
+        try {
+          childrenByPath[p] = (await tauriApi.vault.listDir(p)).slice().sort(compareEntries);
+          expanded[p] = true;
+        } catch {
+          /* каталог исчез — не восстанавливаем */
+        }
+      }),
+    );
+    if (token !== openSeq) return; // более новый openVault уже выполнился — не затираем его дерево
+    persistExpanded(info.root, expanded); // подчищаем отсеянные пути в сторадже
+    set({ info, childrenByPath, expanded, loading: {} });
   },
 
   async toggleDir(path) {
     const { expanded, childrenByPath } = get();
     if (expanded[path]) {
+      // Сворачивание каталога забывает и свёрнутость потомков — иначе в персисте остаётся `a/b`
+      // без `a` (orphan: при рестарте грузится, но невидим; «b всё ещё открыт внутри a» — ревью).
       const next = { ...expanded };
-      delete next[path];
+      for (const k of Object.keys(next)) if (k === path || k.startsWith(`${path}/`)) delete next[k];
       set({ expanded: next });
+      persistExpanded(get().info?.root, next);
       return;
     }
     if (childrenByPath[path]) {
       set((s) => ({ expanded: { ...s.expanded, [path]: true } }));
+      persistExpanded(get().info?.root, get().expanded);
       return;
     }
     set((s) => ({ loading: { ...s.loading, [path]: true } }));
@@ -88,6 +138,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
           loading,
         };
       });
+      persistExpanded(get().info?.root, get().expanded);
     } catch (err) {
       set((s) => {
         const loading = { ...s.loading };
@@ -113,6 +164,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       childrenByPath: { ...s.childrenByPath, [dir]: children },
       expanded: dir ? { ...s.expanded, [dir]: true } : s.expanded,
     }));
+    if (dir) persistExpanded(get().info?.root, get().expanded); // авто-раскрытие каталога переживает рестарт
     return path;
   },
 
@@ -127,10 +179,16 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // Снимаем звёзды с удалённого пути и детей — иначе осиротевшие записи в Starred (находка аудита).
     const { useStarredStore } = await import('./starred');
     useStarredStore.getState().dropStarsUnder(path);
-    // Обновляем детей родительского каталога (удалённый элемент исчезает из дерева).
+    // Обновляем детей родительского каталога (удалённый элемент исчезает из дерева) и выметаем
+    // свёрнутость под удалённым путём (иначе осиротевшие записи в персисте — как у звёзд).
     const dir = parentDir(path);
     const children = (await tauriApi.vault.listDir(dir)).slice().sort(compareEntries);
-    set((s) => ({ childrenByPath: { ...s.childrenByPath, [dir]: children } }));
+    set((s) => {
+      const expanded = { ...s.expanded };
+      for (const k of Object.keys(expanded)) if (k === path || k.startsWith(`${path}/`)) delete expanded[k];
+      return { childrenByPath: { ...s.childrenByPath, [dir]: children }, expanded };
+    });
+    persistExpanded(get().info?.root, get().expanded);
   },
 
   async refreshDir(dir, expand = false) {
@@ -139,6 +197,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       childrenByPath: { ...s.childrenByPath, [dir]: children },
       expanded: expand && dir ? { ...s.expanded, [dir]: true } : s.expanded,
     }));
+    if (expand && dir) persistExpanded(get().info?.root, get().expanded);
   },
 
   async renameFile(from, to) {
@@ -165,6 +224,14 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       const children = (await tauriApi.vault.listDir(d)).slice().sort(compareEntries);
       set((s) => ({ childrenByPath: { ...s.childrenByPath, [d]: children } }));
     }
+    // Выметаем свёрнутость под старым путём: перенесённый каталог сворачивается (как и было до персиста —
+    // childrenByPath поддерева не ремапится), но устаревшие ключи не оседают в сторадже.
+    set((s) => {
+      const expanded = { ...s.expanded };
+      for (const k of Object.keys(expanded)) if (k === from || k.startsWith(`${from}/`)) delete expanded[k];
+      return { expanded };
+    });
+    persistExpanded(get().info?.root, get().expanded);
   },
 }));
 

@@ -1,8 +1,21 @@
 import '@testing-library/jest-dom/vitest';
+import { beforeEach } from 'vitest';
 import i18n from '../i18n/setup';
 
 // Детерминируем локаль тестов (jsdom navigator.language = en): под ru написаны ассерты строк.
 void i18n.changeLanguage('ru');
+
+// Изоляция localStorage между тестами: стор vault теперь ПЕРСИСТИТ свёрнутость дерева
+// (TREE-EXPANDED-PERSIST) и при openVault её ВОССТАНАВЛИВАЕТ. Без сброса персист одного теста протекал
+// бы в следующий (на CI localStorage функционален и FileTree-тест ловил чужое раскрытие 'Projects' →
+// клик сворачивал вместо раскрытия). Локально node-localStorage сломан, потому ловилось только на CI.
+beforeEach(() => {
+  try {
+    localStorage.clear();
+  } catch {
+    /* node-тестовый localStorage может быть нефункционален — не критично */
+  }
+});
 
 // --- Полифиллы/моки для @tanstack/react-virtual в jsdom ---
 // virtual-core снимает размер контейнера через element.offsetWidth/offsetHeight (в jsdom = 0)
