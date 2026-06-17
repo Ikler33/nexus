@@ -134,6 +134,39 @@
   padding: 0 2px;
 }
 
+/* Frontmatter Properties-таблица (FRONTMATTER-1): сетка ключ→значение НАД телом заметки (вместо сырого
+   YAML + лишнего hr). div-grid, чтобы не конфликтовать с `.preview table` (GFM-таблицы). */
+.properties {
+  margin: 0 0 1.2em;
+  padding: 0.5em 0.8em;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 0.9em;
+}
+.propRow {
+  display: grid;
+  grid-template-columns: minmax(72px, 22%) 1fr;
+  gap: 0.3em 1em;
+  padding: 0.22em 0;
+}
+.propRow + .propRow {
+  border-top: 1px solid var(--color-border);
+}
+.propKey {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.propVal {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em;
+  align-items: center;
+}
+
 /* Сноски GFM `[^1]` (FOOTNOTE-1): ссылка-надстрочник в тексте + блок определений снизу. remark-gfm их
    уже парсит — здесь только типографика классами (структурные классы GFM глобальные → :global). */
 .preview sup {
