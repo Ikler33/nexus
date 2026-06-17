@@ -180,6 +180,46 @@ async fn context_facts_only_pins_when_no_search() {
     assert_eq!(facts[0].id, pin);
 }
 
+/// MEM-6: порог близости отсекает хиты ниже `MEM_SIM_THRESHOLD` (раньше top-k добивался любыми).
+/// Чистая функция — синтетические хиты с известными score, без эмбеддера.
+#[test]
+fn threshold_drops_low_similarity_hits() {
+    use crate::vector::VectorHit;
+    let hits = vec![
+        VectorHit {
+            chunk_id: 10,
+            score: 0.92,
+        }, // явно релевантный
+        VectorHit {
+            chunk_id: 11,
+            score: MEM_SIM_THRESHOLD,
+        }, // ровно на пороге — проходит (≥)
+        VectorHit {
+            chunk_id: 12,
+            score: 0.10,
+        }, // шум — отсекается
+    ];
+    let ids = ids_above_threshold(hits, MEM_SIM_THRESHOLD);
+    assert_eq!(
+        ids,
+        vec![10, 11],
+        "ниже порога отсечён, порядок ранга сохранён"
+    );
+
+    // Все ниже порога → пусто (контекст НЕ добивается нерелевантными — главный смысл MEM-6).
+    let noise = vec![
+        VectorHit {
+            chunk_id: 1,
+            score: 0.05,
+        },
+        VectorHit {
+            chunk_id: 2,
+            score: 0.20,
+        },
+    ];
+    assert!(ids_above_threshold(noise, MEM_SIM_THRESHOLD).is_empty());
+}
+
 /// AC-MEM-9: clear вычищает все факты (смена vault).
 #[tokio::test]
 async fn clear_wipes_all() {

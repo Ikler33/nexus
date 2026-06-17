@@ -243,7 +243,7 @@ pub struct MemoryHit {
 /// на разговор). `snippet_chars` — длина выжимки.
 pub async fn resolve_memory_hits(
     reader: &ReadPool,
-    ranked_msg_ids: Vec<i64>,
+    ranked: Vec<(i64, f32)>,
     exclude_session: Option<i64>,
     snippet_chars: usize,
 ) -> DbResult<Vec<MemoryHit>> {
@@ -251,7 +251,7 @@ pub async fn resolve_memory_hits(
         .query(move |c| {
             let mut out: Vec<MemoryHit> = Vec::new();
             let mut seen_sessions = std::collections::HashSet::new();
-            for id in ranked_msg_ids {
+            for (id, score) in ranked {
                 let row = c
                     .query_row(
                         "SELECT m.session_id, s.title, m.role, m.content                          FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id                          WHERE m.id = ?1",
@@ -284,7 +284,7 @@ pub async fn resolve_memory_hits(
                     session_title: title,
                     role,
                     snippet,
-                    score: 0.0,
+                    score, // MEM-6: реальная similarity из ANN (раньше хардкод 0.0 → фронт показывал 0%)
                 });
             }
             Ok(out)
@@ -348,7 +348,10 @@ pub async fn search_memory(
     let hits = vectors
         .search(&qvec, (k * 4).max(8))
         .map_err(|e| crate::db::DbError::External(e.to_string()))?;
-    let ranked: Vec<i64> = hits.into_iter().map(|h| h.chunk_id as i64).collect();
+    let ranked: Vec<(i64, f32)> = hits
+        .into_iter()
+        .map(|h| (h.chunk_id as i64, h.score))
+        .collect();
     let mut out = resolve_memory_hits(reader, ranked, exclude_session, snippet_chars).await?;
     out.truncate(k);
     Ok(out)
@@ -530,6 +533,8 @@ mod tests {
             hits[0].session_id, a.session_id,
             "ближайшая — сессия про SearXNG"
         );
+        // MEM-6: score — реальная similarity из ANN, а не хардкод 0.0 (фронт показывал 0%).
+        assert!(hits[0].score > 0.0, "score проброшен из векторного поиска");
 
         // Исключение текущей сессии: если мы В сессии A, её реплики не подмешиваются.
         let excl = search_memory(
