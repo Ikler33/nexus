@@ -8,7 +8,7 @@ import { FileTree } from './FileTree';
 beforeEach(() => {
   useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
-  useUIStore.setState({ revealTarget: null });
+  useUIStore.setState({ revealTarget: null, renameTarget: null });
 });
 
 describe('FileTree (Ф0-3/Ф0-9)', () => {
@@ -47,6 +47,18 @@ describe('FileTree (Ф0-3/Ф0-9)', () => {
       expect(row).toHaveAttribute('data-active');
     });
     expect(useUIStore.getState().revealTarget).toBeNull(); // запрос сброшен после скролла
+  });
+
+  // FILE-RENAME-COMMAND: requestRename открывает инлайн-input с именем файла без .md, сбрасывает запрос.
+  it('FILE-RENAME-COMMAND: requestRename открывает инлайн-переименование строки файла', async () => {
+    await useVaultStore.getState().openVault('');
+    await useVaultStore.getState().revealPath('Projects/Roadmap.md');
+    render(<FileTree />);
+    await screen.findByText('Roadmap');
+    act(() => useUIStore.getState().requestRename('Projects/Roadmap.md'));
+    const input = await screen.findByDisplayValue('Roadmap'); // имя без .md в input
+    expect(input.tagName).toBe('INPUT');
+    expect(useUIStore.getState().renameTarget).toBeNull(); // запрос сброшен после открытия input
   });
 
   it('кламп active при схлопывании дерева (a11y, audit B10)', async () => {

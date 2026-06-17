@@ -142,6 +142,13 @@ interface UIState {
   requestReveal: (path: string) => void;
   /** Сбросить запрос показа (FileTree вызывает после скролла). */
   consumeReveal: () => void;
+  /** FILE-RENAME-COMMAND: запрос «переименовать файл в дереве» — `seq` для перезапуска по тому же
+   *  пути. FileTree подписан: скроллит, открывает инлайн-input, сбрасывает. */
+  renameTarget: { path: string; seq: number } | null;
+  /** Запросить инлайн-переименование файла в дереве (открывает сайдбар, выходит из reading). */
+  requestRename: (path: string) => void;
+  /** Сбросить запрос переименования (FileTree вызывает после открытия input). */
+  consumeRename: () => void;
 }
 
 /**
@@ -342,4 +349,12 @@ export const useUIStore = create<UIState>((set) => ({
       reading: false,
     })),
   consumeReveal: () => set({ revealTarget: null }),
+  renameTarget: null,
+  requestRename: (path) =>
+    set((s) => ({
+      renameTarget: { path, seq: (s.renameTarget?.seq ?? 0) + 1 },
+      sidebarOpen: true,
+      reading: false,
+    })),
+  consumeRename: () => set({ renameTarget: null }),
 }));

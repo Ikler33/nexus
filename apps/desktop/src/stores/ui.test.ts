@@ -118,3 +118,22 @@ describe('ui-стор: REVEAL-ACTIVE-FILE', () => {
     expect(useUIStore.getState().revealTarget).toBeNull();
   });
 });
+
+describe('ui-стор: FILE-RENAME-COMMAND', () => {
+  it('requestRename ставит цель, показывает сайдбар, выходит из reading; seq растёт при повторе', () => {
+    useUIStore.setState({ renameTarget: null, sidebarOpen: false, reading: true });
+    useUIStore.getState().requestRename('Notes/A.md');
+    const s = useUIStore.getState();
+    expect(s.renameTarget?.path).toBe('Notes/A.md');
+    expect(s.sidebarOpen).toBe(true);
+    expect(s.reading).toBe(false);
+    const seq1 = s.renameTarget!.seq;
+    useUIStore.getState().requestRename('Notes/A.md'); // тот же путь → seq растёт (перезапуск)
+    expect(useUIStore.getState().renameTarget!.seq).toBe(seq1 + 1);
+  });
+  it('consumeRename сбрасывает цель', () => {
+    useUIStore.setState({ renameTarget: { path: 'x', seq: 1 } });
+    useUIStore.getState().consumeRename();
+    expect(useUIStore.getState().renameTarget).toBeNull();
+  });
+});

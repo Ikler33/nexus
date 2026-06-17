@@ -164,6 +164,22 @@ export function registerCoreCommands(): Disposable {
       },
     }),
     commands.register({
+      id: 'file.rename',
+      title: 'Rename active file',
+      titleKey: 'commands.file.rename',
+      source: 'core',
+      defaultKey: 'f2',
+      // FILE-RENAME-COMMAND: раскрываем предков активного файла и запускаем инлайн-переименование в
+      // дереве. Сам rename (commitRename → vault.renameFile) флашит грязные буферы — несохранённое не
+      // теряется. Папки переименовываются через контекст-меню (у команды — только активный файл).
+      run: async () => {
+        const path = activePath(useWorkspaceStore.getState());
+        if (!path) return; // нет активной заметки
+        await useVaultStore.getState().revealPath(path);
+        useUIStore.getState().requestRename(path);
+      },
+    }),
+    commands.register({
       id: 'note.daily',
       title: 'Daily note',
       titleKey: 'commands.note.daily',
