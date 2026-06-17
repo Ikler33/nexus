@@ -67,13 +67,21 @@ pub enum PlanOp {
     /// Нового факта нет среди существующих — добавить.
     Add,
     /// Дополнить существующий `targetId`: было `oldText` → станет `newText` (объединённый).
+    /// `targetSource` ('explicit'|'auto') — для защиты explicit-фактов (§4.3): авто-режим (MEM-8c-b) НЕ
+    /// переписывает молча факт, введённый юзером явно (показывает чип).
     Update {
         target_id: i64,
         old_text: String,
         new_text: String,
+        target_source: String,
     },
     /// Новый факт противоречит `targetId` (старый устарел) — пометить старый супридённым, добавить новый.
-    Supersede { target_id: i64, old_text: String },
+    /// `targetSource` — см. `Update` (авто-режим не супридит молча explicit-факт).
+    Supersede {
+        target_id: i64,
+        old_text: String,
+        target_source: String,
+    },
     /// Новый факт уже покрыт фактом `coveredBy` — по умолчанию ничего не писать.
     Noop { covered_by: i64 },
 }
@@ -336,6 +344,7 @@ pub async fn plan(
                 target_id: f.id,
                 old_text: f.text.clone(),
                 new_text: text,
+                target_source: f.source.clone(),
             },
             None => PlanOp::Add,
         },
@@ -343,6 +352,7 @@ pub async fn plan(
             Some(f) => PlanOp::Supersede {
                 target_id: f.id,
                 old_text: f.text.clone(),
+                target_source: f.source.clone(),
             },
             None => PlanOp::Add,
         },
@@ -457,6 +467,7 @@ pub async fn apply(
                         target_id,
                         old_text,
                         new_text,
+                        ..
                     },
                     ConsolidationChoice::Accept,
                 ) => {
@@ -504,6 +515,7 @@ pub async fn apply(
                     PlanOp::Supersede {
                         target_id,
                         old_text,
+                        ..
                     },
                     ConsolidationChoice::Accept,
                 ) => {
@@ -555,6 +567,123 @@ pub async fn apply(
                 }
                 (PlanOp::Supersede { .. }, ConsolidationChoice::KeepSeparate) => add(tx),
             }
+        })
+        .await
+}
+
+/// Что нужно (пере)индексировать после отката (DB-часть откатила, индекс правит команда).
+pub struct UndoPlan {
+    /// Факты, чей текст восстановлен (вернуть вектор по новому=старому тексту).
+    pub reindex: Vec<(i64, String)>,
+    /// Факты, удалённые откатом (убрать из индекса).
+    pub unindex: Vec<i64>,
+}
+
+impl UndoPlan {
+    /// Откат что-то реально изменил.
+    pub fn reverted(&self) -> bool {
+        !self.reindex.is_empty() || !self.unindex.is_empty()
+    }
+}
+
+/// MEM-8c-b: ОТКАТ всей группы консолидации по `op_group` (§4.6 «откат последней консолидации») — для
+/// undo авто-режима. Реверсит ОРИГИНАЛЬНЫЕ op-события группы (`update`/`supersede`/`add`), пишет
+/// компенсирующие (`restore`/`delete`) в ту же группу. **Optimistic-безопасно:** реверсим ТОЛЬКО если
+/// текущее состояние = то, что группа оставила (текст не редактировали после, факт ещё супридён) — иначе
+/// пропускаем элемент (не теряем правку юзера). Любая комбинация пропусков безопасна (max — оба факта живы).
+pub async fn undo(writer: &WriteActor, op_group: i64) -> DbResult<UndoPlan> {
+    let now = now_secs();
+    writer
+        .transaction(move |tx| {
+            let events: Vec<(i64, String, Option<String>, Option<String>)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT fact_id, event, old_text, new_text FROM memory_fact_events \
+                     WHERE op_group=?1 ORDER BY id ASC",
+                )?;
+                let rows = stmt.query_map([op_group], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            let mut reindex = Vec::new();
+            let mut unindex = Vec::new();
+            for (fact_id, event, old_text, new_text) in events {
+                match event.as_str() {
+                    // UPDATE: вернуть старый текст, ЕСЛИ факт жив и текст == new (не редактировали после).
+                    "update" => {
+                        if let (Some(old), Some(new)) = (&old_text, &new_text) {
+                            let cur: Option<String> = tx
+                                .query_row(
+                                    "SELECT text FROM memory_facts WHERE id=?1 AND superseded_by IS NULL",
+                                    [fact_id],
+                                    |r| r.get(0),
+                                )
+                                .optional()?;
+                            if cur.as_deref() == Some(new.as_str()) {
+                                tx.execute(
+                                    "UPDATE memory_facts SET text=?2 WHERE id=?1",
+                                    params![fact_id, old],
+                                )?;
+                                tx.execute(
+                                    "INSERT INTO memory_fact_events\
+                                     (fact_id,event,old_text,new_text,op_group,created_at) \
+                                     VALUES(?1,'restore',?2,?3,?4,?5)",
+                                    params![fact_id, new, old, op_group, now],
+                                )?;
+                                reindex.push((fact_id, old.clone()));
+                            }
+                        }
+                    }
+                    // SUPERSEDE: вернуть старый факт (снять метку), ЕСЛИ он ещё супридён.
+                    "supersede" => {
+                        let cur_text: Option<String> = tx
+                            .query_row(
+                                "SELECT text FROM memory_facts WHERE id=?1 AND superseded_by IS NOT NULL",
+                                [fact_id],
+                                |r| r.get(0),
+                            )
+                            .optional()?;
+                        if let Some(text) = cur_text {
+                            tx.execute(
+                                "UPDATE memory_facts SET superseded_by=NULL, superseded_at=NULL WHERE id=?1",
+                                [fact_id],
+                            )?;
+                            tx.execute(
+                                "INSERT INTO memory_fact_events\
+                                 (fact_id,event,old_text,new_text,op_group,created_at) \
+                                 VALUES(?1,'restore',NULL,?2,?3,?4)",
+                                params![fact_id, text, op_group, now],
+                            )?;
+                            reindex.push((fact_id, text));
+                        }
+                    }
+                    // ADD (новый факт supersede-группы): удалить, ЕСЛИ он жив и текст не правили.
+                    "add" => {
+                        if let Some(new) = &new_text {
+                            let matches: Option<i64> = tx
+                                .query_row(
+                                    "SELECT id FROM memory_facts WHERE id=?1 AND text=?2",
+                                    params![fact_id, new],
+                                    |r| r.get(0),
+                                )
+                                .optional()?;
+                            if matches.is_some() {
+                                tx.execute(
+                                    "INSERT INTO memory_fact_events\
+                                     (fact_id,event,old_text,new_text,op_group,created_at) \
+                                     VALUES(?1,'delete',?2,NULL,?3,?4)",
+                                    params![fact_id, new, op_group, now],
+                                )?;
+                                tx.execute("DELETE FROM memory_facts WHERE id=?1", [fact_id])?;
+                                unindex.push(fact_id);
+                            }
+                        }
+                    }
+                    // 'restore'/'delete' — компенсирующие следы (свои или прошлого отката) — не реверсим.
+                    _ => {}
+                }
+            }
+            Ok(UndoPlan { reindex, unindex })
         })
         .await
 }

@@ -202,6 +202,7 @@ pub fn run() {
             commands::memory::memory_fact_history,
             commands::memory::memory_consolidate_plan,
             commands::memory::memory_consolidate_apply,
+            commands::memory::memory_consolidate_undo,
             commands::inline::inline_complete,
             commands::inline::inline_cancel,
             commands::news::get_news,

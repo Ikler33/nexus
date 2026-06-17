@@ -211,3 +211,28 @@ pub async fn memory_consolidate_apply(
     }
     Ok(outcome)
 }
+
+/// MEM-8c-b: ОТКАТ группы консолидации по `opGroup` (§4.6) — undo авто-режима / чипа. Реверсит
+/// `update`/`supersede`/`add` группы (optimistic-безопасно) + переиндексирует. Возвращает `true`, если
+/// что-то реально откатилось (фронт обновит toast/панель).
+#[tauri::command]
+pub async fn memory_consolidate_undo(state: State<'_, AppState>, op_group: i64) -> AppResult<bool> {
+    let (writer, embedder, vectors) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.writer().clone(),
+            ctx.ai.embedder.clone(),
+            ctx.memory_vectors.clone(),
+        )
+    };
+    let plan = consolidate::undo(&writer, op_group).await?;
+    if let (Some(emb), Some(vec)) = (embedder, vectors) {
+        for (id, text) in &plan.reindex {
+            let _ = memory::index_fact(&vec, emb.as_ref(), *id, text).await;
+        }
+        for id in &plan.unindex {
+            let _ = memory::unindex_fact(&vec, *id);
+        }
+    }
+    Ok(plan.reverted())
+}
