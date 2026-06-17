@@ -19,8 +19,13 @@ use serde::{Deserialize, Serialize};
 pub const MIN_DELETE_PRECISION: f32 = 0.9;
 /// Порог UPDATE-quality: ≥80% UPDATE сохраняют деталь и бьют по правильной цели.
 pub const MIN_UPDATE_QUALITY: f32 = 0.8;
-/// Порог общей op-accuracy (поддерживающая метрика).
-pub const MIN_OP_ACCURACY: f32 = 0.7;
+
+// `op_accuracy` и `delete_recall` НЕ в гейте — это метрики ПОЛЕЗНОСТИ, не безопасности (урок live-прогона
+// gemma-26B: op_accuracy=0.784, но DELETE-precision=1.0/UPDATE-quality=1.0 — модель БЕЗОПАСНА, просто
+// КОНСЕРВАТИВНА: пропускает контрадикции (missed DELETE = факты сосуществуют = НЕ потеря данных). Гейт
+// разблокирует АВТО-УДАЛЕНИЕ — его критерий = ложно-удаляет ли модель (precision) и портит ли UPDATE,
+// НЕ classification-accuracy, которая мешает безопасные промахи с опасными. Это именованные владельцем
+// критерии (§4.5). Анти-вырожденность (precision не вакуумна) даёт `predicted_delete > 0` в гейте.
 
 /// Один кейс консолидации: существующие факты + новый кандидат + ожидаемая операция (gold).
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +42,10 @@ pub struct ConsolidationCase {
     /// Для UPDATE: подстроки, которые ОБЯЗАН сохранить объединённый текст (прокси «не теряет деталь»).
     #[serde(default, rename = "mergeMustContain")]
     pub merge_must_contain: Vec<String>,
+    /// Для UPDATE: подстроки, которых НЕ ДОЛЖНО быть в объединённом тексте (прокси «не галлюцинирует / не
+    /// инвертирует» — напр. кандидат «без сахара», merged не должен содержать «с сахаром»). M1-ревью §4.5.
+    #[serde(default, rename = "mergeMustNotContain")]
+    pub merge_must_not_contain: Vec<String>,
 }
 
 /// Golden-набор консолидации (`eval/consolidation_eval.json`).
@@ -125,10 +134,16 @@ pub fn evaluate_consolidation(
             update_cases += 1;
             let target_ok = pred_op == "UPDATE" && pred.target == case.expected_target;
             let merged_lc = pred.merged.as_deref().unwrap_or("").to_lowercase();
+            // Двусторонний прокси (M1-ревью): сохранены ВСЕ обязательные токены И отсутствуют запрещённые
+            // (галлюцинация/инверсия). Спека §4.5: «не теряет деталь И не галлюцинирует».
             let detail_ok = case
                 .merge_must_contain
                 .iter()
-                .all(|s| merged_lc.contains(&s.to_lowercase()));
+                .all(|s| merged_lc.contains(&s.to_lowercase()))
+                && case
+                    .merge_must_not_contain
+                    .iter()
+                    .all(|s| !merged_lc.contains(&s.to_lowercase()));
             if target_ok && detail_ok {
                 update_good += 1;
             }
@@ -172,17 +187,20 @@ pub fn evaluate_consolidation(
     }
 }
 
-/// Гейт авто-консолидации (§4.5): DELETE-precision, UPDATE-quality и op-accuracy не ниже порогов.
-/// Прохождение РАЗБЛОКИРУЕТ авто-DELETE (MEM-8c). Доверие к авто-удалению = это число на наших данных.
+/// Гейт авто-консолидации (§4.5, именованные владельцем критерии безопасности): DELETE-precision и
+/// UPDATE-quality не ниже порогов, И модель предложила хотя бы один DELETE (`predicted_delete > 0` —
+/// анти-вырожденность: без этого «никогда не удаляет» дало бы precision вакуумно 1.0). Прохождение
+/// РАЗБЛОКИРУЕТ авто-DELETE (MEM-8c). `op_accuracy`/`delete_recall` — метрики полезности, в гейт НЕ входят
+/// (см. коммент к константам): консервативная-но-безопасная модель не должна блокироваться за безопасные
+/// промахи DELETE.
 pub fn meets_consolidation_gate(
     report: &ConsolidationReport,
     min_delete_precision: f32,
     min_update_quality: f32,
-    min_op_accuracy: f32,
 ) -> bool {
-    report.delete_precision >= min_delete_precision
+    report.predicted_delete > 0
+        && report.delete_precision >= min_delete_precision
         && report.update_quality >= min_update_quality
-        && report.op_accuracy >= min_op_accuracy
 }
 
 #[cfg(test)]
@@ -245,6 +263,14 @@ mod tests {
                 "в наборе нет ни одного {op}"
             );
         }
+        // B1-ревью: есть МУЛЬТИ-кандидатные кейсы с НЕнулевой целью — иначе выбор правильной цели
+        // DELETE/UPDATE не проверяется (в проде модель видит до CONSOLIDATE_MAX_CANDIDATES=6 фактов).
+        assert!(
+            g.cases
+                .iter()
+                .any(|c| c.existing.len() >= 3 && c.expected_target.is_some_and(|t| t > 0)),
+            "нет мульти-кандидатного кейса с ненулевой целью — гейт не проверяет выбор цели"
+        );
     }
 
     #[test]
@@ -255,11 +281,11 @@ mod tests {
         assert_eq!(report.delete_precision, 1.0);
         assert_eq!(report.update_quality, 1.0);
         assert_eq!(report.false_delete, 0);
+        assert!(report.predicted_delete > 0);
         assert!(meets_consolidation_gate(
             &report,
             MIN_DELETE_PRECISION,
-            MIN_UPDATE_QUALITY,
-            MIN_OP_ACCURACY
+            MIN_UPDATE_QUALITY
         ));
     }
 
@@ -287,8 +313,7 @@ mod tests {
         assert!(!meets_consolidation_gate(
             &report,
             MIN_DELETE_PRECISION,
-            MIN_UPDATE_QUALITY,
-            MIN_OP_ACCURACY
+            MIN_UPDATE_QUALITY
         ));
     }
 
@@ -311,13 +336,49 @@ mod tests {
             "нет DELETE → нет ложных удалений"
         );
         assert_eq!(report.false_delete, 0);
+        assert_eq!(report.predicted_delete, 0, "ADD не предлагает DELETE");
         assert!(report.update_quality < MIN_UPDATE_QUALITY);
         assert!(!meets_consolidation_gate(
             &report,
             MIN_DELETE_PRECISION,
-            MIN_UPDATE_QUALITY,
-            MIN_OP_ACCURACY
+            MIN_UPDATE_QUALITY
         ));
+    }
+
+    /// Анти-вырожденность: модель, которая НИКОГДА не удаляет (но идеальна на остальном) → predicted_delete=0
+    /// → precision вакуумно 1.0, но гейт НЕ проходит (иначе «безопасно бесполезная» разблокировала бы авто).
+    #[test]
+    fn never_delete_fails_anti_vacuous() {
+        let g = load_consolidation_golden();
+        // perfect-предсказание, но все DELETE заменены на NOOP по той же цели (никогда не удаляем).
+        let preds: Vec<OpPrediction> = g
+            .cases
+            .iter()
+            .map(|c| {
+                let op = if c.expected_op.eq_ignore_ascii_case("DELETE") {
+                    "NOOP".to_string()
+                } else {
+                    c.expected_op.clone()
+                };
+                OpPrediction {
+                    op,
+                    target: c.expected_target,
+                    merged: if c.expected_op.eq_ignore_ascii_case("UPDATE") {
+                        Some(format!("{} {}", c.existing.join(" "), c.candidate))
+                    } else {
+                        None
+                    },
+                }
+            })
+            .collect();
+        let report = evaluate_consolidation(&preds, &g);
+        assert_eq!(report.predicted_delete, 0);
+        assert_eq!(report.delete_precision, 1.0, "вакуумная precision");
+        assert_eq!(report.update_quality, 1.0);
+        assert!(
+            !meets_consolidation_gate(&report, MIN_DELETE_PRECISION, MIN_UPDATE_QUALITY),
+            "вакуумная precision без единого DELETE не должна проходить гейт"
+        );
     }
 
     /// UPDATE на правильной цели, но потерявший деталь (merged без требуемого токена) → не «качественный».
@@ -331,6 +392,7 @@ mod tests {
                 expected_op: "UPDATE".into(),
                 expected_target: Some(0),
                 merge_must_contain: vec!["кофе".into(), "утр".into()],
+                merge_must_not_contain: vec![],
             }],
         };
         let preds = vec![OpPrediction {

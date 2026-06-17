@@ -778,7 +778,7 @@ async fn live_classify_tags_meets_gate() {
 async fn live_consolidation_meets_gate() {
     use super::consolidation::{
         evaluate_consolidation, load_consolidation_golden, meets_consolidation_gate, OpPrediction,
-        MIN_DELETE_PRECISION, MIN_OP_ACCURACY, MIN_UPDATE_QUALITY,
+        MIN_DELETE_PRECISION, MIN_UPDATE_QUALITY,
     };
     use crate::ai::{ChatProvider, OpenAiChatProvider};
     use crate::net::{EgressFeature, GuardedClient};
@@ -811,9 +811,12 @@ async fn live_consolidation_meets_gate() {
     }
 
     let report = evaluate_consolidation(&predictions, &golden);
+    // op_accuracy / delete_recall — ИНФОРМАЦИОННЫЕ (полезность), НЕ в гейте: консервативная модель
+    // (низкий recall, пропуск контрадикций) безопасна — гейт меряет ложные удаления, не промахи.
     eprintln!(
-        "MEM-8c консолидация: op_acc={:.3} DELETE-precision={:.3} (correct={} false={} predicted={}/gold={}) UPDATE-quality={:.3} ({}/{})",
-        report.op_accuracy,
+        "MEM-8c консолидация (гейт=DELETE-precision+UPDATE-quality+predicted_delete>0): \
+         DELETE-precision={:.3} (correct={} false={} predicted={}/gold={}) UPDATE-quality={:.3} ({}/{}) \
+         | инфо: op_accuracy={:.3} delete_recall={:.3}",
         report.delete_precision,
         report.correct_delete,
         report.false_delete,
@@ -822,14 +825,11 @@ async fn live_consolidation_meets_gate() {
         report.update_quality,
         report.update_good,
         report.update_cases,
+        report.op_accuracy,
+        report.delete_recall,
     );
     assert!(
-        meets_consolidation_gate(
-            &report,
-            MIN_DELETE_PRECISION,
-            MIN_UPDATE_QUALITY,
-            MIN_OP_ACCURACY
-        ),
-        "консолидация не прошла гейт: DELETE-precision≥{MIN_DELETE_PRECISION}, UPDATE-quality≥{MIN_UPDATE_QUALITY}, op-accuracy≥{MIN_OP_ACCURACY}"
+        meets_consolidation_gate(&report, MIN_DELETE_PRECISION, MIN_UPDATE_QUALITY),
+        "консолидация не прошла гейт: DELETE-precision≥{MIN_DELETE_PRECISION}, UPDATE-quality≥{MIN_UPDATE_QUALITY}, predicted_delete>0"
     );
 }

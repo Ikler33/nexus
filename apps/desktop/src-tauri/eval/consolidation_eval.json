@@ -57,12 +57,34 @@
       "expectedTarget": 0
     },
     {
+      "name": "delete-multi-target1",
+      "existing": ["пишет на Rust", "дедлайн проекта Z — пятница", "живёт в Тбилиси"],
+      "candidate": "дедлайн проекта Z перенесли на среду",
+      "expectedOp": "DELETE",
+      "expectedTarget": 1
+    },
+    {
+      "name": "delete-multi-target2",
+      "existing": ["любит кофе", "работает в Acme", "у него есть кот"],
+      "candidate": "кота больше нет, недавно завёл собаку",
+      "expectedOp": "DELETE",
+      "expectedTarget": 2
+    },
+    {
+      "name": "delete-distractor-birthplace-vs-residence",
+      "existing": ["родом из Москвы", "сейчас живёт в Москве", "работает удалённо"],
+      "candidate": "переехал из Москвы в Берлин",
+      "expectedOp": "DELETE",
+      "expectedTarget": 1
+    },
+    {
       "name": "update-coffee-detail",
       "existing": ["пьёт кофе"],
       "candidate": "пьёт кофе только по утрам и без сахара",
       "expectedOp": "UPDATE",
       "expectedTarget": 0,
-      "mergeMustContain": ["кофе", "утр"]
+      "mergeMustContain": ["кофе", "утр"],
+      "mergeMustNotContain": ["с сахаром"]
     },
     {
       "name": "update-rust-level",
@@ -70,7 +92,7 @@
       "candidate": "изучает Rust, уже разобрался с асинхронностью",
       "expectedOp": "UPDATE",
       "expectedTarget": 0,
-      "mergeMustContain": ["rust"]
+      "mergeMustContain": ["rust", "асинхрон"]
     },
     {
       "name": "update-deadline-detail",
@@ -94,7 +116,7 @@
       "candidate": "ведёт блог о программировании на Substack",
       "expectedOp": "UPDATE",
       "expectedTarget": 0,
-      "mergeMustContain": ["блог"]
+      "mergeMustContain": ["блог", "substack"]
     },
     {
       "name": "update-vacation-detail",
@@ -110,7 +132,7 @@
       "candidate": "читает «Designing Data-Intensive Applications»",
       "expectedOp": "UPDATE",
       "expectedTarget": 0,
-      "mergeMustContain": ["чита"]
+      "mergeMustContain": ["чита", "data-intensive"]
     },
     {
       "name": "update-sport-detail",
@@ -119,6 +141,22 @@
       "expectedOp": "UPDATE",
       "expectedTarget": 0,
       "mergeMustContain": ["спорт", "бег"]
+    },
+    {
+      "name": "update-multi-target1-blog",
+      "existing": ["пьёт чай", "ведёт блог", "играет в шахматы"],
+      "candidate": "ведёт блог о путешествиях",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 1,
+      "mergeMustContain": ["блог", "путешеств"]
+    },
+    {
+      "name": "update-multi-target2-project",
+      "existing": ["есть проект A", "есть проект B", "есть проект C"],
+      "candidate": "у проекта B дедлайн в марте",
+      "expectedOp": "UPDATE",
+      "expectedTarget": 1,
+      "mergeMustContain": ["b", "март"]
     },
     {
       "name": "noop-rust-paraphrase",
@@ -170,11 +208,11 @@
       "expectedTarget": 0
     },
     {
-      "name": "noop-early-paraphrase",
-      "existing": ["встаёт рано"],
-      "candidate": "у него ранний подъём",
+      "name": "noop-multi-target1",
+      "existing": ["пишет на Go", "живёт в Тбилиси", "пьёт кофе"],
+      "candidate": "его город — Тбилиси",
       "expectedOp": "NOOP",
-      "expectedTarget": 0
+      "expectedTarget": 1
     },
     {
       "name": "add-hobby-vs-lang",
@@ -220,7 +258,7 @@
     },
     {
       "name": "add-movie-vs-multi",
-      "existing": ["любит Rust", "живёт в Тбилиси"],
+      "existing": ["любит Rust", "живёт в Тбилиси", "пьёт кофе"],
       "candidate": "его любимый фильм — «Интерстеллар»",
       "expectedOp": "ADD"
     }
