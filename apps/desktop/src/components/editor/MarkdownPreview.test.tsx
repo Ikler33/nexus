@@ -435,4 +435,58 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
     expect(screen.queryByRole('button', { name: '#ideas' })).toBeNull();
     expect(screen.getByText('#ideas')).toBeInTheDocument();
   });
+
+  it('COMMENT-1: %%коммент%% скрыт в режиме чтения', () => {
+    render(<MarkdownPreview source={'видно %%скрыто%% дальше'} onOpenLink={() => {}} />);
+    expect(screen.getByText(/видно/)).toBeInTheDocument();
+    expect(screen.queryByText(/скрыто/)).toBeNull();
+    expect(screen.queryByText(/%%/)).toBeNull();
+  });
+
+  it('COMMENT-1: %% внутри code-fence НЕ вырезается', () => {
+    const { container } = render(
+      <MarkdownPreview source={'```\nx %%y%% z\n```'} onOpenLink={() => {}} />,
+    );
+    expect(container.querySelector('code')?.textContent).toContain('%%y%%');
+  });
+
+  it('HEADANCHOR-1: заголовок получает slug-id, дубликаты дедуплицируются', () => {
+    render(<MarkdownPreview source={'# Hello World\n\n## Intro\n\n## Intro'} onOpenLink={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Hello World' })).toHaveAttribute('id', 'hello-world');
+    const intros = screen.getAllByRole('heading', { name: 'Intro' });
+    expect(intros[0]).toHaveAttribute('id', 'intro');
+    expect(intros[1]).toHaveAttribute('id', 'intro-1');
+  });
+
+  it('FOOTNOTE-1: сноска [^1] рендерит ссылку-надстрочник и блок .footnotes', () => {
+    const { container } = render(
+      <MarkdownPreview source={'текст[^1]\n\n[^1]: определение сноски'} onOpenLink={() => {}} />,
+    );
+    expect(container.querySelector('sup')).not.toBeNull(); // ссылка-надстрочник
+    expect(container.querySelector('.footnotes, [class*=footnotes], section')).not.toBeNull();
+    expect(screen.getByText(/определение сноски/)).toBeInTheDocument();
+  });
+
+  it('FOOTNOTE-1: клик по ссылке-сноске скроллит к её определению (CSS.escape + scope)', () => {
+    // jsdom не реализует scrollIntoView → подменяем заглушкой (configurable, чтобы restore не падал).
+    const scrollSpy = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      value: scrollSpy,
+      configurable: true,
+      writable: true,
+    });
+    const { container } = render(
+      <MarkdownPreview source={'текст[^1]\n\n[^1]: определение'} onOpenLink={() => {}} />,
+    );
+    const ref = container.querySelector('sup a');
+    expect(ref).not.toBeNull();
+    fireEvent.click(ref as Element);
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it('хеш-ссылка с литеральным % (#50%) не роняет клик (гард decodeURIComponent)', () => {
+    render(<MarkdownPreview source={'[go](#50%)'} onOpenLink={() => {}} />);
+    // Клик не должен бросать URIError (битое %-кодирование ловится try/catch).
+    expect(() => fireEvent.click(screen.getByText('go'))).not.toThrow();
+  });
 });
