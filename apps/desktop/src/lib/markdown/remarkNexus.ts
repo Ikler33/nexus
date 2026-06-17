@@ -9,9 +9,11 @@ import { visit } from 'unist-util-visit';
  */
 
 // `[[Target]]`, `[[Target#H|Alias]]` ИЛИ `#tag` с границей (^|\s) — без lookbehind (совместимость WebKit).
-// Теги — ТОЛЬКО ASCII-буквы (как бэкенд `is_ascii_alphabetic`, parser/mod.rs): кириллический `#тег`
-// бэкенд не создаёт, а превью раньше подсвечивало его кликабельным → ложный сигнал (находка аудита).
-const RE = /\[\[([^\]\n]+?)\]\]|(^|\s)(#[a-zA-Z0-9/_-]*[a-zA-Z][a-zA-Z0-9/_-]*)/gu;
+// Теги — Unicode-буквы/цифры + `_-/`, минимум ОДНА буква (зеркалит бэкенд `is_tag_char` = is_alphanumeric|_-/
+// + `char::is_alphabetic`, parser/mod.rs:200/576, PROP-1 Unicode-скан): кириллица `#идея` ИНДЕКСИРУЕТСЯ
+// (есть тест `unicode_cyrillic_tags`) → должна быть кликабельной. Раньше регэксп был ASCII-only по
+// устаревшему `is_ascii_alphabetic` — RU-теги выпадали. Клик нормализуется в lowercase на границе.
+const RE = /\[\[([^\]\n]+?)\]\]|(^|\s)(#[\p{L}\p{N}_/-]*\p{L}[\p{L}\p{N}_/-]*)/gu;
 
 /** Кастомные URL-схемы кастомных узлов (распознаются в `MarkdownPreview` по префиксу href). */
 export const WIKILINK_SCHEME = 'nexus-wikilink:';

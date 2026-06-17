@@ -53,4 +53,26 @@ describe('remarkNexus splitter (#20)', () => {
     expect(links[0]).toMatchObject({ url: 'nexus-wikilink:Note' });
     expect(links[1]).toMatchObject({ url: 'nexus-tag:done' });
   });
+
+  it('кириллический #тег кликабелен (зеркалит Unicode is_tag_char бэкенда)', () => {
+    const r = splitWikilinksTags('запиши #идея сюда');
+    const tag = r.find((n) => n.type === 'link');
+    expect(tag).toMatchObject({
+      type: 'link',
+      url: `nexus-tag:${encodeURIComponent('идея')}`,
+      children: [{ type: 'text', value: '#идея' }],
+    });
+  });
+
+  it('вложенный тег с / (#проект/идея) — буквы Unicode + слэш', () => {
+    const r = splitWikilinksTags('#проект/идея');
+    expect(r.find((n) => n.type === 'link')).toMatchObject({
+      url: `nexus-tag:${encodeURIComponent('проект/идея')}`,
+    });
+  });
+
+  it('#123 (только цифры) НЕ тег (нужна хотя бы буква, как бэкенд)', () => {
+    const r = splitWikilinksTags('число #123 тут');
+    expect(r.every((n) => n.type === 'text')).toBe(true);
+  });
 });
