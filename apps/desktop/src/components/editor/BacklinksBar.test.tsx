@@ -1,6 +1,12 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tauriApi } from '../../lib/tauri-api';
 import { BacklinksBar } from './BacklinksBar';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('BacklinksBar (Ф0-6/Ф0-9)', () => {
   it('показывает входящие ссылки переданного файла', async () => {
@@ -11,5 +17,56 @@ describe('BacklinksBar (Ф0-6/Ф0-9)', () => {
   it('показывает пустое состояние, когда обратных ссылок нет', async () => {
     render(<BacklinksBar path="Notes/Idea.md" />); // на Idea никто не ссылается
     expect(await screen.findByText(/Нет обратных ссылок/)).toBeInTheDocument();
+  });
+
+  // REFRESH: подписка на vault:changed → дебаунс-ре-запрос → новая обратная ссылка без смены файла.
+  it('REFRESH: vault:changed пере-запрашивает и показывает новую ссылку', async () => {
+    vi.useFakeTimers();
+    let fire = () => {};
+    vi.spyOn(tauriApi.events, 'onVaultChanged').mockImplementation(async (cb) => {
+      fire = cb;
+      return () => {};
+    });
+    const spy = vi
+      .spyOn(tauriApi.graph, 'getBacklinks')
+      .mockResolvedValueOnce([]) // первичный: пусто
+      .mockResolvedValue([
+        { sourcePath: 'Notes/Linker.md', sourceTitle: 'Linker', context: null, lineNumber: null },
+      ]);
+    render(<BacklinksBar path="Pipeline.md" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fire();
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Linker')).toBeInTheDocument();
+  });
+
+  it('REFRESH: ошибка тихого рефреша НЕ обнуляет показанные ссылки (#296)', async () => {
+    vi.useFakeTimers();
+    let fire = () => {};
+    vi.spyOn(tauriApi.events, 'onVaultChanged').mockImplementation(async (cb) => {
+      fire = cb;
+      return () => {};
+    });
+    vi.spyOn(tauriApi.graph, 'getBacklinks')
+      .mockResolvedValueOnce([
+        { sourcePath: 'Notes/A.md', sourceTitle: 'Keeper', context: null, lineNumber: null },
+      ])
+      .mockRejectedValue(new Error('transient'));
+    render(<BacklinksBar path="Pipeline.md" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText('Keeper')).toBeInTheDocument();
+    await act(async () => {
+      fire();
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(screen.getByText('Keeper')).toBeInTheDocument(); // транзиентная ошибка не стёрла список
   });
 });
