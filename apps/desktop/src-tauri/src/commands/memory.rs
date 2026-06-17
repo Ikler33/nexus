@@ -196,6 +196,9 @@ pub async fn memory_consolidate_apply(
                 inserted,
                 ..
             } => {
+                // ПОРЯДОК ВАЖЕН: сперва индексируем НОВЫЙ, потом убираем старый из ANN. Индексация
+                // best-effort (вне writer-tx) — при сбое между шагами лучше over-recall (оба в индексе),
+                // чем дыра (ни одного до реиндекса). Не переставлять (находка ревью).
                 if *inserted {
                     let _ = memory::index_fact(&vec, emb.as_ref(), *id, new_text).await;
                 }

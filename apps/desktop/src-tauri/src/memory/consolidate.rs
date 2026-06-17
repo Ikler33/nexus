@@ -125,8 +125,18 @@ pub enum ConsolidationOutcome {
     Noop,
 }
 
+/// Схлопывает любые переносы строк/таб в один пробел. КРИТИЧНО для нумерованного списка фактов:
+/// факт с `\n` (явная запись `memory_add`/`edit` только trim'ит, не схлопывает) иначе порождал бы
+/// ФЕЙКОВУЮ строку «5: …», сдвигая нумерацию → LLM вернул бы op на ПОДДЕЛЬНЫЙ id, а `cands.get(idx)`
+/// замапил бы его на чужой реальный факт → ложный supersede/переписывание (находка adversarial-ревью).
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Сообщения для фазы решения. Существующие факты — под временными числовыми id. И новый факт, и
 /// существующие обёрнуты `marker` (анти-инъекция AC-SEC-7) — встреченные внутри команды не выполняются.
+/// Каждый факт приводится к ОДНОЙ строке ([`one_line`]) — недоверенный текст не может симулировать
+/// границы/нумерацию соседних элементов (подмена id внутри блока данных).
 fn build_consolidate_messages(
     candidate: &str,
     existing: &[MemoryFact],
@@ -134,7 +144,7 @@ fn build_consolidate_messages(
 ) -> Vec<ChatMessage> {
     let mut list = String::new();
     for (i, f) in existing.iter().enumerate() {
-        list.push_str(&format!("{i}: {}\n", f.text));
+        list.push_str(&format!("{i}: {}\n", one_line(&f.text)));
     }
     let system = format!(
         "Ты — менеджер «памяти» о пользователе в приложении личных заметок. Дан НОВЫЙ факт и список \
@@ -152,7 +162,7 @@ fn build_consolidate_messages(
     );
     let user = format!(
         "{marker}\nНОВЫЙ факт: {}\n\nСУЩЕСТВУЮЩИЕ факты (id: текст):\n{}{marker}",
-        candidate.trim(),
+        one_line(candidate),
         list
     );
     vec![ChatMessage::system(system), ChatMessage::user(user)]
@@ -322,11 +332,17 @@ pub async fn plan(
 /// `inserted=true` — НОВАЯ или ВОССТАНОВЛЕННАЯ строка (нужна (ре)индексация); `false` — живой дубль.
 /// Edge: текст совпал с СУПРИДЁННЫМ фактом → восстанавливаем его (снова жив + `restore`-событие),
 /// иначе вернулся бы id «мёртвого» факта как добавленного.
+///
+/// `op_group` — если задан (составная операция supersede), пишем событие добавления/восстановления
+/// нового факта В ТУ ЖЕ ГРУППУ → групповой откат (MEM-8c) сможет удалить и новый факт, не оставив
+/// супридённый сиротой (находка adversarial-ревью: иначе group описывал лишь supersede старого).
+/// Одиночный ADD (`op_group=None`) событий НЕ плодит (как `memory::add`).
 fn insert_candidate(
     tx: &rusqlite::Transaction,
     candidate: &str,
     source: &str,
     now: i64,
+    op_group: Option<i64>,
 ) -> rusqlite::Result<(i64, bool)> {
     let changed = tx.execute(
         "INSERT OR IGNORE INTO memory_facts(text,pinned,source,created_at,used_at) \
@@ -334,7 +350,15 @@ fn insert_candidate(
         params![candidate, source, now],
     )?;
     if changed != 0 {
-        return Ok((tx.last_insert_rowid(), true));
+        let id = tx.last_insert_rowid();
+        if let Some(group) = op_group {
+            tx.execute(
+                "INSERT INTO memory_fact_events(fact_id,event,old_text,new_text,op_group,created_at) \
+                 VALUES(?1,'add',NULL,?2,?3,?4)",
+                params![id, candidate, group, now],
+            )?;
+        }
+        return Ok((id, true));
     }
     // Коллизия по UNIQUE(text): строка уже есть — живая или супридённая.
     let (id, superseded): (i64, Option<i64>) = tx.query_row(
@@ -349,8 +373,8 @@ fn insert_candidate(
         )?;
         tx.execute(
             "INSERT INTO memory_fact_events(fact_id,event,old_text,new_text,op_group,created_at) \
-             VALUES(?1,'restore',NULL,?2,NULL,?3)",
-            params![id, candidate, now],
+             VALUES(?1,'restore',NULL,?2,?3,?4)",
+            params![id, candidate, op_group, now],
         )?;
         return Ok((id, true)); // снова жив → (ре)индексировать
     }
@@ -377,10 +401,17 @@ pub async fn apply(
     choice: ConsolidationChoice,
 ) -> DbResult<ConsolidationOutcome> {
     let now = now_secs();
+    // Trim кандидата на входе (apply — отдельная команда-вход, не доверяем переданному plan): иначе
+    // строка хранится нетримленной, а команда индексирует `.trim()` → текст строки ≠ текст вектора и
+    // обход UNIQUE-дедупа " foo " vs "foo" (находка ревью). Совпадает с инвариантом `memory::add`.
+    let plan = ConsolidationPlan {
+        candidate: plan.candidate.trim().to_string(),
+        ..plan
+    };
     writer
         .transaction(move |tx| {
             let add = |tx: &rusqlite::Transaction| -> rusqlite::Result<ConsolidationOutcome> {
-                let (id, inserted) = insert_candidate(tx, &plan.candidate, &plan.source, now)?;
+                let (id, inserted) = insert_candidate(tx, &plan.candidate, &plan.source, now, None)?;
                 Ok(ConsolidationOutcome::Add { id, inserted })
             };
             match (&plan.op, choice) {
@@ -410,6 +441,11 @@ pub async fn apply(
                     match cur {
                         // Факт жив И текст не менялся с момента plan → безопасно дополнить.
                         Some((cur_text, None)) if &cur_text == old_text => {
+                            // Модель вернула UPDATE без реальной правки (new==old) → ничего не делаем:
+                            // не плодим пустое событие истории и лишний ре-эмбед (находка ревью).
+                            if new_text == old_text {
+                                return Ok(ConsolidationOutcome::Noop);
+                            }
                             let group = next_op_group(tx)?;
                             tx.execute(
                                 "UPDATE memory_facts SET text=?2 WHERE id=?1",
@@ -451,16 +487,21 @@ pub async fn apply(
                         .optional()?;
                     match cur {
                         Some((cur_text, None)) if &cur_text == old_text => {
+                            // Группу аллоцируем ДО вставки — событие add/restore нового факта попадёт
+                            // в ту же группу, что и supersede старого (групповой откат, §4.6).
+                            let group = next_op_group(tx)?;
                             let (new_id, inserted) =
-                                insert_candidate(tx, &plan.candidate, &plan.source, now)?;
-                            // Защита от само-замещения (кандидат совпал с целевым) — просто ADD.
-                            if new_id == *target_id {
+                                insert_candidate(tx, &plan.candidate, &plan.source, now, Some(group))?;
+                            // Не супридим вслепую, если новый факт НЕ создан (кандидат совпал с целевым
+                            // или с ДРУГИМ живым фактом): иначе target указал бы superseded_by на
+                            // несвязанный курированный факт, а группа осталась бы без add-события
+                            // (находка ревью). Деградируем в ADD (кандидат-дубль уже в БД).
+                            if new_id == *target_id || !inserted {
                                 return Ok(ConsolidationOutcome::Add {
                                     id: new_id,
                                     inserted,
                                 });
                             }
-                            let group = next_op_group(tx)?;
                             tx.execute(
                                 "UPDATE memory_facts SET superseded_by=?2, superseded_at=?3 WHERE id=?1",
                                 params![target_id, new_id, now],
