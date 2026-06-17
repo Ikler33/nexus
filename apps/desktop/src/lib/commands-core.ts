@@ -11,7 +11,7 @@ import { useThemeStore } from '../stores/theme';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { useVaultStore } from '../stores/vault';
-import { activeBuffer, useWorkspaceStore } from '../stores/workspace';
+import { activeBuffer, activePath, useWorkspaceStore } from '../stores/workspace';
 
 /** Запускает inline-генерацию в активном редакторе (IL-3, команда палитры). Нет редактора — no-op. */
 function runInlineInActiveEditor(mode: InlineMode): void {
@@ -147,6 +147,20 @@ export function registerCoreCommands(): Disposable {
         if (!useVaultStore.getState().info) return; // нет открытого vault — некуда писать
         const path = await useVaultStore.getState().createNote();
         await useWorkspaceStore.getState().openFile(path);
+      },
+    }),
+    commands.register({
+      id: 'file.reveal',
+      title: 'Reveal active file in tree',
+      titleKey: 'commands.file.reveal',
+      source: 'core',
+      // REVEAL-ACTIVE-FILE: раскрываем предков активного файла и просим дерево проскроллить к нему
+      // (открыв заметку через ⌘O/палитру/ссылку/граф, в дереве она раньше не подсвечивалась).
+      run: async () => {
+        const path = activePath(useWorkspaceStore.getState());
+        if (!path) return; // нет активной заметки
+        await useVaultStore.getState().revealPath(path);
+        useUIStore.getState().requestReveal(path);
       },
     }),
     commands.register({

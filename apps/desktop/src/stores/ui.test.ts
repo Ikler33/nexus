@@ -99,3 +99,22 @@ describe('ui-стор: TAGCLICK-1 — отложенный тег-фильтр �
     expect(useUIStore.getState().pendingTagFilter).toBeNull();
   });
 });
+
+describe('ui-стор: REVEAL-ACTIVE-FILE', () => {
+  it('requestReveal ставит цель, показывает сайдбар, выходит из reading; seq растёт при повторе', () => {
+    useUIStore.setState({ revealTarget: null, sidebarOpen: false, reading: true });
+    useUIStore.getState().requestReveal('Notes/A.md');
+    const s = useUIStore.getState();
+    expect(s.revealTarget?.path).toBe('Notes/A.md');
+    expect(s.sidebarOpen).toBe(true);
+    expect(s.reading).toBe(false);
+    const seq1 = s.revealTarget!.seq;
+    useUIStore.getState().requestReveal('Notes/A.md'); // тот же путь → seq растёт (перезапуск скролла)
+    expect(useUIStore.getState().revealTarget!.seq).toBe(seq1 + 1);
+  });
+  it('consumeReveal сбрасывает цель', () => {
+    useUIStore.setState({ revealTarget: { path: 'x', seq: 1 } });
+    useUIStore.getState().consumeReveal();
+    expect(useUIStore.getState().revealTarget).toBeNull();
+  });
+});

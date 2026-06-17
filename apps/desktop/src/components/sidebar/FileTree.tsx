@@ -12,6 +12,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { promoteNoteToBoard } from '../../lib/commands-core';
 import { useStarredStore } from '../../stores/starred';
+import { useUIStore } from '../../stores/ui';
 import { flattenVisible, useVaultStore } from '../../stores/vault';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import styles from './FileTree.module.css';
@@ -96,6 +97,21 @@ export function FileTree() {
     // Стартовый размер, чтобы строки рендерились до измерения (важно для тестов в jsdom).
     initialRect: { width: 280, height: 600 },
   });
+
+  // REVEAL-ACTIVE-FILE: команда `file.reveal` раскрывает предков (vault.revealPath) и просит показать
+  // файл (ui.requestReveal → revealTarget). Здесь — скролл к строке, КОГДА она появилась в nodes
+  // (родителей могло ещё не дораскрыть → ждём пересчёта nodes, не сбрасывая запрос). seq в revealTarget
+  // перезапускает эффект и при повторном reveal того же пути.
+  const revealTarget = useUIStore((s) => s.revealTarget);
+  const consumeReveal = useUIStore((s) => s.consumeReveal);
+  useEffect(() => {
+    if (!revealTarget) return;
+    const idx = nodes.findIndex((n) => n.entry.path === revealTarget.path);
+    if (idx < 0) return; // строка ещё не видна (предки не раскрыты / файла нет) — дождёмся nodes
+    setActive(idx);
+    virtualizer.scrollToIndex(idx, { align: 'center' });
+    consumeReveal();
+  }, [revealTarget, nodes, consumeReveal, virtualizer]);
 
   if (nodes.length === 0) {
     return (

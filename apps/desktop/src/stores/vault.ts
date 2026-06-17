@@ -32,6 +32,9 @@ interface VaultState {
   renameFile: (from: string, to: string) => Promise<void>;
   /** Перечитать детей каталога ('' = корень) и опц. раскрыть его (после создания файла извне). */
   refreshDir: (dir: string, expand?: boolean) => Promise<void>;
+  /** REVEAL-ACTIVE-FILE: раскрыть ВСЕ родительские каталоги пути (с догрузкой детей), чтобы файл стал
+   *  видимым в дереве. Идемпотентно; персистит свёрнутость. Скролл к строке — на стороне FileTree. */
+  revealPath: (path: string) => Promise<void>;
 }
 
 /** Родительский каталог пути ('' = корень). */
@@ -198,6 +201,26 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       expanded: expand && dir ? { ...s.expanded, [dir]: true } : s.expanded,
     }));
     if (expand && dir) persistExpanded(get().info?.root, get().expanded);
+  },
+
+  async revealPath(path) {
+    const segs = path.split('/');
+    segs.pop(); // имя файла — раскрываем только каталоги-предки
+    if (segs.length === 0) return; // файл в корне — раскрывать нечего
+    let acc = '';
+    for (const seg of segs) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      if (!get().childrenByPath[acc]) {
+        try {
+          const children = (await tauriApi.vault.listDir(acc)).slice().sort(compareEntries);
+          set((s) => ({ childrenByPath: { ...s.childrenByPath, [acc]: children } }));
+        } catch {
+          return; // каталог недоступен (удалён снаружи) — дальше раскрывать бессмысленно
+        }
+      }
+      if (!get().expanded[acc]) set((s) => ({ expanded: { ...s.expanded, [acc]: true } }));
+    }
+    persistExpanded(get().info?.root, get().expanded);
   },
 
   async renameFile(from, to) {

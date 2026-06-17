@@ -134,6 +134,21 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
     vi.restoreAllMocks();
   });
 
+  it('REVEAL: revealPath раскрывает ВСЕ каталоги-предки вложенного файла (+ грузит детей)', async () => {
+    await useVaultStore.getState().openVault('');
+    await useVaultStore.getState().revealPath('Projects/Alpha/Spec.md');
+    const s = useVaultStore.getState();
+    expect(s.expanded['Projects']).toBe(true);
+    expect(s.expanded['Projects/Alpha']).toBe(true);
+    expect(s.childrenByPath['Projects/Alpha']).toBeDefined();
+  });
+
+  it('REVEAL: файл в корне — revealPath ничего не раскрывает', async () => {
+    await useVaultStore.getState().openVault('');
+    await useVaultStore.getState().revealPath('README.md');
+    expect(Object.keys(useVaultStore.getState().expanded)).toHaveLength(0);
+  });
+
   it('createNote: уникальное имя, пишет файл, обновляет дерево (кросс-план #1)', async () => {
     useVaultStore.setState({ childrenByPath: { '': [entry('Untitled.md')] } });
     const write = vi.spyOn(tauriApi.vault, 'writeFile').mockResolvedValue('hash');
