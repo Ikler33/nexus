@@ -501,6 +501,7 @@
     "consolidateAutoMerged": "Merged fact: «{{text}}»",
     "consolidateAutoReplaced": "Replaced «{{old}}» with «{{new}}»",
     "consolidateUndone": "Consolidation undone",
+    "consolidateUndoFailed": "Couldn’t undo — fact already changed",
     "noActiveNote": "Open a note to insert into",
     "insertNeedsEdit": "Switch to edit mode to insert",
     "pin": "Pin",

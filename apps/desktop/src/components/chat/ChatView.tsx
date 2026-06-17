@@ -107,6 +107,9 @@ export function ChatView() {
     if (!autoConsolidated) return;
     const a = autoConsolidated;
     acknowledgeAutoConsolidated();
+    // Тост уместен только если обмен ещё на ленте (как у savedFact/captureFromMessage) — иначе всплыл бы
+    // на сменившейся/пустой ленте. Данные уже записаны и обратимы по opGroup, так что это лишь косметика.
+    if (!useChatStore.getState().messages.some((m) => m.id === a.messageId)) return;
     const msg =
       a.op === 'supersede'
         ? t('chat.consolidateAutoReplaced', { old: a.oldText, new: a.newText })
@@ -115,9 +118,15 @@ export function ChatView() {
       kind: 'success',
       action: {
         label: t('chat.memoryUndo'),
+        // Честный тост: показываем «Отменено» только если бэкенд реально откатил (reverted===true);
+        // иначе (факт изменён руками / группа уже откачена) — «не удалось откатить», а не ложь об успехе.
         run: () =>
-          void undoConsolidation(a.opGroup).then(() =>
-            useToastStore.getState().addToast(t('chat.consolidateUndone'), { kind: 'info' }),
+          void undoConsolidation(a.opGroup).then((reverted) =>
+            useToastStore
+              .getState()
+              .addToast(reverted ? t('chat.consolidateUndone') : t('chat.consolidateUndoFailed'), {
+                kind: reverted ? 'info' : 'error',
+              }),
           ),
       },
     });

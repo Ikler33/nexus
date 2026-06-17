@@ -785,10 +785,35 @@ describe('chat store (Ф1-8)', () => {
       expect(useChatStore.getState().autoConsolidated).toBeNull();
     });
 
-    it('undoConsolidation зовёт consolidateUndo по opGroup', async () => {
+    it('авто-режим, цель с НЕИЗВЕСТНЫМ source → чип (fail-closed §4.3, не молчаливый apply)', async () => {
+      onAuto();
+      const planObj: ConsolidationPlan = {
+        candidate: 'новый',
+        source: 'auto',
+        // source не 'auto' (напр. будущий imported/synced или регрессия бэка) — fail-closed: НЕ авто.
+        op: {
+          kind: 'supersede',
+          targetId: 7,
+          oldText: 'импортированный факт',
+          targetSource: 'imported' as 'auto',
+        },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      const apply = vi.spyOn(tauriApi.memory, 'consolidateApply');
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'новый' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('proposed');
+      expect(apply).not.toHaveBeenCalled();
+      expect(useChatStore.getState().autoConsolidated).toBeNull();
+    });
+
+    it('undoConsolidation зовёт consolidateUndo по opGroup и пробрасывает исход', async () => {
       const undo = vi.spyOn(tauriApi.memory, 'consolidateUndo').mockResolvedValue(true);
-      await useChatStore.getState().undoConsolidation(5);
+      await expect(useChatStore.getState().undoConsolidation(5)).resolves.toBe(true);
       expect(undo).toHaveBeenCalledWith(5);
+      // false (факт уже изменён / группа откачена) проброшен честно — тост не соврёт «Отменено».
+      undo.mockResolvedValue(false);
+      await expect(useChatStore.getState().undoConsolidation(5)).resolves.toBe(false);
     });
   });
 

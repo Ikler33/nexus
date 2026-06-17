@@ -512,6 +512,7 @@
     "consolidateAutoMerged": "Объединил факт: «{{text}}»",
     "consolidateAutoReplaced": "Заменил «{{old}}» на «{{new}}»",
     "consolidateUndone": "Откатил консолидацию",
+    "consolidateUndoFailed": "Не удалось откатить — факт уже изменён",
     "noActiveNote": "Откройте заметку для вставки",
     "insertNeedsEdit": "Переключитесь в режим редактирования",
     "pin": "Закрепить",

@@ -166,7 +166,7 @@ interface ChatState {
   /** MEM-8c: ChatView показал undo-тост авто-консолидации → сбросить (одноразово). */
   acknowledgeAutoConsolidated: () => void;
   /** MEM-8c: «Отменить» авто-консолидацию по `opGroup` (откат группы) + обновить панель памяти. */
-  undoConsolidation: (opGroup: number) => Promise<void>;
+  undoConsolidation: (opGroup: number) => Promise<boolean>;
   /** MEM-5: результат сразу-сохранения (явная команда «запомни …» / кнопка «В память»). ChatView
    *  показывает тост по `status` и сбрасывает. `saved` несёт `id` для «Отменить» (удаляем ТОЛЬКО реально
    *  созданный факт — `duplicate` уже был, без отмены; `error`/`nothing` — честные тосты). */
@@ -374,11 +374,12 @@ export const useChatStore = create<ChatState>((set, get) => {
       }
       // update / supersede.
       // MEM-8c: защита explicit-фактов (§4.3) — явный факт юзера НЕ переписываем/не супридим молча,
-      // даже в авто-режиме (всегда через чип). Авто применяем только к auto-source цели.
-      const targetExplicit =
+      // даже в авто-режиме (всегда через чип). Fail-closed: молча применяем ТОЛЬКО к цели с source==='auto';
+      // любой другой/неизвестный/пустой source (explicit, будущий imported/synced, регрессия бэка) → чип.
+      const targetAuto =
         (plan.op.kind === 'update' || plan.op.kind === 'supersede') &&
-        plan.op.targetSource === 'explicit';
-      if (prefs.aiMemoryConsolidationMode === 'auto' && !targetExplicit) {
+        plan.op.targetSource === 'auto';
+      if (prefs.aiMemoryConsolidationMode === 'auto' && targetAuto) {
         advanceQueue(pf.messageId);
         try {
           const outcome = await tauriApi.memory.consolidateApply(plan, 'accept');
@@ -434,12 +435,15 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
     undoConsolidation(opGroup) {
       // «Отменить» авто-консолидацию — откат группы (восстановить старый / удалить новый / вернуть текст).
+      // Возвращаем РЕАЛЬНЫЙ исход бэкенда: false = ничего не откатили (факт изменён руками после слияния /
+      // группа уже откачена) — тогда тост не должен врать «Отменено». true = откат состоялся.
       return tauriApi.memory
         .consolidateUndo(opGroup)
-        .then(() => {
+        .then((reverted) => {
           void useMemoryStore.getState().load();
+          return reverted;
         })
-        .catch(() => {});
+        .catch(() => false);
     },
     acknowledgeSavedFact() {
       if (get().savedFact) set({ savedFact: null });
