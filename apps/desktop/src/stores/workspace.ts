@@ -244,8 +244,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   async openLink(target) {
     // Резолв на бэкенде (#22) — та же семантика, что у индексатора links (путь/±.md/basename,
     // затем алиас V4.1): фронт не держит полный список заметок, алиасные ссылки кликабельны.
-    const path = await tauriApi.vault.resolveNote(target).catch(() => null);
-    if (path) await get().openFile(path);
+    // ВАЖНО: различаем «заметки нет» (resolveNote → null) и «резолв упал» (throw): на падении НЕ
+    // плодим заметку (иначе транзиентная ошибка бэкенда создаст мусорный файл), просто выходим.
+    let path: string | null;
+    try {
+      path = await tauriApi.vault.resolveNote(target);
+    } catch {
+      return; // транзиентная ошибка резолва — ничего не делаем
+    }
+    if (path) {
+      await get().openFile(path);
+      return;
+    }
+    // Заметки нет → создаём её на лету и открываем (Obsidian: клик по [[X]] на несуществующую =
+    // создать X.md), вместо мёртвого клика — базовый workflow «пиши ссылку, наполнишь позже».
+    // Разбираем target на каталог+имя (`[[folder/note]]`), чистим недопустимые для ФС символы имени.
+    const cleaned = target.trim().replace(/\.md$/i, '').trim();
+    if (!cleaned) return;
+    const slash = cleaned.lastIndexOf('/');
+    const dir = slash >= 0 ? cleaned.slice(0, slash) : '';
+    const baseName = cleaned
+      .slice(slash + 1)
+      .replace(/[\\:*?"<>|[\]]/g, '')
+      .trim();
+    if (!baseName) return;
+    try {
+      const { useVaultStore } = await import('./vault');
+      const created = await useVaultStore.getState().createNote(dir, { baseName });
+      await get().openFile(created);
+    } catch {
+      const { useToastStore } = await import('./toast');
+      useToastStore.getState().addToast(`Не удалось создать «${cleaned}»`, { kind: 'error' });
+    }
   },
 
   setActiveTab(groupId, path) {
