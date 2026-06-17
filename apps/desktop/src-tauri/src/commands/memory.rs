@@ -6,6 +6,9 @@
 use tauri::State;
 
 use crate::error::AppResult;
+use crate::memory::consolidate::{
+    self, ConsolidationChoice, ConsolidationOutcome, ConsolidationPlan, PlanOp,
+};
 use crate::memory::{self, FactEvent, MemoryFact, SOURCE_AUTO, SOURCE_EXPLICIT};
 use crate::state::AppState;
 
@@ -121,4 +124,87 @@ pub async fn memory_delete(state: State<'_, AppState>, id: i64) -> AppResult<()>
 pub async fn memory_fact_history(state: State<'_, AppState>, id: i64) -> AppResult<Vec<FactEvent>> {
     let reader = state.vault().await?.db.reader().clone();
     Ok(memory::fact_history(&reader, id).await?)
+}
+
+/// MEM-8 (owner-gated, флаг `aiMemoryConsolidation`): ПОСЧИТАТЬ предложение консолидации для нового
+/// факта — НИЧЕГО не пишет. Семантически близкие факты + ОСНОВНАЯ модель (`ctx.ai.chat`, 27B) решают
+/// ADD/UPDATE/DELETE→supersede/NOOP. Нет модели/эмбеддера/индекса → fail-closed `Add` (фронт сделает
+/// обычный `memory_add`). Применение — отдельной командой [`memory_consolidate_apply`] после выбора.
+#[tauri::command]
+pub async fn memory_consolidate_plan(
+    state: State<'_, AppState>,
+    text: String,
+    source: Option<String>,
+) -> AppResult<ConsolidationPlan> {
+    let source = match source.as_deref() {
+        Some(SOURCE_AUTO) => SOURCE_AUTO,
+        _ => SOURCE_EXPLICIT,
+    };
+    let (reader, embedder, vectors, chat) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.reader().clone(),
+            ctx.ai.embedder.clone(),
+            ctx.memory_vectors.clone(),
+            ctx.ai.chat.clone(),
+        )
+    };
+    // Нет основной модели / эмбеддера / индекса → консолидация невозможна, fail-closed ADD.
+    let (Some(embedder), Some(vectors), Some(chat)) = (embedder, vectors, chat) else {
+        return Ok(ConsolidationPlan {
+            candidate: text.trim().to_string(),
+            source: source.to_string(),
+            op: PlanOp::Add,
+        });
+    };
+    Ok(consolidate::plan(&reader, &vectors, embedder.as_ref(), &chat, &text, source).await?)
+}
+
+/// MEM-8: ПРИМЕНИТЬ выбор пользователя к предложению — в одной транзакции (с optimistic-чеком), затем
+/// индексация по результату (best-effort, как `memory_add`). Возвращает что РЕАЛЬНО произошло
+/// ([`ConsolidationOutcome`]) — фронт покажет toast, будущий откат таргетит `opGroup`.
+#[tauri::command]
+pub async fn memory_consolidate_apply(
+    state: State<'_, AppState>,
+    plan: ConsolidationPlan,
+    choice: ConsolidationChoice,
+) -> AppResult<ConsolidationOutcome> {
+    let (writer, embedder, vectors) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.writer().clone(),
+            ctx.ai.embedder.clone(),
+            ctx.memory_vectors.clone(),
+        )
+    };
+    let candidate = plan.candidate.clone();
+    let outcome = consolidate::apply(&writer, plan, choice).await?;
+    if let (Some(emb), Some(vec)) = (embedder, vectors) {
+        match &outcome {
+            ConsolidationOutcome::Add { id, inserted } => {
+                if *inserted {
+                    let _ = memory::index_fact(&vec, emb.as_ref(), *id, candidate.trim()).await;
+                }
+            }
+            ConsolidationOutcome::Update { id, new_text, .. } => {
+                let _ = memory::index_fact(&vec, emb.as_ref(), *id, new_text).await;
+            }
+            ConsolidationOutcome::Supersede {
+                id,
+                superseded_id,
+                new_text,
+                inserted,
+                ..
+            } => {
+                if *inserted {
+                    let _ = memory::index_fact(&vec, emb.as_ref(), *id, new_text).await;
+                }
+                // Супридённый факт убираем из ANN-индекса — иначе всплыл бы в ретривале (хотя
+                // `facts_by_ids` его и отфильтрует по `superseded_by`, держим индекс в согласии с БД).
+                let _ = memory::unindex_fact(&vec, *superseded_id);
+            }
+            ConsolidationOutcome::Noop => {}
+        }
+    }
+    Ok(outcome)
 }
