@@ -192,7 +192,7 @@ impl GitSync {
 
         let mut out = Vec::new();
         for entry in statuses.iter() {
-            let Some(path) = entry.path() else { continue };
+            let Ok(path) = entry.path() else { continue };
             let s = entry.status();
             let kind = if s.is_wt_new() || s.is_index_new() {
                 ChangeKind::New
@@ -358,7 +358,7 @@ impl GitSync {
     /// URL remote `origin`, если задан.
     pub fn get_remote(&self) -> GitResult<Option<String>> {
         match self.repo.find_remote("origin") {
-            Ok(r) => Ok(r.url().map(str::to_string)),
+            Ok(r) => Ok(r.url().ok().map(str::to_string)),
             Err(_) => Ok(None),
         }
     }

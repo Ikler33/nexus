@@ -47,7 +47,7 @@ getrandom = { workspace = true }
 quick-xml = { workspace = true }
 # git-sync (Ф3): локальные + сетевые (pull/push по https). vendored libgit2 + vendored openssl →
 # кросс-платформенно без системных зависимостей (как usearch; +время сборки CI). ssh не включаем.
-git2 = { version = "0.20", default-features = false, features = [
+git2 = { version = "0.21", default-features = false, features = [
     "vendored-libgit2",
     "https",
     "vendored-openssl",
@@ -64,7 +64,7 @@ keyring = { version = "3", default-features = false, features = [
 [dev-dependencies]
 # Для интеграционных тестов git-sync (#12): создать локальный bare-remote (init_bare) и клон. Те же
 # фичи, что у обычной зависимости — Cargo унифицирует сборку (без второго билда libgit2).
-git2 = { version = "0.20", default-features = false, features = [
+git2 = { version = "0.21", default-features = false, features = [
     "vendored-libgit2",
     "https",
     "vendored-openssl",
