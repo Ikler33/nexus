@@ -68,6 +68,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const createNote = useVaultStore((s) => s.createNote);
   const reading = useUIStore((s) => s.reading);
   const openVersions = useUIStore((s) => s.openVersions);
+  const openTagFilter = useUIStore((s) => s.openTagFilter); // TAGCLICK-1: клик по #tag в превью → фильтр сайдбара
   const [dropTarget, setDropTarget] = useState(false);
   // EDIT-7: ссылка на скролл-контейнер пейна — в режиме чтения/превью оглавление скроллит к заголовку
   // по `data-outline-line` (CM6 в source-режиме скроллит сам). Реф своего пейна → корректно при сплитах.
@@ -290,6 +291,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                   source={active.doc}
                   notePath={active.path}
                   onOpenLink={(target) => void openLink(target)}
+                  onOpenTag={openTagFilter}
                   onToggleTask={(line) => {
                     // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
                     // toggleTaskAtLine вернёт null, если строка уже не таск (дрейф) — тогда no-op.

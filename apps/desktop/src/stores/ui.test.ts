@@ -83,3 +83,19 @@ describe('ui-стор: взаимоисключение оверлеев goals/t
     expect(useUIStore.getState().tasksOpen).toBe(false);
   });
 });
+
+describe('ui-стор: TAGCLICK-1 — отложенный тег-фильтр сайдбара', () => {
+  it('openTagFilter кладёт тег, показывает сайдбар и выходит из reading', () => {
+    useUIStore.setState({ pendingTagFilter: null, sidebarOpen: false, reading: true });
+    useUIStore.getState().openTagFilter('ideas');
+    const s = useUIStore.getState();
+    expect(s.pendingTagFilter).toBe('ideas');
+    expect(s.sidebarOpen).toBe(true);
+    expect(s.reading).toBe(false);
+  });
+  it('consumeTagFilter сбрасывает отложенный тег', () => {
+    useUIStore.setState({ pendingTagFilter: 'ideas' });
+    useUIStore.getState().consumeTagFilter();
+    expect(useUIStore.getState().pendingTagFilter).toBeNull();
+  });
+});

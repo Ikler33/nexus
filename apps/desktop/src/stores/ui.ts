@@ -128,6 +128,13 @@ interface UIState {
   /** Открыть раздел настроек сразу на нужной секции. */
   openSettings: (section?: SettingsSection) => void;
   setAiTab: (tab: AiTab) => void;
+  /** TAGCLICK-1: «отложенный» тег-фильтр — клик по `#tag`-чипу в превью просит сайдбар открыть панель
+   *  поиска с ТОЧНЫМ фильтром по тегу. Сайдбар читает значение и сбрасывает его (consumeTagFilter). */
+  pendingTagFilter: string | null;
+  /** Запросить фильтр сайдбара по тегу (показывает сайдбар, выходит из reading-режима). */
+  openTagFilter: (tag: string) => void;
+  /** Сбросить отложенный тег-фильтр (сайдбар вызывает после применения). */
+  consumeTagFilter: () => void;
 }
 
 /**
@@ -315,4 +322,8 @@ export const useUIStore = create<UIState>((set) => ({
     set({ tweaksOpen: true, settingsSection: section });
   },
   setAiTab: (tab) => set({ aiTab: tab }),
+  pendingTagFilter: null,
+  // Показать сайдбар и выйти из reading (там сайдбар скрыт), иначе фильтр применится незаметно.
+  openTagFilter: (tag) => set({ pendingTagFilter: tag, sidebarOpen: true, reading: false }),
+  consumeTagFilter: () => set({ pendingTagFilter: null }),
 }));
