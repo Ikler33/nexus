@@ -16,6 +16,12 @@ let seq = 1;
 let clock = 1_700_000_000; // монотонные «секунды» (без Date — детерминизм в тестах)
 let opGroupSeq = 1;
 
+/** MEM-8c-b: лог откатываемых операций по `opGroup` (мок не хранит события — держим обратимость явно). */
+type UndoAction =
+  | { kind: 'update'; factId: number; oldText: string; newText: string }
+  | { kind: 'supersede'; restore: MemoryFact; newId: number; newText: string };
+let undoLog = new Map<number, UndoAction>();
+
 const sorted = (): MemoryFact[] =>
   [...facts].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt);
 
@@ -105,8 +111,10 @@ export async function consolidateApply(
     const target = facts.find((f) => f.id === op.targetId);
     if (!target || target.text !== op.oldText) return addCandidate(); // optimistic-деградация
     if (op.newText === op.oldText) return { op: 'noop' }; // backend: правка без изменения → Noop (без события)
+    const group = opGroupSeq++;
+    undoLog.set(group, { kind: 'update', factId: target.id, oldText: op.oldText, newText: op.newText });
     target.text = op.newText;
-    return { op: 'update', id: target.id, oldText: op.oldText, newText: op.newText, opGroup: opGroupSeq++ };
+    return { op: 'update', id: target.id, oldText: op.oldText, newText: op.newText, opGroup: group };
   }
 
   // supersede
@@ -116,6 +124,9 @@ export async function consolidateApply(
   const added = addCandidate();
   // Кандидат совпал с другим ЖИВЫМ фактом (не создан) → не супридим (backend-инвариант `!inserted`).
   if (added.op !== 'add' || !added.inserted) return added;
+  const group = opGroupSeq++;
+  const removed = facts.find((f) => f.id === op.targetId); // ещё в списке (addCandidate не трогал)
+  if (removed) undoLog.set(group, { kind: 'supersede', restore: { ...removed }, newId: added.id, newText: cand });
   facts = facts.filter((f) => f.id !== op.targetId); // soft-supersede: target вне живого списка
   return {
     op: 'supersede',
@@ -124,8 +135,27 @@ export async function consolidateApply(
     oldText: op.oldText,
     newText: cand,
     inserted: true,
-    opGroup: opGroupSeq++,
+    opGroup: group,
   };
+}
+
+/** MEM-8c-b: откат группы — зеркалит `consolidate::undo` на observable-уровне (urok «Mock must match
+ *  backend»). Реверсит по `undoLog`: update→вернуть текст; supersede→удалить новый + восстановить старый.
+ *  Optimistic: реверсим только если состояние не правили после (текст нового/целевого == ожидаемый). */
+export async function consolidateUndo(opGroup: number): Promise<boolean> {
+  const a = undoLog.get(opGroup);
+  if (!a) return false;
+  undoLog.delete(opGroup);
+  if (a.kind === 'update') {
+    const f = facts.find((x) => x.id === a.factId);
+    if (f && f.text === a.newText) f.text = a.oldText; // не правили после → откат
+    return true;
+  }
+  // supersede: удалить новый (если не правили), восстановить старый
+  const newF = facts.find((x) => x.id === a.newId);
+  if (newF && newF.text === a.newText) facts = facts.filter((x) => x.id !== a.newId);
+  if (!facts.some((x) => x.id === a.restore.id)) facts.push(a.restore);
+  return true;
 }
 
 /** Сброс для тестов. */
@@ -134,4 +164,5 @@ export function __reset(): void {
   seq = 1;
   clock = 1_700_000_000;
   opGroupSeq = 1;
+  undoLog = new Map();
 }

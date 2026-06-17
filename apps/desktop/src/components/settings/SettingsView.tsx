@@ -388,6 +388,8 @@ function AiSection() {
   const setAiAgentMemory = usePrefsStore((s) => s.setAiAgentMemory);
   const aiMemoryConsolidation = usePrefsStore((s) => s.aiMemoryConsolidation);
   const setAiMemoryConsolidation = usePrefsStore((s) => s.setAiMemoryConsolidation);
+  const aiMemoryConsolidationMode = usePrefsStore((s) => s.aiMemoryConsolidationMode);
+  const setAiMemoryConsolidationMode = usePrefsStore((s) => s.setAiMemoryConsolidationMode);
   const aiExplainRelations = usePrefsStore((s) => s.aiExplainRelations);
   const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
   const openMemory = useUIStore((s) => s.openMemory);
@@ -534,6 +536,29 @@ function AiSection() {
         onChange={setAiMemoryConsolidation}
         disabled={!aiAgentMemory}
       />
+      {/* MEM-8c-b: режим консолидации — «Предлагать» (через чип) ↔ «Авто» (применять молча, с undo).
+          Виден только когда консолидация реально включена. */}
+      {aiMemoryConsolidation && aiAgentMemory && (
+        <section className={styles.group}>
+          <div className={styles.rowText}>
+            <span className={styles.label}>{t('settings.aiSec.consolidationMode')}</span>
+            <span className={styles.rowDesc}>{t('settings.aiSec.consolidationModeDesc')}</span>
+          </div>
+          <div className={styles.seg}>
+            {(['propose', 'auto'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`${styles.segBtn} ${aiMemoryConsolidationMode === m ? styles.on : ''}`}
+                onClick={() => setAiMemoryConsolidationMode(m)}
+                aria-pressed={aiMemoryConsolidationMode === m}
+              >
+                {t(`settings.aiSec.consolidationModeOpts.${m}`)}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <div className={styles.saveBar}>
         <button type="button" className={styles.ghostBtn} onClick={openMemory}>
           {t('settings.aiSec.manageMemory')}

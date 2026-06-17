@@ -539,7 +539,7 @@ describe('chat store (Ф1-8)', () => {
       const planObj: ConsolidationPlan = {
         candidate: 'дедлайн среда',
         source: 'auto',
-        op: { kind: 'supersede', targetId: 7, oldText: 'дедлайн пятница' },
+        op: { kind: 'supersede', targetId: 7, oldText: 'дедлайн пятница', targetSource: 'auto' },
       };
       vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
       const apply = vi.spyOn(tauriApi.memory, 'consolidateApply');
@@ -574,7 +574,7 @@ describe('chat store (Ф1-8)', () => {
       const planObj: ConsolidationPlan = {
         candidate: 'среда',
         source: 'auto',
-        op: { kind: 'supersede', targetId: 7, oldText: 'пятница' },
+        op: { kind: 'supersede', targetId: 7, oldText: 'пятница', targetSource: 'auto' },
       };
       const apply = vi.spyOn(tauriApi.memory, 'consolidateApply').mockResolvedValue({
         op: 'supersede',
@@ -601,7 +601,7 @@ describe('chat store (Ф1-8)', () => {
       const planObj: ConsolidationPlan = {
         candidate: 'b',
         source: 'auto',
-        op: { kind: 'update', targetId: 1, oldText: 'a', newText: 'a b' },
+        op: { kind: 'update', targetId: 1, oldText: 'a', newText: 'a b', targetSource: 'auto' },
       };
       const apply = vi
         .spyOn(tauriApi.memory, 'consolidateApply')
@@ -620,7 +620,7 @@ describe('chat store (Ф1-8)', () => {
       const planObj: ConsolidationPlan = {
         candidate: 'x',
         source: 'auto',
-        op: { kind: 'update', targetId: 1, oldText: 'a', newText: 'ab' },
+        op: { kind: 'update', targetId: 1, oldText: 'a', newText: 'ab', targetSource: 'auto' },
       };
       useChatStore.setState({
         pendingConsolidation: { messageId: 'a1', plan: planObj },
@@ -658,12 +658,162 @@ describe('chat store (Ф1-8)', () => {
       resolvePlan({
         candidate: 'старый',
         source: 'auto',
-        op: { kind: 'supersede', targetId: 1, oldText: 'o' },
+        op: { kind: 'supersede', targetId: 1, oldText: 'o', targetSource: 'auto' },
       });
       const r = await pending;
       expect(r).toBe('noop');
       expect(apply).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
+    });
+  });
+
+  // MEM-8c: авто-режим консолидации (применять слияния/замещения молча, кроме explicit-фактов).
+  describe('MEM-8c авто-режим консолидации', () => {
+    afterEach(() =>
+      usePrefsStore.setState({ aiMemoryConsolidation: false, aiMemoryConsolidationMode: 'propose' }),
+    );
+    const onAuto = () =>
+      usePrefsStore.setState({
+        aiMemoryConsolidation: true,
+        aiAgentMemory: true,
+        aiMemoryConsolidationMode: 'auto',
+      });
+
+    it('авто-режим, supersede на AUTO-факт → авто-применено + autoConsolidated, без чипа', async () => {
+      onAuto();
+      const planObj: ConsolidationPlan = {
+        candidate: 'дедлайн среда',
+        source: 'auto',
+        op: { kind: 'supersede', targetId: 7, oldText: 'дедлайн пятница', targetSource: 'auto' },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      const apply = vi.spyOn(tauriApi.memory, 'consolidateApply').mockResolvedValue({
+        op: 'supersede',
+        id: 2,
+        supersededId: 7,
+        oldText: 'дедлайн пятница',
+        newText: 'дедлайн среда',
+        inserted: true,
+        opGroup: 5,
+      });
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'дедлайн среда' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('autoConsolidated');
+      expect(apply).toHaveBeenCalledWith(planObj, 'accept');
+      expect(useChatStore.getState().pendingConsolidation).toBeNull();
+      expect(useChatStore.getState().autoConsolidated).toMatchObject({
+        op: 'supersede',
+        opGroup: 5,
+        oldText: 'дедлайн пятница',
+        newText: 'дедлайн среда',
+      });
+    });
+
+    it('авто-режим, но цель EXPLICIT → чип (защита §4.3), НЕ авто-применяем', async () => {
+      onAuto();
+      const planObj: ConsolidationPlan = {
+        candidate: 'новый',
+        source: 'auto',
+        op: { kind: 'supersede', targetId: 7, oldText: 'явный факт юзера', targetSource: 'explicit' },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      const apply = vi.spyOn(tauriApi.memory, 'consolidateApply');
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'новый' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('proposed');
+      expect(apply).not.toHaveBeenCalled();
+      expect(useChatStore.getState().pendingConsolidation).toEqual({ messageId: 'a1', plan: planObj });
+      expect(useChatStore.getState().autoConsolidated).toBeNull();
+    });
+
+    it('авто-режим, update на AUTO-факт → авто-применено + autoConsolidated', async () => {
+      onAuto();
+      const planObj: ConsolidationPlan = {
+        candidate: 'x',
+        source: 'auto',
+        op: { kind: 'update', targetId: 1, oldText: 'a', newText: 'a b', targetSource: 'auto' },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      vi.spyOn(tauriApi.memory, 'consolidateApply').mockResolvedValue({
+        op: 'update',
+        id: 1,
+        oldText: 'a',
+        newText: 'a b',
+        opGroup: 9,
+      });
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'x' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('autoConsolidated');
+      expect(useChatStore.getState().autoConsolidated).toMatchObject({ op: 'update', opGroup: 9 });
+    });
+
+    it('режим «Предлагать» (дефолт) — supersede всё равно через чип (8b сохранён)', async () => {
+      usePrefsStore.setState({
+        aiMemoryConsolidation: true,
+        aiAgentMemory: true,
+        aiMemoryConsolidationMode: 'propose',
+      });
+      const planObj: ConsolidationPlan = {
+        candidate: 'x',
+        source: 'auto',
+        op: { kind: 'supersede', targetId: 1, oldText: 'o', targetSource: 'auto' },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      const apply = vi.spyOn(tauriApi.memory, 'consolidateApply');
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'x' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('proposed');
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it('авто-режим, degraded-to-add (outcome.op=add) → written, без autoConsolidated', async () => {
+      onAuto();
+      const planObj: ConsolidationPlan = {
+        candidate: 'x',
+        source: 'auto',
+        op: { kind: 'supersede', targetId: 7, oldText: 'устаревший', targetSource: 'auto' },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      vi.spyOn(tauriApi.memory, 'consolidateApply').mockResolvedValue({
+        op: 'add',
+        id: 3,
+        inserted: true,
+      });
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'x' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('written');
+      expect(useChatStore.getState().autoConsolidated).toBeNull();
+    });
+
+    it('авто-режим, цель с НЕИЗВЕСТНЫМ source → чип (fail-closed §4.3, не молчаливый apply)', async () => {
+      onAuto();
+      const planObj: ConsolidationPlan = {
+        candidate: 'новый',
+        source: 'auto',
+        // source не 'auto' (напр. будущий imported/synced или регрессия бэка) — fail-closed: НЕ авто.
+        op: {
+          kind: 'supersede',
+          targetId: 7,
+          oldText: 'импортированный факт',
+          targetSource: 'imported' as 'auto',
+        },
+      };
+      vi.spyOn(tauriApi.memory, 'consolidatePlan').mockResolvedValue(planObj);
+      const apply = vi.spyOn(tauriApi.memory, 'consolidateApply');
+      useChatStore.setState({ pendingFact: { messageId: 'a1', text: 'новый' } });
+      const r = await useChatStore.getState().confirmFact();
+      expect(r).toBe('proposed');
+      expect(apply).not.toHaveBeenCalled();
+      expect(useChatStore.getState().autoConsolidated).toBeNull();
+    });
+
+    it('undoConsolidation зовёт consolidateUndo по opGroup и пробрасывает исход', async () => {
+      const undo = vi.spyOn(tauriApi.memory, 'consolidateUndo').mockResolvedValue(true);
+      await expect(useChatStore.getState().undoConsolidation(5)).resolves.toBe(true);
+      expect(undo).toHaveBeenCalledWith(5);
+      // false (факт уже изменён / группа откачена) проброшен честно — тост не соврёт «Отменено».
+      undo.mockResolvedValue(false);
+      await expect(useChatStore.getState().undoConsolidation(5)).resolves.toBe(false);
     });
   });
 

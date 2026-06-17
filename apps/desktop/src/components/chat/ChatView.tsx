@@ -68,6 +68,10 @@ export function ChatView() {
   const acknowledgeSavedFact = useChatStore((s) => s.acknowledgeSavedFact);
   const undoSavedFact = useChatStore((s) => s.undoSavedFact);
   const explicitSaving = useChatStore((s) => s.explicitSaving);
+  // MEM-8c: авто-применённая консолидация (режим «Авто») — undo-тост.
+  const autoConsolidated = useChatStore((s) => s.autoConsolidated);
+  const acknowledgeAutoConsolidated = useChatStore((s) => s.acknowledgeAutoConsolidated);
+  const undoConsolidation = useChatStore((s) => s.undoConsolidation);
 
   // MEM-5: тост по исходу сразу-сохранения. saved → «Запомнил: «…»» + «Отменить» (удаляем ТОЛЬКО
   // реально созданный факт); duplicate → «Уже в памяти» (без отмены — не трогаем существующий);
@@ -96,6 +100,37 @@ export function ChatView() {
       addToast(t('chat.memoryNothing'), { kind: 'info' });
     }
   }, [savedFact, acknowledgeSavedFact, undoSavedFact, t]);
+
+  // MEM-8c: тост авто-консолидации (режим «Авто») — «Объединил/Заменил» + «Отменить» (откат группы).
+  // Молчаливое слияние/замещение → юзер видит, ЧТО произошло, и может мгновенно откатить (обратимость).
+  useEffect(() => {
+    if (!autoConsolidated) return;
+    const a = autoConsolidated;
+    acknowledgeAutoConsolidated();
+    // Тост уместен только если обмен ещё на ленте (как у savedFact/captureFromMessage) — иначе всплыл бы
+    // на сменившейся/пустой ленте. Данные уже записаны и обратимы по opGroup, так что это лишь косметика.
+    if (!useChatStore.getState().messages.some((m) => m.id === a.messageId)) return;
+    const msg =
+      a.op === 'supersede'
+        ? t('chat.consolidateAutoReplaced', { old: a.oldText, new: a.newText })
+        : t('chat.consolidateAutoMerged', { text: a.newText });
+    useToastStore.getState().addToast(msg, {
+      kind: 'success',
+      action: {
+        label: t('chat.memoryUndo'),
+        // Честный тост: показываем «Отменено» только если бэкенд реально откатил (reverted===true);
+        // иначе (факт изменён руками / группа уже откачена) — «не удалось откатить», а не ложь об успехе.
+        run: () =>
+          void undoConsolidation(a.opGroup).then((reverted) =>
+            useToastStore
+              .getState()
+              .addToast(reverted ? t('chat.consolidateUndone') : t('chat.consolidateUndoFailed'), {
+                kind: reverted ? 'info' : 'error',
+              }),
+          ),
+      },
+    });
+  }, [autoConsolidated, acknowledgeAutoConsolidated, undoConsolidation, t]);
 
   const [input, setInput] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);

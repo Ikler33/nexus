@@ -474,8 +474,15 @@ export interface MemoryAddResult {
  *  `supersede` — новый противоречит `targetId` (старый устарел); `noop` — уже покрыт `coveredBy`. */
 export type ConsolidationPlanOp =
   | { kind: 'add' }
-  | { kind: 'update'; targetId: number; oldText: string; newText: string }
-  | { kind: 'supersede'; targetId: number; oldText: string }
+  | {
+      kind: 'update';
+      targetId: number;
+      oldText: string;
+      newText: string;
+      /** Источник целевого факта ('explicit'|'auto') — авто-режим не переписывает молча explicit (§4.3). */
+      targetSource: string;
+    }
+  | { kind: 'supersede'; targetId: number; oldText: string; targetSource: string }
   | { kind: 'noop'; coveredBy: number };
 
 /** MEM-8: предложение консолидации (round-trip plan → чип → apply). */
@@ -1367,6 +1374,13 @@ export const tauriApi = {
       isTauri()
         ? invoke<ConsolidationOutcome>('memory_consolidate_apply', { plan, choice })
         : mockMemory.consolidateApply(plan, choice),
+
+    /** MEM-8c-b: откатить группу консолидации по `opGroup` (undo авто-режима, §4.6). `true` — что-то
+     *  реально откатилось. Optimistic-безопасно (правка юзера не теряется). */
+    consolidateUndo: (opGroup: number): Promise<boolean> =>
+      isTauri()
+        ? invoke<boolean>('memory_consolidate_undo', { opGroup })
+        : mockMemory.consolidateUndo(opGroup),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).

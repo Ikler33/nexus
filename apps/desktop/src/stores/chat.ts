@@ -33,10 +33,21 @@ export type SaveResult =
   | { status: 'error' }
   | { status: 'nothing' };
 
-/** MEM-8b: исход подтверждения авто-факта. `written` — факт записан (тост «сохранено»);
+/** MEM-8b/8c: исход подтверждения авто-факта. `written` — факт записан (тост «сохранено»);
  *  `proposed` — консолидация предложила слияние/замещение, показан чип-предложение (без тоста);
- *  `noop` — нечего/уже покрыто; `error` — сбой записи. ChatView маппит на тост. */
-export type ConfirmFactResult = 'written' | 'proposed' | 'noop' | 'error';
+ *  `autoConsolidated` (8c авто-режим) — слияние/замещение применено молча, ChatView покажет undo-тост
+ *  (поле `autoConsolidated`); `noop` — нечего/уже покрыто; `error` — сбой. ChatView маппит на тост. */
+export type ConfirmFactResult = 'written' | 'proposed' | 'autoConsolidated' | 'noop' | 'error';
+
+/** MEM-8c: авто-применённая консолидация (для undo-тоста, паттерн `savedFact`). `op` — что сделали,
+ *  `opGroup` — для отката. `null` — нет. */
+export type AutoConsolidation = {
+  messageId: string;
+  op: 'update' | 'supersede';
+  oldText: string;
+  newText: string;
+  opGroup: number;
+} | null;
 
 export interface ChatMessage {
   id: string;
@@ -150,6 +161,12 @@ interface ChatState {
   resolveConsolidation: (choice: ConsolidationChoice) => Promise<ConfirmFactResult>;
   /** MEM-8b: отклонить предложение целиком — НИЧЕГО не пишем (юзер передумал), продвигаем очередь. */
   dismissConsolidation: () => void;
+  /** MEM-8c: авто-применённая консолидация (режим «Авто») — для undo-тоста; `null` — нет. */
+  autoConsolidated: AutoConsolidation;
+  /** MEM-8c: ChatView показал undo-тост авто-консолидации → сбросить (одноразово). */
+  acknowledgeAutoConsolidated: () => void;
+  /** MEM-8c: «Отменить» авто-консолидацию по `opGroup` (откат группы) + обновить панель памяти. */
+  undoConsolidation: (opGroup: number) => Promise<boolean>;
   /** MEM-5: результат сразу-сохранения (явная команда «запомни …» / кнопка «В память»). ChatView
    *  показывает тост по `status` и сбрасывает. `saved` несёт `id` для «Отменить» (удаляем ТОЛЬКО реально
    *  созданный факт — `duplicate` уже был, без отмены; `error`/`nothing` — честные тосты). */
@@ -307,6 +324,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     pendingFact: null,
     pendingFactQueue: [],
     pendingConsolidation: null,
+    autoConsolidated: null,
     savedFact: null,
     explicitSaving: false,
     capturingId: null,
@@ -354,7 +372,36 @@ export const useChatStore = create<ChatState>((set, get) => {
         advanceQueue(pf.messageId); // уже покрыто близким фактом — Accept-noop ничего не пишет
         return 'noop';
       }
-      // update / supersede → предложение пользователю (прячем fact-чип, очередь НЕ двигаем до решения).
+      // update / supersede.
+      // MEM-8c: защита explicit-фактов (§4.3) — явный факт юзера НЕ переписываем/не супридим молча,
+      // даже в авто-режиме (всегда через чип). Fail-closed: молча применяем ТОЛЬКО к цели с source==='auto';
+      // любой другой/неизвестный/пустой source (explicit, будущий imported/synced, регрессия бэка) → чип.
+      const targetAuto =
+        (plan.op.kind === 'update' || plan.op.kind === 'supersede') &&
+        plan.op.targetSource === 'auto';
+      if (prefs.aiMemoryConsolidationMode === 'auto' && targetAuto) {
+        advanceQueue(pf.messageId);
+        try {
+          const outcome = await tauriApi.memory.consolidateApply(plan, 'accept');
+          void useMemoryStore.getState().load();
+          if (outcome.op === 'update' || outcome.op === 'supersede') {
+            set({
+              autoConsolidated: {
+                messageId: pf.messageId,
+                op: outcome.op,
+                oldText: outcome.oldText,
+                newText: outcome.newText,
+                opGroup: outcome.opGroup,
+              },
+            });
+            return 'autoConsolidated';
+          }
+          return 'written'; // деградировало в add (optimistic) — обычный «сохранено»
+        } catch {
+          return 'error';
+        }
+      }
+      // Режим «Предлагать» ИЛИ explicit-цель → чип-предложение (прячем fact-чип, очередь НЕ двигаем).
       set({ pendingConsolidation: { messageId: pf.messageId, plan }, pendingFact: null });
       return 'proposed';
     },
@@ -382,6 +429,21 @@ export const useChatStore = create<ChatState>((set, get) => {
       if (!pc) return;
       set({ pendingConsolidation: null });
       advanceQueue(pc.messageId);
+    },
+    acknowledgeAutoConsolidated() {
+      if (get().autoConsolidated) set({ autoConsolidated: null });
+    },
+    undoConsolidation(opGroup) {
+      // «Отменить» авто-консолидацию — откат группы (восстановить старый / удалить новый / вернуть текст).
+      // Возвращаем РЕАЛЬНЫЙ исход бэкенда: false = ничего не откатили (факт изменён руками после слияния /
+      // группа уже откачена) — тогда тост не должен врать «Отменено». true = откат состоялся.
+      return tauriApi.memory
+        .consolidateUndo(opGroup)
+        .then((reverted) => {
+          void useMemoryStore.getState().load();
+          return reverted;
+        })
+        .catch(() => false);
     },
     acknowledgeSavedFact() {
       if (get().savedFact) set({ savedFact: null });
@@ -474,6 +536,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         pendingFact: null,
         pendingFactQueue: [],
         pendingConsolidation: null,
+        autoConsolidated: null,
         explicitSaving: explicit,
       }));
 
@@ -648,6 +711,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         pendingFact: null,
         pendingFactQueue: [],
         pendingConsolidation: null,
+        autoConsolidated: null,
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
@@ -670,6 +734,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         pendingFact: null,
         pendingFactQueue: [],
         pendingConsolidation: null,
+        autoConsolidated: null,
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
@@ -727,6 +792,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           pendingFact: null,
           pendingFactQueue: [],
           pendingConsolidation: null,
+          autoConsolidated: null,
           savedFact: null,
           explicitSaving: false,
           capturingId: null,
@@ -746,6 +812,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         pendingFact: null,
         pendingFactQueue: [],
         pendingConsolidation: null,
+        autoConsolidated: null,
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
