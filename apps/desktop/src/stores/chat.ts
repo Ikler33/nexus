@@ -124,10 +124,14 @@ interface ChatState {
    *  модели, ожидающий подтверждения чипом «Запомнить? ✓/✗». `null` — нет предложения. `messageId`
    *  привязывает чип к конкретному ответу (не показываем под устаревшим). */
   pendingFact: { messageId: string; text: string } | null;
-  /** MEM-3: подтвердить предложенный факт → пишем в память агента (`source='auto'`), чип убираем.
-   *  Промис реджектится при сбое записи (компонент показывает toast). */
+  /** MEM-9: очередь ОСТАЛЬНЫХ извлечённых из того же обмена фактов (модель может предложить N).
+   *  Показываем по одному чипу (`pendingFact`); подтверждение/отклонение продвигает очередь к
+   *  следующему. Привязана к `pendingFact.messageId`; чистится теми же путями, что `pendingFact`. */
+  pendingFactQueue: string[];
+  /** MEM-3: подтвердить предложенный факт → пишем в память агента (`source='auto'`), чип убираем
+   *  (или продвигаем к следующему из очереди MEM-9). Промис реджектится при сбое записи. */
   confirmFact: () => Promise<void>;
-  /** MEM-3: отклонить предложенный факт — просто убрать чип, в БД НИЧЕГО не пишем (D1). */
+  /** MEM-3: отклонить предложенный факт — в БД НИЧЕГО не пишем (D1), убираем чип (или следующий из очереди). */
   dismissFact: () => void;
   /** MEM-5: результат сразу-сохранения (явная команда «запомни …» / кнопка «В память»). ChatView
    *  показывает тост по `status` и сбрасывает. `saved` несёт `id` для «Отменить» (удаляем ТОЛЬКО реально
@@ -230,14 +234,22 @@ export const useChatStore = create<ChatState>((set, get) => {
     if (!userText.trim() || !assistantText.trim()) return;
     void tauriApi.memory
       .propose(userText, assistantText)
-      .then((fact) => {
-        const text = (fact ?? '').trim();
-        if (!text) return;
+      .then((facts) => {
+        const list = facts.map((f) => f.trim()).filter(Boolean);
+        if (!list.length) return;
         if (get().streaming) return; // уже идёт новый обмен
         if (get().messages.at(-1)?.id !== replyId) return; // ответ устарел
-        set({ pendingFact: { messageId: replyId, text } });
+        // MEM-9: первый факт — в чип, остальные — в очередь (триаж по одному).
+        set({ pendingFact: { messageId: replyId, text: list[0] }, pendingFactQueue: list.slice(1) });
       })
       .catch(() => {});
+  };
+
+  // MEM-9: после подтверждения/отклонения чипа продвигаем очередь к следующему факту того же обмена.
+  const advanceQueue = (messageId: string) => {
+    const q = get().pendingFactQueue;
+    if (q.length) set({ pendingFact: { messageId, text: q[0] }, pendingFactQueue: q.slice(1) });
+    else set({ pendingFact: null, pendingFactQueue: [] });
   };
 
   // MEM-5: ЯВНОЕ сохранение факта (команда «запомни …» или кнопка «В память»). Явная команда =
@@ -248,7 +260,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     userText: string,
     assistantText: string,
   ): Promise<SaveResult> => {
-    let fact = (await tauriApi.memory.propose(userText, assistantText).catch(() => null))?.trim();
+    // Явное «запомни …» — смысл один: берём первый из предложенных (MEM-9 propose → массив).
+    const proposed = await tauriApi.memory
+      .propose(userText, assistantText)
+      .catch(() => [] as string[]);
+    let fact = proposed[0]?.trim();
     if (!fact) fact = stripSaveCommand(userText); // фолбэк: срезать команду
     if (!fact) return { status: 'nothing' };
     try {
@@ -272,6 +288,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     pinned: [],
     sessionId: null,
     pendingFact: null,
+    pendingFactQueue: [],
     savedFact: null,
     explicitSaving: false,
     capturingId: null,
@@ -279,13 +296,14 @@ export const useChatStore = create<ChatState>((set, get) => {
     confirmFact() {
       const pf = get().pendingFact;
       if (!pf) return Promise.resolve();
-      set({ pendingFact: null });
+      advanceQueue(pf.messageId); // MEM-9: показать следующий факт обмена (или снять чип)
       // Подтверждённое авто (D1): пишем с source='auto'. Промис наверх — компонент решает про toast.
       return tauriApi.memory.add(pf.text, 'auto').then(() => {});
     },
     dismissFact() {
-      // Отказ (D1): ничего не пишем, просто снимаем чип.
-      if (get().pendingFact) set({ pendingFact: null });
+      // Отказ (D1): ничего не пишем, продвигаем очередь к следующему (или снимаем чип).
+      const pf = get().pendingFact;
+      if (pf) advanceQueue(pf.messageId);
     },
     acknowledgeSavedFact() {
       if (get().savedFact) set({ savedFact: null });
@@ -376,6 +394,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         messages: [...s.messages, userMsg, reply],
         streaming: true,
         pendingFact: null,
+        pendingFactQueue: [],
         explicitSaving: explicit,
       }));
 
@@ -545,7 +564,14 @@ export const useChatStore = create<ChatState>((set, get) => {
       disclosureOpen.clear();
       if (get().streaming) return;
       // MEM-5: сброс транзиентного состояния захвата (индикатор/чип не висят на пустой ленте).
-      set({ messages: [], pendingFact: null, savedFact: null, explicitSaving: false, capturingId: null });
+      set({
+        messages: [],
+        pendingFact: null,
+        pendingFactQueue: [],
+        savedFact: null,
+        explicitSaving: false,
+        capturingId: null,
+      });
       save();
     },
 
@@ -562,6 +588,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         sessionId: null,
         pinned: [],
         pendingFact: null,
+        pendingFactQueue: [],
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
@@ -617,6 +644,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           messages: restored,
           sessionId: id,
           pendingFact: null,
+          pendingFactQueue: [],
           savedFact: null,
           explicitSaving: false,
           capturingId: null,
@@ -634,6 +662,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         messages: [],
         sessionId: null,
         pendingFact: null,
+        pendingFactQueue: [],
         savedFact: null,
         explicitSaving: false,
         capturingId: null,
