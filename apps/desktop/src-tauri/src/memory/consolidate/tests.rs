@@ -5,7 +5,7 @@
 use super::*;
 use crate::ai::{AiError, AiResult, MockEmbedder};
 use crate::db::Database;
-use crate::memory::{add, fact_history, index_fact, list, SOURCE_EXPLICIT};
+use crate::memory::{add, fact_history, index_fact, list, SOURCE_AUTO, SOURCE_EXPLICIT};
 use crate::vector::VectorIndex;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -299,7 +299,8 @@ async fn plan_neighbor_delete_maps_to_supersede() {
         p.op,
         PlanOp::Supersede {
             target_id: old,
-            old_text: "дедлайн проекта в пятницу точно".into()
+            old_text: "дедлайн проекта в пятницу точно".into(),
+            target_source: "explicit".into(),
         },
         "DELETE замаплен в supersede по реальному id"
     );
@@ -341,7 +342,8 @@ async fn plan_neighbor_update_maps_to_update() {
         PlanOp::Update {
             target_id: old,
             old_text: "пользователь любит зелёный чай".into(),
-            new_text: "пользователь любит зелёный чай без сахара".into()
+            new_text: "пользователь любит зелёный чай без сахара".into(),
+            target_source: "explicit".into(),
         }
     );
 }
@@ -423,6 +425,7 @@ async fn apply_update_merges_and_logs() {
             target_id: old,
             old_text: "пьёт кофе".into(),
             new_text: "пьёт кофе по утрам".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -471,6 +474,7 @@ async fn apply_update_stale_target_degrades_to_add() {
             target_id: old,
             old_text: "исходный текст факта".into(), // снимок устарел
             new_text: "слитый текст".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -506,6 +510,7 @@ async fn apply_supersede_adds_new_and_retires_old() {
         op: PlanOp::Supersede {
             target_id: old,
             old_text: "дедлайн пятница".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -545,6 +550,7 @@ async fn apply_supersede_keep_separate_keeps_both() {
         op: PlanOp::Supersede {
             target_id: old,
             old_text: "дедлайн пятница".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::KeepSeparate)
@@ -584,6 +590,7 @@ async fn apply_supersede_already_retired_degrades_to_add() {
         op: PlanOp::Supersede {
             target_id: old,
             old_text: "старый факт гонки".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -710,6 +717,7 @@ async fn apply_supersede_candidate_is_other_live_fact_degrades() {
         op: PlanOp::Supersede {
             target_id: target,
             old_text: "дедлайн пятница".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -748,6 +756,7 @@ async fn apply_supersede_new_fact_shares_op_group() {
         op: PlanOp::Supersede {
             target_id: old,
             old_text: "старый дедлайн".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -779,6 +788,7 @@ async fn apply_update_noop_when_text_unchanged() {
             target_id: id,
             old_text: "факт без изменений".into(),
             new_text: "факт без изменений".into(),
+            target_source: "explicit".into(),
         },
     };
     let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
@@ -813,4 +823,185 @@ async fn apply_add_live_duplicate_is_not_inserted() {
         }
     ));
     assert_eq!(list(db.reader()).await.unwrap().len(), 1);
+}
+
+// ── undo: откат группы консолидации (MEM-8c-b) ────────────────────────────────────────────────
+
+/// Откат SUPERSEDE: старый факт возвращается живым, новый удаляется.
+#[tokio::test]
+async fn undo_supersede_restores_old_deletes_new() {
+    let (_d, db) = open().await;
+    let old = add(db.writer(), "дедлайн пятница", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let plan = ConsolidationPlan {
+        candidate: "дедлайн среда".into(),
+        source: SOURCE_EXPLICIT.into(),
+        op: PlanOp::Supersede {
+            target_id: old,
+            old_text: "дедлайн пятница".into(),
+            target_source: SOURCE_EXPLICIT.into(),
+        },
+    };
+    let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
+        .await
+        .unwrap();
+    let (new_id, group) = match out {
+        ConsolidationOutcome::Supersede { id, op_group, .. } => (id, op_group),
+        o => panic!("ожидался Supersede, получено {o:?}"),
+    };
+    assert_eq!(
+        list(db.reader()).await.unwrap().len(),
+        1,
+        "до отката — только новый"
+    );
+
+    let u = undo(db.writer(), group).await.unwrap();
+    assert!(u.reverted());
+    let facts = list(db.reader()).await.unwrap();
+    assert_eq!(facts.len(), 1, "старый вернулся, новый удалён");
+    assert_eq!(facts[0].id, old);
+    assert_eq!(facts[0].text, "дедлайн пятница");
+    assert_eq!(superseded_by(&db, old).await, None, "старый снова жив");
+    assert!(!facts.iter().any(|f| f.id == new_id), "новый удалён");
+}
+
+/// Откат UPDATE: текст факта возвращается к старому.
+#[tokio::test]
+async fn undo_update_reverts_text() {
+    let (_d, db) = open().await;
+    let id = add(db.writer(), "пьёт кофе", SOURCE_AUTO)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let plan = ConsolidationPlan {
+        candidate: "пьёт кофе по утрам".into(),
+        source: SOURCE_AUTO.into(),
+        op: PlanOp::Update {
+            target_id: id,
+            old_text: "пьёт кофе".into(),
+            new_text: "пьёт кофе по утрам".into(),
+            target_source: SOURCE_AUTO.into(),
+        },
+    };
+    let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
+        .await
+        .unwrap();
+    let group = match out {
+        ConsolidationOutcome::Update { op_group, .. } => op_group,
+        o => panic!("ожидался Update, получено {o:?}"),
+    };
+    assert_eq!(
+        list(db.reader()).await.unwrap()[0].text,
+        "пьёт кофе по утрам"
+    );
+
+    let u = undo(db.writer(), group).await.unwrap();
+    assert!(u.reverted());
+    assert_eq!(
+        list(db.reader()).await.unwrap()[0].text,
+        "пьёт кофе",
+        "текст откатан к старому"
+    );
+}
+
+/// Откат SUPERSEDE, где новый факт ОТРЕДАКТИРОВАН после консолидации → новый НЕ удаляется (правка юзера
+/// цела), старый возвращается → оба живы (безопасная частичная отмена).
+#[tokio::test]
+async fn undo_supersede_skips_edited_new_fact() {
+    let (_d, db) = open().await;
+    let old = add(db.writer(), "старый факт", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let plan = ConsolidationPlan {
+        candidate: "новый факт".into(),
+        source: SOURCE_EXPLICIT.into(),
+        op: PlanOp::Supersede {
+            target_id: old,
+            old_text: "старый факт".into(),
+            target_source: SOURCE_EXPLICIT.into(),
+        },
+    };
+    let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
+        .await
+        .unwrap();
+    let (new_id, group) = match out {
+        ConsolidationOutcome::Supersede { id, op_group, .. } => (id, op_group),
+        o => panic!("ожидался Supersede, получено {o:?}"),
+    };
+    // Юзер правит новый факт после авто-замещения.
+    crate::memory::edit(db.writer(), new_id, "новый факт, дополненный юзером")
+        .await
+        .unwrap();
+
+    let u = undo(db.writer(), group).await.unwrap();
+    assert!(u.reverted(), "старый всё равно восстановлен");
+    let facts = list(db.reader()).await.unwrap();
+    assert!(
+        facts.iter().any(|f| f.id == old && f.text == "старый факт"),
+        "старый вернулся"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|f| f.id == new_id && f.text == "новый факт, дополненный юзером"),
+        "правка юзера НЕ потеряна"
+    );
+    assert_eq!(facts.len(), 2, "оба живы");
+}
+
+/// Откат неизвестной группы — no-op.
+#[tokio::test]
+async fn undo_unknown_group_is_noop() {
+    let (_d, db) = open().await;
+    add(db.writer(), "факт", SOURCE_EXPLICIT).await.unwrap();
+    let u = undo(db.writer(), 99999).await.unwrap();
+    assert!(!u.reverted());
+    assert_eq!(list(db.reader()).await.unwrap().len(), 1);
+}
+
+/// Откат идемпотентен: повторный undo той же группы ничего не меняет.
+#[tokio::test]
+async fn undo_is_idempotent() {
+    let (_d, db) = open().await;
+    let old = add(db.writer(), "старый", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let out = apply(
+        db.writer(),
+        ConsolidationPlan {
+            candidate: "новый".into(),
+            source: SOURCE_EXPLICIT.into(),
+            op: PlanOp::Supersede {
+                target_id: old,
+                old_text: "старый".into(),
+                target_source: SOURCE_EXPLICIT.into(),
+            },
+        },
+        ConsolidationChoice::Accept,
+    )
+    .await
+    .unwrap();
+    let group = match out {
+        ConsolidationOutcome::Supersede { op_group, .. } => op_group,
+        o => panic!("{o:?}"),
+    };
+    assert!(undo(db.writer(), group).await.unwrap().reverted());
+    let snapshot = list(db.reader()).await.unwrap();
+    assert!(
+        !undo(db.writer(), group).await.unwrap().reverted(),
+        "второй откат — no-op"
+    );
+    assert_eq!(
+        list(db.reader()).await.unwrap(),
+        snapshot,
+        "состояние не изменилось"
+    );
 }
