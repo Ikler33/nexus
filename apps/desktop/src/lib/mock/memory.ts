@@ -72,7 +72,10 @@ export async function consolidatePlan(
 
 /** MEM-8: применить выбор — зеркалит стейт-машину backend на in-memory списке (урок «Mock must match
  *  backend»). `supersede` = убрать target из ЖИВОГО списка (наблюдаемый эффект soft-supersede) + добавить
- *  новый; optimistic-деградация в add, если target изменился/исчез; `keepSeparate` всегда = add. */
+ *  новый; optimistic-деградация в add, если target изменился/исчез; `keepSeparate` всегда = add.
+ *  ОГРАНИЧЕНИЕ (нет колонки `superseded_by`): soft-supersede смоделирован как ФИЗИЧЕСКОЕ удаление из
+ *  списка → backend-путь «re-add супридённого текста → restore» здесь НЕ воспроизводится. В браузер-превью
+ *  это недостижимо (нет эмбеддингов → `update`/`supersede`-планы не возникают); путь покрыт Rust-тестами. */
 export async function consolidateApply(
   plan: ConsolidationPlan,
   choice: ConsolidationChoice,
@@ -101,6 +104,7 @@ export async function consolidateApply(
     if (choice === 'keepSeparate') return addCandidate();
     const target = facts.find((f) => f.id === op.targetId);
     if (!target || target.text !== op.oldText) return addCandidate(); // optimistic-деградация
+    if (op.newText === op.oldText) return { op: 'noop' }; // backend: правка без изменения → Noop (без события)
     target.text = op.newText;
     return { op: 'update', id: target.id, oldText: op.oldText, newText: op.newText, opGroup: opGroupSeq++ };
   }
