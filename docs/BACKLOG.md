@@ -177,6 +177,7 @@
 | ⏳ **Профиль пользователя на edit_events** (что/когда пишешь — для AI-напарника) | нужен накопленный edit_events; ценность растёт со временем | накопление истории | IMPROVEMENT_PLAN P6 (AIP-7) |
 | ✂️ **FLOW: news-пагинация / инфинит-скролл** | 30-дн ретенция редко даёт >50 карточек → низкая дневная ценность | при росте объёма ленты | IMPROVEMENT_PLAN P8 |
 | ✂️ **POLISH: welcome-засев + vault-pills чата + чистка англ-строк** | discoverability-доводки, не блокируют DoD | по спросу | IMPROVEMENT_PLAN P9 |
+| ✂️ **«Скопировать как HTML»** (рендер заметки → буфер обмена с `text/html`) | «Скопировать как Markdown» сделана (палитра `file.copyMarkdown`); HTML-вариант требует `ClipboardItem` с rich-mime + рендер preview-HTML вне React-дерева — заметно больше кода при неясном спросе | по спросу | daily-driver audit |
 | ✅ ~~**kbd-aria в палитре/HotkeysSection** (a11y)~~ — **СДЕЛАНО (cleanup):** футер палитры — `aria-label="Escape"` на Esc, `↑↓`-глиф `aria-hidden` (рядом текст-метка); cheatsheet/HotkeysSection уже имели aria. | — | — |
 | ✅ ~~**dev-StrictMode: дубль prefill композера**~~ — **УЖЕ СДЕЛАНО** (ref-гард `consumedDraft` в `ChatView.tsx`, тест под StrictMode); пункт был устаревший. | — | — |
 | ✅ ~~**tagFilter не сбрасывается при смене vault**~~ — **УЖЕ СДЕЛАНО** (#230, `Sidebar.tsx` сбрасывает tag-filter на смену `vaultRoot`, тест); пункт был устаревший. | — | — |

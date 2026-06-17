@@ -290,6 +290,11 @@
     "applyFailed": "Could not write tags",
     "flushFailed": "Save the note first — write cancelled"
   },
+  "file": {
+    "noActiveNote": "Open a note to copy",
+    "copied": "Note copied as Markdown",
+    "copyFailed": "Couldn't copy the note"
+  },
   "tree": {
     "label": "Vault files",
     "empty": "This vault is empty.",
@@ -905,6 +910,7 @@
     "file.new": "New note",
     "file.reveal": "Reveal active file in tree",
     "file.rename": "Rename active file",
+    "file.copyMarkdown": "Copy note as Markdown",
     "note.daily": "Daily note",
     "capture.quick": "Quick capture",
     "note.fromTemplate": "New note from template",
