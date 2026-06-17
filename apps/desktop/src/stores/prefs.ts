@@ -56,6 +56,21 @@ function readPalette(): PaletteStyle {
   return 'top';
 }
 
+/** MEM-8c-b: режим консолидации памяти. `propose` — каждое слияние/замещение через чип (безопасно по
+ *  умолчанию); `auto` — применять автоматически (кроме explicit-фактов §4.3), с undo-тостом. */
+export type ConsolidationMode = 'propose' | 'auto';
+const CONSOLIDATION_MODE_KEY = 'nexus.ai.memoryConsolidationMode';
+
+function readConsolidationMode(): ConsolidationMode {
+  try {
+    const v = localStorage.getItem(CONSOLIDATION_MODE_KEY);
+    if (v === 'propose' || v === 'auto') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'propose';
+}
+
 /** Расположение AI-панели (DP-12, макет tweaks): side / bottom / overlay. */
 export type AiLayout = 'side' | 'bottom' | 'overlay';
 const AI_LAYOUT_KEY = 'nexus.ai.layout';
@@ -154,6 +169,8 @@ interface PrefsState {
    *  существующий (режим «Предлагать» — каждое слияние/замещение через подтверждение, обратимо). ВЫКЛ
    *  по умолчанию (owner-gated). Работает только при `aiAgentMemory` + наличии основной модели. */
   aiMemoryConsolidation: boolean;
+  /** MEM-8c-b: режим консолидации (`propose`|`auto`). Имеет смысл при `aiMemoryConsolidation` ON. */
+  aiMemoryConsolidationMode: ConsolidationMode;
   /** AIP-10: LLM-объяснение «причины связи» в «Связях»/«Похожих» вместо сырого сниппета (лениво,
    *  кэш). ВКЛ; реально работает при наличии утилитарной модели (иначе фолбэк на сниппет). */
   aiExplainRelations: boolean;
@@ -170,6 +187,7 @@ interface PrefsState {
   setAiChatMemory: (on: boolean) => void;
   setAiAgentMemory: (on: boolean) => void;
   setAiMemoryConsolidation: (on: boolean) => void;
+  setAiMemoryConsolidationMode: (mode: ConsolidationMode) => void;
   setAiExplainRelations: (on: boolean) => void;
   setAiPanelW: (w: number) => void;
   setAiPanelH: (h: number) => void;
@@ -185,6 +203,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   aiChatMemory: readBoolDefaultTrue(AI_CHAT_MEMORY_KEY),
   aiAgentMemory: readBoolDefaultFalse(AI_AGENT_MEMORY_KEY),
   aiMemoryConsolidation: readBoolDefaultFalse(AI_MEMORY_CONSOLIDATION_KEY),
+  aiMemoryConsolidationMode: readConsolidationMode(),
   aiExplainRelations: readBoolDefaultTrue(AI_EXPLAIN_RELATIONS_KEY),
   aiPanelW: readNum(AI_W_KEY, AI_PANEL_W.def, AI_PANEL_W.min, AI_PANEL_W.max),
   aiPanelH: readNum(AI_H_KEY, AI_PANEL_H.def, AI_PANEL_H.min, AI_PANEL_H.max),
@@ -261,6 +280,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       /* ignore */
     }
     set({ aiMemoryConsolidation: on });
+  },
+  setAiMemoryConsolidationMode: (mode) => {
+    try {
+      localStorage.setItem(CONSOLIDATION_MODE_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+    set({ aiMemoryConsolidationMode: mode });
   },
   setAiExplainRelations: (on) => {
     try {

@@ -68,6 +68,10 @@ export function ChatView() {
   const acknowledgeSavedFact = useChatStore((s) => s.acknowledgeSavedFact);
   const undoSavedFact = useChatStore((s) => s.undoSavedFact);
   const explicitSaving = useChatStore((s) => s.explicitSaving);
+  // MEM-8c: авто-применённая консолидация (режим «Авто») — undo-тост.
+  const autoConsolidated = useChatStore((s) => s.autoConsolidated);
+  const acknowledgeAutoConsolidated = useChatStore((s) => s.acknowledgeAutoConsolidated);
+  const undoConsolidation = useChatStore((s) => s.undoConsolidation);
 
   // MEM-5: тост по исходу сразу-сохранения. saved → «Запомнил: «…»» + «Отменить» (удаляем ТОЛЬКО
   // реально созданный факт); duplicate → «Уже в памяти» (без отмены — не трогаем существующий);
@@ -96,6 +100,28 @@ export function ChatView() {
       addToast(t('chat.memoryNothing'), { kind: 'info' });
     }
   }, [savedFact, acknowledgeSavedFact, undoSavedFact, t]);
+
+  // MEM-8c: тост авто-консолидации (режим «Авто») — «Объединил/Заменил» + «Отменить» (откат группы).
+  // Молчаливое слияние/замещение → юзер видит, ЧТО произошло, и может мгновенно откатить (обратимость).
+  useEffect(() => {
+    if (!autoConsolidated) return;
+    const a = autoConsolidated;
+    acknowledgeAutoConsolidated();
+    const msg =
+      a.op === 'supersede'
+        ? t('chat.consolidateAutoReplaced', { old: a.oldText, new: a.newText })
+        : t('chat.consolidateAutoMerged', { text: a.newText });
+    useToastStore.getState().addToast(msg, {
+      kind: 'success',
+      action: {
+        label: t('chat.memoryUndo'),
+        run: () =>
+          void undoConsolidation(a.opGroup).then(() =>
+            useToastStore.getState().addToast(t('chat.consolidateUndone'), { kind: 'info' }),
+          ),
+      },
+    });
+  }, [autoConsolidated, acknowledgeAutoConsolidated, undoConsolidation, t]);
 
   const [input, setInput] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
