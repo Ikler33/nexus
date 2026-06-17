@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
@@ -7,6 +8,7 @@ import { FileTree } from './FileTree';
 beforeEach(() => {
   useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
+  useUIStore.setState({ revealTarget: null });
 });
 
 describe('FileTree (Ф0-3/Ф0-9)', () => {
@@ -34,6 +36,19 @@ describe('FileTree (Ф0-3/Ф0-9)', () => {
 
   // audit B10: при схлопывании дерева active-индекс не должен «повисать» за пределами списка —
   // иначе aria-activedescendant ссылается на несуществующий treeitem. Кламп держит его валидным.
+  it('REVEAL-ACTIVE-FILE: requestReveal делает строку файла активной (после раскрытия предков)', async () => {
+    await useVaultStore.getState().openVault('');
+    await useVaultStore.getState().revealPath('Projects/Roadmap.md'); // раскрыли предков
+    render(<FileTree />);
+    await screen.findByText('Roadmap');
+    act(() => useUIStore.getState().requestReveal('Projects/Roadmap.md'));
+    await waitFor(() => {
+      const row = screen.getByText('Roadmap').closest('[role="treeitem"]');
+      expect(row).toHaveAttribute('data-active');
+    });
+    expect(useUIStore.getState().revealTarget).toBeNull(); // запрос сброшен после скролла
+  });
+
   it('кламп active при схлопывании дерева (a11y, audit B10)', async () => {
     await useVaultStore.getState().openVault('');
     render(<FileTree />);

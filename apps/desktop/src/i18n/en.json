@@ -903,6 +903,7 @@
     "vault.rescan": "Reindex vault",
     "view.toggleSidebar": "Toggle sidebar",
     "file.new": "New note",
+    "file.reveal": "Reveal active file in tree",
     "note.daily": "Daily note",
     "capture.quick": "Quick capture",
     "note.fromTemplate": "New note from template",

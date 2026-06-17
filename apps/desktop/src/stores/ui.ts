@@ -135,6 +135,13 @@ interface UIState {
   openTagFilter: (tag: string) => void;
   /** Сбросить отложенный тег-фильтр (сайдбар вызывает после применения). */
   consumeTagFilter: () => void;
+  /** REVEAL-ACTIVE-FILE: запрос «показать файл в дереве» — `seq` (а не голый путь), чтобы повтор по
+   *  ТОМУ ЖЕ пути перезапускал эффект скролла. FileTree подписан, скроллит и сбрасывает. */
+  revealTarget: { path: string; seq: number } | null;
+  /** Запросить показ файла в дереве (открывает сайдбар, выходит из reading). */
+  requestReveal: (path: string) => void;
+  /** Сбросить запрос показа (FileTree вызывает после скролла). */
+  consumeReveal: () => void;
 }
 
 /**
@@ -326,4 +333,13 @@ export const useUIStore = create<UIState>((set) => ({
   // Показать сайдбар и выйти из reading (там сайдбар скрыт), иначе фильтр применится незаметно.
   openTagFilter: (tag) => set({ pendingTagFilter: tag, sidebarOpen: true, reading: false }),
   consumeTagFilter: () => set({ pendingTagFilter: null }),
+  revealTarget: null,
+  // Дерево видно только при открытом сайдбаре и не в reading — иначе скролл произойдёт незаметно.
+  requestReveal: (path) =>
+    set((s) => ({
+      revealTarget: { path, seq: (s.revealTarget?.seq ?? 0) + 1 },
+      sidebarOpen: true,
+      reading: false,
+    })),
+  consumeReveal: () => set({ revealTarget: null }),
 }));
