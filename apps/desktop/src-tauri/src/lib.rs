@@ -199,6 +199,7 @@ pub fn run() {
             commands::memory::memory_set_pinned,
             commands::memory::memory_edit,
             commands::memory::memory_delete,
+            commands::memory::memory_fact_history,
             commands::inline::inline_complete,
             commands::inline::inline_cancel,
             commands::news::get_news,

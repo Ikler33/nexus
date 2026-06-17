@@ -220,6 +220,87 @@ fn threshold_drops_low_similarity_hits() {
     assert!(ids_above_threshold(noise, MEM_SIM_THRESHOLD).is_empty());
 }
 
+/// MEM-7: правка факта пишет `update`-событие (old→new); правка тем же текстом события НЕ плодит.
+#[tokio::test]
+async fn edit_writes_update_event() {
+    let (_d, db) = open().await;
+    let id = add(db.writer(), "дедлайн X — пятница", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    edit(db.writer(), id, "дедлайн X — среда").await.unwrap();
+    let hist = fact_history(db.reader(), id).await.unwrap();
+    assert_eq!(hist.len(), 1, "одно событие правки");
+    assert_eq!(hist[0].event, "update");
+    assert_eq!(hist[0].old_text.as_deref(), Some("дедлайн X — пятница"));
+    assert_eq!(hist[0].new_text.as_deref(), Some("дедлайн X — среда"));
+
+    // Правка тем же текстом — не пишем пустое событие.
+    edit(db.writer(), id, "  дедлайн X — среда  ")
+        .await
+        .unwrap();
+    assert_eq!(fact_history(db.reader(), id).await.unwrap().len(), 1);
+}
+
+/// MEM-7: удаление пишет `delete`-событие (с прежним текстом), которое переживает факт (аудит).
+#[tokio::test]
+async fn delete_writes_event_surviving_fact() {
+    let (_d, db) = open().await;
+    let id = add(db.writer(), "временный факт", SOURCE_AUTO)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    delete(db.writer(), id).await.unwrap();
+    assert!(list(db.reader()).await.unwrap().is_empty(), "факт удалён");
+    let hist = fact_history(db.reader(), id).await.unwrap();
+    assert_eq!(hist.len(), 1, "событие удаления осталось (без FK-cascade)");
+    assert_eq!(hist[0].event, "delete");
+    assert_eq!(hist[0].old_text.as_deref(), Some("временный факт"));
+}
+
+/// MEM-7: ИНВАРИАНТ — супридённый факт (`superseded_by IS NOT NULL`) исключён из list/count/context
+/// (заранее, до MEM-8). Помечаем вручную сырым UPDATE и проверяем.
+#[tokio::test]
+async fn superseded_fact_excluded_everywhere() {
+    let (_d, db) = open().await;
+    let keep = add(db.writer(), "живой факт", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let gone = add(db.writer(), "устаревший факт", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    // Помечаем `gone` супридённым (как сделает консолидация MEM-8): superseded_by = keep.
+    db.writer()
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE memory_facts SET superseded_by=?2, superseded_at=1 WHERE id=?1",
+                rusqlite::params![gone, keep],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let ids: Vec<i64> = list(db.reader())
+        .await
+        .unwrap()
+        .iter()
+        .map(|f| f.id)
+        .collect();
+    assert_eq!(ids, vec![keep], "супридённый не в списке");
+    assert_eq!(
+        count(db.reader()).await.unwrap(),
+        1,
+        "count считает только живые"
+    );
+}
+
 /// AC-MEM-9: clear вычищает все факты (смена vault).
 #[tokio::test]
 async fn clear_wipes_all() {
