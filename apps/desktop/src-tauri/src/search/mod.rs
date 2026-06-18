@@ -472,19 +472,23 @@ async fn graph_rank(
         .await
 }
 
-/// Строка резолва (внутренняя): несёт `file_id`/`chunk_index` для dedup overlap.
+/// Строка резолва (внутренняя): несёт `file_id` + char-диапазон `[char_start,char_end)` для dedup
+/// overlap (по РЕАЛЬНОМУ пересечению текста, НЕ по соседству `chunk_index` — M1).
 struct RawHit {
     chunk_id: i64,
     file_id: i64,
-    chunk_index: i64,
+    char_start: i64,
+    char_end: i64,
     path: String,
     title: Option<String>,
     heading_path: Option<String>,
     content: String,
 }
 
-/// Резолвит метаданные кандидатов (в порядке RRF), схлопывает перекрывающиеся соседние чанки одного
-/// файла (|Δchunk_index| ≤ 1 — overlap чанкера) и обрезает до `limit`. Порядок RRF сохраняется.
+/// Резолвит метаданные кандидатов (в порядке RRF), схлопывает РЕАЛЬНО перекрывающиеся чанки одного
+/// файла (пересечение char-диапазонов — overlap чанкера; НЕ соседство `chunk_index`: индекс сквозной
+/// через секции, иначе последний чанк секции A и первый секции B ложно схлопнулись бы — M1) и
+/// обрезает до `limit`. Порядок RRF сохраняется.
 async fn resolve_and_dedup(
     reader: &ReadPool,
     candidates: Vec<(i64, f32)>,
@@ -498,7 +502,7 @@ async fn resolve_and_dedup(
         .query(move |c| {
             let ph = vec!["?"; ids.len()].join(",");
             let sql = format!(
-                "SELECT ch.id, ch.file_id, ch.chunk_index, f.path, f.title, ch.heading_path, ch.content \
+                "SELECT ch.id, ch.file_id, ch.char_start, ch.char_end, f.path, f.title, ch.heading_path, ch.content \
                  FROM chunks ch JOIN files f ON f.id = ch.file_id \
                  WHERE f.is_deleted = 0 AND ch.id IN ({ph})"
             );
@@ -508,11 +512,12 @@ async fn resolve_and_dedup(
                     Ok(RawHit {
                         chunk_id: r.get(0)?,
                         file_id: r.get(1)?,
-                        chunk_index: r.get(2)?,
-                        path: r.get(3)?,
-                        title: r.get(4)?,
-                        heading_path: r.get(5)?,
-                        content: r.get(6)?,
+                        char_start: r.get(2)?,
+                        char_end: r.get(3)?,
+                        path: r.get(4)?,
+                        title: r.get(5)?,
+                        heading_path: r.get(6)?,
+                        content: r.get(7)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -521,20 +526,26 @@ async fn resolve_and_dedup(
         .await?;
 
     let mut by_id: HashMap<i64, RawHit> = rows.into_iter().map(|h| (h.chunk_id, h)).collect();
-    let mut kept_idx_by_file: HashMap<i64, Vec<i64>> = HashMap::new();
+    // Дедуп по РЕАЛЬНОМУ пересечению char-диапазонов того же файла (overlap чанкера = общий текст),
+    // а НЕ по соседству chunk_index: индекс сквозной через секции, поэтому соседние индексы на стыке
+    // секций имеют 0 пересечения текста и не должны схлопываться (M1 — иначе потеря recall).
+    let mut kept_ranges_by_file: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
     let mut out: Vec<SearchHit> = Vec::with_capacity(limit);
     for id in order {
         let Some(h) = by_id.remove(&id) else { continue };
-        let overlaps = kept_idx_by_file
-            .get(&h.file_id)
-            .is_some_and(|idxs| idxs.iter().any(|&ci| (ci - h.chunk_index).abs() <= 1));
+        // Полуинтервалы [s,e) пересекаются ⇔ s < h.char_end И h.char_start < e.
+        let overlaps = kept_ranges_by_file.get(&h.file_id).is_some_and(|ranges| {
+            ranges
+                .iter()
+                .any(|&(s, e)| s < h.char_end && h.char_start < e)
+        });
         if overlaps {
-            continue; // соседний чанк того же файла уже взят — это overlap чанкера
+            continue; // перекрывающийся по тексту чанк того же файла уже взят — overlap чанкера
         }
-        kept_idx_by_file
+        kept_ranges_by_file
             .entry(h.file_id)
             .or_default()
-            .push(h.chunk_index);
+            .push((h.char_start, h.char_end));
         out.push(SearchHit {
             score: score_of.get(&h.chunk_id).copied().unwrap_or(0.0),
             chunk_id: h.chunk_id,
@@ -1046,6 +1057,42 @@ mod tests {
             (hits.len() as i64) < n,
             "overlap соседних чанков схлопнут ({} из {n})",
             hits.len()
+        );
+    }
+
+    /// M1: последний чанк секции A и первый секции B имеют СОСЕДНИЕ chunk_index, но
+    /// НЕПЕРЕСЕКАЮЩИЕСЯ char-диапазоны — НЕ должны схлопываться (старый `|Δindex|≤1` ронял recall
+    /// на многосекционной заметке: второй чанк молча выбрасывался).
+    #[tokio::test]
+    async fn dedup_keeps_adjacent_index_disjoint_sections() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = open_db(&root).await;
+        // Две секции, каждая — отдельный небольшой чанк, обе про "vector". Граница секции →
+        // char-диапазоны не пересекаются, хотя chunk_index соседние (0 и 1).
+        let body =
+            "# Section A\n\nvector alpha alpha alpha\n\n# Section B\n\nvector beta beta beta\n";
+        let (emb, vectors) = index_rag(&db, &root, &[("Two.md", body)], 16).await;
+        let n: i64 = db
+            .reader()
+            .query(|c| c.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(n, 2, "ожидаем ровно 2 чанка (по секции), их {n}");
+
+        let hits = hybrid_search(
+            db.reader(),
+            Some(vectors.as_ref()),
+            Some(emb.as_ref()),
+            "vector".into(),
+            opts(10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            hits.len(),
+            2,
+            "оба чанка соседних секций сохранены (не схлопнуты по индексу) — M1"
         );
     }
 }
