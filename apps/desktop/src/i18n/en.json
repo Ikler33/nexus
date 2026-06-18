@@ -157,6 +157,10 @@
       "episodicMemory": "Episodic memory",
       "episodicMemoryDesc": "Mix short summaries of your past sessions («what we talked about before») into AI answers. Off by default — privacy. Manage episodes below.",
       "manageEpisodes": "Episodes…",
+      "insights": "Insights",
+      "insightsDesc": "Proactive AI widgets on Home: open questions, context drift, stale-note radar. Generated in the background on a schedule. Off by default — enable if your notes give them something to work with.",
+      "contradictions": "Contradiction finder",
+      "contradictionsDesc": "AI looks for pairs of notes that contradict each other (stale plans, conflicting facts). Background pass on a schedule. Off by default — niche and costly, enable when needed.",
       "explainRelations": "Explain relations",
       "explainRelationsDesc": "In Related/Similar, show a short LLM explanation of how the notes relate instead of the raw snippet (lazy, cached). Without a utility model — falls back to the snippet."
     },
@@ -285,6 +289,7 @@
     "oqEmpty": "No questions yet — hit “refresh” and the model will find open threads in recent notes.",
     "driftTitle": "Focus drift",
     "driftEmpty": "No analysis yet — hit “refresh” and the model will compare your current focus with your goals.",
+    "insightsOff": "Insights are off. Enable them in Settings → AI.",
     "discussWithAi": "Discuss with AI",
     "discussDriftPrompt": "How do I refocus on my goals? Here's the current drift: {{drift}}"
   },
@@ -633,6 +638,7 @@
     "title": "Contradiction finder",
     "loading": "Loading…",
     "empty": "No contradictions found. Click “Find” — the model will compare topically close notes.",
+    "disabled": "Contradiction finder is off. Enable it in Settings → AI.",
     "queued": "Search started — results will appear here once the model finishes.",
     "generate": "Find",
     "generating": "Searching…",

@@ -261,17 +261,22 @@ pub async fn open_vault(
     // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.
     const DAY_SECS: i64 = 24 * 3600;
     let mut recurring: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    // Тогглы фоновых ИИ-фич (persisted в settings vault, дефолт OFF — real-test 2026-06-18): инсайты
+    // (open_questions/context_drift/stale) и поиск противоречий при OFF НЕ регистрируем в recurring и НЕ
+    // сидим ниже (фон/LLM не тратится; хендлеры дополнительно рано выходят NOOP при mid-session OFF).
+    let insights_on = crate::home::insights::insights_enabled(db.reader()).await;
+    let contra_on = crate::contradictions::is_enabled(db.reader()).await;
     if chat.is_some() {
         recurring.insert(crate::digest::KIND_DIGEST.to_string(), DAY_SECS);
     }
-    if chat.is_some() && vectors.is_some() {
+    if chat.is_some() && vectors.is_some() && contra_on {
         recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
     }
     // On-change (slice 7): дайджест+противоречия перезапускаются после правок vault (с дебаунсом).
     let on_change: Vec<String> = recurring.keys().cloned().collect();
     // Context drift (H5) — scheduled-only (раз/сутки; концепт: «чаще нет смысла»): в `recurring`, но НЕ в
     // `on_change` — добавляем ПОСЛЕ снятия on_change, чтобы он не реагировал на каждую правку.
-    if chat.is_some() {
+    if chat.is_some() && insights_on {
         recurring.insert(
             crate::home::widgets::widget_kind(crate::home::insights::KEY_CONTEXT_DRIFT),
             DAY_SECS,
@@ -280,7 +285,7 @@ pub async fn open_vault(
     // Open questions (H5) — AIP-5: проактивно раз/сутки (как context drift), scheduled-only (НЕ on-change,
     // добавлено после снятия on_change). Раньше — manual-only; теперь генерируется само, чтобы карточка
     // не висела пустой с «нажми обновить». Хендлер на `chat_util`, поэтому и гейт по нему.
-    if chat_util.is_some() {
+    if chat_util.is_some() && insights_on {
         recurring.insert(
             crate::home::widgets::widget_kind(crate::home::insights::KEY_OPEN_QUESTIONS),
             DAY_SECS,
@@ -289,7 +294,7 @@ pub async fn open_vault(
     // Stale radar (H4) — AIP-хвост: слой 2 теперь ПРОАКТИВЕН (раз/сутки, scheduled-only, как
     // open_questions; добавлено после снятия on_change — правка делает заметку МЕНЕЕ устаревшей, спешить
     // с переобогащением незачем). Per-note кэш делает повторный прогон дешёвым (пропуск валидного).
-    if chat_util.is_some() {
+    if chat_util.is_some() && insights_on {
         recurring.insert(crate::home::stale::KIND_STALE.to_string(), DAY_SECS);
     }
     // Эпизоды (EP) — scheduled-only (как context drift / open questions; добавлено ПОСЛЕ снятия
@@ -396,10 +401,10 @@ pub async fn open_vault(
             .await
             .unwrap_or(0);
         let mut seeds: Vec<&str> = Vec::new();
-        if chat.is_some() {
+        if chat.is_some() && insights_on {
             seeds.push(crate::home::insights::KEY_CONTEXT_DRIFT);
         }
-        if chat_util.is_some() {
+        if chat_util.is_some() && insights_on {
             seeds.push(crate::home::insights::KEY_OPEN_QUESTIONS);
         }
         for key in seeds {
@@ -422,6 +427,7 @@ pub async fn open_vault(
     // `is_overdue` — stale не виджет `home_widgets`): обогащаем, только если среди топ-устаревших есть
     // НЕобогащённые/протухшие. Иначе при свежем кэше открытие не дёргало бы LLM зря.
     if chat_util.is_some()
+        && insights_on
         && crate::home::stale::needs_enrichment(db.reader(), crate::scheduler::now_secs())
             .await
             .unwrap_or(false)
@@ -451,6 +457,7 @@ pub async fn open_vault(
     // Поиск противоречий — run-if-overdue (нужны и chat, и векторы).
     if chat.is_some()
         && vectors.is_some()
+        && contra_on
         && crate::contradictions::should_generate(db.reader())
             .await
             .unwrap_or(false)

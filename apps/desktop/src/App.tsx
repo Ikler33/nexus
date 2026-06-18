@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
+import { useAiFeaturesStore } from './stores/aiFeatures';
 import { flushAllDirty } from './stores/autosave';
 import { useChatStore } from './stores/chat';
 import { useContradictionsStore } from './stores/contradictions';
@@ -108,6 +109,9 @@ export function App() {
         .getEnabled()
         .then((on) => usePrefsStore.getState().setAiEpisodicMemory(on))
         .catch(() => {});
+      // Тогглы «Инсайты»/«Поиск противоречий» — тоже persisted в БД vault (источник истины), грузим
+      // от бэка при открытии (privacy-default, как эпизоды). Стор не лезет в localStorage.
+      void useAiFeaturesStore.getState().sync();
     }
   }, [vaultRoot]);
 

@@ -968,6 +968,15 @@ export const tauriApi = {
     staleRefresh: (): Promise<void> =>
       isTauri() ? invoke<void>('refresh_stale_radar') : Promise.resolve(),
 
+    /** Состояние тоггла «Инсайты» (проактивные ИИ-виджеты Home: открытые вопросы + дрейф контекста +
+     *  stale-radar). Persisted, дефолт OFF. Вне Tauri — мок. */
+    insightsGetEnabled: (): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('insights_get_enabled') : mockHome.insightsGetEnabled(),
+
+    /** Переключить «Инсайты»; при включении бэкенд ставит kick-джобы доступных виджетов. Вне Tauri — мок. */
+    insightsSetEnabled: (on: boolean): Promise<void> =>
+      isTauri() ? invoke<void>('insights_set_enabled', { on }) : mockHome.insightsSetEnabled(on),
+
     /** «Open questions» (H5, зона 4, manual): незакрытые вопросы из последних заметок — распарсенный
      *  контент виджета `open_questions`. Сгенерировать/обновить — `home.refresh('open_questions')`;
      *  готовность — событие `onWidgetUpdated`. Пока не сгенерировано — `[]`. */
@@ -1047,6 +1056,16 @@ export const tauriApi = {
      */
     generate: (): Promise<void> =>
       isTauri() ? invoke<void>('generate_contradictions') : Promise.resolve(),
+
+    /** Состояние тоггла «Поиск противоречий» (persisted, дефолт OFF). Вне Tauri — мок. */
+    getEnabled: (): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('contradictions_get_enabled') : mockVault.contradictionsGetEnabled(),
+
+    /** Переключить «Поиск противоречий»; при включении бэкенд ставит kick-джобу. Вне Tauri — мок. */
+    setEnabled: (on: boolean): Promise<void> =>
+      isTauri()
+        ? invoke<void>('contradictions_set_enabled', { on })
+        : mockVault.contradictionsSetEnabled(on),
   },
 
   events: {

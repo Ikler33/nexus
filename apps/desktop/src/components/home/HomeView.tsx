@@ -28,6 +28,7 @@ import { openOrCreateDaily, openOrCreateInbox } from '../../lib/daily';
 import { renderBold } from '../../lib/render';
 import { relTime } from '../../lib/time';
 import { isTauri, tauriApi, type AiConfigDto, type HeatDay } from '../../lib/tauri-api';
+import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useChatStore } from '../../stores/chat';
 import { useHomeStore } from '../../stores/home';
 import { usePrefsStore } from '../../stores/prefs';
@@ -101,6 +102,9 @@ export function HomeView() {
     loading,
     error,
   } = useHomeStore();
+  // Тоггл «Инсайты» (owner-gated, дефолт OFF): гейтит проактивные AI-виджеты Home. При OFF карточки
+  // показывают честную подсказку «включите в настройках» вместо мёртвой кнопки «Обновить».
+  const insightsOn = useAiFeaturesStore((s) => s.insights);
   const [ai, setAi] = useState<AiConfigDto | null>(null);
   const [revealed, setRevealed] = useState(false);
 
@@ -237,15 +241,20 @@ export function HomeView() {
         {title}
         <span className={styles.aiBadge}>AI</span>
       </div>
-      <button
-        type="button"
-        className={styles.cardAct}
-        onClick={() => void refreshWidget(widgetKey)}
-        disabled={Boolean(generating[widgetKey])}
-      >
-        <RefreshCw aria-hidden />
-        {t('home.refresh')}
-      </button>
+      {/* «Обновить» прячем ТОЛЬКО у инсайт-виджетов при OFF (фоновая генерация выключена → кнопка была
+          бы no-op). daily_brief гейтится не «Инсайтами», а наличием chat — его кнопка остаётся. */}
+      {(insightsOn ||
+        (widgetKey !== 'open_questions' && widgetKey !== 'context_drift')) && (
+        <button
+          type="button"
+          className={styles.cardAct}
+          onClick={() => void refreshWidget(widgetKey)}
+          disabled={Boolean(generating[widgetKey])}
+        >
+          <RefreshCw aria-hidden />
+          {t('home.refresh')}
+        </button>
+      )}
     </div>
   );
 
@@ -715,27 +724,35 @@ export function HomeView() {
               'open_questions',
             )}
             <div className={styles.oqList}>
-              {questions.map((q, i) => (
-                <div key={`${q.path}-${i}`} className={styles.oqRow}>
-                  <button type="button" className={styles.oq} onClick={() => openNote(q.path)}>
-                    {q.question}
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.discuss}
-                    onClick={() => discussInsight(q.question, q.path)}
-                    title={t('home.discussWithAi')}
-                    aria-label={t('home.discussWithAi')}
-                  >
-                    <MessageSquare size={13} aria-hidden />
-                  </button>
-                </div>
-              ))}
-              {questions.length === 0 && (
-                <div className={styles.cardEmpty}>{t('home.oqEmpty')}</div>
+              {!insightsOn ? (
+                <div className={styles.cardEmpty}>{t('home.insightsOff')}</div>
+              ) : (
+                <>
+                  {questions.map((q, i) => (
+                    <div key={`${q.path}-${i}`} className={styles.oqRow}>
+                      <button type="button" className={styles.oq} onClick={() => openNote(q.path)}>
+                        {q.question}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.discuss}
+                        onClick={() => discussInsight(q.question, q.path)}
+                        title={t('home.discussWithAi')}
+                        aria-label={t('home.discussWithAi')}
+                      >
+                        <MessageSquare size={13} aria-hidden />
+                      </button>
+                    </div>
+                  ))}
+                  {questions.length === 0 && (
+                    <div className={styles.cardEmpty}>{t('home.oqEmpty')}</div>
+                  )}
+                </>
               )}
             </div>
-            {thinking('open_questions')}
+            {/* Спиннер только при ON: если выключить «Инсайты» во время фоновой генерации, хендлер
+                NOOP'ит без события `widget-updated` → иначе спиннер залип бы рядом с disabled-подсказкой. */}
+            {insightsOn && thinking('open_questions')}
           </div>
         </div>
 
@@ -748,7 +765,9 @@ export function HomeView() {
               t('home.driftTitle'),
               'context_drift',
             )}
-            {drift ? (
+            {!insightsOn ? (
+              <div className={styles.cardEmpty}>{t('home.insightsOff')}</div>
+            ) : drift ? (
               <>
                 <div className={styles.driftText}>{renderBold(drift)}</div>
                 <button
@@ -763,7 +782,7 @@ export function HomeView() {
             ) : (
               <div className={styles.cardEmpty}>{t('home.driftEmpty')}</div>
             )}
-            {thinking('context_drift')}
+            {insightsOn && thinking('context_drift')}
           </div>
         </div>
 

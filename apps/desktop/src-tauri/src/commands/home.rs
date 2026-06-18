@@ -79,6 +79,14 @@ pub async fn refresh_widget(state: State<'_, AppState>, key: String) -> AppResul
     let Some(kind) = kind else {
         return Err(format!("неизвестный HOME-виджет: {key}").into());
     };
+    // Тоггл «Инсайты» OFF → ручной refresh инсайт-виджета no-op (как сид/recurring гейтятся в vault.rs).
+    if matches!(
+        key.as_str(),
+        crate::home::insights::KEY_OPEN_QUESTIONS | crate::home::insights::KEY_CONTEXT_DRIFT
+    ) && !crate::home::insights::insights_enabled(&reader).await
+    {
+        return Ok(());
+    }
     if scheduler::has_ready_job(&reader, &kind, scheduler::now_secs()).await? {
         return Ok(()); // уже в очереди/выполняется — дедуп
     }
@@ -116,9 +124,61 @@ pub async fn refresh_stale_radar(state: State<'_, AppState>) -> AppResult<()> {
     if !has_chat {
         return Err("chat (LLM) не сконфигурирован — настройте в «AI / Модели»".into());
     }
+    // Stale radar — часть «Инсайтов»: при выключенном тогле ручной refresh no-op.
+    if !crate::home::insights::insights_enabled(&reader).await {
+        return Ok(());
+    }
     if scheduler::has_ready_job(&reader, stale::KIND_STALE, scheduler::now_secs()).await? {
         return Ok(()); // уже в очереди/выполняется — дедуп
     }
     scheduler::enqueue(&writer, stale::KIND_STALE, "", 0, 2).await?;
+    Ok(())
+}
+
+/// Текущее состояние тоггла «Инсайты» (проактивные ИИ-виджеты Home: открытые вопросы + дрейф контекста +
+/// stale-radar). Persisted, дефолт OFF.
+#[tauri::command]
+pub async fn insights_get_enabled(state: State<'_, AppState>) -> AppResult<bool> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(home::insights::insights_enabled(&reader).await)
+}
+
+/// Переключить «Инсайты». Persist `insights.enabled` + при ВКЛЮЧЕНИИ — enqueue kick для каждого
+/// доступного виджета (зеркало `episode_set_enabled`/`contradictions_set_enabled`: сид/recurring гейтятся
+/// флагом и регистрируются лишь на открытии vault → без kick включение в работающем приложении не
+/// сгенерирует виджеты до перезапуска). Дедуп `has_ready_job`. Хендлеры зарегистрированы всегда.
+#[tauri::command]
+pub async fn insights_set_enabled(state: State<'_, AppState>, on: bool) -> AppResult<()> {
+    let (writer, reader, has_util, has_fast) = {
+        let ctx = state.vault().await?;
+        (
+            ctx.db.writer().clone(),
+            ctx.db.reader().clone(),
+            ctx.ai.chat_util.is_some(),
+            ctx.ai.chat_fast.is_some(),
+        )
+    };
+    home::insights::set_insights_enabled(&writer, on).await?;
+    if on {
+        let now = scheduler::now_secs();
+        // open_questions + stale → chat_util; context_drift → chat_fast.
+        let mut kicks: Vec<String> = Vec::new();
+        if has_util {
+            kicks.push(home::widgets::widget_kind(
+                home::insights::KEY_OPEN_QUESTIONS,
+            ));
+            kicks.push(stale::KIND_STALE.to_string());
+        }
+        if has_fast {
+            kicks.push(home::widgets::widget_kind(
+                home::insights::KEY_CONTEXT_DRIFT,
+            ));
+        }
+        for kind in kicks {
+            if !scheduler::has_ready_job(&reader, &kind, now).await? {
+                let _ = scheduler::enqueue(&writer, &kind, "", 0, 2).await;
+            }
+        }
+    }
     Ok(())
 }
