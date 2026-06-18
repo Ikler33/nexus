@@ -882,6 +882,29 @@
       "manual": "Вручную"
     }
   },
+  "today": {
+    "title": "Сегодня",
+    "subtitle": "Сводка дня",
+    "refresh": "Обновить",
+    "loading": "Загрузка…",
+    "boardTasks": "Задачи доски",
+    "boardEmpty": "Просроченных и сегодняшних задач нет",
+    "checklist": "Чек-задачи",
+    "checklistEmpty": "Чек-задач на сегодня нет",
+    "overdue": "просрочено",
+    "due": "сегодня",
+    "dailyNote": "Заметка дня",
+    "dailyEmpty": "Заметки дня ещё нет",
+    "dailyCreate": "Открыть заметку дня",
+    "inbox": "Входящие",
+    "inboxCount_one": "{{count}} запись",
+    "inboxCount_few": "{{count}} записи",
+    "inboxCount_many": "{{count}} записей",
+    "inboxEmpty": "Входящие пусты",
+    "inboxOpen": "Разобрать",
+    "episodes": "Недавние сессии",
+    "episodesEmpty": "Сохранённых сессий пока нет"
+  },
   "board": {
     "title": "Доска",
     "taskCount_one": "{{count}} задача",
@@ -1008,6 +1031,7 @@
     "view.contradictions": "Поиск противоречий",
     "view.news": "Новости",
     "view.board": "Доска",
+    "view.today": "Сегодня",
     "view.home": "Home",
     "view.tasks": "Задачи",
     "view.inbox": "Входящие",

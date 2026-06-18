@@ -473,6 +473,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleHome(),
     }),
     commands.register({
+      id: 'view.today',
+      title: 'Today',
+      titleKey: 'commands.view.today',
+      source: 'core',
+      run: () => useUIStore.getState().toggleToday(),
+    }),
+    commands.register({
       id: 'vault.rescan',
       title: 'Reindex vault',
       titleKey: 'commands.vault.rescan',

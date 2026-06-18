@@ -866,6 +866,28 @@
       "manual": "Manual"
     }
   },
+  "today": {
+    "title": "Today",
+    "subtitle": "Your day at a glance",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "boardTasks": "Board tasks",
+    "boardEmpty": "No overdue or due-today tasks",
+    "checklist": "Checklist tasks",
+    "checklistEmpty": "No checklist tasks for today",
+    "overdue": "overdue",
+    "due": "today",
+    "dailyNote": "Daily note",
+    "dailyEmpty": "No daily note yet",
+    "dailyCreate": "Open daily note",
+    "inbox": "Inbox",
+    "inboxCount_one": "{{count}} item",
+    "inboxCount_other": "{{count}} items",
+    "inboxEmpty": "Inbox is empty",
+    "inboxOpen": "Process",
+    "episodes": "Recent sessions",
+    "episodesEmpty": "No saved sessions yet"
+  },
   "board": {
     "title": "Board",
     "taskCount_one": "{{count}} task",
@@ -991,6 +1013,7 @@
     "view.contradictions": "Contradiction finder",
     "view.news": "News feed",
     "view.board": "Board",
+    "view.today": "Today",
     "view.home": "Home",
     "view.tasks": "Tasks",
     "view.inbox": "Inbox",

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import {
+  CalendarCheck,
   FileText,
   GitBranch,
   Home,
@@ -24,11 +25,13 @@ export function ActivityBar() {
   const homeOpen = useUIStore((s) => s.homeOpen);
   const newsOpen = useUIStore((s) => s.newsOpen);
   const boardOpen = useUIStore((s) => s.boardOpen);
+  const todayOpen = useUIStore((s) => s.todayOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const graphOpen = useUIStore((s) => s.graphOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
   const inboxOpen = useUIStore((s) => s.inboxOpen);
   const openHome = useUIStore((s) => s.openHome);
+  const openToday = useUIStore((s) => s.openToday);
   const openNews = useUIStore((s) => s.openNews);
   const openBoard = useUIStore((s) => s.openBoard);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
@@ -56,6 +59,12 @@ export function ActivityBar() {
       <div className={styles.group}>
         {btn(<Home size={19} aria-hidden />, t('commands.view.home'), openHome, homeOpen)}
         {btn(
+          <CalendarCheck size={19} aria-hidden />,
+          t('commands.view.today'),
+          openToday,
+          todayOpen,
+        )}
+        {btn(
           <Newspaper size={19} aria-hidden />,
           t('commands.view.news'),
           openNews,
@@ -71,7 +80,7 @@ export function ActivityBar() {
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),
           toggleSidebar,
-          !homeOpen && !newsOpen && !boardOpen && sidebarOpen,
+          !homeOpen && !newsOpen && !boardOpen && !todayOpen && sidebarOpen,
         )}
         {btn(
           <Share2 size={19} aria-hidden />,

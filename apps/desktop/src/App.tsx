@@ -19,6 +19,7 @@ import { EditorArea } from './components/workspace/EditorArea';
 import { BoardView } from './components/board/BoardView';
 import { HomeView } from './components/home/HomeView';
 import { NewsView } from './components/news/NewsView';
+import { TodayView } from './components/today/TodayView';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
@@ -77,6 +78,7 @@ export function App() {
   const newsOpen = useUIStore((s) => s.newsOpen);
   const homeOpen = useUIStore((s) => s.homeOpen);
   const boardOpen = useUIStore((s) => s.boardOpen);
+  const todayOpen = useUIStore((s) => s.todayOpen);
   const onboardingActive = useUIStore((s) => s.onboardingActive);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -230,7 +232,7 @@ export function App() {
 
   // DP-12 (макет): расположение AI-панели — side / bottom / overlay; панель живёт только
   // в workspace-вью (Home/News — без неё, как `view === "workspace"` макета).
-  const aiVisible = chatOpen && !reading && !homeOpen && !newsOpen && !boardOpen;
+  const aiVisible = chatOpen && !reading && !homeOpen && !newsOpen && !boardOpen && !todayOpen;
   const aiSide = aiVisible && aiLayout === 'side';
   const aiBottom = aiVisible && aiLayout === 'bottom';
   const aiOverlay = aiVisible && aiLayout === 'overlay';
@@ -258,7 +260,9 @@ export function App() {
             </aside>
           )}
           <main className={styles.main}>
-            {homeOpen ? (
+            {todayOpen ? (
+              <TodayView />
+            ) : homeOpen ? (
               <HomeView />
             ) : newsOpen ? (
               <NewsView />
