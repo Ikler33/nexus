@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Web-агент: consent-URL SearXNG за subpath (m9)
+
+`build_search_url` достраивал `/search` через `ends_with("search")` — для consent-URL за subpath (`/research`/`/websearch`/`/metasearch`) ложно считал путь готовым эндпоинтом → запрос уходил не туда (404). Теперь сравнивается ПОСЛЕДНИЙ сегмент пути. Egress-safe (тот же хост/эндпоинт, без новых хостов — owner-flag из бэклога). +тест subpath/уже-полный путь; `cargo test --lib websearch` 14/0.
+
 ### Frontmatter: writer `set_frontmatter_field` стал value-aware (m8 — защита от тихой порчи)
 
 Фикс бага из аудита LLM-путей (батч D, owner-deferred → взят с приоритетом как задевающий агента): writer валидировал только КЛЮЧ, не текущее ЗНАЧЕНИЕ — перезапись ключа, чьё значение список/блок, молча портила данные. Будущий actuator/skill-writer агента — ровно новый вызыватель, доходящий до этой ветки.

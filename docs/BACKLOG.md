@@ -73,7 +73,7 @@
 ### Батч C — quick wins (trivial)
 | # | Sev | Файл:строка | Суть | Фикс | Риск |
 |---|---|---|---|---|---|
-| **m9** | 🟡 MINOR ⚠️egress | `websearch/search.rs:174` | `ends_with("search")` ловит `/research`/`/websearch`/`/metasearch` → consent-URL за subpath не получает `/search` → 404. | Сравнить последний сегмент: `url.path().trim_end_matches('/').rsplit('/').next()`. | trivial — **пометить владельцу (egress/web-URL builder), сам фикс egress-safe (тот же endpoint, без новых хостов)** |
+| **m9** | ✅ DONE | `websearch/search.rs build_search_url` | Достройка `/search` теперь по ПОСЛЕДНЕМУ сегменту пути (не `ends_with`) → consent-URL за subpath (`/research`/`/websearch`/`/metasearch`) получает корректный эндпоинт вместо 404. +тест subpath/уже-полный. | done — egress-safe (тот же хост/эндпоинт, без новых хостов; помечено владельцу в CHANGELOG) |
 | **n1** | ⚪ NIT | `episode/mod.rs:522-530,577-588` | `upsert_for_session` зовёт `idx.save()` на каждый эпизод; handler BATCH=5 → 5 полных сериализаций usearch. Лишний I/O. | Убрать `save()` из upsert, звать один раз в конце цикла handler (как бэкфилл vault.rs:378). | trivial |
 | **n2** | ⚪ NIT | `episode/mod.rs:485-511` | `msg_count` пишет COUNT(*) всей сессии, не покрытого хвоста (MAX_TRANSCRIPT_MSGS=40) → поле врёт vs комментарий мигр.019. | Поправить комментарий миграции на «всего сообщений сессии на момент генерации». | trivial |
 

@@ -174,8 +174,12 @@ const FRESH_TIME_RANGE: &str = "year";
 fn build_search_url(base_url: &str, query: &str, fresh: bool) -> Result<reqwest::Url, SearchError> {
     let mut url = reqwest::Url::parse(base_url.trim_end_matches('/'))
         .map_err(|_| SearchError::Failed("некорректный URL SearXNG".into()))?;
-    if !url.path().trim_end_matches('/').ends_with("search") {
-        url.set_path(&format!("{}/search", url.path().trim_end_matches('/')));
+    // Дописываем /search, если ПОСЛЕДНИЙ сегмент пути ещё не "search". Сравниваем именно сегмент,
+    // а не `ends_with("search")`: иначе consent-URL за subpath (`/research`, `/websearch`,
+    // `/metasearch`) ложно считался бы готовым эндпоинтом → 404 (m9).
+    let trimmed = url.path().trim_end_matches('/').to_string();
+    if trimmed.rsplit('/').next() != Some("search") {
+        url.set_path(&format!("{trimmed}/search"));
     }
     url.query_pairs_mut()
         .append_pair("q", query)
@@ -251,6 +255,27 @@ mod tests {
             build_search_url("https://searx.example.com/search", "обычный запрос", false).unwrap();
         assert_eq!(u.path(), "/search");
         assert!(!u.query().unwrap().contains("time_range"));
+    }
+
+    /// m9: consent-URL за subpath (`/research`, `/websearch`) — последний сегмент НЕ "search",
+    /// поэтому /search дописывается (раньше `ends_with("search")` ложно считал их готовыми → 404).
+    #[test]
+    fn build_search_url_appends_search_for_subpath_consent_url() {
+        for base in [
+            "https://searx.example.com/research",
+            "https://host.test/websearch",
+        ] {
+            let u = build_search_url(base, "q", false).unwrap();
+            assert!(
+                u.path().ends_with("/search") && u.path() != "/search",
+                "subpath consent-URL должен дописать /search: {} -> {}",
+                base,
+                u.path()
+            );
+        }
+        // Уже-полный subpath `/sx/search` не дублируется.
+        let u = build_search_url("https://host.test/sx/search", "q", false).unwrap();
+        assert_eq!(u.path(), "/sx/search");
     }
 
     #[test]
