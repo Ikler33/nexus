@@ -117,10 +117,12 @@ async fn eval_batch(
 /// Сопоставляет ответ модели с батчем: каждая запись либо оценена, либо `failed` (не молча).
 fn apply_batch(batch: &[NewsEntry], raw: &str) -> EvalReport {
     let mut report = EvalReport::default();
-    let Some(parsed) = extract_json_array(raw) else {
-        report.failed = batch.len();
-        return report;
-    };
+    // B6 (real-test 2026-06-18): ЛОЯЛЬНЫЙ пер-объектный парс. Раньше парсили массив ЦЕЛИКОМ
+    // (`serde_json::from_str::<Vec<_>>`) — один битый/обрезанный элемент ИЛИ truncation без закрывающей
+    // `]` (под нагрузкой/обрыв стрима) ронял ВЕСЬ батч из 10 записей, причём молча. Теперь вытаскиваем
+    // каждый валидный `{…}`-объект отдельно: обрыв/мусор теряет максимум ОДИН элемент, остальные доходят.
+    // Пустой результат → весь батч failed (через `seen` ниже) — как и раньше.
+    let parsed = parse_eval_objects(raw);
     let mut seen = vec![false; batch.len()];
     for ev in parsed {
         let Some(idx) = batch
@@ -181,14 +183,63 @@ pub async fn daily_digest(
     Ok(out.trim().to_string())
 }
 
-/// Достаёт первый JSON-массив из ответа (модель может обернуть в ```json``` или добавить текст).
-fn extract_json_array(raw: &str) -> Option<Vec<EvalJson>> {
-    let start = raw.find('[')?;
-    let end = raw.rfind(']')?;
-    if end <= start {
-        return None;
+/// Лояльный парс ответа модели (B6): вытаскивает КАЖДЫЙ top-level JSON-объект `{…}` и парсит его в
+/// [`EvalJson`] независимо. Невалидные/неполные объекты (truncation, мусор, лишние брейсы в прозе)
+/// пропускаются — батч не теряется целиком из-за одного. Объект без обязательного `i` serde отвергает,
+/// поэтому проза/обёртки (```json``` , пояснения) безопасно отсеиваются. Устойчив к обрыву массива.
+fn parse_eval_objects(raw: &str) -> Vec<EvalJson> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            match object_end(bytes, i) {
+                Some(end) => {
+                    if let Ok(obj) = serde_json::from_str::<EvalJson>(&raw[i..=end]) {
+                        out.push(obj);
+                    }
+                    i = end + 1;
+                }
+                // Незакрытый `{` (обрыв ответа) — дальше целых объектов нет.
+                None => break,
+            }
+        } else {
+            i += 1;
+        }
     }
-    serde_json::from_str(&raw[start..=end]).ok()
+    out
+}
+
+/// Индекс закрывающей `}` для объекта, начинающегося на `start` (`bytes[start]==b'{'`), с учётом
+/// строковых литералов и экранирования (брейсы/кавычки внутри строки не считаются). `None` — объект не
+/// закрыт (обрыв). Все служебные символы (`{}"\`) — ASCII, поэтому байтовый скан корректен на UTF-8.
+fn object_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut esc = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_str {
+            match b {
+                _ if esc => esc = false,
+                b'\\' => esc = true,
+                b'"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -280,6 +331,74 @@ mod tests {
         let report2 = evaluate_entries(&mock(half), &[entry("A")], false, &cancel(), &|_| {}).await;
         assert!(report2.items.is_empty());
         assert_eq!(report2.failed, 1, "relevant без title_ru — вне контракта");
+    }
+
+    /// B6 (real-test 2026-06-18): ОБРЫВ ответа (нет закрывающей `]`, последний объект недописан) больше
+    /// НЕ роняет весь батч — целые объекты ДО обрыва восстанавливаются, теряется лишь недописанный.
+    #[tokio::test]
+    async fn truncated_response_recovers_complete_objects() {
+        let reply = "[{\"i\":0,\"relevant\":true,\"title_ru\":\"А\",\"summary_ru\":\"Резюме А.\",\"topic\":\"Модели\"},\n\
+             {\"i\":1,\"relevant\":true,\"title_ru\":\"Б\",\"summary_ru\":\"Резюме Б.\",\"topic\":\"Инференс\"},\n\
+             {\"i\":2,\"relevant\":true,\"title_ru\":\"В\",\"summary_ru\":\"обор";
+        let report = evaluate_entries(
+            &mock(reply),
+            &[entry("A"), entry("B"), entry("C")],
+            false,
+            &cancel(),
+            &|_| {},
+        )
+        .await;
+        assert_eq!(
+            report.items.len(),
+            2,
+            "2 целых объекта восстановлены до обрыва"
+        );
+        assert_eq!(
+            report.failed, 1,
+            "только оборванный 3-й — failed (не весь батч)"
+        );
+    }
+
+    /// B6: один БИТЫЙ объект в середине не роняет соседей (раньше — весь батч failed).
+    #[tokio::test]
+    async fn one_malformed_object_does_not_drop_others() {
+        let reply = "[{\"i\":0,\"relevant\":true,\"title_ru\":\"А\",\"summary_ru\":\"Резюме.\",\"topic\":\"Т\"},\n\
+             {битый мусор},\n\
+             {\"i\":2,\"relevant\":true,\"title_ru\":\"В\",\"summary_ru\":\"Резюме.\",\"topic\":\"Т\"}]";
+        let report = evaluate_entries(
+            &mock(reply),
+            &[entry("A"), entry("B"), entry("C")],
+            false,
+            &cancel(),
+            &|_| {},
+        )
+        .await;
+        assert_eq!(report.items.len(), 2, "i=0 и i=2 восстановлены");
+        assert_eq!(report.failed, 1, "пропущенный/битый i=1 — failed");
+    }
+
+    /// B6 краевой (adversarial-ревью): «битый» объект с ВЛОЖЕННЫМИ брейсами (брейс-баланс сохранён)
+    /// теряется сам, но СЛЕДУЮЩИЙ валидный объект НЕ поглощается — `object_end` корректно закрывает
+    /// внешний `}`, скан продолжается с `end+1`.
+    #[tokio::test]
+    async fn malformed_object_with_nested_braces_does_not_swallow_next() {
+        let reply = "[{\"i\":0,\"relevant\":true,\"title_ru\":\"А\",\"summary_ru\":\"Р.\",\"topic\":\"Т\"},\n\
+             {мусор {\"вложено\":1}},\n\
+             {\"i\":2,\"relevant\":true,\"title_ru\":\"В\",\"summary_ru\":\"Р.\",\"topic\":\"Т\"}]";
+        let report = evaluate_entries(
+            &mock(reply),
+            &[entry("A"), entry("B"), entry("C")],
+            false,
+            &cancel(),
+            &|_| {},
+        )
+        .await;
+        assert_eq!(
+            report.items.len(),
+            2,
+            "i=0 и i=2 уцелели — вложенный мусор не поглотил следующий валидный объект"
+        );
+        assert_eq!(report.failed, 1, "i=1 (внутри мусора) — failed");
     }
 
     /// AC-SEC-7-паттерн: недоверенный контент фида в промпте лежит МЕЖДУ маркерами, система

@@ -330,9 +330,18 @@ pub async fn session_markdown(reader: &ReadPool, id: i64) -> DbResult<Option<(St
     Ok(Some((session.title, md)))
 }
 
+/// Порог косинусной близости (bge-m3) для подмешивания фрагмента ПЕРЕПИСКИ (N4b) в контекст ответа.
+/// Раньше N4b брал top-k БЕЗ порога (в отличие от эпизодов/фактов) → на нерелевантный запрос всплывали
+/// «ближайшие» чужие диалоги (real-test 2026-06-18: на «новости OpenAI» лезли тестовые диалоги про имя/
+/// Аристотеля). Калибровка на живом bge-m3: нерелевантный «пол» ~0.39–0.44, релевантный контроль ~0.64 →
+/// 0.45 чисто разделяет. Тот же 0.45, что у эпизодов ([`crate::episode::EPISODE_SIM_THRESHOLD`]) — оба
+/// канала «прошлых разговоров»; константа отдельная (независимая калибровка).
+pub const CHAT_MEM_SIM_THRESHOLD: f32 = 0.45;
+
 /// Поиск по памяти переписки (N4): эмбеддит запрос, ищет в `chat_vectors` (ключи = id сообщений),
-/// резолвит топ-`k` в `MemoryHit` (исключая текущую сессию + `exclude_sessions`, дедуп по сессии).
-/// Параллельный канал — заметочный RAG не трогаем. `None`-эмбеддер/индекс → пусто.
+/// отсекает ниже [`CHAT_MEM_SIM_THRESHOLD`], резолвит топ-`k` в `MemoryHit` (исключая текущую сессию +
+/// `exclude_sessions`, дедуп по сессии). Параллельный канал — заметочный RAG не трогаем. `None`-эмбеддер/
+/// индекс → пусто.
 // Все 8 параметров осмысленны (источник/индекс/эмбеддер/запрос/k/исключения/длина) — bundling в struct
 // читаемости не добавит; EP-2 добавил `exclude_sessions` (дедуп с эпизодами).
 #[allow(clippy::too_many_arguments)]
@@ -357,8 +366,12 @@ pub async fn search_memory(
     let hits = vectors
         .search(&qvec, (k * 4).max(8))
         .map_err(|e| crate::db::DbError::External(e.to_string()))?;
+    // N4b-порог релевантности: ниже [`CHAT_MEM_SIM_THRESHOLD`] — шум (нерелевантные чужие диалоги),
+    // в контекст не подмешиваем (real-test 2026-06-18). Берём `(k*4).max(8)` с запасом ДО фильтра —
+    // дедуп по сессии/исключения отсеют часть уже после порога.
     let ranked: Vec<(i64, f32)> = hits
         .into_iter()
+        .filter(|h| h.score >= CHAT_MEM_SIM_THRESHOLD)
         .map(|h| (h.chunk_id as i64, h.score))
         .collect();
     let mut out = resolve_memory_hits(
@@ -589,6 +602,53 @@ mod tests {
         assert!(
             dd.iter().all(|h| h.session_id != b.session_id),
             "сессия из exclude_sessions (всплывшая эпизодом) не дублируется сырыми репликами"
+        );
+    }
+
+    /// N4b-порог (real-test 2026-06-18): хит ниже `CHAT_MEM_SIM_THRESHOLD` не подмешивается в контекст,
+    /// выше — да. Вектора задаём напрямую (q и −q: cosine 1.0 vs −1.0 — детерминированно выше/ниже порога;
+    /// mock-текст даёт слишком высокие cosine между любыми строками для честной проверки порога).
+    #[tokio::test]
+    async fn search_memory_filters_below_threshold() {
+        use crate::ai::{EmbeddingProvider, MockEmbedder};
+        use crate::vector::VectorIndex;
+
+        let (_d, db) = open().await;
+        let dir = TempDir::new().unwrap();
+        let vectors = VectorIndex::open(dir.path().join("cv.usearch"), 8).unwrap();
+        let emb = MockEmbedder { dim: 8 };
+        let near = log_exchange(db.writer(), None, "близкий", "ответ", None)
+            .await
+            .unwrap();
+        let far = log_exchange(db.writer(), None, "далёкий", "ответ", None)
+            .await
+            .unwrap();
+        let q = emb.embed_query("запрос").await.unwrap();
+        // near: вектор = q → cosine 1.0 ≥ порога → останется; far: −q → cosine −1.0 < порога → отсев.
+        vectors.upsert(near.user_msg_id as u64, &q).unwrap();
+        let neg: Vec<f32> = q.iter().map(|x| -x).collect();
+        vectors.upsert(far.user_msg_id as u64, &neg).unwrap();
+
+        let hits = search_memory(
+            db.reader(),
+            &vectors,
+            &emb,
+            "запрос",
+            5,
+            None,
+            std::collections::HashSet::new(),
+            80,
+        )
+        .await
+        .unwrap();
+        let sids: Vec<i64> = hits.iter().map(|h| h.session_id).collect();
+        assert!(
+            sids.contains(&near.session_id),
+            "близкий (cosine 1.0) подмешан"
+        );
+        assert!(
+            !sids.contains(&far.session_id),
+            "далёкий (ниже порога) отфильтрован"
         );
     }
 }
