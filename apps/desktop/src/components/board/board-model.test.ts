@@ -6,18 +6,34 @@ import {
   basename,
   DEFAULT_COLUMN_IDS,
   filterStuck,
+  filterTasks,
   groupIntoColumns,
   isOverdue,
   knownPriority,
   normalizeStatus,
   OTHER_COLUMN_ID,
   planDay,
+  sortTasks,
   stripFrontmatter,
   todayIsoLocal,
 } from './board-model';
 
 function card(path: string, status: string): TaskCard {
   return { path, title: null, status, project: null, priority: null, due: null, tags: [] };
+}
+
+/** Гибкий конструктор карточки для VIEW-1 тестов. */
+function tcard(path: string, o: Partial<TaskCard> = {}): TaskCard {
+  return {
+    path,
+    title: null,
+    status: 'todo',
+    project: null,
+    priority: null,
+    due: null,
+    tags: [],
+    ...o,
+  };
 }
 
 describe('board-model: groupIntoColumns', () => {
@@ -188,5 +204,172 @@ describe('board-model: planDay (AI-2b)', () => {
       1,
     );
     expect(out.map((i) => i.card.path)).toEqual(['u.md']); // urgent важнее, limit=1
+  });
+});
+
+describe('board-model: sortTasks (VIEW-1)', () => {
+  it('пустой вход → пустой массив', () => {
+    expect(sortTasks([], 'due', 'asc')).toEqual([]);
+  });
+
+  it('due asc: даты по возрастанию, null-due В КОНЦЕ', () => {
+    const out = sortTasks(
+      [tcard('a.md'), tcard('b.md', { due: '2026-06-20' }), tcard('c.md', { due: '2026-06-10' })],
+      'due',
+      'asc',
+    );
+    expect(out.map((c) => c.path)).toEqual(['c.md', 'b.md', 'a.md']);
+  });
+
+  it('due desc: даты по убыванию, но null-due ВСЁ РАВНО в конце (не всплывает)', () => {
+    const out = sortTasks(
+      [tcard('a.md'), tcard('b.md', { due: '2026-06-20' }), tcard('c.md', { due: '2026-06-10' })],
+      'due',
+      'desc',
+    );
+    expect(out.map((c) => c.path)).toEqual(['b.md', 'c.md', 'a.md']); // a.md (null) последний
+  });
+
+  it('невалидная дата трактуется как «нет значения» (тонет в конец)', () => {
+    const out = sortTasks(
+      [tcard('a.md', { due: 'скоро' }), tcard('b.md', { due: '2026-06-10' })],
+      'due',
+      'asc',
+    );
+    expect(out.map((c) => c.path)).toEqual(['b.md', 'a.md']);
+  });
+
+  it('priority asc: urgent→high→medium→low→неизвестный(в конце)', () => {
+    const out = sortTasks(
+      [
+        tcard('low.md', { priority: 'low' }),
+        tcard('x.md', { priority: 'wat' }),
+        tcard('urg.md', { priority: 'urgent' }),
+        tcard('med.md', { priority: 'medium' }),
+        tcard('hi.md', { priority: 'high' }),
+      ],
+      'priority',
+      'asc',
+    );
+    expect(out.map((c) => c.path)).toEqual(['urg.md', 'hi.md', 'med.md', 'low.md', 'x.md']);
+  });
+
+  it('priority desc: low→…→urgent, но неизвестный ВСЁ РАВНО в конце', () => {
+    const out = sortTasks(
+      [
+        tcard('low.md', { priority: 'low' }),
+        tcard('x.md', { priority: 'wat' }),
+        tcard('urg.md', { priority: 'urgent' }),
+        tcard('hi.md', { priority: 'high' }),
+      ],
+      'priority',
+      'desc',
+    );
+    expect(out.map((c) => c.path)).toEqual(['low.md', 'hi.md', 'urg.md', 'x.md']);
+  });
+
+  it('status: регистронезависимая алфавитная сортировка', () => {
+    const out = sortTasks(
+      [
+        tcard('t.md', { status: 'Todo' }),
+        tcard('d.md', { status: 'doing' }),
+        tcard('n.md', { status: 'DONE' }),
+      ],
+      'status',
+      'asc',
+    );
+    expect(out.map((c) => c.path)).toEqual(['d.md', 'n.md', 't.md']); // doing < done < todo
+  });
+
+  it('title: null → фолбэк basename; алфавит', () => {
+    const out = sortTasks([tcard('Zebra.md'), tcard('x.md', { title: 'Apple' })], 'title', 'asc');
+    expect(out.map((c) => c.path)).toEqual(['x.md', 'Zebra.md']); // Apple < Zebra
+  });
+
+  it('стабильный тай-брейк по пути при равном ключе (в т.ч. оба null-due)', () => {
+    const out = sortTasks([tcard('b.md'), tcard('a.md')], 'due', 'asc');
+    expect(out.map((c) => c.path)).toEqual(['a.md', 'b.md']);
+    // desc не должен переворачивать тай-брейк (он не зависит от dir)
+    const outD = sortTasks([tcard('b.md'), tcard('a.md')], 'due', 'desc');
+    expect(outD.map((c) => c.path)).toEqual(['a.md', 'b.md']);
+  });
+
+  it('НЕ мутирует вход (порядок и идентичность элементов сохранены)', () => {
+    const input = [tcard('b.md', { due: '2026-01-02' }), tcard('a.md', { due: '2026-01-01' })];
+    const first = input[0];
+    const out = sortTasks(input, 'due', 'asc');
+    expect(input.map((c) => c.path)).toEqual(['b.md', 'a.md']); // вход не тронут
+    expect(input[0]).toBe(first); // та же ссылка
+    expect(out.map((c) => c.path)).toEqual(['a.md', 'b.md']); // отсортирована копия
+  });
+});
+
+describe('board-model: filterTasks (VIEW-1)', () => {
+  const cards: TaskCard[] = [
+    tcard('a.md', {
+      title: 'Design board',
+      status: 'todo',
+      priority: 'high',
+      project: 'Nexus',
+      tags: ['design', 'task'],
+    }),
+    tcard('b.md', {
+      title: 'Pay bill',
+      status: 'Done',
+      priority: 'low',
+      project: 'Home',
+      tags: ['быт'],
+    }),
+    tcard('c.md', { title: null, status: 'doing', priority: null, project: 'Nexus', tags: [] }),
+  ];
+
+  it('пустой фильтр — no-op (все карточки)', () => {
+    expect(filterTasks(cards, {}).map((c) => c.path)).toEqual(['a.md', 'b.md', 'c.md']);
+    expect(filterTasks(cards, { status: '', text: '  ' }).map((c) => c.path)).toEqual([
+      'a.md',
+      'b.md',
+      'c.md',
+    ]);
+  });
+
+  it('status — регистронезависимое равенство', () => {
+    expect(filterTasks(cards, { status: 'TODO' }).map((c) => c.path)).toEqual(['a.md']);
+  });
+
+  it('priority — равенство; карточка без приоритета не совпадает', () => {
+    expect(filterTasks(cards, { priority: 'High' }).map((c) => c.path)).toEqual(['a.md']);
+    expect(filterTasks(cards, { priority: 'low' }).map((c) => c.path)).toEqual(['b.md']);
+  });
+
+  it('project — равенство (CI), сужает до проекта', () => {
+    expect(filterTasks(cards, { project: 'nexus' }).map((c) => c.path)).toEqual(['a.md', 'c.md']);
+    expect(filterTasks(cards, { project: 'Home' }).map((c) => c.path)).toEqual(['b.md']);
+  });
+
+  it('tag — членство (CI)', () => {
+    expect(filterTasks(cards, { tag: 'TASK' }).map((c) => c.path)).toEqual(['a.md']);
+    expect(filterTasks(cards, { tag: 'быт' }).map((c) => c.path)).toEqual(['b.md']);
+  });
+
+  it('text — подстрока (CI) по заголовку/проекту/тегам', () => {
+    expect(filterTasks(cards, { text: 'design' }).map((c) => c.path)).toEqual(['a.md']); // title+tag
+    expect(filterTasks(cards, { text: 'HOME' }).map((c) => c.path)).toEqual(['b.md']); // project
+    expect(filterTasks(cards, { text: 'быт' }).map((c) => c.path)).toEqual(['b.md']); // tag
+  });
+
+  it('несколько полей комбинируются по И', () => {
+    expect(filterTasks(cards, { status: 'todo', project: 'Nexus' }).map((c) => c.path)).toEqual([
+      'a.md',
+    ]);
+    expect(filterTasks(cards, { project: 'Nexus', priority: 'high' }).map((c) => c.path)).toEqual([
+      'a.md',
+    ]);
+  });
+
+  it('несовпадающий фильтр → пусто; вход не мутируется', () => {
+    expect(filterTasks(cards, { status: 'нет-такого' })).toEqual([]);
+    const out = filterTasks(cards, { project: 'Nexus' });
+    expect(out).not.toBe(cards); // новый массив
+    expect(cards).toHaveLength(3); // вход цел
   });
 });

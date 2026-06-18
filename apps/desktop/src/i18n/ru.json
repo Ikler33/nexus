@@ -944,6 +944,27 @@
         "today": "сегодня",
         "priority": "приоритет"
       }
+    },
+    "list": {
+      "viewToggle": "Представление",
+      "viewColumns": "Канбан",
+      "viewList": "Список",
+      "col": {
+        "title": "Задача",
+        "status": "Статус",
+        "priority": "Приоритет",
+        "due": "Срок",
+        "project": "Проект",
+        "tags": "Теги"
+      },
+      "filter": {
+        "allStatuses": "Все статусы",
+        "allPriorities": "Все приоритеты",
+        "allProjects": "Все проекты",
+        "allTags": "Все теги",
+        "searchPlaceholder": "Поиск задач…"
+      },
+      "emptyFiltered": "Нет задач под фильтр"
     }
   },
   "prop": {

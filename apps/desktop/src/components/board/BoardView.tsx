@@ -5,6 +5,7 @@ import {
   FolderClosed,
   Hourglass,
   LayoutGrid,
+  List,
   RefreshCw,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -14,6 +15,7 @@ import { useToastStore } from '../../stores/toast';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { type DragData, planMove } from './board-dnd';
+import { ListBoardView } from './ListBoardView';
 import { TaskPeek } from './TaskPeek';
 import {
   applyOrder,
@@ -34,6 +36,26 @@ const CARD_MIME = 'application/x-nexus-board-card';
 
 /** Дефолтные id колонок, для которых есть локализованная метка `board.col.*` (пустой label → локализуем). */
 const LOCALIZED_COL_IDS = new Set(['todo', 'doing', 'done']);
+
+/** Режим представления доски (VIEW-1): колонки (канбан) или плоский список. Персист в localStorage. */
+type ViewMode = 'columns' | 'list';
+const VIEW_MODE_KEY = 'nexus.board.viewMode.v1';
+
+function readViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_MODE_KEY) === 'list' ? 'list' : 'columns';
+  } catch {
+    return 'columns'; // localStorage недоступен (node25/test) — дефолт-канбан
+  }
+}
+
+function persistViewMode(mode: ViewMode): void {
+  try {
+    localStorage.setItem(VIEW_MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Класс цвета приоритета (известный набор → свой; прочее → нейтральный). */
 function prioClass(priority: string | null): string {
@@ -92,6 +114,12 @@ export function BoardView() {
   // AI-2a/2b: «застрявшие» (бэкенд) + раскрытая AI-панель (взаимоисключимы). План дня — чисто из карточек.
   const [stale, setStale] = useState<StaleTask[]>([]);
   const [aiPanel, setAiPanel] = useState<'stale' | 'plan' | null>(null);
+  // VIEW-1: режим представления (канбан-колонки / список) — клиентский префо, персист в localStorage.
+  const [viewMode, setViewMode] = useState<ViewMode>(readViewMode);
+  const switchView = (mode: ViewMode) => {
+    setViewMode(mode);
+    persistViewMode(mode);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -299,6 +327,29 @@ export function BoardView() {
               {t('board.stale.count', { count: stuck.length })}
             </button>
           )}
+          {/* VIEW-1: переключатель представления (канбан / список) — сегментированный тоггл. */}
+          <div className={styles.viewToggle} role="group" aria-label={t('board.list.viewToggle')}>
+            <button
+              type="button"
+              className={`${styles.viewBtn} ${viewMode === 'columns' ? styles.viewActive : ''}`}
+              onClick={() => switchView('columns')}
+              title={t('board.list.viewColumns')}
+              aria-label={t('board.list.viewColumns')}
+              aria-pressed={viewMode === 'columns'}
+            >
+              <LayoutGrid size={15} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={`${styles.viewBtn} ${viewMode === 'list' ? styles.viewActive : ''}`}
+              onClick={() => switchView('list')}
+              title={t('board.list.viewList')}
+              aria-label={t('board.list.viewList')}
+              aria-pressed={viewMode === 'list'}
+            >
+              <List size={15} aria-hidden />
+            </button>
+          </div>
           <button
             type="button"
             className={styles.refresh}
@@ -386,7 +437,28 @@ export function BoardView() {
         </div>
       )}
 
-      {data && total > 0 && (
+      {data && total > 0 && viewMode === 'list' && (
+        <div className={styles.bodyRow}>
+          <ListBoardView
+            cards={data.cards}
+            today={today}
+            onOpen={setPeekPath}
+            columnLabel={columnLabel}
+            activePath={peekPath}
+          />
+          {peekCard && (
+            <TaskPeek
+              card={peekCard}
+              onClose={() => setPeekPath(null)}
+              onOpenFull={openNote}
+              onOpenLink={openLink}
+              onChanged={() => void load()}
+            />
+          )}
+        </div>
+      )}
+
+      {data && total > 0 && viewMode === 'columns' && (
         <div className={styles.bodyRow}>
         <div className={styles.columns}>
           {columns.map((col) => {

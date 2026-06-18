@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BoardView } from './BoardView';
 import i18n from '../../i18n/setup';
@@ -133,5 +133,84 @@ describe('BoardView DnD (BOARD-5 — optimistic + rollback, §14.6)', () => {
 
     expect(get.mock.calls.length).toBe(callsAfterMount); // load НЕ вызван во время busy
     resolveFm({ content: '---\nstatus: doing\n---\n', hash: 'h2' });
+  });
+});
+
+describe('BoardView — переключатель представления (VIEW-1)', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en');
+    vi.restoreAllMocks();
+    // Детерминированный in-memory localStorage (локальный node-localStorage сломан, см. test/setup.ts;
+    // тогл персистится → нужен рабочий стор и локально, и на CI).
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: () => null,
+      length: 0,
+    });
+    useWorkspaceStore.setState({ buffers: {} });
+    vi.spyOn(tauriApi.board, 'get').mockResolvedValue(boardData());
+    vi.spyOn(tauriApi.board, 'save').mockResolvedValue(undefined);
+    vi.spyOn(tauriApi.board, 'stale').mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('тоггл «List» переключает на список (канбан-колонки исчезают, появляется список)', async () => {
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    expect(column(/To do/i)).toBeInTheDocument(); // канбан по умолчанию
+
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    expect(screen.queryByRole('region', { name: /To do/i })).toBeNull(); // колонок нет
+    expect(screen.getByRole('button', { name: 'Task' })).toBeInTheDocument(); // заголовок списка
+  });
+
+  it('режим вида персистится в localStorage и восстанавливается при ремоунте', async () => {
+    const { unmount } = render(<BoardView />);
+    await screen.findByText('Task T');
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    expect(localStorage.getItem('nexus.board.viewMode.v1')).toBe('list');
+
+    unmount();
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    // Стартовал сразу в list-режиме (колонок нет, есть заголовок списка).
+    expect(screen.queryByRole('region', { name: /To do/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Task' })).toBeInTheDocument();
+  });
+
+  it('обратно на «Board» восстанавливает канбан', async () => {
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    expect(screen.queryByRole('region', { name: /To do/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Board' }));
+    expect(column(/To do/i)).toBeInTheDocument();
+  });
+
+  it('клик по строке списка открывает превью (TaskPeek) — peek работает в обоих режимах', async () => {
+    vi.spyOn(tauriApi.vault, 'readFileMeta').mockResolvedValue({
+      content: '---\nstatus: todo\n---\n# Тело',
+      hash: 'h1',
+    });
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Task T/ }));
+    expect(await screen.findByRole('complementary', { name: /Task preview/i })).toBeInTheDocument();
+  });
+
+  it('в list-режиме строки НЕ draggable (DnD отключён)', async () => {
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    const row = await screen.findByRole('button', { name: /Task T/ });
+    expect(row.getAttribute('draggable')).not.toBe('true');
   });
 });
