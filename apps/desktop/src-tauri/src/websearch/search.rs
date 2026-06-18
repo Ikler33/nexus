@@ -12,8 +12,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::git::scan_secrets;
-use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
-use crate::news::{check_resolved_ips, read_body_capped, Resolver, FEED_BODY_CAP};
+use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, Resolver};
+use crate::news::{check_resolved_ips, read_body_capped, FEED_BODY_CAP};
 
 /// W3: таймаут поискового запроса и потолок тела ответа (как у ленты — единый web-класс).
 const SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -137,16 +137,19 @@ impl WebSearcher {
             .resolver
             .resolve(&host)
             .await
-            .map_err(SearchError::Failed)?;
+            .map_err(|e| SearchError::Failed(format!("dns: {e}")))?;
         check_resolved_ips(&host, &ips).map_err(SearchError::Failed)?;
         let pinned = SocketAddr::new(ips[0], url.port_or_known_default().unwrap_or(443));
         let host_for_pin = host.clone();
 
+        // Тот же резолвер инъектится в core-`GuardedClient` (P0-a): его собственный гард работает
+        // поверх ТОГО ЖЕ резолва, единый [`check_resolved_ips`] — один источник истины.
         let client = GuardedClient::new(self.policy.clone(), self.audit.clone(), move |b| {
             b.timeout(SEARCH_TIMEOUT)
                 .resolve_to_addrs(&host_for_pin, &[pinned])
         })
-        .map_err(|e| SearchError::Failed(e.to_string()))?;
+        .map_err(|e| SearchError::Failed(e.to_string()))?
+        .with_resolver(self.resolver.clone());
         let resp = client
             .get(url.as_str(), EgressFeature::Web)
             .await
@@ -215,7 +218,7 @@ mod tests {
         struct NopeResolver;
         #[async_trait::async_trait]
         impl Resolver for NopeResolver {
-            async fn resolve(&self, _h: &str) -> Result<Vec<std::net::IpAddr>, String> {
+            async fn resolve(&self, _h: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
                 panic!("резолв не должен вызываться: запрос с секретом не уходит")
             }
         }

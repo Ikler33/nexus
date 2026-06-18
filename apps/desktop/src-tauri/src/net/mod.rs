@@ -11,6 +11,7 @@
 //! append-only [`EgressAudit`] (E8, AC-EGR-4); host — через [`Redacted`] (значение не утекает в Debug).
 
 mod persist;
+mod resolve;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +21,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use persist::{load as load_egress_state, save as save_egress_state, EgressState};
+pub use resolve::{check_resolved_ips, Resolver, SystemResolver};
 
 use crate::plugin::{blocks_cloud_metadata, is_private_host};
 use crate::redact::Redacted;
@@ -284,30 +286,54 @@ impl EgressAudit {
     }
 }
 
+/// Тип фабрики тюнинга билдера: вызывается на КАЖДЫЙ запрос (нужно пересобрать клиент с пином
+/// проверенного IP — `resolve_to_addrs` — чтобы DNS не «перепрыгнул» между check и connect, TOCTOU).
+/// Поэтому `Fn` (а не `FnOnce`) + `Send + Sync` (клиент клонируется между задачами) под `Arc`.
+type TuneFn = Arc<dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync>;
+
 /// Guarded HTTP-клиент ядра — ЕДИНСТВЕННАЯ дверь исходящего HTTP (E1, AC-EGR-1). Каждый запрос:
-/// `policy.check` (отказ ДО сокета/DNS) → запись в audit (успех И отказ) → реальный I/O.
-/// Клонирование дёшево (`reqwest::Client` внутри — `Arc`).
+/// `policy.check` (host-string-гейт) → **резолв + проверка ВСЕХ IP** (DNS-rebinding/SSRF-гард, P0-a)
+/// → запись в audit (успех И отказ) → реальный I/O **с пином проверенного IP**.
+/// Клонирование дёшево (`reqwest::Client`/`Arc` внутри).
 #[derive(Clone)]
 pub struct GuardedClient {
-    inner: reqwest::Client,
+    /// Фабрика тюнинга — пересобирает клиент с `resolve_to_addrs` (пин проверенного IP) на КАЖДЫЙ
+    /// запрос; держит таймауты/UA вызывающего и приватный `core_client_builder` (redirect=none).
+    tune: TuneFn,
     policy: Arc<EgressPolicy>,
     audit: Arc<EgressAudit>,
+    /// DNS-резолвер для гарда (боевой [`SystemResolver`]; в тестах/web-классе подменяется).
+    resolver: Arc<dyn Resolver>,
 }
 
 impl GuardedClient {
     /// Строит guarded-клиент поверх приватного `core_client_builder` (redirect=none сохраняется,
     /// AC-EGR-7); `tune` добавляет таймауты вызывающего, политику редиректов не трогать.
+    /// `tune` зовётся на каждый запрос (пересборка с пином IP) — потому `Fn + Send + Sync`.
     pub fn new(
         policy: Arc<EgressPolicy>,
         audit: Arc<EgressAudit>,
-        tune: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+        tune: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder + Send + Sync + 'static,
     ) -> Result<Self, NetError> {
-        let inner = tune(core_client_builder()).build()?;
+        let tune: TuneFn = Arc::new(tune);
+        // Build-and-discard: валидируем конфиг билдера СРАЗУ (как раньше), чтобы `new` отдал `Err`
+        // на битом тюнинге, а не падал на первом запросе. Сам клиент per-request пересобирается.
+        let _ = tune(core_client_builder()).build()?;
         Ok(Self {
-            inner,
+            tune,
             policy,
             audit,
+            resolver: Arc::new(SystemResolver),
         })
+    }
+
+    /// Подменяет резолвер: web-класс (news/websearch) инъектит свой `Arc<dyn Resolver>` (в проде —
+    /// [`SystemResolver`], в их тестах — мок), а гард резолв→проверка→пин делает САМ core-путь
+    /// (P0-a, единый источник истины). Боевой core-путь chat/embed/probe использует
+    /// [`SystemResolver`] по умолчанию (без вызова этого сеттера).
+    pub fn with_resolver(mut self, resolver: Arc<dyn Resolver>) -> Self {
+        self.resolver = resolver;
+        self
     }
 
     /// Профиль chat-стрима: общего таймаута нет (стрим долгий, idle-таймаут — у провайдера),
@@ -332,7 +358,7 @@ impl GuardedClient {
         audit: Arc<EgressAudit>,
         timeout: Duration,
     ) -> Result<Self, NetError> {
-        Self::new(policy, audit, |b| b.timeout(timeout))
+        Self::new(policy, audit, move |b| b.timeout(timeout))
     }
 
     /// GET через политику (probe `/v1/models`). `bytes_out=None` — тела запроса нет (AC-EGR-10).
@@ -341,8 +367,8 @@ impl GuardedClient {
         url: &str,
         feature: EgressFeature,
     ) -> Result<reqwest::Response, NetError> {
-        self.authorize(url, feature, None)?;
-        Ok(self.inner.get(url).send().await?)
+        let client = self.authorize(url, feature, None).await?;
+        Ok(client.get(url).send().await?)
     }
 
     /// POST JSON-тела через политику. `bytes_out=Some(len)` — длина сериализованного тела ЗАПРОСА
@@ -354,9 +380,8 @@ impl GuardedClient {
         body: &serde_json::Value,
     ) -> Result<reqwest::Response, NetError> {
         let bytes = serde_json::to_vec(body).expect("serde_json::Value сериализуем всегда");
-        self.authorize(url, feature, Some(bytes.len()))?;
-        Ok(self
-            .inner
+        let client = self.authorize(url, feature, Some(bytes.len())).await?;
+        Ok(client
             .post(url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(bytes)
@@ -369,15 +394,19 @@ impl GuardedClient {
         &self.policy
     }
 
-    /// Проверка политики + ровно ОДНА запись audit на вызов (успех и отказ, AC-EGR-4) — ДО сокета.
-    fn authorize(
+    /// Авторизация per-request (порядок — дизайн-инвариант): host-string-гейт политики → **резолв +
+    /// проверка ВСЕХ IP** (DNS-rebinding/SSRF, P0-a) → ровно ОДНА запись audit (успех И отказ,
+    /// AC-EGR-4). Возвращает клиент с **пином** проверенного IP (`resolve_to_addrs`): коннект пойдёт
+    /// на проверенный адрес, а не на повторный резолв атакующего DNS (TOCTOU). Любой отказ — ДО сокета.
+    async fn authorize(
         &self,
         url: &str,
         feature: EgressFeature,
         bytes_out: Option<usize>,
-    ) -> Result<(), NetError> {
-        let host = reqwest::Url::parse(url)
-            .ok()
+    ) -> Result<reqwest::Client, NetError> {
+        let parsed = reqwest::Url::parse(url).ok();
+        let host = parsed
+            .as_ref()
             .and_then(|u| u.host_str().map(str::to_string));
         let Some(host) = host else {
             // URL без хоста: аудитим сырой url (redacted) с отказом и не уходим в сеть.
@@ -389,10 +418,48 @@ impl GuardedClient {
             );
             return Err(NetError::BadUrl);
         };
-        let decision = self.policy.check(&host, feature);
-        self.audit.record(feature, host, bytes_out, &decision);
-        decision.map_err(NetError::from)?;
-        Ok(())
+
+        // 1. Host-string-гейт (metadata/офлайн/opt-in/allowlist|приватность) — без сети.
+        if let Err(denied) = self.policy.check(&host, feature) {
+            self.audit
+                .record(feature, host, bytes_out, &Err(denied.clone()));
+            return Err(NetError::from(denied));
+        }
+
+        // 2. DNS-rebinding/SSRF-гард (P0-a): резолв → проверка ВСЕХ IP. host-литерал-IP резолвится
+        //    сам в себя — гард всё равно отрабатывает (defense-in-depth поверх host-гейта).
+        let ips = match self.resolver.resolve(&host).await {
+            Ok(ips) => ips,
+            Err(_) => {
+                // Резолв упал — НЕ молчаливый allow: типизированный отказ + audit как denial.
+                let denied = EgressDenied::HostNotAllowed(Redacted::new(host.clone()));
+                self.audit
+                    .record(feature, host, bytes_out, &Err(denied.clone()));
+                return Err(NetError::from(denied));
+            }
+        };
+        let ip_decision = check_resolved_ips(&ips, feature.denies_private());
+        if let Err(denied) = ip_decision {
+            self.audit
+                .record(feature, host, bytes_out, &Err(denied.clone()));
+            return Err(NetError::from(denied));
+        }
+
+        // 3. Успех — ровно одна audit-запись.
+        self.audit.record(feature, host.clone(), bytes_out, &Ok(()));
+
+        // 4. ПИН: пересобираем клиент с `resolve_to_addrs` на первый проверенный IP (порт из URL).
+        //    Анти-TOCTOU: коннект гарантированно идёт на проверенный адрес. redirect=none сохранён
+        //    (через `core_client_builder` в фабрике `tune`).
+        let port = parsed
+            .as_ref()
+            .and_then(|u| u.port_or_known_default())
+            .unwrap_or(443);
+        let pinned = std::net::SocketAddr::new(ips[0], port);
+        let client = (self.tune)(core_client_builder())
+            .resolve_to_addrs(&host, &[pinned])
+            .build()?;
+        Ok(client)
     }
 
     /// Тест-фикстура: политика с дефолтами (фичи включены, офлайн выключен, allowlist пуст) —
@@ -416,9 +483,23 @@ mod tests {
         (Arc::new(EgressPolicy::new(offline.clone())), offline)
     }
 
+    /// Гард с боевым `SystemResolver` (литералы 127.0.0.1/IP резолвятся в себя без сети).
     fn guarded(policy: Arc<EgressPolicy>) -> (GuardedClient, Arc<EgressAudit>) {
         let audit = Arc::new(EgressAudit::default());
         let client = GuardedClient::new(policy, audit.clone(), |b| b).unwrap();
+        (client, audit)
+    }
+
+    /// Гард с МОК-резолвером: любой хост → заданный список IP (DNS-rebinding-сценарии без сети).
+    fn guarded_with_ips(
+        policy: Arc<EgressPolicy>,
+        ips: Vec<std::net::IpAddr>,
+    ) -> (GuardedClient, Arc<EgressAudit>) {
+        let audit = Arc::new(EgressAudit::default());
+        let resolver = Arc::new(resolve::test_support::FixedResolver::new(ips));
+        let client = GuardedClient::new(policy, audit.clone(), |b| b)
+            .unwrap()
+            .with_resolver(resolver);
         (client, audit)
     }
 
@@ -762,6 +843,111 @@ mod tests {
             "Content-Length >= len(body)"
         );
         assert_eq!(entries[1].bytes_out, None, "get: тела нет");
+    }
+
+    /// P0-a (DNS-rebinding на CORE-пути): chat-хост, резолвящийся в metadata 169.254.169.254,
+    /// отклоняется ДО коннекта — типизированным отказом (не сетевой ошибкой) и аудитится как denial.
+    /// Мок-listener обязан НЕ принять соединение.
+    #[tokio::test]
+    async fn chat_host_resolving_to_metadata_is_denied_before_connect() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+
+        let (policy, _) = policy_with_switch();
+        policy.set_allowlist(["chat.example.com".to_string()]); // host-string-гейт пропустит
+        let (client, audit) = guarded_with_ips(policy, vec!["169.254.169.254".parse().unwrap()]);
+
+        let res = client
+            .post_json(
+                "http://chat.example.com/v1/chat/completions",
+                EgressFeature::Chat,
+                &serde_json::json!({"messages": []}),
+            )
+            .await;
+        assert!(
+            matches!(res, Err(NetError::Denied(EgressDenied::HostNotAllowed(_)))),
+            "rebind на metadata режется типизированно: {res:?}"
+        );
+        assert!(
+            matches!(
+                listener.accept(),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+            ),
+            "0 коннектов: DNS-гард отрезал ДО сокета (P0-a)"
+        );
+        let entries = audit.entries();
+        assert_eq!(entries.len(), 1, "ровно одна audit-запись на отказ");
+        assert!(!entries[0].allowed, "rebind аудитится как denial");
+    }
+
+    /// P0-a (local-first сохранён): chat-хост, резолвящийся в loopback/LAN, ДОПУСКАЕТСЯ — приватные
+    /// IP для chat живут (LAN-LLM). Реальный коннект на loopback-мок проходит (пин не ломает loopback).
+    #[tokio::test]
+    async fn chat_host_resolving_to_loopback_or_lan_is_allowed() {
+        // Реальный loopback-сервер; мок-резолвер отдаёт его адрес как «резолв» публичного имени.
+        let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        let (policy, _) = policy_with_switch();
+        policy.set_allowlist(["chat.example.com".to_string()]);
+        let (client, audit) = guarded_with_ips(policy, vec![addr.ip()]);
+
+        // URL-порт должен совпасть с портом пина → используем порт мок-сервера в URL.
+        let url = format!("http://chat.example.com:{}/v1/models", addr.port());
+        let resp = client
+            .get(&url, EgressFeature::Chat)
+            .await
+            .expect("loopback/LAN для chat живёт (local-first)");
+        assert_eq!(resp.status().as_u16(), 200);
+        server.join().unwrap();
+        assert!(audit.entries()[0].allowed, "успех аудитится как allowed");
+
+        // И чисто политически: LAN-IP (192.168.x) для chat проходит ip-гард.
+        let (policy2, _) = policy_with_switch();
+        policy2.set_allowlist(["lan.example.com".to_string()]);
+        let (client2, _) = guarded_with_ips(policy2, vec!["192.168.0.31".parse().unwrap()]);
+        // Коннекта к 192.168.0.31 не будет (нет сервера) — но гард обязан ПРОПУСТИТЬ (ip-allow),
+        // отказ может прийти только сетевой (Http), не Denied. Проверяем именно это разграничение.
+        let res = client2
+            .get("http://lan.example.com/v1/models", EgressFeature::Chat)
+            .await;
+        assert!(
+            !matches!(res, Err(NetError::Denied(_))),
+            "LAN для chat НЕ отклоняется политикой/гардом (local-first): {res:?}"
+        );
+    }
+
+    /// P0-a (web-класс): NewsFeed-хост, резолвящийся в приватный LAN-IP, отклоняется (deny_private).
+    #[tokio::test]
+    async fn web_class_host_resolving_to_private_is_denied() {
+        let (policy, _) = policy_with_switch();
+        policy.set_feature_enabled(EgressFeature::NewsFeed, true);
+        policy.set_scoped_allowlist("news", ["feeds.example.com".to_string()]);
+        let (client, audit) = guarded_with_ips(policy, vec!["10.0.0.7".parse().unwrap()]);
+
+        let res = client
+            .get("https://feeds.example.com/rss", EgressFeature::NewsFeed)
+            .await;
+        assert!(
+            matches!(res, Err(NetError::Denied(EgressDenied::HostNotAllowed(_)))),
+            "web-класс: приватный резолв denied: {res:?}"
+        );
+        assert!(!audit.entries()[0].allowed);
+    }
+
+    /// P0-a: пустой резолв → типизированный отказ (нечего пинить), аудит как denial, без сети.
+    #[tokio::test]
+    async fn empty_resolution_is_denied() {
+        let (policy, _) = policy_with_switch();
+        policy.set_allowlist(["chat.example.com".to_string()]);
+        let (client, audit) = guarded_with_ips(policy, vec![]);
+        let res = client
+            .get("http://chat.example.com/v1/models", EgressFeature::Chat)
+            .await;
+        assert!(matches!(
+            res,
+            Err(NetError::Denied(EgressDenied::HostNotAllowed(_)))
+        ));
+        assert_eq!(audit.len(), 1);
+        assert!(!audit.entries()[0].allowed);
     }
 
     /// URL без хоста: типизированный `BadUrl`, одна audit-запись, в сеть не уходим.
