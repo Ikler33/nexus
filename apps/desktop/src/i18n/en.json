@@ -152,6 +152,9 @@
       "consolidationModeDesc": "«Propose» — every merge/replace via a chip. «Auto» — apply silently (except your EXPLICIT facts — always via a chip), with «Undo» in the toast.",
       "consolidationModeOpts": { "propose": "Propose", "auto": "Auto" },
       "manageMemory": "AI memory…",
+      "episodicMemory": "Episodic memory",
+      "episodicMemoryDesc": "Mix short summaries of your past sessions («what we talked about before») into AI answers. Off by default — privacy. Manage episodes below.",
+      "manageEpisodes": "Episodes…",
       "explainRelations": "Explain relations",
       "explainRelationsDesc": "In Related/Similar, show a short LLM explanation of how the notes relate instead of the raw snippet (lazy, cached). Without a utility model — falls back to the snippet."
     },
@@ -578,6 +581,20 @@
     "noProgress": "no progress",
     "refresh": "Refresh",
     "close": "Close"
+  },
+  "episode": {
+    "title": "Episodes",
+    "loading": "Loading episodes…",
+    "empty": "No episodes yet. The AI summarizes finished conversations in the background when episodic memory is on.",
+    "close": "Close",
+    "openSession": "Open this session",
+    "dismiss": "Hide",
+    "dismissed": "Episode hidden",
+    "restore": "Restore",
+    "hidden": "Hidden",
+    "undo": "Undo",
+    "purge": "Delete forever",
+    "purgeConfirm": "Delete episode «{{title}}» forever? Its summary and vector will be erased (the session and messages remain)."
   },
   "memory": {
     "title": "AI memory",

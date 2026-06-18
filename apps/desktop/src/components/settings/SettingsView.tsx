@@ -19,6 +19,7 @@ import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import type { EgressState, WebSearchConfig } from '../../lib/tauri-api';
+import { useEpisodeStore } from '../../stores/episode';
 import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, THEMES, useThemeStore } from '../../stores/theme';
 import type { Accent } from '../../stores/theme';
@@ -392,7 +393,10 @@ function AiSection() {
   const setAiMemoryConsolidationMode = usePrefsStore((s) => s.setAiMemoryConsolidationMode);
   const aiExplainRelations = usePrefsStore((s) => s.aiExplainRelations);
   const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
+  const aiEpisodicMemory = usePrefsStore((s) => s.aiEpisodicMemory);
+  const setAiEpisodicMemory = usePrefsStore((s) => s.setAiEpisodicMemory);
   const openMemory = useUIStore((s) => s.openMemory);
+  const openEpisodes = useUIStore((s) => s.openEpisodes);
   const [chatUrl, setChatUrl] = useState('');
   const [chatModel, setChatModel] = useState('');
   const [embUrl, setEmbUrl] = useState('');
@@ -559,9 +563,24 @@ function AiSection() {
           </div>
         </section>
       )}
+      {/* EP-3: эпизодическая память — подмешивать саммари прошлых сессий в ответы. ВЫКЛ по умолчанию.
+          Тоггл пишет И фронт-pref (per-call флаг чата), И persisted-настройку бэка (фоновая генерация +
+          kick при включении — контракт MAJOR-2). Управление эпизодами — кнопка «Эпизоды…». */}
+      <EgressRow
+        label={t('settings.aiSec.episodicMemory')}
+        desc={t('settings.aiSec.episodicMemoryDesc')}
+        value={aiEpisodicMemory}
+        onChange={(on) => {
+          setAiEpisodicMemory(on);
+          void useEpisodeStore.getState().setEnabled(on);
+        }}
+      />
       <div className={styles.saveBar}>
         <button type="button" className={styles.ghostBtn} onClick={openMemory}>
           {t('settings.aiSec.manageMemory')}
+        </button>
+        <button type="button" className={styles.ghostBtn} onClick={openEpisodes}>
+          {t('settings.aiSec.manageEpisodes')}
         </button>
       </div>
 

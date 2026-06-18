@@ -98,6 +98,12 @@ interface UIState {
   toggleMemory: () => void;
   /** Открыть «Память ИИ» (из Настроек — поэтому закрывает раздел настроек). */
   openMemory: () => void;
+  /** Открыта ли панель «Эпизоды» (EP-3 — саммари прошлых сессий). */
+  episodesOpen: boolean;
+  closeEpisodes: () => void;
+  toggleEpisodes: () => void;
+  /** Открыть «Эпизоды» (из Настроек — закрывает раздел настроек). */
+  openEpisodes: () => void;
   closeTasks: () => void;
   toggleTasks: () => void;
   closeInbox: () => void;
@@ -163,6 +169,7 @@ const TRAP_OVERLAYS_CLOSED = {
   inboxOpen: false,
   cheatsheetOpen: false,
   memoryOpen: false,
+  episodesOpen: false,
   tweaksOpen: false, // ревью MEM-4: иначе trap-оверлей поверх открытых Настроек = два стэкнутых focus-trap
 } as const;
 
@@ -176,6 +183,7 @@ export const useUIStore = create<UIState>((set) => ({
   conflictOpen: false,
   goalsOpen: false,
   memoryOpen: false,
+  episodesOpen: false,
   tasksOpen: false,
   inboxOpen: false,
   digestOpen: false,
@@ -266,6 +274,17 @@ export const useUIStore = create<UIState>((set) => ({
     }),
   // Открытие из Настроек: закрываем раздел настроек, чтобы модалка не пряталась под ним.
   openMemory: () => set({ ...TRAP_OVERLAYS_CLOSED, memoryOpen: true, tweaksOpen: false }),
+  // «Эпизоды» (EP-3) — focus-trap-модалка, взаимоисключаема с прочими trap-оверлеями (как «Память ИИ»).
+  closeEpisodes: () => set({ episodesOpen: false }),
+  toggleEpisodes: () =>
+    set((s) => {
+      const open = !s.episodesOpen;
+      logUi('episodes:toggle', open ? 'open' : 'close');
+      return open
+        ? { ...TRAP_OVERLAYS_CLOSED, episodesOpen: true, tweaksOpen: false }
+        : { episodesOpen: false };
+    }),
+  openEpisodes: () => set({ ...TRAP_OVERLAYS_CLOSED, episodesOpen: true, tweaksOpen: false }),
   closeTasks: () => set({ tasksOpen: false }),
   toggleTasks: () =>
     set((s) => {
