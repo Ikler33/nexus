@@ -97,6 +97,16 @@ export function App() {
   const vaultRoot = info?.root ?? null;
   useEffect(() => {
     useChatStore.getState().hydrate(vaultRoot);
+    // EP-3 (ревью): `episodic.enabled` живёт в БД vault (едет с vault), это ИСТОЧНИК ИСТИНЫ. Синхронизируем
+    // фронт-pref `aiEpisodicMemory` (= отображение тоггла + per-call флаг чата) от бэка при открытии vault.
+    // Иначе на другой машине / после очистки localStorage тоггл показывал бы OFF, а фоновая генерация шла
+    // (нарушение privacy-default). Best-effort: нет vault/ошибка → оставляем pref как есть.
+    if (vaultRoot) {
+      void tauriApi.episode
+        .getEnabled()
+        .then((on) => usePrefsStore.getState().setAiEpisodicMemory(on))
+        .catch(() => {});
+    }
   }, [vaultRoot]);
 
   // Живой пересчёт зависимых от индекса вьюх по событию индексатора (ADR-007 S8, AC-GP-3):
