@@ -105,6 +105,19 @@ export async function refresh(key: string): Promise<void> {
   if (w) widgets[key] = { ...w, generatedAt: Math.floor(Date.now() / 1000) };
 }
 
+// Тоггл «Инсайты» (зеркало бэкенд-сеттинга `insights.enabled`, дефолт OFF). setEnabled персистит флаг
+// в памяти процесса (мок-бэкенд без БД); kick-джобы не эмулируем (виджеты уже сидированы выше).
+let insightsEnabled = false;
+
+export function insightsGetEnabled(): Promise<boolean> {
+  return Promise.resolve(insightsEnabled);
+}
+
+export function insightsSetEnabled(on: boolean): Promise<void> {
+  insightsEnabled = on;
+  return Promise.resolve();
+}
+
 export async function staleRadar(): Promise<StaleNote[]> {
   const base = {
     isDraft: false,

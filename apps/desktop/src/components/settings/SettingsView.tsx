@@ -19,6 +19,7 @@ import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import type { EgressState, WebSearchConfig } from '../../lib/tauri-api';
+import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useEpisodeStore } from '../../stores/episode';
 import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, THEMES, useThemeStore } from '../../stores/theme';
@@ -395,6 +396,11 @@ function AiSection() {
   const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
   const aiEpisodicMemory = usePrefsStore((s) => s.aiEpisodicMemory);
   const setAiEpisodicMemory = usePrefsStore((s) => s.setAiEpisodicMemory);
+  // Фоновые ИИ-фичи Home (persisted в БД vault, дефолт OFF) — гейтятся owner-тогглами.
+  const insightsEnabled = useAiFeaturesStore((s) => s.insights);
+  const setInsightsEnabled = useAiFeaturesStore((s) => s.setInsights);
+  const contradictionsEnabled = useAiFeaturesStore((s) => s.contradictions);
+  const setContradictionsEnabled = useAiFeaturesStore((s) => s.setContradictions);
   const aiChatDeep = usePrefsStore((s) => s.aiChatDeep);
   const setAiChatDeep = usePrefsStore((s) => s.setAiChatDeep);
   const openMemory = useUIStore((s) => s.openMemory);
@@ -595,6 +601,22 @@ function AiSection() {
           {t('settings.aiSec.manageEpisodes')}
         </button>
       </div>
+
+      {/* Фоновые ИИ-фичи Home, гейтируемые владельцем (real-test 2026-06-18). Дефолт OFF (opt-in). При
+          включении бэкенд ставит kick-генерацию (иначе фича «мертва» до перезапуска vault — урок EP-1).
+          Источник истины — БД vault (стор грузится от бэка на открытии). */}
+      <EgressRow
+        label={t('settings.aiSec.insights')}
+        desc={t('settings.aiSec.insightsDesc')}
+        value={insightsEnabled}
+        onChange={(on) => void setInsightsEnabled(on)}
+      />
+      <EgressRow
+        label={t('settings.aiSec.contradictions')}
+        desc={t('settings.aiSec.contradictionsDesc')}
+        value={contradictionsEnabled}
+        onChange={(on) => void setContradictionsEnabled(on)}
+      />
 
       {/* AIP-10: LLM-«причина связи» в «Связях»/«Похожих» (лениво, кэш). Без утилитарной модели —
           фолбэк на сниппет. */}

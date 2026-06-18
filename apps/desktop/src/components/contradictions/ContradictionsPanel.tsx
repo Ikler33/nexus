@@ -3,6 +3,7 @@ import { RefreshCw, Scale, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useContradictionsStore } from '../../stores/contradictions';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -31,6 +32,9 @@ export function ContradictionsPanel() {
   const error = useContradictionsStore((s) => s.error);
   const load = useContradictionsStore((s) => s.load);
   const generate = useContradictionsStore((s) => s.generate);
+  // Тоггл «Поиск противоречий» (owner-gated, дефолт OFF): при OFF прячем кнопку запуска (была бы no-op)
+  // и показываем честную подсказку «включите в настройках».
+  const enabled = useAiFeaturesStore((s) => s.contradictions);
   const openFile = useWorkspaceStore((s) => s.openFile);
 
   useEffect(() => {
@@ -57,15 +61,19 @@ export function ContradictionsPanel() {
           <Scale size={16} aria-hidden />
           <span className={styles.title}>{t('contradictions.title')}</span>
           <span className={styles.spacer} />
-          <button
-            className={styles.genBtn}
-            onClick={() => void generate()}
-            disabled={generating}
-            title={t('contradictions.generate')}
-          >
-            <Sparkles size={14} aria-hidden />
-            <span>{generating ? t('contradictions.generating') : t('contradictions.generate')}</span>
-          </button>
+          {enabled && (
+            <button
+              className={styles.genBtn}
+              onClick={() => void generate()}
+              disabled={generating}
+              title={t('contradictions.generate')}
+            >
+              <Sparkles size={14} aria-hidden />
+              <span>
+                {generating ? t('contradictions.generating') : t('contradictions.generate')}
+              </span>
+            </button>
+          )}
           <button
             className={styles.iconBtn}
             onClick={() => void load()}
@@ -97,7 +105,9 @@ export function ContradictionsPanel() {
         ) : items.length === 0 ? (
           <div className={styles.emptyState}>
             <Scale size={22} className={styles.emptyIco} aria-hidden />
-            <p className={styles.empty}>{t('contradictions.empty')}</p>
+            <p className={styles.empty}>
+              {enabled ? t('contradictions.empty') : t('contradictions.disabled')}
+            </p>
           </div>
         ) : (
           <ul className={styles.list}>

@@ -495,6 +495,19 @@ export async function getContradictions(): Promise<Contradiction[]> {
   ];
 }
 
+// Тоггл «Поиск противоречий» (зеркало бэкенд-сеттинга `contradictions.enabled`, дефолт OFF). setEnabled
+// персистит флаг в памяти процесса (мок-бэкенд без БД); kick-джобу не эмулируем.
+let contradictionsEnabled = false;
+
+export function contradictionsGetEnabled(): Promise<boolean> {
+  return Promise.resolve(contradictionsEnabled);
+}
+
+export function contradictionsSetEnabled(on: boolean): Promise<void> {
+  contradictionsEnabled = on;
+  return Promise.resolve();
+}
+
 /** Симуляция inline-стрима (IL-2) для превью/тестов: несколько токенов по режиму → done. */
 export function streamInline(
   mode: InlineMode,

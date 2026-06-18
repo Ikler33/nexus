@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeView } from './HomeView';
+import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useChatStore } from '../../stores/chat';
 import { useHomeStore } from '../../stores/home';
 import { useUIStore } from '../../stores/ui';
@@ -13,6 +14,9 @@ const realLoad = useHomeStore.getState().load;
 function resetStores() {
   useUIStore.setState({ homeOpen: true, newsOpen: false, chatOpen: false });
   useChatStore.setState({ draft: '', pinned: [], mode: 'general', streaming: false });
+  // «Инсайты» включены — проверяем рендер карточек вопросов/дрейфа с контентом (отдельный кейс ниже
+  // проверяет disabled-состояние при OFF).
+  useAiFeaturesStore.setState({ insights: true, contradictions: true });
   useHomeStore.setState({
     data: null,
     activity: null,
@@ -50,6 +54,19 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
     expect(screen.getByText(/смещение фокуса|focus drift/i)).toBeInTheDocument();
     // Heatmap-сетка построена (17 недель × 7).
     expect(document.querySelectorAll('[class*="heatCell"]').length).toBeGreaterThan(119);
+  });
+
+  // owner-тоггл «Инсайты» OFF: AI-карточки (вопросы/дрейф) показывают честную подсказку «включите в
+  // настройках» вместо контента; daily_brief гейтится не «Инсайтами» — его сводка остаётся.
+  it('«Инсайты» OFF → карточки вопросов/дрейфа в disabled-состоянии, сводка дня остаётся', async () => {
+    useAiFeaturesStore.setState({ insights: false });
+    render(<HomeView />);
+    // Сводка дня (daily_brief) рендерится независимо от тоггла «Инсайты».
+    expect(await screen.findByText(/архитектурой агентов/)).toBeInTheDocument();
+    // Карточки вопросов и дрейфа → подсказка «выключены» (две: open_questions + context_drift).
+    expect(screen.getAllByText(/«Инсайты» выключены|Insights are off/i).length).toBe(2);
+    // Контент инсайтов скрыт.
+    expect(screen.queryByText(/чанк-перекрытие/)).not.toBeInTheDocument();
   });
 
   // Клик по недавней заметке открывает её в редакторе и закрывает Home.

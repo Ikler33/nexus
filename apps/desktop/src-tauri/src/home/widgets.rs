@@ -208,6 +208,18 @@ impl JobHandler for WidgetHandler {
     }
 
     async fn handle(&self, _job: &Job) -> Result<(), String> {
+        // Инсайт-виджеты (open_questions/context_drift) гейтятся owner-тогглом «Инсайты»: при OFF фоновую
+        // LLM-генерацию НЕ запускаем — early-NOOP, как у `ContradictionHandler`. Нужно именно здесь, т.к.
+        // recurring-джоба самоподдерживается через `reschedule_if_absent` и отработала бы после выключения
+        // тоггла в работающем приложении (до переоткрытия vault). `daily_brief` обслуживается
+        // `DigestHandler` (НЕ этим хендлером) → сюда не попадает и не гейтится.
+        if matches!(
+            self.key.as_str(),
+            crate::home::insights::KEY_OPEN_QUESTIONS | crate::home::insights::KEY_CONTEXT_DRIFT
+        ) && !crate::home::insights::insights_enabled(&self.reader).await
+        {
+            return Ok(());
+        }
         // Снимок состояния vault ДО генерации: контент основан на нём, и любая последующая правка
         // корректно пометит виджет stale (даже если она пришла во время генерации).
         let source_hash = max_file_mtime(&self.reader)
@@ -399,6 +411,48 @@ mod tests {
         assert_eq!(w.source_hash, 500, "снимок mtime vault");
         assert!(!w.stale, "vault не менялся → не stale");
         assert_eq!(sink.seen.lock().unwrap().as_slice(), ["daily_brief"]);
+    }
+
+    /// Инсайт-виджет (open_questions) гейтится owner-тогглом «Инсайты»: OFF (дефолт) → хендлер ранний
+    /// NOOP (генератор НЕ зван, кэш пуст, событие не слалось); ON → генерит как обычно. daily_brief
+    /// (тесты выше) сюда НЕ попадает — его ключ не входит в инсайт-набор, кнопка/генерация не гейтятся.
+    #[tokio::test]
+    async fn insight_widget_noop_when_insights_disabled() {
+        let (_d, db) = open_db().await;
+        set_vault_mtime(&db, 500).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::new(RecordingSink::default());
+        let key = crate::home::insights::KEY_OPEN_QUESTIONS;
+        let h = WidgetHandler::new(
+            key,
+            Arc::new(FakeGen {
+                result: Ok("[]".into()),
+                calls: calls.clone(),
+            }),
+            sink.clone(),
+            db.reader().clone(),
+            db.writer().clone(),
+            true,
+        );
+        // Дефолт OFF → NOOP.
+        h.handle(&dummy_job(&widget_kind(key))).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "генератор не зван при OFF");
+        assert!(sink.seen.lock().unwrap().is_empty(), "событие не слалось");
+        assert!(
+            get(db.reader(), key).await.unwrap().is_none(),
+            "кэш пуст при OFF"
+        );
+
+        // Включаем — генерит.
+        crate::home::insights::set_insights_enabled(db.writer(), true)
+            .await
+            .unwrap();
+        h.handle(&dummy_job(&widget_kind(key))).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "генератор зван при ON");
+        assert!(
+            get(db.reader(), key).await.unwrap().is_some(),
+            "кэш заполнен"
+        );
     }
 
     /// Правка vault после генерации → `get` отдаёт `stale=true`, `is_overdue` → true (on-open refresh).

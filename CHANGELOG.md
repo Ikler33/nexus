@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Тогглы «Инсайты» и «Поиск противоречий» — owner-gated фоновые ИИ-фичи (дефолт OFF)
+
+Два фоновых LLM-виджета вынесены за тогглы в Настройки→ИИ с возможностью отключить, не выпиливая функционал (решение владельца на real-test 2026-06-18: на reference/MOC-vault'ах инсайты дают пусто, противоречия точны но нишевы и затратны → дефолт **OFF**, opt-in). Источник истины — БД vault (зеркало `episodic.enabled`).
+- **Бэкенд-гейт** (persisted `insights.enabled` / `contradictions.enabled`): `is_enabled`/`set_enabled` в `contradictions/mod.rs` + `insights_enabled`/`set_insights_enabled` в `home/insights.rs`. В `commands/vault.rs` (`open_vault`) флагами `insights_on`/`contra_on` гейтятся ВСЕ пути enqueue — recurring-регистрации (open_questions/context_drift/stale → insights, contradictions → contra) И on-open seed'ы. Ручные триггеры тоже гейтятся: `refresh_widget` (insight-ключи), `refresh_stale_radar`, `generate_contradictions`. `ContradictionHandler::handle` рано выходит NOOP при OFF (защита от stale-recurring при выключении в работающем приложении).
+- **Kick при включении** (контракт MAJOR-2, урок EP-1): `contradictions_set_enabled`/`insights_set_enabled` при ВКЛючении enqueue'ят немедленные джобы доступных виджетов (recurring регистрируется лишь на открытии vault → без kick фича мертва до перезапуска). Дедуп `has_ready_job`.
+- **Фронт**: стор `useAiFeaturesStore` (НЕ localStorage — грузится от бэка при открытии vault, `App.tsx`; иначе дефолт-OFF на новой машине разошёлся бы с включённым в БД — privacy-урок EP-3). Два тоггла в Настройки→ИИ. Home-карточки инсайтов и панель противоречий при OFF показывают честную подсказку «включите в настройках» вместо мёртвой кнопки «Обновить». Stale-radar deterministic-скан НЕ гейтится (graceful degradation: список устаревших виден без LLM-обогащения). Мок зеркалит контракт (дефолт OFF, round-trip).
+- 4 backend-теста (дефолт-OFF+round-trip обоих тогглов · handler-NOOP-при-OFF противоречий) + полный фронт-сьют 845/0; tsc/eslint/i18n-паритет/egress/dangling зелёные.
+
 ### Утренний экран «Сегодня» — сводка дня из существующих данных (TODAY-1)
 
 Новый top-level вид «Сегодня» (соседи Home/Новости/Доска): один экран собирает весь день из УЖЕ существующих данных — никакого нового бэкенда/БД/LLM/egress (чистый фронт, read-only компоновка). Заменяет утренний ритуал из 4 остановок (Home → ⌘⇧D дневник → Доска → Задачи) одним взглядом. Выбран мультиагентным роадмап-анализом R2 (12 кандидатов → судья) как единственный net-new кандидат (не перекрыт списком/панелью Задач/Home), ready-now и autonomy-safe; agenda-вид доски отклонён как перекрытый VIEW-1.

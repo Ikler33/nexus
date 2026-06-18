@@ -17,14 +17,55 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use rusqlite::OptionalExtension;
+
 use crate::ai::{injection_marker, ChatMessage, ChatProvider};
-use crate::db::{DbResult, ReadPool};
+use crate::db::{DbResult, ReadPool, WriteActor};
 use crate::home::widgets::WidgetGenerator;
 
 /// Ключ виджета «Open questions» (зона 4). kind планировщика — `widget_kind(KEY_OPEN_QUESTIONS)`.
 pub const KEY_OPEN_QUESTIONS: &str = "open_questions";
 /// Ключ виджета «Context drift» (зона 5).
 pub const KEY_CONTEXT_DRIFT: &str = "context_drift";
+
+/// Тоггл «Инсайты» (persisted в `settings`, как `episodic.enabled`). Гейтит ВСЕ проактивные ИИ-виджеты
+/// Home — открытые вопросы + дрейф контекста + stale-radar. Дефолт **OFF** (real-test 2026-06-18: на
+/// reference/MOC-vault'ах фича даёт пусто; не гоняем фон по умолчанию — opt-in). Регистрация recurring +
+/// сид этих kind'ов гейтятся флагом в `commands/vault.rs`.
+const SETTING_INSIGHTS_ENABLED: &str = "insights.enabled";
+
+/// Включены ли проактивные ИИ-инсайты Home? Дефолт OFF (нет значения → false).
+pub async fn insights_enabled(reader: &ReadPool) -> bool {
+    reader
+        .query(move |c| {
+            c.query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                [SETTING_INSIGHTS_ENABLED],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+        })
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1")
+}
+
+/// Persist тоггла инсайтов ("1"/"0").
+pub async fn set_insights_enabled(writer: &WriteActor, on: bool) -> DbResult<()> {
+    let v = if on { "1" } else { "0" };
+    writer
+        .call(move |c| {
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES('insights.enabled', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [v],
+            )
+            .map(|_| ())
+        })
+        .await
+}
 
 /// Сколько последних изменённых заметок сканировать на открытые вопросы.
 const OPEN_Q_NOTES: usize = 20;
@@ -368,6 +409,23 @@ mod tests {
             .unwrap();
         let gen = OpenQuestionsGenerator::new(db.reader().clone(), Arc::new(FakeChat("[]")));
         assert_eq!(gen.generate().await.unwrap(), "[]");
+    }
+
+    /// Тоггл «Инсайты» — дефолт OFF (opt-in), round-trip persisted.
+    #[tokio::test]
+    async fn insights_enabled_defaults_off_and_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        assert!(!insights_enabled(db.reader()).await, "дефолт OFF");
+        set_insights_enabled(db.writer(), true).await.unwrap();
+        assert!(insights_enabled(db.reader()).await, "после set(true) — ON");
+        set_insights_enabled(db.writer(), false).await.unwrap();
+        assert!(
+            !insights_enabled(db.reader()).await,
+            "после set(false) — OFF"
+        );
     }
 
     #[tokio::test]

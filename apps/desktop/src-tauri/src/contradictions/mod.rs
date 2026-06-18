@@ -31,6 +31,45 @@ const MAX_JUDGE: usize = 24;
 /// Длина сниппета заметки в промпте судьи.
 const SNIPPET_CHARS: usize = 400;
 
+/// Тоггл «Поиск противоречий» (persisted в `settings`, как `episodic.enabled`). Дефолт **OFF**
+/// (real-test 2026-06-18: фича точна, но нишева + дорога́; не гоняем фон по умолчанию — opt-in).
+/// Фоновая джоба/сид гейтятся этим флагом в `commands/vault.rs`; хендлер рано выходит NOOP (защита от
+/// stale-recurring при выключении в работающем приложении).
+const SETTING_CONTRA_ENABLED: &str = "contradictions.enabled";
+
+/// Включён ли поиск противоречий? Дефолт OFF (нет значения → false).
+pub async fn is_enabled(reader: &ReadPool) -> bool {
+    reader
+        .query(move |c| {
+            c.query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                [SETTING_CONTRA_ENABLED],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+        })
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1")
+}
+
+/// Persist тоггла противоречий ("1"/"0").
+pub async fn set_enabled(writer: &WriteActor, on: bool) -> DbResult<()> {
+    let v = if on { "1" } else { "0" };
+    writer
+        .call(move |c| {
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES('contradictions.enabled', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [v],
+            )
+            .map(|_| ())
+        })
+        .await
+}
+
 /// Найденное противоречие (для UI). `ctype` — `hard`|`soft`|`temporal` (D3).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -406,6 +445,11 @@ impl JobHandler for ContradictionHandler {
     }
 
     async fn handle(&self, _job: &Job) -> Result<(), String> {
+        // Тоггл OFF (в т.ч. выключен в работающем приложении при уже зарегистрированной recurring) →
+        // ранний NOOP, не тратим тяжёлый обход+LLM. Регистрация/сид гейтятся отдельно в vault.rs.
+        if !is_enabled(&self.reader).await {
+            return Ok(());
+        }
         let pairs = candidate_pairs(&self.reader, &self.vectors)
             .await
             .map_err(|e| e.to_string())?;
@@ -599,6 +643,8 @@ mod tests {
         fs::write(root.join("b.md"), body).unwrap();
         idx.index_file("a.md").await.unwrap();
         idx.index_file("b.md").await.unwrap();
+        // Тоггл по умолчанию OFF (opt-in) — хендлер бы NOOP'нул. Для тестов поведения судьи включаем.
+        set_enabled(db.writer(), true).await.unwrap();
         (dir, db, vectors)
     }
 
@@ -650,6 +696,54 @@ mod tests {
             0,
             "пара с удалённой заметкой не показывается"
         );
+    }
+
+    /// Тоггл OFF (дефолт) → хендлер ранний NOOP: судья не зовётся, ничего не пишется. Включён → пишет.
+    #[tokio::test]
+    async fn handler_noop_when_disabled() {
+        let (_d, db, vectors) = db_two_similar().await;
+        // db_two_similar включает тоггл; выключаем обратно, чтобы проверить гейт.
+        set_enabled(db.writer(), false).await.unwrap();
+        assert!(!is_enabled(db.reader()).await, "выключен");
+
+        let judge = Arc::new(FakeJudge(
+            r#"{"contradiction": true, "type": "hard", "explanation": "конфликт"}"#,
+        ));
+        let h = ContradictionHandler::new(
+            db.reader().clone(),
+            vectors.clone(),
+            judge,
+            db.writer().clone(),
+        );
+        h.handle(&dummy_job()).await.unwrap();
+        assert_eq!(
+            list(db.reader()).await.unwrap().len(),
+            0,
+            "тоггл OFF → ничего не сгенерировано"
+        );
+
+        // Включаем — теперь генерит.
+        set_enabled(db.writer(), true).await.unwrap();
+        h.handle(&dummy_job()).await.unwrap();
+        assert_eq!(
+            list(db.reader()).await.unwrap().len(),
+            1,
+            "тоггл ON → пара найдена"
+        );
+    }
+
+    /// Дефолт тоггла — OFF (opt-in), без записи в settings `is_enabled` == false.
+    #[tokio::test]
+    async fn enabled_defaults_off_and_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        assert!(!is_enabled(db.reader()).await, "дефолт OFF");
+        set_enabled(db.writer(), true).await.unwrap();
+        assert!(is_enabled(db.reader()).await, "после set(true) — ON");
+        set_enabled(db.writer(), false).await.unwrap();
+        assert!(!is_enabled(db.reader()).await, "после set(false) — OFF");
     }
 
     /// Аудит: hash_snippet детерминирован (blake3) — одинаковый вход → одинаковый ключ кэша; разный → разный.

@@ -578,6 +578,13 @@ impl JobHandler for StaleRadarHandler {
     }
 
     async fn handle(&self, _job: &Job) -> Result<(), String> {
+        // Stale-radar — часть owner-тоггла «Инсайты»: при OFF тяжёлое LLM-обогащение НЕ запускаем
+        // (early-NOOP, как WidgetHandler/ContradictionHandler). Recurring самоподдерживается через
+        // `reschedule_if_absent` → без этого гейта прогон шёл бы после выключения тоггла до переоткрытия
+        // vault. Слой-1 скан (`scan`) детерминированный и НЕ гейтится — список устаревших виден всегда.
+        if !crate::home::insights::insights_enabled(&self.reader).await {
+            return Ok(());
+        }
         let result = self.enrich().await;
         // Фронт ВСЕГДА перечитывает радар (снимает индикатор «обогащаю…»), даже при ОШИБКЕ LLM —
         // иначе при проактивном прогоне (AIP-хвост) карточка залипла бы в «обогащаю…» (флаг снимается
@@ -818,6 +825,10 @@ mod tests {
             })
             .await
             .unwrap();
+        // Тоггл «Инсайты» по умолчанию OFF (opt-in) — хендлер бы NOOP'нул. Для тестов обогащения включаем.
+        crate::home::insights::set_insights_enabled(db.writer(), true)
+            .await
+            .unwrap();
         (dir, db)
     }
 
@@ -845,6 +856,32 @@ mod tests {
         assert_eq!(after[0].reason.as_deref(), Some("давно не трогали"));
         assert_eq!(after[0].action.as_deref(), Some("archive"));
         assert_eq!(sink.0.lock().unwrap().as_slice(), [KEY_STALE_RADAR]);
+    }
+
+    /// Тоггл «Инсайты» OFF → хендлер ранний NOOP: LLM-обогащение не запускается, кэш пуст. Слой-1 скан
+    /// при этом продолжает видеть заметку (детерминированный, не гейтится).
+    #[tokio::test]
+    async fn handler_noop_when_insights_disabled() {
+        let (_d, db) = db_with_stale_note().await;
+        // db_with_stale_note включает тоггл; выключаем обратно, чтобы проверить гейт.
+        crate::home::insights::set_insights_enabled(db.writer(), false)
+            .await
+            .unwrap();
+        let now = now_secs();
+        let sink = Arc::new(RecSink::default());
+        let h = StaleRadarHandler::new(
+            db.reader().clone(),
+            Arc::new(FakeEnricher(
+                r#"{"reason":"не должно записаться","action":"archive","hint":"x"}"#,
+            )),
+            db.writer().clone(),
+            sink.clone(),
+        );
+        h.handle(&dummy_job()).await.unwrap();
+        let after = scan(db.reader(), now).await.unwrap();
+        assert_eq!(after.len(), 1, "слой-1 скан виден всегда");
+        assert!(after[0].reason.is_none(), "LLM-обогащение НЕ запускалось");
+        assert!(sink.0.lock().unwrap().is_empty(), "событие не слалось");
     }
 
     #[tokio::test]
