@@ -12,9 +12,9 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::ai::{
-    build_agent_memory_block, build_chat_messages, build_memory_block, build_pinned_block,
-    build_rag_messages, build_web_answer_messages, injection_marker, prepend_memory_block,
-    ChatMessage, ChatProvider,
+    build_agent_memory_block, build_chat_messages, build_episode_block, build_memory_block,
+    build_pinned_block, build_rag_messages, build_web_answer_messages, injection_marker,
+    prepend_memory_block, ChatMessage, ChatProvider,
 };
 use crate::error::AppResult;
 use crate::search::{self, SearchHit, SearchOptions};
@@ -34,6 +34,11 @@ pub enum ChatStreamEvent {
     /// Приходит до токенов, как и `Sources`; UI помечает их «из прошлых разговоров».
     MemorySources {
         sources: Vec<crate::chat_log::MemoryHit>,
+    },
+    /// Эпизодическая память (EP-2): саммари релевантных прошлых сессий (канал episode_vectors).
+    /// Приходит до токенов; UI помечает «из прошлого разговора», по клику грузит сессию.
+    EpisodeSources {
+        sources: Vec<crate::episode::EpisodeHit>,
     },
     /// Очередная текстовая дельта ответа.
     Token { text: String },
@@ -83,6 +88,9 @@ const DEFAULT_K: usize = 8;
 /// Консервативно мало — память это ФОН, а не основной контекст (не должна глушить заметки/ответ).
 const MEMORY_K: usize = 3;
 const MEMORY_SNIPPET_CHARS: usize = 280;
+/// Эпизодическая память (EP-2): длина саммари эпизода при инъекции/показе (символы). Эпизод длиннее
+/// сниппета переписки — но капается, чтобы не раздувать фон (порог K — `episode::EPISODE_K`).
+const EPISODE_SNIPPET_CHARS: usize = 400;
 /// Память агента (MEM, D2): сколько НЕ-пинов подмешивать по близости (пины — всегда, сверх этого).
 /// Консервативно мало — факты это фон, как и переписка.
 const AGENT_MEMORY_K: usize = 3;
@@ -126,6 +134,7 @@ pub async fn chat_rag(
     rerank: Option<bool>,
     memory: Option<bool>,
     agent_memory: Option<bool>,
+    episodic: Option<bool>,
     session_id: Option<i64>,
     pinned: Option<Vec<String>>,
 ) -> AppResult<()> {
@@ -140,8 +149,22 @@ pub async fn chat_rag(
     // Память агента (MEM, явные факты) — ВЫКЛ по умолчанию (D5: приватность-first). Тумблер
     // `aiAgentMemory` в Настройках → AI (MEM-4). Отдельный канал (memory_vectors), не трогает RAG.
     let agent_memory = agent_memory.unwrap_or(false);
+    // Эпизодическая память (EP-2) — саммари прошлых сессий (канал episode_vectors). ВЫКЛ по умолчанию
+    // (приватность-first, как MEM); per-call флаг от фронта (тоггл `aiEpisodicMemory`). UI-тоггл — EP-3.
+    let episodic = episodic.unwrap_or(false);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
-    let (root, reader, writer, vectors, chat_vectors, memory_vectors, embedder, chat, chat_util) = {
+    let (
+        root,
+        reader,
+        writer,
+        vectors,
+        chat_vectors,
+        memory_vectors,
+        episode_vectors,
+        embedder,
+        chat,
+        chat_util,
+    ) = {
         let ctx = state.vault().await?;
         (
             ctx.root.clone(),
@@ -150,6 +173,7 @@ pub async fn chat_rag(
             ctx.vectors.clone(),
             ctx.chat_vectors.clone(),
             ctx.memory_vectors.clone(),
+            ctx.episode_vectors.clone(),
             ctx.ai.embedder.clone(),
             ctx.ai.chat.clone(),
             ctx.ai.chat_util.clone(),
@@ -275,9 +299,55 @@ pub async fn chat_rag(
         build_chat_messages(&question)
     };
 
+    // EP-2: эпизодическая память — саммари релевантных ЗАВЕРШЁННЫХ сессий (канал episode_vectors,
+    // ключи = id эпизодов). Отдельный канал, как N4b/MEM — note-RAG не трогает. Считаем ПЕРВЫМ, чтобы
+    // дедуплицировать с N4b: если сессия всплыла эпизодом, её сырые реплики не дублируем (real_concern
+    // дизайна). Текущую сессию исключаем. Best-effort. Дефолт OFF (флаг `aiEpisodicMemory`).
+    let mut episode_session_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    if episodic {
+        if let (Some(embedder), Some(episode_vectors)) =
+            (embedder.as_ref(), episode_vectors.as_ref())
+        {
+            match crate::episode::search_episodes(
+                &reader,
+                episode_vectors,
+                embedder.as_ref(),
+                &question,
+                crate::episode::EPISODE_K,
+                session_id,
+                EPISODE_SNIPPET_CHARS,
+            )
+            .await
+            {
+                Ok(hits) if !hits.is_empty() => {
+                    episode_session_ids = hits.iter().map(|h| h.session_id).collect();
+                    let _ = channel.send(ChatStreamEvent::EpisodeSources {
+                        sources: hits.clone(),
+                    });
+                    let snippets: Vec<(String, String)> = hits
+                        .iter()
+                        .map(|h| {
+                            (
+                                format!("Прошлый разговор «{}»", h.session_title),
+                                h.summary_snippet.clone(),
+                            )
+                        })
+                        .collect();
+                    prepend_memory_block(
+                        &mut messages,
+                        build_episode_block(&snippets, &injection_marker()),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "episodic-memory: поиск эпизодов не удался"),
+            }
+        }
+    }
+
     // N4b: память переписки — отдельный КАНАЛ (chat_vectors), не трогает note-RAG ранжирование
     // (eval-гейт держится: hybrid_search не задействован). Подмешиваем как фон к user-сообщению
-    // ЛЮБОГО режима (vault/общий/web). Текущую сессию исключаем (не пересказываем сам себе).
+    // ЛЮБОГО режима (vault/общий/web). Текущую сессию исключаем (не пересказываем сам себе), а также
+    // сессии, уже всплывшие ЭПИЗОДОМ (EP-2 дедуп: один разговор не пересказан И процитирован).
     // Best-effort: ошибка эмбеддинга/поиска не валит чат — просто без памяти.
     if memory {
         if let (Some(embedder), Some(chat_vectors)) = (embedder.as_ref(), chat_vectors.as_ref()) {
@@ -288,6 +358,7 @@ pub async fn chat_rag(
                 &question,
                 MEMORY_K,
                 session_id,
+                episode_session_ids.clone(),
                 MEMORY_SNIPPET_CHARS,
             )
             .await

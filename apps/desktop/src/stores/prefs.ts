@@ -104,6 +104,8 @@ const AI_RERANK_KEY = 'nexus.ai.rerank';
 const AI_CHAT_MEMORY_KEY = 'nexus.ai.chatMemory';
 /** Память агента (MEM, явные факты) — ВЫКЛ по умолчанию (D5: приватность-first). */
 const AI_AGENT_MEMORY_KEY = 'nexus.ai.agentMemory';
+/** Эпизодическая память (EP, саммари сессий) — ВЫКЛ по умолчанию (приватность-first). */
+const AI_EPISODIC_MEMORY_KEY = 'nexus.ai.episodicMemory';
 /** Консолидация памяти (MEM-8) — ВЫКЛ по умолчанию (owner-gated: LLM сливает/замещает факты). */
 const AI_MEMORY_CONSOLIDATION_KEY = 'nexus.ai.memoryConsolidation';
 const AI_EXPLAIN_RELATIONS_KEY = 'nexus.ai.explainRelations';
@@ -165,6 +167,9 @@ interface PrefsState {
   /** Память агента (MEM): подмешивать сохранённые ЯВНЫЕ ФАКТЫ о пользователе/проектах (пины + top-k)
    *  в контекст ответа. ВЫКЛ по умолчанию (D5: приватность-first); тумблер в Настройках → AI. */
   aiAgentMemory: boolean;
+  /** Эпизодическая память (EP): подмешивать саммари релевантных прошлых СЕССИЙ в контекст ответа.
+   *  ВЫКЛ по умолчанию (приватность-first); тумблер в Настройках → AI — EP-3. */
+  aiEpisodicMemory: boolean;
   /** Консолидация памяти (MEM-8): при подтверждении факта ИИ предлагает объединить/заменить близкий
    *  существующий (режим «Предлагать» — каждое слияние/замещение через подтверждение, обратимо). ВЫКЛ
    *  по умолчанию (owner-gated). Работает только при `aiAgentMemory` + наличии основной модели. */
@@ -186,6 +191,7 @@ interface PrefsState {
   setAiRerank: (on: boolean) => void;
   setAiChatMemory: (on: boolean) => void;
   setAiAgentMemory: (on: boolean) => void;
+  setAiEpisodicMemory: (on: boolean) => void;
   setAiMemoryConsolidation: (on: boolean) => void;
   setAiMemoryConsolidationMode: (mode: ConsolidationMode) => void;
   setAiExplainRelations: (on: boolean) => void;
@@ -202,6 +208,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   aiRerank: readBoolDefaultTrue(AI_RERANK_KEY),
   aiChatMemory: readBoolDefaultTrue(AI_CHAT_MEMORY_KEY),
   aiAgentMemory: readBoolDefaultFalse(AI_AGENT_MEMORY_KEY),
+  aiEpisodicMemory: readBoolDefaultFalse(AI_EPISODIC_MEMORY_KEY),
   aiMemoryConsolidation: readBoolDefaultFalse(AI_MEMORY_CONSOLIDATION_KEY),
   aiMemoryConsolidationMode: readConsolidationMode(),
   aiExplainRelations: readBoolDefaultTrue(AI_EXPLAIN_RELATIONS_KEY),
@@ -272,6 +279,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       /* ignore */
     }
     set({ aiAgentMemory: on });
+  },
+  setAiEpisodicMemory: (on) => {
+    try {
+      localStorage.setItem(AI_EPISODIC_MEMORY_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ aiEpisodicMemory: on });
   },
   setAiMemoryConsolidation: (on) => {
     try {

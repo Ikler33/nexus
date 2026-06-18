@@ -833,3 +833,58 @@ async fn live_consolidation_meets_gate() {
         "консолидация не прошла гейт: DELETE-precision≥{MIN_DELETE_PRECISION}, UPDATE-quality≥{MIN_UPDATE_QUALITY}, predicted_delete>0"
     );
 }
+
+/// EP-2 БЛОКИРУЮЩИЙ live-гейт faithfulness эпизодов: реальная модель суммирует каждый golden-транскрипт,
+/// грейдим (нет галлюцинаций + заземлено), сверяем с порогом. Ретривал эпизодов в чат НЕ включается
+/// (EP-2 не мержится), пока этот гейт не зелёный на актуальной модели саммари. При смене модели —
+/// рекалибровка ([[project_nexus_consolidation_recalibrate]]).
+///
+/// Прод-саммари идёт `chat_util`→`chat_fast` (см. open_vault). Запуск против основной (gemma):
+/// `NEXUS_CHAT_URL=http://192.168.0.31:8080 NEXUS_CHAT_MODEL=gemma cargo test live_episode_summary_meets_gate -- --ignored --nocapture`
+/// против утилитарной: `NEXUS_CHAT_URL=http://192.168.0.31:8084 NEXUS_CHAT_MODEL=<util> ...`.
+#[tokio::test]
+#[ignore = "live-llm faithfulness эпизодов (EP-2): нужна модель саммари (NEXUS_CHAT_URL / 192.168.0.31)"]
+async fn live_episode_summary_meets_gate() {
+    use super::episodes::{
+        evaluate_episodes, load_episode_golden, meets_episode_gate, transcript_pairs,
+        MIN_EPISODE_FAITHFULNESS,
+    };
+    use crate::ai::{ChatProvider, OpenAiChatProvider};
+    use crate::net::{EgressFeature, GuardedClient};
+
+    let chat_url =
+        std::env::var("NEXUS_CHAT_URL").unwrap_or_else(|_| "http://192.168.0.31:8080".into());
+    let model = std::env::var("NEXUS_CHAT_MODEL").unwrap_or_else(|_| "gemma".into());
+    // t≈0.2 (как прод-summarize) + без reasoning (саммари дешёвое, CoT не нужен).
+    let chat: Arc<dyn ChatProvider> = Arc::new(
+        OpenAiChatProvider::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Chat,
+            &chat_url,
+            &model,
+            Some(0.2),
+        )
+        .without_reasoning(),
+    );
+
+    let golden = load_episode_golden();
+    let mut summaries: Vec<String> = Vec::with_capacity(golden.cases.len());
+    for case in &golden.cases {
+        let pairs = transcript_pairs(case);
+        // Прод-путь генерации саммари; ошибка/пусто → пустая строка (графится как off-topic, честно).
+        let (summary, _topics) = crate::episode::summarize(chat.as_ref(), &pairs)
+            .await
+            .unwrap_or_default();
+        summaries.push(summary);
+    }
+
+    let report = evaluate_episodes(&summaries, &golden);
+    eprintln!(
+        "EP-2 faithfulness (модель={model}): faithfulness={:.3} ({}/{}) | hallucinated={} off_topic={}",
+        report.faithfulness, report.faithful, report.cases, report.hallucinated, report.off_topic,
+    );
+    assert!(
+        meets_episode_gate(&report, MIN_EPISODE_FAITHFULNESS),
+        "faithfulness ниже {MIN_EPISODE_FAITHFULNESS} — ретривал эпизодов НЕ разблокирован (ложная память)"
+    );
+}

@@ -290,9 +290,18 @@ async fn live_chat_memory_recall_end_to_end() {
     );
 
     // С ПАМЯТЬЮ: search_memory достаёт сессию A (мы в новой сессии → exclude None).
-    let hits = search_memory(db.reader(), &vectors, &emb, question, 3, None, 280)
-        .await
-        .unwrap();
+    let hits = search_memory(
+        db.reader(),
+        &vectors,
+        &emb,
+        question,
+        3,
+        None,
+        std::collections::HashSet::new(),
+        280,
+    )
+    .await
+    .unwrap();
     println!(
         "[память] {} фрагм.: {:?}",
         hits.len(),

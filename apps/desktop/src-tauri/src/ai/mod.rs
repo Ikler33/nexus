@@ -12,10 +12,10 @@ mod embedder;
 use std::sync::Arc;
 
 pub use chat::{
-    build_agent_memory_block, build_chat_messages, build_inline_messages, build_memory_block,
-    build_pinned_block, build_rag_messages, build_web_answer_messages, build_web_query_messages,
-    injection_marker, parse_web_query_plan, prepend_memory_block, ChatMessage, ChatProvider,
-    InlineMode, OpenAiChatProvider, WebQueryPlan,
+    build_agent_memory_block, build_chat_messages, build_episode_block, build_inline_messages,
+    build_memory_block, build_pinned_block, build_rag_messages, build_web_answer_messages,
+    build_web_query_messages, injection_marker, parse_web_query_plan, prepend_memory_block,
+    ChatMessage, ChatProvider, InlineMode, OpenAiChatProvider, WebQueryPlan,
 };
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
 #[cfg(test)]

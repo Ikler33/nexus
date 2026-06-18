@@ -452,6 +452,18 @@ export interface MemoryHit {
   score: number;
 }
 
+/** Эпизод памяти (EP-2, зеркалит Rust `episode::EpisodeHit`) — саммари прошлой сессии. По клику грузит
+ *  сессию (`sessionId`). `summarySnippet` — обрезанное саммари; `started/endedAt` — unix-секунды. */
+export interface EpisodeHit {
+  episodeId: number;
+  sessionId: number;
+  sessionTitle: string;
+  summarySnippet: string;
+  startedAt: number;
+  endedAt: number;
+  score: number;
+}
+
 /** Факт памяти агента (MEM, зеркалит Rust `memory::MemoryFact`). `source`: 'explicit' | 'auto' (D1).
  *  `createdAt`/`usedAt` — unix-секунды; `usedAt=0` — ещё не подмешивался в контекст. */
 export interface MemoryFact {
@@ -515,6 +527,7 @@ export type ChatStreamEvent =
   | { type: 'sources'; sources: SearchHit[] }
   | { type: 'webSources'; sources: WebSource[] }
   | { type: 'memorySources'; sources: MemoryHit[] }
+  | { type: 'episodeSources'; sources: EpisodeHit[] }
   | { type: 'token'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'reasoningSummary'; text: string }
@@ -1100,6 +1113,8 @@ export const tauriApi = {
         memory?: boolean;
         /** MEM (AC-MEM-5): подмешивать сохранённые явные факты (память агента). ВЫКЛ по умолчанию. */
         agentMemory?: boolean;
+        /** EP-2: подмешивать саммари прошлых сессий (эпизодическая память). ВЫКЛ по умолчанию. */
+        episodic?: boolean;
         sessionId?: number | null;
         /** P6-PIN: пути закреплённых заметок — их полное содержимое в гарантированный контекст. */
         pinned?: string[];
@@ -1122,6 +1137,7 @@ export const tauriApi = {
         rerank: opts?.rerank,
         memory: opts?.memory,
         agentMemory: opts?.agentMemory,
+        episodic: opts?.episodic,
         sessionId: opts?.sessionId,
         pinned: opts?.pinned,
         channel,

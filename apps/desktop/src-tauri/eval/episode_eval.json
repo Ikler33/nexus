@@ -1,0 +1,226 @@
+{
+  "_comment": "EP-2 golden faithfulness эпизодов: транскрипт сессии + anchors (ЕСТЬ в диалоге, верное саммари упоминает ≥1) + forbidden (правдоподобно, но в диалоге НЕТ — упоминание = галлюцинация). Грейд в eval/episodes.rs. Каждый anchor — подстрока транскрипта; forbidden — НЕ подстрока.",
+  "cases": [
+    {
+      "name": "searxng-docker",
+      "transcript": [
+        {"role": "user", "content": "Как поднять SearXNG на моём VPS?"},
+        {"role": "assistant", "content": "Через Docker: образ searxng/searxng, проброс порта 8888, включить JSON-формат в settings.yml."},
+        {"role": "user", "content": "А firewall открывать?"},
+        {"role": "assistant", "content": "Только если нужен внешний доступ; для локального тоннеля порт можно не открывать."}
+      ],
+      "anchors": ["SearXNG", "Docker", "8888"],
+      "forbidden": ["Kubernetes", "nginx", "Postgres"]
+    },
+    {
+      "name": "rust-borrow",
+      "transcript": [
+        {"role": "user", "content": "Не компилируется: stmt does not live long enough в rusqlite."},
+        {"role": "assistant", "content": "Свяжи rows = stmt.query_map(...)? в let, потом collect — не делай inline, иначе stmt дропается."},
+        {"role": "user", "content": "О, помогло, спасибо."}
+      ],
+      "anchors": ["rusqlite", "query_map", "stmt"],
+      "forbidden": ["async", "tokio", "mutex"]
+    },
+    {
+      "name": "deadline-friday",
+      "transcript": [
+        {"role": "user", "content": "Напомни, что отчёт по проекту Орион сдать в пятницу."},
+        {"role": "assistant", "content": "Записал: отчёт по проекту Орион — дедлайн пятница."},
+        {"role": "user", "content": "Да, и созвон с командой в четверг."}
+      ],
+      "anchors": ["Орион", "пятниц", "четверг"],
+      "forbidden": ["понедельник", "бюджет", "Юпитер"]
+    },
+    {
+      "name": "react-hooks",
+      "transcript": [
+        {"role": "user", "content": "Почему useEffect срабатывает дважды в dev?"},
+        {"role": "assistant", "content": "Это StrictMode: React монтирует компонент дважды, чтобы ловить побочные эффекты. В проде один раз."},
+        {"role": "user", "content": "Ясно, значит в проде ок."}
+      ],
+      "anchors": ["useEffect", "StrictMode", "React"],
+      "forbidden": ["Vue", "Redux", "Webpack"]
+    },
+    {
+      "name": "vacation-georgia",
+      "transcript": [
+        {"role": "user", "content": "Думаю съездить в Грузию в сентябре, в Тбилиси и Батуми."},
+        {"role": "assistant", "content": "Сентябрь хорош — не жарко. Тбилиси для города, Батуми для моря."},
+        {"role": "user", "content": "Да, на две недели."}
+      ],
+      "anchors": ["Грузию", "Тбилиси", "Батуми"],
+      "forbidden": ["Армению", "Турцию", "горы"]
+    },
+    {
+      "name": "embedding-choice",
+      "transcript": [
+        {"role": "user", "content": "Какую модель эмбеддингов взять для русского текста?"},
+        {"role": "assistant", "content": "bge-m3 — мультиязычная, dim 1024, хорошо работает с русским и кодом."},
+        {"role": "user", "content": "Поставлю bge-m3."}
+      ],
+      "anchors": ["bge-m3", "1024", "русск"],
+      "forbidden": ["OpenAI", "ada", "GloVe"]
+    },
+    {
+      "name": "git-rebase",
+      "transcript": [
+        {"role": "user", "content": "Как переписать последние 3 коммита в одну ветку перед PR?"},
+        {"role": "assistant", "content": "interactive rebase: git rebase -i HEAD~3, пометь squash на лишних, потом force-push в свою ветку."},
+        {"role": "user", "content": "Только в свою, не в main, понял."}
+      ],
+      "anchors": ["rebase", "squash", "коммит"],
+      "forbidden": ["cherry-pick", "submodule", "stash"]
+    },
+    {
+      "name": "sleep-routine",
+      "transcript": [
+        {"role": "user", "content": "Плохо сплю, ложусь в 2 ночи. Хочу перейти на 23:00."},
+        {"role": "assistant", "content": "Сдвигай по 15 минут раньше каждые пару дней, убери экраны за час до сна."},
+        {"role": "user", "content": "Попробую без телефона перед сном."}
+      ],
+      "anchors": ["сплю", "23:00", "экран"],
+      "forbidden": ["кофеин", "мелатонин", "спорт"]
+    },
+    {
+      "name": "book-scifi",
+      "transcript": [
+        {"role": "user", "content": "Посоветуй фантастику, люблю Лема."},
+        {"role": "assistant", "content": "Если нравится Лем — попробуй Стругацких «Пикник на обочине» и Теда Чана."},
+        {"role": "user", "content": "Стругацких читал, возьму Чана."}
+      ],
+      "anchors": ["Лема", "Стругацких", "Чана"],
+      "forbidden": ["Толкина", "Кинга", "детектив"]
+    },
+    {
+      "name": "sqlite-migration",
+      "transcript": [
+        {"role": "user", "content": "Как версионировать схему SQLite без отдельной таблицы?"},
+        {"role": "assistant", "content": "PRAGMA user_version — транзакционно, не нужна chicken-egg с settings. Каждая миграция поднимает его в том же коммите."},
+        {"role": "user", "content": "Удобно, идемпотентно."}
+      ],
+      "anchors": ["SQLite", "user_version", "миграц"],
+      "forbidden": ["MySQL", "ORM", "Alembic"]
+    },
+    {
+      "name": "coffee-switch",
+      "transcript": [
+        {"role": "user", "content": "Пью 5 чашек кофе в день, хочу сократить."},
+        {"role": "assistant", "content": "Замени половину на цикорий или чай, снижай по чашке в неделю."},
+        {"role": "user", "content": "Начну с замены послеобеденного кофе."}
+      ],
+      "anchors": ["кофе", "цикорий", "чашк"],
+      "forbidden": ["энергетик", "сахар", "молоко"]
+    },
+    {
+      "name": "tauri-csp",
+      "transcript": [
+        {"role": "user", "content": "Как показать LaTeX в Tauri, не ослабляя CSP?"},
+        {"role": "assistant", "content": "rehype-katex с output mathml — нативный <math>, без inline-стилей, style-src self не трогаем."},
+        {"role": "user", "content": "То есть MathML вместо HTML-рендера KaTeX."}
+      ],
+      "anchors": ["Tauri", "CSP", "MathML"],
+      "forbidden": ["iframe", "eval", "CDN"]
+    },
+    {
+      "name": "running-knee",
+      "transcript": [
+        {"role": "user", "content": "Колено болит после пробежек по 10 км."},
+        {"role": "assistant", "content": "Снизь объём, проверь кроссовки, добавь укрепление квадрицепса. Если боль резкая — к врачу."},
+        {"role": "user", "content": "Сокращу до 5 км пока."}
+      ],
+      "anchors": ["Колено", "пробеж", "квадрицепс"],
+      "forbidden": ["плавание", "велосипед", "спина"]
+    },
+    {
+      "name": "scheduler-job",
+      "transcript": [
+        {"role": "user", "content": "Фоновая задача тихо умирает, как лечить?"},
+        {"role": "assistant", "content": "Вотчдог: respawn воркера, таймаут на тик, heartbeat. И не считать future-scheduled джобы работающими."},
+        {"role": "user", "content": "Добавлю heartbeat и respawn."}
+      ],
+      "anchors": ["воркер", "heartbeat", "respawn"],
+      "forbidden": ["cron", "Celery", "RabbitMQ"]
+    },
+    {
+      "name": "spanish-learn",
+      "transcript": [
+        {"role": "user", "content": "Учу испанский, застрял на subjuntivo."},
+        {"role": "assistant", "content": "Subjuntivo идёт после выражений желания и сомнения: espero que vengas. Практикуй на фразах, не на таблицах."},
+        {"role": "user", "content": "Буду делать по 5 фраз в день."}
+      ],
+      "anchors": ["испанский", "subjuntivo", "фраз"],
+      "forbidden": ["французский", "глаголы прошедшего", "Duolingo"]
+    },
+    {
+      "name": "vector-index",
+      "transcript": [
+        {"role": "user", "content": "usearch выдаёт DimMismatch после смены модели эмбеддера."},
+        {"role": "assistant", "content": "Старые векторы несовместимы по размерности. Дропни .usearch и переэмбедди заново при reconcile."},
+        {"role": "user", "content": "Снесу индекс и пересоберу."}
+      ],
+      "anchors": ["usearch", "DimMismatch", "reconcile"],
+      "forbidden": ["FAISS", "Pinecone", "HNSWlib"]
+    },
+    {
+      "name": "budget-laptop",
+      "transcript": [
+        {"role": "user", "content": "Выбираю ноут до 100 тысяч для разработки."},
+        {"role": "assistant", "content": "Смотри на 32 ГБ RAM и SSD, процессор не главное. В этот бюджет влезает прошлогодний флагман."},
+        {"role": "user", "content": "Возьму с 32 гигами оперативки."}
+      ],
+      "anchors": ["ноут", "32 ГБ", "SSD"],
+      "forbidden": ["видеокарта", "macOS", "игр"]
+    },
+    {
+      "name": "meditation-start",
+      "transcript": [
+        {"role": "user", "content": "Хочу начать медитировать, с чего?"},
+        {"role": "assistant", "content": "Начни с 5 минут дыхания утром, считай вдохи до десяти. Без приложений, просто сидя."},
+        {"role": "user", "content": "Попробую 5 минут после пробуждения."}
+      ],
+      "anchors": ["медитировать", "дыхани", "5 минут"],
+      "forbidden": ["мантра", "йога", "вечером"]
+    },
+    {
+      "name": "fts-search",
+      "transcript": [
+        {"role": "user", "content": "Полнотекстовый поиск по заметкам тормозит на стоп-словах."},
+        {"role": "assistant", "content": "Фильтруй стоп-слова из FTS-запроса под eval-гейтом, и используй external-content FTS5 поверх chunks."},
+        {"role": "user", "content": "Уберу русские стоп-слова из запроса."}
+      ],
+      "anchors": ["FTS", "стоп-слов", "chunks"],
+      "forbidden": ["Elasticsearch", "Lucene", "регулярк"]
+    },
+    {
+      "name": "plant-care",
+      "transcript": [
+        {"role": "user", "content": "Монстера желтеет, что не так?"},
+        {"role": "assistant", "content": "Чаще всего перелив. Дай грунту просохнуть, проверь дренаж, убери от прямого солнца."},
+        {"role": "user", "content": "Похоже, заливал. Буду реже поливать."}
+      ],
+      "anchors": ["Монстера", "перелив", "дренаж"],
+      "forbidden": ["удобрение", "пересадка", "вредител"]
+    },
+    {
+      "name": "memory-consolidation",
+      "transcript": [
+        {"role": "user", "content": "Как не плодить дубли фактов в памяти ассистента?"},
+        {"role": "assistant", "content": "Консолидация в стиле Mem0: новый факт сверяется с похожими, LLM решает ADD/UPDATE/DELETE под eval-гейтом DELETE-precision."},
+        {"role": "user", "content": "Сделаю soft-supersede, чтобы было обратимо."}
+      ],
+      "anchors": ["Mem0", "консолидаци", "supersede"],
+      "forbidden": ["граф знаний", "Redis", "кэш"]
+    },
+    {
+      "name": "cooking-pasta",
+      "transcript": [
+        {"role": "user", "content": "Карбонара получается сухой, в чём ошибка?"},
+        {"role": "assistant", "content": "Снимай сковороду с огня перед добавлением яиц с пармезаном, добавь воду от пасты — иначе яйцо сворачивается."},
+        {"role": "user", "content": "Понял, выключаю огонь и добавляю воду от пасты."}
+      ],
+      "anchors": ["Карбонара", "яиц", "пармезан"],
+      "forbidden": ["сливки", "бекон жарить", "чеснок"]
+    }
+  ]
+}
