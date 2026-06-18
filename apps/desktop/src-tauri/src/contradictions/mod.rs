@@ -146,15 +146,13 @@ struct Judgment {
     explanation: Option<String>,
 }
 
-/// Устойчивый парс JSON-вердикта: срезает ```-фенсы/прозу, берёт первый `{…}`. `None` — не разобрать.
-/// Тип нормализуется к hard/soft/temporal (дефолт soft при `contradiction=true` без валидного типа).
+/// Устойчивый парс JSON-вердикта: берёт ПЕРВЫЙ СБАЛАНСИРОВАННЫЙ `{…}`-объект (терпит ```-фенсы/прозу).
+/// `None` — не разобрать. Тип нормализуется к hard/soft/temporal (дефолт soft при `contradiction=true`).
 fn parse_judgment(text: &str) -> Option<(bool, String, String)> {
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end < start {
-        return None;
-    }
-    let j: Judgment = serde_json::from_str(&text[start..=end]).ok()?;
+    // Аудит 2026-06-18 (класс B6): раньше брали find('{')+rfind('}') — проза со скобкой ДО/ПОСЛЕ JSON
+    // расширяла срез на невалидный → парс падал → пара не кэшировалась и пере-судилась каждый прогон.
+    // Теперь сканируем первый сбалансированный объект (учёт строк/экранирования).
+    let j: Judgment = first_json_object(text)?;
     let ctype = match j.ctype.as_deref().map(str::trim) {
         Some("hard") => "hard",
         Some("temporal") => "temporal",
@@ -163,6 +161,61 @@ fn parse_judgment(text: &str) -> Option<(bool, String, String)> {
     .to_string();
     let explanation = j.explanation.unwrap_or_default().trim().to_string();
     Some((j.contradiction, ctype, explanation))
+}
+
+/// Первый сбалансированный top-level `{…}`-объект из текста, разобранный в `T`. Невалидный/неполный
+/// объект → пробуем следующий `{`. `None` — валидного объекта нужной формы нет. (Класс фикса B6.)
+fn first_json_object<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            match balanced_object_end(bytes, i) {
+                Some(end) => {
+                    if let Ok(v) = serde_json::from_str::<T>(&text[i..=end]) {
+                        return Some(v);
+                    }
+                    i = end + 1;
+                }
+                None => break, // незакрытый `{` (обрыв) — дальше целых объектов нет
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Индекс закрывающей `}` для объекта на `start` (`bytes[start]==b'{'`), с учётом строковых литералов и
+/// экранирования (брейсы/кавычки внутри строки не считаются). `None` — объект не закрыт. Служебные
+/// `{}"\` — ASCII, поэтому байтовый скан корректен на UTF-8 (кириллица в значениях не мешает).
+fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut esc = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_str {
+            match b {
+                _ if esc => esc = false,
+                b'\\' => esc = true,
+                b'"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Заменяет весь набор противоречий (CT-1 без кэша — прогон перезаписывает прошлый, AC-CT-4).
@@ -449,6 +502,19 @@ mod tests {
     #[test]
     fn parse_judgment_rejects_garbage() {
         assert!(parse_judgment("no json here").is_none());
+    }
+
+    /// Аудит 2026-06-18 (класс B6): проза со скобками ДО и хвост ПОСЛЕ валидного JSON больше НЕ ломают
+    /// парс (раньше find('{')+rfind('}') расширяли срез на невалидный → None → пара пере-судилась).
+    #[test]
+    fn parse_judgment_survives_prose_with_braces() {
+        let text = "Вот мой разбор {набросок}: \
+                    {\"contradiction\": true, \"type\": \"hard\", \"explanation\": \"кот и жив и мёртв\"} \
+                    — итог в скобках {конец}.";
+        let (c, t, e) = parse_judgment(text).expect("первый сбалансированный объект разобран");
+        assert!(c);
+        assert_eq!(t, "hard");
+        assert_eq!(e, "кот и жив и мёртв");
     }
 
     #[test]
