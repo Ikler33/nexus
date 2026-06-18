@@ -63,6 +63,28 @@ describe('chat store (Ф1-8)', () => {
     useChatStore.getState().stop();
   });
 
+  it('send передаёт deep по тогглу aiChatDeep (дефолт Быстрый=false)', () => {
+    const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
+    // Дефолт «Быстрый»: deep=false.
+    useChatStore.getState().send('q1');
+    expect(spy).toHaveBeenCalledWith(
+      'q1',
+      expect.any(Function),
+      expect.objectContaining({ deep: false }),
+    );
+    useChatStore.getState().stop();
+    // «Глубокий» тоггл → deep=true.
+    usePrefsStore.setState({ aiChatDeep: true });
+    useChatStore.getState().send('q2');
+    expect(spy).toHaveBeenLastCalledWith(
+      'q2',
+      expect.any(Function),
+      expect.objectContaining({ deep: true }),
+    );
+    useChatStore.getState().stop();
+    usePrefsStore.setState({ aiChatDeep: false });
+  });
+
   it('hydrate (смена vault) чистит pinned — нет кросс-vault утечки', () => {
     useChatStore.setState({ pinned: ['A.md', 'B.md'] });
     useChatStore.getState().hydrate('/vault/B');

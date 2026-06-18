@@ -66,11 +66,17 @@ pub async fn memory_propose(
     user_text: String,
     assistant_text: String,
 ) -> AppResult<Vec<String>> {
-    let chat = state.vault().await?.ai.chat_util.clone();
+    let (chat, reader) = {
+        let ctx = state.vault().await?;
+        (ctx.ai.chat_util.clone(), ctx.db.reader().clone())
+    };
     let Some(chat) = chat else {
         return Ok(Vec::new()); // нет «быстрой» модели → без авто-предложений
     };
-    Ok(memory::extract::propose_facts(&chat, &user_text, &assistant_text).await)
+    let candidates = memory::extract::propose_facts(&chat, &user_text, &assistant_text).await;
+    // MEM-3 дедуп предложений: не показывать чип «Запомнить?» на факт, который УЖЕ в памяти (точный
+    // повтор) — баг real-test 2026-06-18 (в новом чате повторно предлагал сохранить уже сохранённое имя).
+    Ok(memory::filter_known_exact(&reader, candidates).await?)
 }
 
 /// AC-MEM-3: пин/анпин факта.

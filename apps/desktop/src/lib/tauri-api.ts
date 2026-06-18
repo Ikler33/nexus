@@ -1130,6 +1130,8 @@ export const tauriApi = {
         agentMemory?: boolean;
         /** EP-2: подмешивать саммари прошлых сессий (эпизодическая память). ВЫКЛ по умолчанию. */
         episodic?: boolean;
+        /** Reasoning-режим: «Глубокий» (CoT gemma, медленнее) vs «Быстрый». ВЫКЛ по умолчанию = Быстрый. */
+        deep?: boolean;
         sessionId?: number | null;
         /** P6-PIN: пути закреплённых заметок — их полное содержимое в гарантированный контекст. */
         pinned?: string[];
@@ -1153,6 +1155,7 @@ export const tauriApi = {
         memory: opts?.memory,
         agentMemory: opts?.agentMemory,
         episodic: opts?.episodic,
+        deep: opts?.deep,
         sessionId: opts?.sessionId,
         pinned: opts?.pinned,
         channel,

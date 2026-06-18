@@ -97,6 +97,41 @@ pub async fn add(writer: &WriteActor, text: &str, source: &str) -> DbResult<Opti
         .await
 }
 
+/// MEM-3 (real-test 2026-06-18): из кандидатов авто-ПРЕДЛОЖЕНИЯ оставить ТОЛЬКО ещё НЕ сохранённые —
+/// по ТОЧНОМУ тексту (та же UNIQUE-семантика, что в [`add`]). Иначе чип «Запомнить?» всплывает на уже
+/// сохранённый факт (его `add` всё равно вернул бы дублем `inserted=false`). Близкие-но-ИНЫЕ факты НЕ
+/// трогаем — их слияние/обновление это отдельная зона консолидации (MEM-8); дедупим лишь точные повторы.
+/// Порядок кандидатов сохраняется. Пустые/whitespace — отбрасываются (как в `add`).
+pub async fn filter_known_exact(
+    reader: &ReadPool,
+    candidates: Vec<String>,
+) -> DbResult<Vec<String>> {
+    let mut out = Vec::with_capacity(candidates.len());
+    for cand in candidates {
+        if cand.trim().is_empty() {
+            continue;
+        }
+        let needle = cand.trim().to_string();
+        let exists = reader
+            .query(move |conn| {
+                match conn.query_row(
+                    "SELECT 1 FROM memory_facts WHERE text=?1 LIMIT 1",
+                    [needle],
+                    |_| Ok(()),
+                ) {
+                    Ok(()) => Ok(true),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+                    Err(e) => Err(e),
+                }
+            })
+            .await?;
+        if !exists {
+            out.push(cand);
+        }
+    }
+    Ok(out)
+}
+
 /// AC-MEM-2: все ЖИВЫЕ факты — пины сверху, затем по `created_at` desc. Супридённые (MEM-7/8,
 /// `superseded_by IS NOT NULL`) исключены — они «заменены», в обычном списке не показываются.
 pub async fn list(reader: &ReadPool) -> DbResult<Vec<MemoryFact>> {

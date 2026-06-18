@@ -395,6 +395,8 @@ function AiSection() {
   const setAiExplainRelations = usePrefsStore((s) => s.setAiExplainRelations);
   const aiEpisodicMemory = usePrefsStore((s) => s.aiEpisodicMemory);
   const setAiEpisodicMemory = usePrefsStore((s) => s.setAiEpisodicMemory);
+  const aiChatDeep = usePrefsStore((s) => s.aiChatDeep);
+  const setAiChatDeep = usePrefsStore((s) => s.setAiChatDeep);
   const openMemory = useUIStore((s) => s.openMemory);
   const openEpisodes = useUIStore((s) => s.openEpisodes);
   const [chatUrl, setChatUrl] = useState('');
@@ -503,6 +505,16 @@ function AiSection() {
         {saved && !restart && <span className={styles.okText}>{t('settings.aiSec.saved')}</span>}
         {saved && restart && <span className={styles.warnText}>{t('settings.aiSec.restart')}</span>}
       </div>
+
+      {/* Reasoning-режим чата (замер 2026-06-18): «Быстрый» (без CoT) vs «Глубокий» (с CoT gemma).
+          ВЫКЛ по умолчанию = Быстрый — на RAG-по-базе reasoning давал +30–40с без выигрыша качества;
+          «Глубокий» оставлен тогглом на редкие сложные выводы. Per-call флаг `deep` в chat_rag. */}
+      <EgressRow
+        label={t('settings.aiSec.chatDeep')}
+        desc={t('settings.aiSec.chatDeepDesc')}
+        value={aiChatDeep}
+        onChange={setAiChatDeep}
+      />
 
       {/* LLM-реранжирование источников (search::rerank, eval: nDCG .883→1.0 / MRR .848→1.0):
           переупорядочивает топ-24 кандидатов мелкой моделью перед выбором k. Цена ~1–3 с. */}

@@ -140,6 +140,8 @@
       "restart": "Saved. Restart the app — embedding changed (re-indexing needed).",
       "fastTitle": "Fast model (primitives)",
       "fastDesc": "A small model for short tasks: inline generation, contradiction judge, reasoning summary, news. Empty → the chat model is used.",
+      "chatDeep": "Deep reasoning in chat",
+      "chatDeepDesc": "“Deep”: the model reasons (chain-of-thought) before answering — sharper on rare complex questions, but +30–40 s per answer. Off = “Fast” (measured: reasoning did not improve quality for knowledge-base retrieval).",
       "rerank": "Source reranking (LLM)",
       "rerankDesc": "The fast model reorders retrieved fragments before answering: sharper citations, +~2 s per question. Golden-set: nDCG 0.88 → 1.00.",
       "chatMemory": "Conversation memory",

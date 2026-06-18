@@ -55,6 +55,29 @@ async fn add_dedup_and_list() {
     assert_eq!(count(db.reader()).await.unwrap(), 2);
 }
 
+/// MEM-3 (real-test 2026-06-18): filter_known_exact выкидывает кандидатов, точно совпадающих с уже
+/// сохранёнными фактами (та же UNIQUE-семантика, что в add: trim-учёт), оставляя НОВЫЕ в порядке;
+/// пустые отброшены. Это глушит повторный авто-чип «Запомнить?» на уже сохранённом факте.
+#[tokio::test]
+async fn filter_known_exact_drops_existing_keeps_new() {
+    let (_d, db) = open().await;
+    add(db.writer(), "Имя пользователя Артём", SOURCE_EXPLICIT)
+        .await
+        .unwrap();
+    let candidates = vec![
+        "  Имя пользователя Артём  ".to_string(), // точный дубль (после trim) → выкинуть
+        "Пользователь предпочитает Rust".to_string(), // новый → оставить
+        "   ".to_string(),                        // пустой → выкинуть
+    ];
+    let out = filter_known_exact(db.reader(), candidates).await.unwrap();
+    assert_eq!(out, vec!["Пользователь предпочитает Rust".to_string()]);
+    // Без существующих фактов ничего не фильтруется.
+    let fresh = filter_known_exact(db.reader(), vec!["совсем новый факт".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(fresh, vec!["совсем новый факт".to_string()]);
+}
+
 /// AC-MEM-2/3: пин поднимает факт наверх; edit меняет текст; delete убирает.
 #[tokio::test]
 async fn pin_edit_delete() {
