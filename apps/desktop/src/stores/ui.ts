@@ -39,6 +39,8 @@ interface UIState {
   newsOpen: boolean;
   /** Открыта ли «Доска» (BOARD-4) — канбан-вью заметок-задач вместо редактора. */
   boardOpen: boolean;
+  /** Открыт ли утренний экран «Сегодня» (TODAY-1) — сводка дня вместо редактора. */
+  todayOpen: boolean;
   /** Открыт ли HOME-дашборд (DP-1) — лендинг-вью вместо редактора (стартовая после vault). */
   homeOpen: boolean;
   /** Онбординг пройден (DP-7, персист): welcome ведёт сразу к открытию vault. */
@@ -120,6 +122,10 @@ interface UIState {
   toggleBoard: () => void;
   /** Открыть «Доску» (activity-bar: клик = переход на вью, гасит home/news/chat). */
   openBoard: () => void;
+  closeToday: () => void;
+  toggleToday: () => void;
+  /** Открыть «Сегодня» (activity-bar: клик = переход на вью, гасит home/news/board/chat). */
+  openToday: () => void;
   toggleSidebar: () => void;
   closeHome: () => void;
   toggleHome: () => void;
@@ -190,6 +196,7 @@ export const useUIStore = create<UIState>((set) => ({
   contradictionsOpen: false,
   newsOpen: false,
   boardOpen: false,
+  todayOpen: false,
   // HOME — стартовый лендинг после открытия vault (макет: Home-вью по умолчанию).
   homeOpen: true,
   onboardingDone: readOnboarded(),
@@ -215,16 +222,17 @@ export const useUIStore = create<UIState>((set) => ({
   // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
   openChat: () => {
     logUi('chat:open');
-    set({ chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false });
+    set({ chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false, todayOpen: false });
   },
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () =>
     set((s) => {
       logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
-      if (!s.chatOpen) return { chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false };
-      // Панель уже «открыта», но скрыта за Home/News/Board → клик возвращает её в поле зрения.
-      if (s.homeOpen || s.newsOpen || s.boardOpen)
-        return { homeOpen: false, newsOpen: false, boardOpen: false };
+      if (!s.chatOpen)
+        return { chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false, todayOpen: false };
+      // Панель уже «открыта», но скрыта за Home/News/Board/Today → клик возвращает её в поле зрения.
+      if (s.homeOpen || s.newsOpen || s.boardOpen || s.todayOpen)
+        return { homeOpen: false, newsOpen: false, boardOpen: false, todayOpen: false };
       return { chatOpen: false };
     }),
   openPlugins: () => set({ pluginsOpen: true }),
@@ -311,31 +319,43 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('contradictions:toggle', s.contradictionsOpen ? 'close' : 'open');
       return { contradictionsOpen: !s.contradictionsOpen };
     }),
-  // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board (редактор — когда все закрыты).
+  // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board ↔ today (редактор — когда все закрыты).
   closeNews: () => set({ newsOpen: false }),
-  toggleNews: () => set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false, boardOpen: false })),
+  toggleNews: () =>
+    set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false, boardOpen: false, todayOpen: false })),
   openNews: () => {
     logUi('news:open');
-    set({ newsOpen: true, homeOpen: false, boardOpen: false });
+    set({ newsOpen: true, homeOpen: false, boardOpen: false, todayOpen: false });
   },
   closeBoard: () => set({ boardOpen: false }),
   toggleBoard: () =>
     set((s) => {
       logUi('board:toggle', s.boardOpen ? 'close' : 'open');
-      return { boardOpen: !s.boardOpen, homeOpen: false, newsOpen: false };
+      return { boardOpen: !s.boardOpen, homeOpen: false, newsOpen: false, todayOpen: false };
     }),
   openBoard: () => {
     logUi('board:open');
-    set({ boardOpen: true, homeOpen: false, newsOpen: false });
+    set({ boardOpen: true, homeOpen: false, newsOpen: false, todayOpen: false });
+  },
+  // «Сегодня» (TODAY-1) — полная main-вью, взаимоисключаема с home/news/board (как они меж собой).
+  closeToday: () => set({ todayOpen: false }),
+  toggleToday: () =>
+    set((s) => {
+      logUi('today:toggle', s.todayOpen ? 'close' : 'open');
+      return { todayOpen: !s.todayOpen, homeOpen: false, newsOpen: false, boardOpen: false };
+    }),
+  openToday: () => {
+    logUi('today:open');
+    set({ todayOpen: true, homeOpen: false, newsOpen: false, boardOpen: false });
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () =>
     set((s) => {
       logUi('home:toggle', s.homeOpen ? 'close' : 'open');
-      return { homeOpen: !s.homeOpen, newsOpen: false, boardOpen: false };
+      return { homeOpen: !s.homeOpen, newsOpen: false, boardOpen: false, todayOpen: false };
     }),
-  openHome: () => set({ homeOpen: true, newsOpen: false, boardOpen: false }),
+  openHome: () => set({ homeOpen: true, newsOpen: false, boardOpen: false, todayOpen: false }),
   startOnboarding: () => set({ onboardingActive: true }),
   finishOnboarding: () => {
     try {
