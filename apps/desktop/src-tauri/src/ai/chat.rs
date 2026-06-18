@@ -522,9 +522,16 @@ pub fn parse_web_query_plan(raw: &str) -> Option<WebQueryPlan> {
     if line.is_empty() || normalized == "NONE" {
         return None;
     }
-    let (line, fresh) = match line.to_uppercase().strip_prefix("FRESH:") {
-        Some(_) => (line[6..].trim(), true),
-        None => (line, false),
+    // Признак свежести. Модель ОБЯЗАНА давать `FRESH:`, но мелкие модели (gemma-e4b) роняют двоеточие
+    // → «FRESH <запрос>» ЗАГЛАВНЫМИ. Принимаем оба: `FRESH:`/`fresh:` (любой регистр) ИЛИ `FRESH ` строго
+    // ЗАГЛАВНЫМИ + пробел. Регистр в no-colon важен: строчное «fresh bread recipe» — слово в запросе, не маркер.
+    let upper = line.to_uppercase();
+    let (line, fresh) = if upper.starts_with("FRESH:") {
+        (line[6..].trim(), true)
+    } else if line.starts_with("FRESH") && line[5..].starts_with(char::is_whitespace) {
+        (line[5..].trim(), true)
+    } else {
+        (line, false)
     };
     let query = line
         .trim_matches(|c| c == '"' || c == '\'')
@@ -633,10 +640,21 @@ mod tests {
         );
         assert_eq!(parse_web_query_plan("FRESH:"), None);
         assert_eq!(parse_web_query_plan("FRESH:   "), None);
-        // Слово fresh ВНУТРИ запроса префиксом не считается.
+        // Реальный случай (live-тест на gemma-e4b): модель уронила двоеточие — «FRESH <запрос>»
+        // ЗАГЛАВНЫМИ всё равно маркер (иначе «FRESH» утекало бы в запрос + fresh=false → без time_range).
+        assert_eq!(
+            parse_web_query_plan("FRESH последняя стабильная версия Python"),
+            plan("последняя стабильная версия Python", true)
+        );
+        // Слово fresh ВНУТРИ запроса префиксом не считается (строчное, без двоеточия).
         assert_eq!(
             parse_web_query_plan("fresh bread recipe"),
             plan("fresh bread recipe", false)
+        );
+        // ЗАГЛАВНОЕ FRESH без пробела/двоеточия (напр. «FRESHly») — не маркер.
+        assert_eq!(
+            parse_web_query_plan("FRESHly baked bread"),
+            plan("FRESHly baked bread", false)
         );
     }
 

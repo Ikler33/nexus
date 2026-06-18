@@ -387,13 +387,26 @@ impl JobHandler for ContradictionHandler {
                         .stream_chat(&messages, &mut sink, &cancel)
                         .await
                         .map_err(|e| e.to_string())?;
-                    // Нераспознанный ответ кэшируем как «нет противоречия» — чтобы не пере-судить мусор.
-                    let v =
-                        parse_judgment(&answer).unwrap_or((false, "soft".into(), String::new()));
-                    cache_put(&self.writer, &a, &b, ha, hb, v.0, &v.1, &v.2, now)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    v
+                    match parse_judgment(&answer) {
+                        Some(v) => {
+                            // Распознанный вердикт кэшируем (в т.ч. честное «нет противоречия»).
+                            cache_put(&self.writer, &a, &b, ha, hb, v.0, &v.1, &v.2, now)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            v
+                        }
+                        None => {
+                            // Парс НЕ удался (битый JSON / литеральная `}` в тексте / обрыв) — НЕ кэшируем
+                            // как «нет противоречия» (иначе реальное противоречие подавилось бы навсегда до
+                            // смены сниппета) и логируем, чтобы сбой был наблюдаем. Пере-судим в след. прогон.
+                            tracing::warn!(
+                                a = %a,
+                                b = %b,
+                                "contradiction judge: не разобрать вердикт LLM — пропуск без кэша (пере-суд позже)"
+                            );
+                            (false, "soft".into(), String::new())
+                        }
+                    }
                 }
             };
             if is_contra {
