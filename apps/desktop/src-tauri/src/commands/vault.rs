@@ -861,7 +861,18 @@ pub async fn set_frontmatter_field(
         let rel = path.clone();
         let content_for_write = new_content.clone();
         let root_for_write = root.clone();
+        let expected_old = old.clone();
         tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+            // SAFE-3+ (закрытый буфер): перечитываем диск ПЕРЕД записью. Если внешний писатель
+            // (Syncthing/Dropbox/git/другой редактор) изменил файл в окне read→write — НЕ затираем
+            // его правки контентом, выведенным из устаревшего `old`; возвращаем конфликт. Для ОТКРЫТЫХ
+            // буферов это ловил баннер SAFE-3, но для закрытых файлов гарда не было (потеря данных).
+            let current = std::fs::read_to_string(&abs)?;
+            if current != expected_old {
+                return Err(AppError::Msg(
+                    "файл изменён извне во время правки свойства — операция отменена (перечитайте заметку и повторите)".into(),
+                ));
+            }
             vault::atomic_write(&abs, content_for_write.as_bytes())?;
             // Правка статуса/свойства — намеренная → снапшот истории как ручной (SAFE-5).
             if let Err(e) = vault::history::snapshot(&root_for_write, &rel, &content_for_write, true) {

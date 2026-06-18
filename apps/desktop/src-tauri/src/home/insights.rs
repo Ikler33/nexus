@@ -142,19 +142,25 @@ fn build_questions_prompt(
 
 /// Устойчивый парс JSON-массива вопросов: берёт первый `[…]`, валидирует путь против поданных заметок
 /// (`known`) — отбрасывает галлюцинированные пути и пустые вопросы, режет до `OPEN_Q_MAX`.
-fn parse_questions(text: &str, known: &HashSet<String>) -> Vec<OpenQuestion> {
+/// `Ok(vec)` = распознано (возможно пусто — модель честно не нашла вопросов); `Err` = ПАРС НЕ УДАЛСЯ
+/// (модель дала `[…]`, но битый JSON) — НЕ маскируем под «нет вопросов», чтобы виджет показал сбой, а не
+/// пустоту (иначе реальный отказ LLM неотличим от честного пустого результата).
+fn parse_questions(text: &str, known: &HashSet<String>) -> Result<Vec<OpenQuestion>, String> {
     let (Some(start), Some(end)) = (text.find('['), text.rfind(']')) else {
-        return Vec::new();
+        return Ok(Vec::new()); // модель не дала JSON-массива — валидно «нет вопросов»
     };
     if end < start {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let parsed: Vec<OpenQuestion> = serde_json::from_str(&text[start..=end]).unwrap_or_default();
-    parsed
+    let parsed: Vec<OpenQuestion> = serde_json::from_str(&text[start..=end]).map_err(|e| {
+        tracing::warn!(error = %e, "open_questions: парс JSON-ответа LLM не удался");
+        format!("парс ответа LLM не удался: {e}")
+    })?;
+    Ok(parsed
         .into_iter()
         .filter(|q| !q.question.trim().is_empty() && known.contains(&q.path))
         .take(OPEN_Q_MAX)
-        .collect()
+        .collect())
 }
 
 /// Генератор виджета «Open questions» (manual): последние заметки → LLM → JSON `[{question, path}]`.
@@ -187,7 +193,9 @@ impl WidgetGenerator for OpenQuestionsGenerator {
             .stream_chat(&messages, &mut token_sink, &cancel)
             .await
             .map_err(|e| e.to_string())?;
-        let questions = parse_questions(&answer, &known);
+        // Парс-сбой (битый JSON модели) пробрасываем как Err → WidgetHandler пометит виджет ошибкой
+        // (а не молча 'нет вопросов'). Честно пустой результат (Ok([])) — это 'ready' без вопросов.
+        let questions = parse_questions(&answer, &known)?;
         Ok(serde_json::to_string(&questions).unwrap_or_else(|_| "[]".to_string()))
     }
 }
@@ -295,12 +303,14 @@ mod tests {
           {"question":"а это?","path":"ghost.md"},
           {"question":"  ","path":"b.md"}
         ]"#;
-        let q = parse_questions(text, &k);
+        let q = parse_questions(text, &k).expect("валидный JSON-массив парсится");
         assert_eq!(q.len(), 1, "только валидный путь + непустой вопрос");
         assert_eq!(q[0].path, "a.md");
         assert_eq!(q[0].question, "что дальше?");
-        // Нет массива → пусто.
-        assert!(parse_questions("нет json", &k).is_empty());
+        // Нет массива → честно пусто (Ok([])), а не ошибка.
+        assert!(parse_questions("нет json", &k).unwrap().is_empty());
+        // Битый JSON в `[…]` → Err (НЕ молчаливое пусто): виджет покажет сбой LLM, а не «нет вопросов».
+        assert!(parse_questions(r#"[{"question": битый]"#, &k).is_err());
     }
 
     /// Индексирует заметки (создаёт чанки для сниппетов); опц. тегирует goal.
