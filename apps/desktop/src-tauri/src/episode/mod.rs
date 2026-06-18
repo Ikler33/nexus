@@ -447,10 +447,19 @@ pub async fn upsert_for_session(
     cand: &EpisodeCandidate,
 ) -> DbResult<bool> {
     let sid = cand.session_id;
+    // MAJOR (аудит 2026-06-18): берём ПОСЛЕДНИЕ MAX_TRANSCRIPT_MSGS сообщений (ХВОСТ), а не первые.
+    // Раньше брали первые 40 (ORDER BY id LIMIT), но ватермарк last_msg_id писали = max(id) ВСЕЙ сессии
+    // → для длинной сессии (>40 реплик) саммари описывало НАЧАЛО, а гейт «покрыто до последнего»
+    // блокировал пересжатие навсегда. Хвост и семантически вернее (промпт просит «к чему пришли»), и
+    // согласует ватермарк: max(id) хвоста == max(id) сессии (cand.last_msg_id) → при дозаписи сессия
+    // снова кандидат и пересжимает СВЕЖИЙ хвост (сходится, без бесконечного цикла «первых 40»).
     let transcript: Vec<(String, String)> = reader
         .query(move |c| {
             let mut stmt = c.prepare(
-                "SELECT role, content FROM chat_messages WHERE session_id=?1 ORDER BY id LIMIT ?2",
+                "SELECT role, content FROM \
+                   (SELECT id, role, content FROM chat_messages WHERE session_id=?1 \
+                    ORDER BY id DESC LIMIT ?2) \
+                 ORDER BY id ASC",
             )?;
             let rows = stmt.query_map(params![sid, MAX_TRANSCRIPT_MSGS as i64], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))

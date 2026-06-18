@@ -495,6 +495,50 @@ async fn apply_update_stale_target_degrades_to_add() {
     );
 }
 
+/// Аудит 2026-06-18 (data-loss MAJOR): UPDATE с `new_text`, равным тексту ДРУГОГО живого факта, не валит
+/// транзакцию на UNIQUE(text), а ДЕГРАДИРУЕТ в ADD (кандидат не теряется, цель не перезаписана).
+#[tokio::test]
+async fn apply_update_new_text_collision_degrades_to_add() {
+    let (_d, db) = open().await;
+    let target = add(db.writer(), "пьёт кофе", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    // Независимый живой факт, чей текст совпадёт с new_text слияния → UNIQUE-коллизия.
+    add(db.writer(), "пьёт чай", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap();
+    let plan = ConsolidationPlan {
+        candidate: "пьёт чай".into(),
+        source: SOURCE_EXPLICIT.into(),
+        op: PlanOp::Update {
+            target_id: target,
+            old_text: "пьёт кофе".into(),
+            new_text: "пьёт чай".into(), // совпадает с существующим фактом
+            target_source: "explicit".into(),
+        },
+    };
+    let out = apply(db.writer(), plan, ConsolidationChoice::Accept)
+        .await
+        .unwrap(); // НЕ Err — раньше тут была бы constraint-ошибка → потеря кандидата
+    assert!(
+        matches!(out, ConsolidationOutcome::Add { .. }),
+        "коллизия new_text → деградация в ADD, получено {out:?}"
+    );
+    let facts = list(db.reader()).await.unwrap();
+    assert!(
+        facts.iter().any(|f| f.text == "пьёт кофе"),
+        "цель НЕ перезаписана"
+    );
+    assert!(
+        facts.iter().any(|f| f.text == "пьёт чай"),
+        "существующий факт жив"
+    );
+    assert_eq!(facts.len(), 2, "кандидат-дубль не завёл третий факт");
+}
+
 /// SUPERSEDE Accept: добавляет новый, помечает старый супридённым (вне списка), пишет supersede-событие.
 #[tokio::test]
 async fn apply_supersede_adds_new_and_retires_old() {

@@ -455,7 +455,13 @@ pub async fn chat_rag(
     // = «обсудить ЭТИ заметки». Best-effort: битый/пропавший путь молча пропускается.
     if let Some(paths) = pinned.as_ref().filter(|p| !p.is_empty()) {
         let mut notes: Vec<(String, String)> = Vec::new();
-        for path in paths.iter().take(PINNED_MAX_NOTES) {
+        for path in paths.iter() {
+            // Бюджет (PINNED_MAX_NOTES) считаем по УСПЕШНО добавленным, а не по входным позициям:
+            // непинуемые/битые/служебные пути в начале списка не должны съедать слоты гарантированного
+            // контекста (аудит 2026-06-18).
+            if notes.len() >= PINNED_MAX_NOTES {
+                break;
+            }
             if !is_pinnable(path) {
                 continue; // только .md-заметки, без служебных dot-путей (.nexus/.git) — см. is_pinnable
             }
@@ -463,6 +469,15 @@ pub async fn chat_rag(
             else {
                 continue; // путь вне vault / битый — пропускаем (анти-traversal)
             };
+            // БЕЗОПАСНОСТЬ (security-MAJOR, аудит 2026-06-18): `is_pinnable` — ЛЕКСИЧЕСКАЯ проверка
+            // строки; `resolve_vault_path` канонизирует и ловит только побег НАРУЖУ root, но НЕ служебный
+            // `.nexus` (он физически внутри root). Симлинк `notes/leak.md → ../.nexus/local.json` прошёл
+            // бы оба и утёк бы секреты/историю чатов в LLM-канал. Сверяем КАНОНИЗИРОВАННЫЙ таргет через
+            // `is_ignored` (паритет с `attachments.rs::safe_attachment_abs`): .nexus/.git/dotfile/*.db →
+            // пропуск.
+            if crate::watcher::is_ignored(&abs) {
+                continue;
+            }
             // Size-guard: не грузим в RAM огромный файл целиком (read_to_string читает всё ДО
             // обрезки PINNED_NOTE_CHARS). Слишком большой → пропускаем.
             if let Ok(meta) = tokio::fs::metadata(&abs).await {

@@ -486,6 +486,21 @@ pub async fn apply(
                             if new_text == old_text {
                                 return Ok(ConsolidationOutcome::Noop);
                             }
+                            // UNIQUE(text)-safety (data-loss MAJOR, аудит 2026-06-18): если new_text
+                            // (LLM-merge) совпал с текстом ДРУГОГО живого факта — голый UPDATE бросил бы
+                            // SQLITE_CONSTRAINT и завалил ВСЮ транзакцию → кандидат потерян (нарушение
+                            // fail-closed=ADD). Деградируем в ADD (как ветка устаревшего снимка ниже и
+                            // как Supersede при коллизии). Проверяем под той же tx.
+                            let collision: Option<i64> = tx
+                                .query_row(
+                                    "SELECT id FROM memory_facts WHERE text=?1 AND id<>?2 LIMIT 1",
+                                    params![new_text, target_id],
+                                    |r| r.get(0),
+                                )
+                                .optional()?;
+                            if collision.is_some() {
+                                return add(tx);
+                            }
                             let group = next_op_group(tx)?;
                             tx.execute(
                                 "UPDATE memory_facts SET text=?2 WHERE id=?1",
@@ -620,17 +635,30 @@ pub async fn undo(writer: &WriteActor, op_group: i64) -> DbResult<UndoPlan> {
                                 )
                                 .optional()?;
                             if cur.as_deref() == Some(new.as_str()) {
-                                tx.execute(
-                                    "UPDATE memory_facts SET text=?2 WHERE id=?1",
-                                    params![fact_id, old],
-                                )?;
-                                tx.execute(
-                                    "INSERT INTO memory_fact_events\
-                                     (fact_id,event,old_text,new_text,op_group,created_at) \
-                                     VALUES(?1,'restore',?2,?3,?4,?5)",
-                                    params![fact_id, new, old, op_group, now],
-                                )?;
-                                reindex.push((fact_id, old.clone()));
+                                // UNIQUE(text)-safety (аудит 2026-06-18): если за окно появился
+                                // независимый ряд с текстом `old`, restore-UPDATE нарушил бы UNIQUE и
+                                // завалил ВЕСЬ откат. Undo обещает «любая комбинация пропусков безопасна»
+                                // → при коллизии ПРОПУСКАЕМ элемент (как прочие skip-условия undo).
+                                let collision: Option<i64> = tx
+                                    .query_row(
+                                        "SELECT id FROM memory_facts WHERE text=?1 AND id<>?2 LIMIT 1",
+                                        params![old, fact_id],
+                                        |r| r.get(0),
+                                    )
+                                    .optional()?;
+                                if collision.is_none() {
+                                    tx.execute(
+                                        "UPDATE memory_facts SET text=?2 WHERE id=?1",
+                                        params![fact_id, old],
+                                    )?;
+                                    tx.execute(
+                                        "INSERT INTO memory_fact_events\
+                                         (fact_id,event,old_text,new_text,op_group,created_at) \
+                                         VALUES(?1,'restore',?2,?3,?4,?5)",
+                                        params![fact_id, new, old, op_group, now],
+                                    )?;
+                                    reindex.push((fact_id, old.clone()));
+                                }
                             }
                         }
                     }
