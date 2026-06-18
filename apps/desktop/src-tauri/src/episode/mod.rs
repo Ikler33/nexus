@@ -79,6 +79,9 @@ pub struct EpisodeCandidate {
 /// старше порога), и НЕТ актуального эпизода (нет строки `chat_episodes` с `last_msg_id` == текущему
 /// max(id) сессии — idempotency: не жжём LLM на неизменном). Детерминированный SQL — юнит-тестируем
 /// без LLM. `limit` — анти-flood. Производный подзапрос считает агрегаты, LEFT JOIN сверяет водяной знак.
+/// ORDER BY ended_at **ASC** — FIFO-дренаж бэклога: при >`limit` созревших за раз самые старые
+/// разговоры суммируются ПЕРВЫМИ (монотонный прогресс), а не голодают под потоком новых (DESC бы их
+/// вытеснял; остаток доберёт следующий тик/открытие).
 pub async fn candidate_sessions(
     reader: &ReadPool,
     now: i64,
@@ -102,7 +105,7 @@ pub async fn candidate_sessions(
                  WHERE s.msg_count >= ?1 \
                    AND s.ended_at <= ?2 \
                    AND (e.session_id IS NULL OR e.last_msg_id <> s.last_msg_id) \
-                 ORDER BY s.ended_at DESC \
+                 ORDER BY s.ended_at ASC \
                  LIMIT ?3",
             )?;
             let rows = stmt.query_map(params![MIN_MSGS, quiet_cutoff, limit as i64], |r| {
@@ -476,6 +479,25 @@ mod tests {
         assert_eq!(cands[0].session_id, mature);
         assert_eq!(cands[0].msg_count, 4);
         assert!(has_stale_episodes(db.reader(), now).await.unwrap());
+    }
+
+    /// FIFO-дренаж (фикс MAJOR-1): при бэклоге > limit берутся САМЫЕ СТАРЫЕ созревшие (ended_at ASC),
+    /// чтобы старые разговоры не голодали под потоком новых. limit=2 из 3 созревших → две старейшие.
+    #[tokio::test]
+    async fn candidates_drain_oldest_first() {
+        let (_d, db) = open().await;
+        let now = 10_000_000;
+        let old = seed_session(&db, 4, now - QUIET_SECS - 3000).await;
+        let mid = seed_session(&db, 4, now - QUIET_SECS - 2000).await;
+        let _new = seed_session(&db, 4, now - QUIET_SECS - 1000).await; // тоже созрела, но новее
+
+        let cands = candidate_sessions(db.reader(), now, 2).await.unwrap();
+        let ids: Vec<i64> = cands.iter().map(|c| c.session_id).collect();
+        assert_eq!(
+            ids,
+            vec![old, mid],
+            "две старейшие созревшие, в порядке возрастания ended_at"
+        );
     }
 
     /// Идемпотентность: после генерации эпизода та же неизменная сессия больше НЕ кандидат, повторный
