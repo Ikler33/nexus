@@ -78,6 +78,146 @@ pub trait ChatProvider: Send + Sync {
 /// Каждый пришедший чанк сбрасывает таймер — легитимный долгий стрим не обрывается.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
+/// Политика ретрая ИНИЦИАЦИИ запроса к модели (P0-d, ADR-009): мигающий локальный LLM не должен ронять
+/// весь вызов на транзиентном сбое коннекта/статуса. Ретраится ТОЛЬКО установка стрима (post + проверка
+/// HTTP-статуса) ДО чтения первого байта тела: частично прочитанный SSE-поток переиграть нельзя (дублит/
+/// бьёт вывод), поэтому после старта стрима ретрая нет ВООБЩЕ. Идиома backoff зеркалит планировщик
+/// (`base * 2^n`, потолок), но с интерактивно-чатовыми константами: чат — не фоновая джоба, суммарная
+/// добавленная латентность держится скромной.
+#[derive(Debug, Clone, Copy)]
+struct RetryPolicy {
+    /// Всего попыток (включая первую). Малое число — интерактивный чат, не фон.
+    max_attempts: u32,
+    /// База экспоненциального backoff. Задержка перед попыткой `n` (n=1 после 1-го провала) — `base*2^(n-1)`.
+    base: std::time::Duration,
+    /// Потолок одной задержки backoff (чтобы 2-я/3-я пауза не растягивали чат).
+    cap: std::time::Duration,
+}
+
+impl RetryPolicy {
+    /// Дефолт интерактивного чата: 3 попытки, base 300 мс, cap 2 с → паузы 300 мс, 600 мс (capped 2 с
+    /// не достигается при 3 попытках) — суммарно <1 с добавленной латентности в худшем (но успешном) случае.
+    const fn chat_default() -> Self {
+        Self {
+            max_attempts: 3,
+            base: std::time::Duration::from_millis(300),
+            cap: std::time::Duration::from_secs(2),
+        }
+    }
+
+    /// Задержка backoff ПЕРЕД попыткой с индексом `attempt` (0 = первая, без паузы). `base*2^(attempt-1)`,
+    /// насыщающе (без переполнения сдвига) и под потолком `cap`. Зеркалит идиому планировщика.
+    fn backoff(&self, attempt: u32) -> std::time::Duration {
+        if attempt == 0 {
+            return std::time::Duration::ZERO;
+        }
+        let shift = (attempt - 1).min(20); // защита от переполнения сдвига
+        let factor = 1u32.checked_shl(shift).unwrap_or(u32::MAX);
+        self.base.saturating_mul(factor).min(self.cap)
+    }
+}
+
+/// Исход ОДНОЙ попытки инициации (seam для офлайн-теста политики): `Retryable` — транзиентный сбой,
+/// можно повторить; `Fatal` — повторять НЕЛЬЗЯ (отказ политики эгресса / не-ретраибл 4xx). Классификация
+/// (что транзиентно) живёт в [`classify_attempt_error`] и тестируется в изоляции от сети.
+enum AttemptOutcome<T> {
+    Ok(T),
+    Retryable(AiError),
+    Fatal(AiError),
+}
+
+/// Ретраибл-статусы HTTP (транзиентные): таймаут запроса, троттлинг, перегрузка/сбои апстрима.
+fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// Классифицирует ошибку инициации запроса: транзиентная (ретраибл) vs фатальная.
+///
+/// - [`AiError::Denied`] — отказ ПОЛИТИКИ эгресса (до сокета): НИКОГДА не ретраим (повтор бессмыслен).
+/// - [`AiError::Http`] из transport-reqwest (коннект/таймаут/сброс) — транзиентно, ретраим.
+///
+/// Статусные ошибки классифицируются раздельно (см. [`status_outcome`]) — здесь только транспорт/политика.
+fn classify_attempt_error(err: AiError) -> AttemptOutcome<reqwest::Response> {
+    match err {
+        // Отказ политики эгресса — детерминированный, повтор не поможет (и плодил бы audit-записи).
+        AiError::Denied(_) => AttemptOutcome::Fatal(err),
+        // Транспорт (reqwest): коннект отказан/сброшен, таймаут, DNS — типично транзиентно для
+        // локального LLM, который перезапускается/мигает. Idle-таймаут инициации тоже попадает сюда.
+        AiError::Http(_) => AttemptOutcome::Retryable(err),
+        // Прочее (Config/BadResponse/Dim…) на этапе инициации появиться не должно — на всякий случай
+        // фатально (повтор бессмыслен).
+        other => AttemptOutcome::Fatal(other),
+    }
+}
+
+/// Классифицирует HTTP-статус успешно установленного коннекта: 2xx — ок (Response отдаётся дальше),
+/// ретраибл-5xx/429/408 — `Retryable`, прочие (400/401/403/404/422…) — `Fatal`. Текст ошибки сохраняем
+/// прежний (`статус {…}`) — поведение наружу не меняется.
+fn status_outcome(resp: reqwest::Response) -> AttemptOutcome<reqwest::Response> {
+    let status = resp.status();
+    if status.is_success() {
+        AttemptOutcome::Ok(resp)
+    } else if is_retryable_status(status.as_u16()) {
+        AttemptOutcome::Retryable(AiError::Http(format!("статус {status}")))
+    } else {
+        AttemptOutcome::Fatal(AiError::Http(format!("статус {status}")))
+    }
+}
+
+/// Cancel-aware сон: спит `dur`, но КАЖДЫЕ ~50 мс проверяет флаг отмены — взведённый `cancel` обрывает
+/// паузу немедленно (Stop остаётся отзывчивым, даже если cap-backoff = 2 с). Возвращает `true`, если
+/// проснулись по таймеру (можно продолжать), `false` — если отменены во сне.
+async fn cancel_aware_sleep(dur: std::time::Duration, cancel: &Arc<AtomicBool>) -> bool {
+    const TICK: std::time::Duration = std::time::Duration::from_millis(50);
+    let deadline = std::time::Instant::now() + dur;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        let step = (deadline - now).min(TICK);
+        tokio::time::sleep(step).await;
+    }
+}
+
+/// Ретрай-цикл инициации запроса (seam, P0-d). `attempt` — асинхронная «одна попытка»: возвращает уже
+/// классифицированный [`AttemptOutcome`] (Ok/Retryable/Fatal). Цикл: проверяет `cancel` перед каждой
+/// попыткой и перед/во время backoff-сна; на `Retryable` спит экспоненциальный backoff и пробует снова,
+/// пока не исчерпаны `max_attempts`; на `Fatal` — возвращает сразу; по исчерпании — ПОСЛЕДНЮЮ ошибку
+/// без изменений. ВАЖНО: ретраится только то, что делает `attempt` — у реального вызывающего это лишь
+/// post + проверка статуса ДО первого чанка (стрим после старта не переигрывается).
+async fn retry_request<T, F, Fut>(
+    policy: RetryPolicy,
+    cancel: &Arc<AtomicBool>,
+    mut attempt: F,
+) -> AiResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = AttemptOutcome<T>>,
+{
+    let mut last_err: Option<AiError> = None;
+    for n in 0..policy.max_attempts {
+        // Отмена до попытки: уважаем Stop, не открываем лишний сокет.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AiError::Http("запрос отменён".into()));
+        }
+        // Backoff ПЕРЕД повторной попыткой (n>=1); прерывается отменой во сне.
+        if n > 0 && !cancel_aware_sleep(policy.backoff(n), cancel).await {
+            return Err(AiError::Http("запрос отменён".into()));
+        }
+        match attempt().await {
+            AttemptOutcome::Ok(v) => return Ok(v),
+            AttemptOutcome::Fatal(e) => return Err(e),
+            AttemptOutcome::Retryable(e) => last_err = Some(e),
+        }
+    }
+    // Исчерпаны попытки — последняя ошибка БЕЗ изменений (типизированная).
+    Err(last_err.unwrap_or_else(|| AiError::Http("ретрай исчерпан без ошибки".into())))
+}
+
 /// Chat через OpenAI-совместимый `POST {base}/v1/chat/completions` (llama.cpp-server, напр. Gemma).
 pub struct OpenAiChatProvider {
     /// Guarded-клиент ядра (ADR-005-ext): политика+audit на каждый запрос, провайдер своего
@@ -90,6 +230,9 @@ pub struct OpenAiChatProvider {
     temperature: f32,
     /// Idle-таймаут стрима (по умолчанию [`STREAM_IDLE_TIMEOUT`]); короче — в тестах.
     idle_timeout: std::time::Duration,
+    /// Политика ретрая ИНИЦИАЦИИ запроса (P0-d): post + проверка статуса ДО первого чанка. По
+    /// умолчанию [`RetryPolicy::chat_default`]; в тестах — крошечные константы (быстрый backoff).
+    retry: RetryPolicy,
     /// Включать ли «размышление» reasoning-модели (gemma). `true` для RAG-чата (точнее на сложных
     /// выводах), `false` для примитивов (inline/дайджест/судья) — там CoT только жрёт латентность/бюджет
     /// без выигрыша в качестве (замер 2026-06-09). При `false` шлём `chat_template_kwargs.enable_thinking`.
@@ -113,6 +256,7 @@ impl OpenAiChatProvider {
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
             idle_timeout: STREAM_IDLE_TIMEOUT,
+            retry: RetryPolicy::chat_default(),
             enable_thinking: true,
         }
     }
@@ -146,6 +290,13 @@ impl OpenAiChatProvider {
         self.idle_timeout = d;
         self
     }
+
+    /// Тест-хелпер: переопределить политику ретрая (крошечный backoff в офлайн-тестах).
+    #[cfg(test)]
+    fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
 }
 
 #[async_trait]
@@ -170,15 +321,22 @@ impl ChatProvider for OpenAiChatProvider {
     ) -> AiResult<String> {
         let body = self.request_body(messages);
         let start = std::time::Instant::now();
-        // Через guarded-клиент: политика+audit ДО сокета; отказ — типизированный `AiError::Denied`.
-        let send_fut = self.client.post_json(&self.endpoint, self.feature, &body);
-        let mut resp = tokio::time::timeout(self.idle_timeout, send_fut)
-            .await
-            .map_err(|_| AiError::Http("таймаут ответа модели (сервер не отвечает)".into()))?
-            .map_err(AiError::from)?;
-        if !resp.status().is_success() {
-            return Err(AiError::Http(format!("статус {}", resp.status())));
-        }
+        // P0-d: ретрай ТОЛЬКО инициации стрима (post + проверка HTTP-статуса) ДО чтения первого байта.
+        // После старта стрима (ниже, `resp.chunk()`) ретрая НЕТ: частично прочитанный SSE переиграть
+        // нельзя. Каждая попытка — заново post через guarded-клиент (политика+audit ДО сокета; отказ —
+        // типизированный `AiError::Denied`, который классификатор помечает Fatal → не ретраится).
+        let mut resp = retry_request(self.retry, cancel, || async {
+            let send_fut = self.client.post_json(&self.endpoint, self.feature, &body);
+            // Idle-таймаут на саму инициацию: залипший на коннекте сервер → транзиентная ошибка (ретраибл).
+            match tokio::time::timeout(self.idle_timeout, send_fut).await {
+                Err(_) => AttemptOutcome::Retryable(AiError::Http(
+                    "таймаут ответа модели (сервер не отвечает)".into(),
+                )),
+                Ok(Err(e)) => classify_attempt_error(AiError::from(e)),
+                Ok(Ok(resp)) => status_outcome(resp),
+            }
+        })
+        .await?;
 
         let mut full = String::new();
         // Цепочка «размышления» reasoning-модели в `full` НЕ идёт (только живой 💭-индикатор через
@@ -1082,5 +1240,251 @@ mod tests {
         assert!(tokens > 0, "должны прийти токены");
         assert!(!full.trim().is_empty(), "накопленный ответ непуст");
         assert!(full.to_lowercase().contains("париж") || full.to_lowercase().contains("paris"));
+    }
+
+    // --- P0-d: ретрай инициации запроса (политика в изоляции через seam) ---
+
+    use std::cell::Cell;
+
+    /// Крошечная политика для офлайн-тестов: 3 попытки, base 1 мс, cap 4 мс — backoff почти мгновенный.
+    fn tiny_policy() -> RetryPolicy {
+        RetryPolicy {
+            max_attempts: 3,
+            base: std::time::Duration::from_millis(1),
+            cap: std::time::Duration::from_millis(4),
+        }
+    }
+
+    /// (e) Backoff экспоненциальный и ограничен потолком: 0 → нет паузы, далее base*2^(n-1), но ≤ cap.
+    #[test]
+    fn backoff_is_exponential_and_capped() {
+        let p = RetryPolicy {
+            max_attempts: 5,
+            base: std::time::Duration::from_millis(100),
+            cap: std::time::Duration::from_millis(250),
+        };
+        assert_eq!(p.backoff(0), std::time::Duration::ZERO);
+        assert_eq!(p.backoff(1), std::time::Duration::from_millis(100)); // base
+        assert_eq!(p.backoff(2), std::time::Duration::from_millis(200)); // base*2
+        assert_eq!(p.backoff(3), std::time::Duration::from_millis(250)); // base*4=400 → cap
+        assert_eq!(p.backoff(4), std::time::Duration::from_millis(250)); // cap
+                                                                         // Большой attempt не переполняет сдвиг и не превышает cap.
+        assert_eq!(p.backoff(100), std::time::Duration::from_millis(250));
+    }
+
+    /// Прод-дефолт: суммарный добавленный backoff при 3 попытках скромен (<1 с) — это интерактивный чат.
+    #[test]
+    fn chat_default_total_backoff_is_modest() {
+        let p = RetryPolicy::chat_default();
+        assert_eq!(p.max_attempts, 3);
+        // Паузы перед попытками 1 и 2 (попытка 0 — без паузы).
+        let total = p.backoff(1) + p.backoff(2);
+        assert!(
+            total < std::time::Duration::from_secs(1),
+            "суммарный backoff {total:?} должен быть < 1 с (интерактивный чат)"
+        );
+    }
+
+    /// Классификатор: отказ политики эгресса — Fatal (не ретраим); transport-http — Retryable.
+    #[test]
+    fn classify_attempt_error_policy_vs_transport() {
+        let denied = AiError::Denied(crate::net::EgressDenied::FeatureNotEnabled(
+            EgressFeature::Chat,
+        ));
+        assert!(matches!(
+            classify_attempt_error(denied),
+            AttemptOutcome::Fatal(_)
+        ));
+        // BadResponse/Config на этапе инициации — фатально (повтор бессмыслен).
+        assert!(matches!(
+            classify_attempt_error(AiError::Config("x".into())),
+            AttemptOutcome::Fatal(_)
+        ));
+    }
+
+    /// Статусный классификатор: 2xx → Ok-маркер недоступен без Response, проверяем булеву таблицу статусов.
+    #[test]
+    fn retryable_status_table() {
+        for s in [408u16, 429, 500, 502, 503, 504] {
+            assert!(is_retryable_status(s), "{s} должен быть ретраибл");
+        }
+        for s in [400u16, 401, 403, 404, 422, 200, 201, 301] {
+            assert!(!is_retryable_status(s), "{s} НЕ должен быть ретраибл");
+        }
+    }
+
+    /// (a) Транзиентная ошибка ретраится до cap и в итоге успех; число попыток = (провалы + 1).
+    #[tokio::test]
+    async fn retry_succeeds_after_transient_failures() {
+        let calls = Cell::new(0u32);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let res: AiResult<&str> = retry_request(tiny_policy(), &cancel, || {
+            let n = calls.get() + 1;
+            calls.set(n);
+            async move {
+                if n < 3 {
+                    AttemptOutcome::Retryable(AiError::Http("конн. сброшен".into()))
+                } else {
+                    AttemptOutcome::Ok("ответ")
+                }
+            }
+        })
+        .await;
+        assert_eq!(res.unwrap(), "ответ");
+        assert_eq!(calls.get(), 3, "2 провала + 1 успех = 3 попытки");
+    }
+
+    /// (b) Граница max_attempts: всё транзиентно → ровно `max_attempts` попыток, наружу — ПОСЛЕДНЯЯ ошибка.
+    #[tokio::test]
+    async fn retry_exhausts_and_returns_last_error() {
+        let calls = Cell::new(0u32);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let res: AiResult<&str> = retry_request(tiny_policy(), &cancel, || {
+            let n = calls.get() + 1;
+            calls.set(n);
+            async move { AttemptOutcome::Retryable(AiError::Http(format!("сбой #{n}"))) }
+        })
+        .await;
+        match res {
+            Err(AiError::Http(msg)) => assert_eq!(msg, "сбой #3", "вернулась ПОСЛЕДНЯЯ ошибка"),
+            other => panic!("ожидали последнюю Http-ошибку, получили {other:?}"),
+        }
+        assert_eq!(calls.get(), 3, "ровно max_attempts попыток");
+    }
+
+    /// (c) Fatal (отказ политики / не-ретраибл 4xx) НЕ ретраится: ровно ОДНА попытка.
+    #[tokio::test]
+    async fn retry_does_not_retry_fatal() {
+        // Отказ политики эгресса.
+        let calls = Cell::new(0u32);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let res: AiResult<&str> = retry_request(tiny_policy(), &cancel, || {
+            calls.set(calls.get() + 1);
+            async move {
+                AttemptOutcome::Fatal(AiError::Denied(
+                    crate::net::EgressDenied::FeatureNotEnabled(EgressFeature::Chat),
+                ))
+            }
+        })
+        .await;
+        assert!(matches!(res, Err(AiError::Denied(_))));
+        assert_eq!(calls.get(), 1, "Fatal → без ретрая (1 попытка)");
+
+        // Не-ретраибл 4xx (через status_outcome-эквивалент Fatal).
+        let calls2 = Cell::new(0u32);
+        let res2: AiResult<&str> = retry_request(tiny_policy(), &cancel, || {
+            calls2.set(calls2.get() + 1);
+            async move { AttemptOutcome::Fatal(AiError::Http("статус 404 Not Found".into())) }
+        })
+        .await;
+        assert!(matches!(res2, Err(AiError::Http(_))));
+        assert_eq!(calls2.get(), 1, "не-ретраибл 4xx → без ретрая");
+    }
+
+    /// (d) Взведённый cancel обрывает ретрай немедленно. Подслучай 1: отмена ДО первой попытки —
+    /// 0 попыток. Подслучай 2: отмена ВО ВРЕМЯ backoff после транзиентного провала — обрыв на паузе.
+    #[tokio::test]
+    async fn retry_aborts_on_cancel() {
+        // Отмена до старта.
+        let cancel = Arc::new(AtomicBool::new(true));
+        let calls = Cell::new(0u32);
+        let res: AiResult<&str> = retry_request(tiny_policy(), &cancel, || {
+            calls.set(calls.get() + 1);
+            async move { AttemptOutcome::Ok("не должно вызваться") }
+        })
+        .await;
+        assert!(res.is_err(), "отмена до старта → ошибка");
+        assert_eq!(
+            calls.get(),
+            0,
+            "ни одной попытки при заранее взведённом cancel"
+        );
+
+        // Отмена во время backoff: первая попытка транзиентно падает, попытка взводит cancel перед
+        // тем как уйти в сон → cancel_aware_sleep обрывает паузу, второй попытки нет.
+        let cancel2 = Arc::new(AtomicBool::new(false));
+        let cancel2_for_closure = cancel2.clone();
+        let calls2 = Cell::new(0u32);
+        // Долгий backoff (cap 5 с) — если cancel НЕ уважается во сне, тест зависнет/упадёт по времени.
+        let policy = RetryPolicy {
+            max_attempts: 3,
+            base: std::time::Duration::from_secs(5),
+            cap: std::time::Duration::from_secs(5),
+        };
+        let start = std::time::Instant::now();
+        let res2: AiResult<&str> = retry_request(policy, &cancel2, || {
+            let n = calls2.get() + 1;
+            calls2.set(n);
+            let c = cancel2_for_closure.clone();
+            async move {
+                // Первая попытка проваливается транзиентно и взводит cancel → backoff должен оборваться.
+                c.store(true, Ordering::Relaxed);
+                AttemptOutcome::Retryable(AiError::Http(format!("сбой #{n}")))
+            }
+        })
+        .await;
+        assert!(res2.is_err(), "отмена во сне → ошибка");
+        assert_eq!(
+            calls2.get(),
+            1,
+            "вторая попытка не запускалась (отмена в backoff)"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "backoff оборвался по cancel быстро, не ждал 5 с (фактически {:?})",
+            start.elapsed()
+        );
+    }
+
+    /// Интеграция через провайдер (seam в проде): TCP-сервер сначала рвёт коннект (1 раз), затем отдаёт
+    /// валидный SSE-стрим. Ретрай инициации должен пережить транзиентный сбой и собрать ответ.
+    /// NB: моков фронта на контракт чат-стрима нет (стрим читается в Rust по Response::chunk) → зеркалить
+    /// нечего; контракт проверяем этим integ-тестом + seam-тестами политики выше.
+    #[tokio::test]
+    async fn provider_retries_initiation_then_streams() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            // 1-е соединение: принять и СРАЗУ закрыть (transport-сбой инициации → ретраибл).
+            if let Ok((sock, _)) = listener.accept() {
+                drop(sock);
+            }
+            // 2-е соединение: отдать валидный SSE-ответ.
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf);
+                let body = "data: {\"choices\":[{\"delta\":{\"content\":\"Привет\"}}]}\n\n\
+                            data: [DONE]\n\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes());
+                let _ = sock.flush();
+            }
+        });
+        let provider = OpenAiChatProvider::new(
+            &GuardedClient::unchecked(),
+            EgressFeature::Chat,
+            &format!("http://{addr}"),
+            "gemma",
+            Some(0.0),
+        )
+        .with_idle_timeout(std::time::Duration::from_secs(2))
+        .with_retry(tiny_policy());
+        let msgs = vec![ChatMessage::user("привет")];
+        let mut got = String::new();
+        let mut on_token = |t: String| got.push_str(&t);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let full = provider
+            .stream_chat(&msgs, &mut on_token, &cancel)
+            .await
+            .expect("ретрай инициации пережил сброс коннекта и собрал ответ");
+        assert_eq!(full, "Привет");
+        assert_eq!(got, "Привет");
+        let _ = server.join();
     }
 }
