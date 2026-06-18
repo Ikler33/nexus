@@ -83,6 +83,41 @@ describe('mock setFrontmatterField (BOARD-1 — зеркало Rust-контра
     const { content } = await setFrontmatterField('Tasks/I.md', 'status', 'a "x" b');
     expect(content).toContain('status: a "x" b');
   });
+
+  it('m8: целевой ключ — инлайн-список → throw, файл не тронут', async () => {
+    const src = '---\nstatus: [a, b]\nproject: Alpha\n---\nтело\n';
+    await writeFile('Tasks/J.md', src);
+    await expect(setFrontmatterField('Tasks/J.md', 'status', 'doing')).rejects.toThrow();
+    // Файл байт-в-байт цел (мок не мутировал CONTENT при отказе).
+    expect((await readFileMeta('Tasks/J.md')).content).toBe(src);
+  });
+
+  it('m8: целевой ключ — блок-список → throw, файл не тронут', async () => {
+    const src = '---\ntags:\n  - a\n  - b\nproject: Alpha\n---\nbody\n';
+    await writeFile('Tasks/K.md', src);
+    await expect(setFrontmatterField('Tasks/K.md', 'tags', 'x')).rejects.toThrow();
+    expect((await readFileMeta('Tasks/K.md')).content).toBe(src);
+  });
+
+  it('m8: запись скаляра в ключ НАД чужим блок-списком не съедает чужой список', async () => {
+    await writeFile('Tasks/L.md', '---\nstatus: todo\ntags:\n  - a\n  - b\n---\nbody\n');
+    const { content } = await setFrontmatterField('Tasks/L.md', 'status', 'doing');
+    expect(content).toBe('---\nstatus: doing\ntags:\n  - a\n  - b\n---\nbody\n');
+  });
+
+  it('m8: целевой ключ — блок-скаляр |/> → throw, файл не тронут', async () => {
+    const src = '---\ndesc: |\n  l1\n  l2\nproject: A\n---\nbody\n';
+    await writeFile('Tasks/M.md', src);
+    await expect(setFrontmatterField('Tasks/M.md', 'desc', 'v')).rejects.toThrow();
+    expect((await readFileMeta('Tasks/M.md')).content).toBe(src);
+  });
+
+  it('m8: целевой ключ — вложенный блок-маппинг → throw, файл не тронут', async () => {
+    const src = '---\nnested:\n  sub: 1\nproject: Alpha\n---\nbody\n';
+    await writeFile('Tasks/N.md', src);
+    await expect(setFrontmatterField('Tasks/N.md', 'nested', 'v')).rejects.toThrow();
+    expect((await readFileMeta('Tasks/N.md')).content).toBe(src);
+  });
 });
 
 describe('mock content-hash (SAFE-2)', () => {
