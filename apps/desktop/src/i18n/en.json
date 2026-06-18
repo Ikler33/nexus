@@ -927,6 +927,27 @@
         "today": "today",
         "priority": "priority"
       }
+    },
+    "list": {
+      "viewToggle": "View",
+      "viewColumns": "Board",
+      "viewList": "List",
+      "col": {
+        "title": "Task",
+        "status": "Status",
+        "priority": "Priority",
+        "due": "Due",
+        "project": "Project",
+        "tags": "Tags"
+      },
+      "filter": {
+        "allStatuses": "All statuses",
+        "allPriorities": "All priorities",
+        "allProjects": "All projects",
+        "allTags": "All tags",
+        "searchPlaceholder": "Search tasks…"
+      },
+      "emptyFiltered": "No tasks match the filter"
     }
   },
   "prop": {

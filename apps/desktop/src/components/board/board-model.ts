@@ -128,8 +128,9 @@ export interface PlanItem {
   bucket: PlanBucket;
 }
 
-/** Ранг приоритета для сортировки (меньше = важнее); нестандартный/нет — в конец. */
-function priorityRank(priority: string | null): number {
+/** Ранг приоритета для сортировки (меньше = важнее); нестандартный/нет — в конец. Экспортируется, чтобы
+ *  список (VIEW-1) и план дня (AI-2b) ранжировали приоритет ОДИНАКОВО (анти-дрейф двух ранжирований). */
+export function priorityRank(priority: string | null): number {
   switch (knownPriority(priority)) {
     case 'urgent':
       return 0;
@@ -185,4 +186,103 @@ export function planDay(
     return a.card.path.localeCompare(b.card.path);
   });
   return items.slice(0, Math.max(0, limit));
+}
+
+// ── VIEW-1: список задач (плоское сортируемое/фильтруемое представление поверх ТЕХ ЖЕ карточек) ──
+// Чистые функции без мутации входа: BoardView выводит колонки из ТОГО ЖЕ массива `cards`, и мутирующая
+// сортировка испортила бы порядок колонок/DnD. Все функции возвращают НОВЫЙ массив (sort копии).
+
+/** Ключ сортировки списка. */
+export type SortKey = 'due' | 'priority' | 'status' | 'title';
+/** Направление сортировки. */
+export type SortDir = 'asc' | 'desc';
+
+/** Заголовок карточки для отображения/сортировки (единый источник: список и сорт совпадают): явный title →
+ *  фолбэк-basename → путь. */
+export function cardTitle(card: TaskCard): string {
+  return card.title?.trim() || basename(card.path) || card.path;
+}
+
+/** Дедлайн как сортируемый ключ: валидная ISO-дата `YYYY-MM-DD` → она же; иначе (null/пусто/мусор) → null
+ *  (= «нет значения», тонет В КОНЕЦ при любом направлении). */
+function dueSortKey(due: string | null): string | null {
+  if (!due) return null;
+  const d = due.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+}
+
+/**
+ * Детерминированная сортировка списка (VIEW-1). НЕ мутирует вход (sort копии). Инвариант «пустое тонет»:
+ * для `due` и `priority` отсутствующее/неизвестное значение всегда В КОНЦЕ — НЕЗАВИСИМО от `dir` (desc не
+ * поднимает их наверх). Присутствующие значения уважают `dir`. Приоритет ранжируется через ОБЩИЙ
+ * `priorityRank` (тот же, что у `planDay`). Стабильный тай-брейк по пути — БЕЗ влияния `dir`.
+ */
+export function sortTasks(cards: TaskCard[], key: SortKey, dir: SortDir): TaskCard[] {
+  const mul = dir === 'desc' ? -1 : 1;
+  const cmp = (a: TaskCard, b: TaskCard): number => {
+    switch (key) {
+      case 'due': {
+        const da = dueSortKey(a.due);
+        const db = dueSortKey(b.due);
+        if (da === null && db === null) return 0;
+        if (da === null) return 1; // пустое — в конец, не зависит от dir
+        if (db === null) return -1;
+        return mul * da.localeCompare(db);
+      }
+      case 'priority': {
+        const ma = knownPriority(a.priority) === null;
+        const mb = knownPriority(b.priority) === null;
+        if (ma && mb) return 0;
+        if (ma) return 1; // неизвестный приоритет — в конец, не зависит от dir
+        if (mb) return -1;
+        return mul * (priorityRank(a.priority) - priorityRank(b.priority));
+      }
+      case 'status':
+        return mul * normalizeStatus(a.status).localeCompare(normalizeStatus(b.status));
+      case 'title':
+        return mul * cardTitle(a).localeCompare(cardTitle(b));
+    }
+  };
+  return [...cards].sort((a, b) => {
+    const c = cmp(a, b);
+    return c !== 0 ? c : a.path.localeCompare(b.path); // стабильный тай-брейк, БЕЗ dir
+  });
+}
+
+/** Фильтр списка (VIEW-1): все поля опциональны, пустые/undefined — no-op; активные комбинируются по И. */
+export interface TaskFilter {
+  status?: string;
+  priority?: string;
+  project?: string;
+  tag?: string;
+  text?: string;
+}
+
+/** Регистронезависимое равенство по trim-lowercase (null/пусто слева → не совпадёт с непустым фильтром). */
+function eqCI(value: string | null | undefined, filter: string): boolean {
+  return (value?.trim().toLowerCase() ?? '') === filter.trim().toLowerCase();
+}
+
+/**
+ * Фильтрация списка (VIEW-1). Чистая (возвращает новый массив). Активные поля комбинируются по И; пустые —
+ * пропускаются (no-op). status/priority/project — регистронезависимое РАВЕНСТВО; tag — членство (CI);
+ * text — подстрока (CI) по заголовку+проекту+тегам. Карточки без значения не совпадают с заданным фильтром.
+ */
+export function filterTasks(cards: TaskCard[], f: TaskFilter): TaskCard[] {
+  const status = f.status?.trim();
+  const priority = f.priority?.trim();
+  const project = f.project?.trim();
+  const tag = f.tag?.trim().toLowerCase();
+  const text = f.text?.trim().toLowerCase();
+  return cards.filter((c) => {
+    if (status && !eqCI(c.status, status)) return false;
+    if (priority && !eqCI(c.priority, priority)) return false;
+    if (project && !eqCI(c.project, project)) return false;
+    if (tag && !c.tags.some((tg) => tg.trim().toLowerCase() === tag)) return false;
+    if (text) {
+      const hay = [cardTitle(c), c.project ?? '', ...c.tags].join(' ').toLowerCase();
+      if (!hay.includes(text)) return false;
+    }
+    return true;
+  });
 }
