@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Egress: DNS-rebind/SSRF-гард в ядре GuardedClient (агент P0-a, ADR-009 Фаза 0)
+
+Первый срез фундамента самообучающегося агента. Закрыта дыра: `EgressPolicy::check` валидировал только СТРОКУ хоста, после чего `reqwest` сам резолвил DNS и коннектился — публичный домен, резолвящийся в cloud-metadata (`169.254.169.254` / IMDS-v6 `fd00:ec2::254`) или (web-класс) приватный IP, проходил host-string-гейт и уходил на сокет (TOCTOU между check и connect). Гард resolve→check-all-IPs→pin был лишь в фетчерах и отсутствовал на core-пути chat/embed/probe.
+- **`net/resolve.rs` (новый)** — единый источник истины: трейт `Resolver` (боевой `SystemResolver` на tokio + мок для офлайн-тестов), `check_resolved_ips(ips, deny_private)` — БЕЗУСЛОВНО режет cloud-metadata (вкл. IPv4-mapped/NAT64/6to4/IPv4-compat-туннелирование), IMDS-v6 `fd00:ec2::254` и link-local; при `deny_private` (web-класс) — также приватные/loopback/ULA/CGNAT; пустой резолв → fail-closed отказ.
+- **`GuardedClient::authorize` теперь async**: host-string-гейт → резолв → `check_resolved_ips` → ровно одна audit-запись → per-request клиент с пином проверенного IP (`resolve_to_addrs`), коннект гарантированно на проверенный адрес. `redirect=none` сохранён. chat/embed/probe: LAN/приватные живут (local-first), metadata/link-local/IMDS-v6 — нет.
+- **Дедуп**: дублированный guard в `news/fetch.rs`, `websearch/search.rs`, `commands/plugin.rs` сведён к `net::check_resolved_ips` (одна логика).
+- 16 adversarial IP-тестов (metadata/IMDS-v6/mapped/NAT64/6to4/multi-A/empty/link-local) + 4 async-интеграционных (chat→metadata denied до коннекта и аудитится; chat→loopback/LAN allowed; web→private denied). Полный `cargo test --lib` 530/0; fmt/clippy/egress-lint чисто.
+- Adversarial-ревью диффа (3 скептика→судья): TOCTOU-пин подтверждён корректным; блокер «IMDS-v6 на chat-пути» закрыт безусловным блоком. Остаток (authorize-owns-resolve: убрать двойной резолв на web-классе, аудит web-rebind-отказов, connection-pooling, мульти-IP-пин, дедуп предиката) → отложен в BACKLOG отдельным follow-up-срезом.
+
 ### Тогглы «Инсайты» и «Поиск противоречий» — owner-gated фоновые ИИ-фичи (дефолт OFF)
 
 Два фоновых LLM-виджета вынесены за тогглы в Настройки→ИИ с возможностью отключить, не выпиливая функционал (решение владельца на real-test 2026-06-18: на reference/MOC-vault'ах инсайты дают пусто, противоречия точны но нишевы и затратны → дефолт **OFF**, opt-in). Источник истины — БД vault (зеркало `episodic.enabled`).

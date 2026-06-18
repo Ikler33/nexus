@@ -7,15 +7,19 @@
 //! приватность/metadata; затем проверенный IP **пинится** в клиент (`reqwest resolve override`) —
 //! коннект гарантированно идёт на проверенный адрес, а не на повторный резолв атакующего DNS.
 //! Политика (`EgressPolicy::check`) при этом отрабатывает как обычно поверх ИМЕНИ хоста.
+//!
+//! P0-a: общий гард вынесен в [`crate::net::resolve`] (единый источник истины); здесь — тонкая
+//! обёртка `check_resolved_ips(host, ips)` (web-класс, `deny_private=true`) с прежним текстом ошибки.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use super::FeedFetcher;
+// `Resolver`/`SystemResolver` — реэкспорт общего модуля (P0-a): один трейт на весь эгресс.
 use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
-use crate::plugin::{blocks_cloud_metadata, is_private_host};
+pub use crate::net::{Resolver, SystemResolver};
 
 /// W3: таймаут запроса фида и потолок тела ответа.
 /// Таймауты фетча (W3, переосмысление 2026-06-11): прежний ЕДИНЫЙ 20-секундный `timeout()`
@@ -37,41 +41,18 @@ const FEED_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// потолок остаётся — это анти-DoS, а не норматив размера.
 pub const FEED_BODY_CAP: usize = 4 * 1024 * 1024;
 
-/// DNS-резолв для гарда — за трейтом ради офлайн-тестов (мок задаёт IP).
-#[async_trait]
-pub trait Resolver: Send + Sync {
-    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String>;
-}
-
-/// Боевой резолвер на tokio (системный DNS).
-pub struct SystemResolver;
-
-#[async_trait]
-impl Resolver for SystemResolver {
-    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
-        let addrs = tokio::net::lookup_host((host, 443))
-            .await
-            .map_err(|e| format!("dns: {e}"))?;
-        Ok(addrs.map(|sa| sa.ip()).collect())
-    }
-}
-
-/// Гард: ВСЕ зарезолвленные IP обязаны быть публичными и не-metadata (AC-NF-8) — иначе домен
-/// отклоняется ДО коннекта. Пустой резолв — тоже отказ (нечего пинить).
-pub fn check_resolved_ips(host: &str, ips: &[IpAddr]) -> Result<(), String> {
-    if ips.is_empty() {
-        return Err("dns: пустой резолв".into());
-    }
-    for ip in ips {
-        let s = ip.to_string();
-        if blocks_cloud_metadata(&s) || is_private_host(&s) {
-            // Адрес НЕ включаем в текст (политика приватности ошибок как у EgressDenied).
-            return Err(format!(
-                "dns-гард: домен {host} резолвится в приватный/metadata адрес"
-            ));
+/// Гард web-класса (NewsFeed/Web): ВСЕ зарезолвленные IP обязаны быть публичными и не-metadata
+/// (AC-NF-8) — иначе домен отклоняется ДО коннекта. Пустой резолв — тоже отказ (нечего пинить).
+/// Тонкая обёртка над общим [`crate::net::check_resolved_ips`] (`deny_private=true`): прежний текст
+/// ошибки (адрес НЕ утекает) сохранён для совместимости с вызывающими/тестами.
+pub fn check_resolved_ips(host: &str, ips: &[std::net::IpAddr]) -> Result<(), String> {
+    crate::net::check_resolved_ips(ips, true).map_err(|_| {
+        if ips.is_empty() {
+            "dns: пустой резолв".to_string()
+        } else {
+            format!("dns-гард: домен {host} резолвится в приватный/metadata адрес")
         }
-    }
-    Ok(())
+    })
 }
 
 /// Прод-фетчер: на каждый запрос — резолв → гард → guarded-GET c пином проверенного IP.
@@ -109,19 +90,27 @@ impl FeedFetcher for GuardedNewsFetcher {
             .check(&host, EgressFeature::NewsFeed)
             .map_err(|e| e.to_string())?;
 
-        // DNS-гард (AC-NF-8): резолв → проверка ВСЕХ IP → пин первого проверенного в клиент.
-        let ips = self.resolver.resolve(&host).await?;
+        // DNS-гард (AC-NF-8): резолв → проверка ВСЕХ IP (общий [`check_resolved_ips`], P0-a) → пин
+        // первого проверенного в клиент. Тот же `resolver` инъектится в core-`GuardedClient`, чтобы
+        // его собственный P0-a-гард работал поверх ТОГО ЖЕ резолва (а не системного DNS повторно).
+        let ips = self
+            .resolver
+            .resolve(&host)
+            .await
+            .map_err(|e| format!("dns: {e}"))?;
         check_resolved_ips(&host, &ips)?;
         let pinned = SocketAddr::new(ips[0], parsed.port_or_known_default().unwrap_or(443));
 
+        let pin_host = host.clone();
         let client = GuardedClient::new(self.policy.clone(), self.audit.clone(), move |b| {
             b.user_agent(FEED_USER_AGENT)
                 .connect_timeout(FEED_CONNECT_TIMEOUT)
                 .read_timeout(FEED_READ_TIMEOUT)
                 .timeout(FEED_TOTAL_TIMEOUT)
-                .resolve_to_addrs(&host, &[pinned])
+                .resolve_to_addrs(&pin_host, &[pinned])
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .with_resolver(self.resolver.clone());
         let resp = client
             .get(url, EgressFeature::NewsFeed)
             .await
@@ -151,6 +140,7 @@ pub async fn read_body_capped(mut resp: reqwest::Response, cap: usize) -> Result
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    use std::net::IpAddr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct FixedResolver {
@@ -159,7 +149,7 @@ mod tests {
     }
     #[async_trait]
     impl Resolver for FixedResolver {
-        async fn resolve(&self, _host: &str) -> Result<Vec<IpAddr>, String> {
+        async fn resolve(&self, _host: &str) -> std::io::Result<Vec<IpAddr>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.ips.clone())
         }

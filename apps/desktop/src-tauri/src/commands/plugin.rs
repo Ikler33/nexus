@@ -156,19 +156,16 @@ pub async fn plugin_invoke(
 
 /// SSRF-гард плагин-egress: КАЖДЫЙ зарезолвленный IP обязан быть публичным и не-metadata — иначе
 /// домен отклоняется ДО коннекта (анти-DNS-rebinding). Пустой резолв — тоже отказ (нечего пинить).
-/// Чистая функция — тестируется напрямую (находка аудита 2026-06: plugin net.fetch не пинил IP).
+/// Plugin-egress — web-класс (`deny_private=true`). Делегирует общему [`crate::net::check_resolved_ips`]
+/// (P0-a, единый источник истины); прежний текст ошибки (адрес не утекает) сохранён.
 fn guard_fetch_ips(ips: &[std::net::IpAddr]) -> Result<(), String> {
-    if ips.is_empty() {
-        return Err("dns: пустой резолв".into());
-    }
-    for ip in ips {
-        let s = ip.to_string();
-        if crate::plugin::blocks_cloud_metadata(&s) || crate::plugin::is_private_host(&s) {
-            // Адрес не включаем (политика приватности ошибок).
-            return Err("SSRF: хост резолвится в приватный/metadata адрес".into());
+    crate::net::check_resolved_ips(ips, true).map_err(|_| {
+        if ips.is_empty() {
+            "dns: пустой резолв".to_string()
+        } else {
+            "SSRF: хост резолвится в приватный/metadata адрес".to_string()
         }
-    }
-    Ok(())
+    })
 }
 
 /// `net.fetch`: GET по авторизованному (allowlist) + SSRF-проверенному URL. DNS-гард: резолв хоста →
