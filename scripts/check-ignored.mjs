@@ -26,7 +26,10 @@ import { dirname, resolve } from 'node:path';
 // 20→21: + `live_consolidation_meets_gate` (MEM-8c-a: реальный consolidate::decide основной модели :8080
 // по `consolidation_eval.json` → гейт DELETE-precision≥0.9/UPDATE-quality≥0.8 разблокирует авто-DELETE;
 // нужен живой LLM; запуск `NEXUS_CHAT_URL=… cargo test live_consolidation_meets_gate -- --ignored`).
-const EXPECTED = 21;
+// 21→22: + `live_episode_summary_meets_gate` (EP-2: реальный episode::summarize модели саммари по
+// `episode_eval.json` → гейт faithfulness≥0.85 разблокирует ретривал эпизодов в чат; нужен живой LLM;
+// запуск `NEXUS_CHAT_URL=… cargo test live_episode_summary_meets_gate -- --ignored`).
+const EXPECTED = 22;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(root, 'apps/desktop/src-tauri/src');

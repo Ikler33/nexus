@@ -239,12 +239,14 @@ pub struct MemoryHit {
 }
 
 /// Резолвит id сообщений (в порядке релевантности) в `MemoryHit` с заголовком сессии, ИСКЛЮЧАЯ
-/// текущую сессию (свои же реплики не подмешиваем) и дедуплицируя по сессии (один лучший фрагмент
-/// на разговор). `snippet_chars` — длина выжимки.
+/// текущую сессию (свои же реплики не подмешиваем), сессии из `exclude_sessions` (EP-2: дедуп между
+/// каналами — если разговор уже всплыл ЭПИЗОДОМ, его сырые реплики не дублируем) и дедуплицируя по
+/// сессии (один лучший фрагмент на разговор). `snippet_chars` — длина выжимки.
 pub async fn resolve_memory_hits(
     reader: &ReadPool,
     ranked: Vec<(i64, f32)>,
     exclude_session: Option<i64>,
+    exclude_sessions: std::collections::HashSet<i64>,
     snippet_chars: usize,
 ) -> DbResult<Vec<MemoryHit>> {
     reader
@@ -269,7 +271,10 @@ pub async fn resolve_memory_hits(
                 let Some((sid, title, role, content)) = row else {
                     continue;
                 };
-                if exclude_session == Some(sid) || !seen_sessions.insert(sid) {
+                if exclude_session == Some(sid)
+                    || exclude_sessions.contains(&sid)
+                    || !seen_sessions.insert(sid)
+                {
                     continue;
                 }
                 let snippet: String = content
@@ -326,8 +331,11 @@ pub async fn session_markdown(reader: &ReadPool, id: i64) -> DbResult<Option<(St
 }
 
 /// Поиск по памяти переписки (N4): эмбеддит запрос, ищет в `chat_vectors` (ключи = id сообщений),
-/// резолвит топ-`k` в `MemoryHit` (исключая текущую сессию, дедуп по сессии). Параллельный канал —
-/// заметочный RAG не трогаем. `None`-эмбеддер/индекс → пусто (память выключена/нет провайдера).
+/// резолвит топ-`k` в `MemoryHit` (исключая текущую сессию + `exclude_sessions`, дедуп по сессии).
+/// Параллельный канал — заметочный RAG не трогаем. `None`-эмбеддер/индекс → пусто.
+// Все 8 параметров осмысленны (источник/индекс/эмбеддер/запрос/k/исключения/длина) — bundling в struct
+// читаемости не добавит; EP-2 добавил `exclude_sessions` (дедуп с эпизодами).
+#[allow(clippy::too_many_arguments)]
 pub async fn search_memory(
     reader: &ReadPool,
     vectors: &crate::vector::VectorIndex,
@@ -335,6 +343,7 @@ pub async fn search_memory(
     query: &str,
     k: usize,
     exclude_session: Option<i64>,
+    exclude_sessions: std::collections::HashSet<i64>,
     snippet_chars: usize,
 ) -> DbResult<Vec<MemoryHit>> {
     if query.trim().is_empty() || k == 0 || vectors.is_empty() {
@@ -344,7 +353,7 @@ pub async fn search_memory(
         .embed_query(query)
         .await
         .map_err(|e| crate::db::DbError::External(e.to_string()))?;
-    // Берём с запасом — дедуп по сессии и исключение текущей могут отсеять часть.
+    // Берём с запасом — дедуп по сессии и исключение текущей/эпизодных могут отсеять часть.
     let hits = vectors
         .search(&qvec, (k * 4).max(8))
         .map_err(|e| crate::db::DbError::External(e.to_string()))?;
@@ -352,7 +361,14 @@ pub async fn search_memory(
         .into_iter()
         .map(|h| (h.chunk_id as i64, h.score))
         .collect();
-    let mut out = resolve_memory_hits(reader, ranked, exclude_session, snippet_chars).await?;
+    let mut out = resolve_memory_hits(
+        reader,
+        ranked,
+        exclude_session,
+        exclude_sessions,
+        snippet_chars,
+    )
+    .await?;
     out.truncate(k);
     Ok(out)
 }
@@ -524,6 +540,7 @@ mod tests {
             "настройка SearXNG",
             3,
             None,
+            std::collections::HashSet::new(),
             80,
         )
         .await
@@ -544,6 +561,7 @@ mod tests {
             "настройка SearXNG",
             3,
             Some(a.session_id),
+            std::collections::HashSet::new(),
             80,
         )
         .await
@@ -551,6 +569,26 @@ mod tests {
         assert!(
             excl.iter().all(|h| h.session_id != a.session_id),
             "текущая сессия исключена из памяти"
+        );
+
+        // EP-2: дедуп между каналами — сессия B исключена через exclude_sessions (она «уже эпизод»).
+        let mut excl_set = std::collections::HashSet::new();
+        excl_set.insert(b.session_id);
+        let dd = search_memory(
+            db.reader(),
+            &vectors,
+            &emb,
+            "граф связей",
+            3,
+            None,
+            excl_set,
+            80,
+        )
+        .await
+        .unwrap();
+        assert!(
+            dd.iter().all(|h| h.session_id != b.session_id),
+            "сессия из exclude_sessions (всплывшая эпизодом) не дублируется сырыми репликами"
         );
     }
 }

@@ -10,6 +10,7 @@ import type {
   ConsolidationChoice,
   ConsolidationPlan,
   EgressDeniedKind,
+  EpisodeHit,
   MemoryHit,
   SearchHit,
   WebSource,
@@ -71,6 +72,8 @@ export interface ChatMessage {
   webSources?: WebSource[];
   /** Память переписки (N4b): фрагменты прошлых диалогов, подмешанные в контекст ответа. */
   memorySources?: MemoryHit[];
+  /** Эпизодическая память (EP-2): саммари прошлых сессий, подмешанные в контекст ответа. */
+  episodeSources?: EpisodeHit[];
 }
 
 /** Раскрытость аккордеонов источников ВНЕ React-состояния (см. ChatView.Disclosure): живёт со
@@ -230,11 +233,15 @@ export const useChatStore = create<ChatState>((set, get) => {
     if (!reply || reply.role !== 'assistant' || !ask || ask.role !== 'user') return;
     if (reply.error) return; // ошибочные обмены не персистим (нечего вспоминать)
     const sourcesJson =
-      reply.sources?.length || reply.webSources?.length || reply.memorySources?.length
+      reply.sources?.length ||
+      reply.webSources?.length ||
+      reply.memorySources?.length ||
+      reply.episodeSources?.length
         ? JSON.stringify({
             sources: reply.sources ?? [],
             webSources: reply.webSources ?? [],
             memorySources: reply.memorySources ?? [],
+            episodeSources: reply.episodeSources ?? [],
           })
         : null;
     lastSave = tauriApi.chat.sessions
@@ -570,6 +577,10 @@ export const useChatStore = create<ChatState>((set, get) => {
             // N4b: фрагменты прошлых диалогов — отдельная плашка «из прошлых разговоров».
             patch(replyId, (m) => ({ ...m, memorySources: event.sources }));
             break;
+          case 'episodeSources':
+            // EP-2: саммари прошлых сессий — отдельная плашка «из прошлого разговора».
+            patch(replyId, (m) => ({ ...m, episodeSources: event.sources }));
+            break;
           case 'token':
             // Не set() на каждый токен — копим в буфер, рендерим раз в кадр (AC-Б10-4).
             pending += event.text;
@@ -647,6 +658,8 @@ export const useChatStore = create<ChatState>((set, get) => {
         memory: usePrefsStore.getState().aiChatMemory,
         // MEM (AC-MEM-5): память агента — явные факты (пины + top-k). ВЫКЛ по умолчанию (D5).
         agentMemory: usePrefsStore.getState().aiAgentMemory,
+        // EP-2: эпизодическая память — саммари прошлых сессий. ВЫКЛ по умолчанию (UI-тоггл — EP-3).
+        episodic: usePrefsStore.getState().aiEpisodicMemory,
         sessionId: get().sessionId,
         // P6-PIN: гарантированный контекст закреплённых заметок (полное содержимое).
         pinned: pinned.length ? pinned : undefined,
@@ -763,16 +776,19 @@ export const useChatStore = create<ChatState>((set, get) => {
           let sources: ChatSource[] | undefined;
           let webSources: WebSource[] | undefined;
           let memorySources: MemoryHit[] | undefined;
+          let episodeSources: EpisodeHit[] | undefined;
           if (m.sourcesJson) {
             try {
               const parsed = JSON.parse(m.sourcesJson) as {
                 sources?: ChatSource[];
                 webSources?: WebSource[];
                 memorySources?: MemoryHit[];
+                episodeSources?: EpisodeHit[];
               };
               sources = parsed.sources?.length ? parsed.sources : undefined;
               webSources = parsed.webSources?.length ? parsed.webSources : undefined;
               memorySources = parsed.memorySources?.length ? parsed.memorySources : undefined;
+              episodeSources = parsed.episodeSources?.length ? parsed.episodeSources : undefined;
             } catch {
               /* битый снапшот источников — сообщение без карточек */
             }
@@ -784,6 +800,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             sources,
             webSources,
             memorySources,
+            episodeSources,
           };
         });
         set({

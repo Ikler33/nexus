@@ -15,6 +15,7 @@ import {
   X,
   ChevronRight,
   MessageSquare,
+  History,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
@@ -33,7 +34,7 @@ import { useUIStore } from '../../stores/ui';
 import { useToastStore } from '../../stores/toast';
 import { getActiveEditorView } from '../../lib/editor/activeView';
 import { tauriApi } from '../../lib/tauri-api';
-import type { LinkSuggestion, MemoryHit, WebSource } from '../../lib/tauri-api';
+import type { EpisodeHit, LinkSuggestion, MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
 import { BrandThinking } from '../chrome/BrandThinking';
@@ -929,8 +930,44 @@ function Message({
               <MemorySources sources={message.memorySources} />
             </Disclosure>
           )}
+          {message.episodeSources && message.episodeSources.length > 0 && (
+            <Disclosure
+              id={`${message.id}:ep`}
+              label={t('chat.episodeSourcesToggle', { count: message.episodeSources.length })}
+            >
+              <EpisodeSources sources={message.episodeSources} />
+            </Disclosure>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Эпизодическая память (EP-2): саммари прошлых сессий — клик грузит ту сессию в ленту. Внутренние
+ *  данные «второго мозга» (не внешний контент) — открываем прямо в панели, как N4b. */
+function EpisodeSources({ sources }: { sources: EpisodeHit[] }) {
+  const { t } = useTranslation();
+  const loadSession = useChatStore((s) => s.loadSession);
+  return (
+    <div className={styles.srcCards} aria-label={t('chat.episodeSources')}>
+      {sources.map((s, i) => (
+        <button
+          key={`${s.episodeId}:${i}`}
+          type="button"
+          className={styles.srcCard}
+          onClick={() => void loadSession(s.sessionId)}
+          title={t('chat.episodeOpen')}
+        >
+          <span className={styles.srcCardNum}>
+            <History size={12} aria-hidden />
+          </span>
+          <span className={styles.srcCardBody}>
+            <span className={styles.srcCardTitle}>{s.sessionTitle}</span>
+            <span className={styles.srcCardCtx}>{s.summarySnippet}</span>
+          </span>
+        </button>
+      ))}
     </div>
   );
 }

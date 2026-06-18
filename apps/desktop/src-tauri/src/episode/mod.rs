@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
+use serde::Serialize;
 
 use crate::ai::{injection_marker, ChatMessage, ChatProvider, EmbeddingProvider};
 use crate::db::{DbResult, ReadPool, WriteActor};
@@ -137,6 +138,117 @@ pub async fn episodes_for_backfill(reader: &ReadPool) -> DbResult<Vec<(i64, Stri
             rows.collect::<rusqlite::Result<Vec<_>>>()
         })
         .await
+}
+
+// ── EP-2: ретривал эпизодов в контекст чата ──────────────────────────────────────────────────────
+
+/// Сколько эпизодов подмешивать в контекст (эпизоды длиннее факта/сниппета — не раздуваем промпт).
+pub const EPISODE_K: usize = 2;
+/// Порог близости (cosine) — отдельный от MEM (0.30): длинное саммари 3–6 предложений ведёт себя на
+/// bge-m3 иначе короткого факта; 0.30 дал бы «любой рабочий эпизод к любому рабочему вопросу».
+/// Стартовое значение; финал — из offline-eval (EP-4).
+pub const EPISODE_SIM_THRESHOLD: f32 = 0.45;
+
+/// Найденный эпизод (EP-2): саммари сессии + заголовок. Зеркало `chat_log::MemoryHit` — единая
+/// сериализация/UI/мок. UI помечает «из прошлого разговора», по клику грузит сессию.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeHit {
+    pub episode_id: i64,
+    pub session_id: i64,
+    pub session_title: String,
+    pub summary_snippet: String,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub score: f32,
+}
+
+/// Резолвит id эпизодов (в порядке релевантности) в `EpisodeHit` с заголовком сессии: фильтр
+/// `dismissed=0` (скрытые не всплывают), исключение текущей сессии (свой же эпизод не подмешиваем),
+/// обрезка саммари до `snippet_chars`, топ-`k`. Эпизоды 1:1 с сессиями — дедуп по сессии не нужен.
+async fn resolve_episode_hits(
+    reader: &ReadPool,
+    ranked: Vec<(i64, f32)>,
+    exclude_session: Option<i64>,
+    snippet_chars: usize,
+    k: usize,
+) -> DbResult<Vec<EpisodeHit>> {
+    reader
+        .query(move |c| {
+            let mut out: Vec<EpisodeHit> = Vec::new();
+            for (id, score) in ranked {
+                if out.len() >= k {
+                    break;
+                }
+                let row = c
+                    .query_row(
+                        "SELECT e.id, e.session_id, s.title, e.summary, e.started_at, e.ended_at, e.dismissed \
+                         FROM chat_episodes e JOIN chat_sessions s ON s.id = e.session_id \
+                         WHERE e.id = ?1",
+                        [id],
+                        |r| {
+                            Ok((
+                                r.get::<_, i64>(0)?,
+                                r.get::<_, i64>(1)?,
+                                r.get::<_, String>(2)?,
+                                r.get::<_, String>(3)?,
+                                r.get::<_, i64>(4)?,
+                                r.get::<_, i64>(5)?,
+                                r.get::<_, i64>(6)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((eid, sid, title, summary, started, ended, dismissed)) = row else {
+                    continue;
+                };
+                if dismissed != 0 || exclude_session == Some(sid) {
+                    continue;
+                }
+                out.push(EpisodeHit {
+                    episode_id: eid,
+                    session_id: sid,
+                    session_title: title,
+                    summary_snippet: truncate_chars(summary.trim(), snippet_chars),
+                    started_at: started,
+                    ended_at: ended,
+                    score,
+                });
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// Поиск по эпизодической памяти (EP-2): эмбеддит запрос, ищет в `episode_vectors` (ключи = id
+/// эпизодов), отсекает ниже `EPISODE_SIM_THRESHOLD`, резолвит топ-`k` в `EpisodeHit` (исключая текущую
+/// сессию, скрытые). Параллельный канал — note-RAG/N4b не трогает. Пустой запрос/индекс → пусто.
+pub async fn search_episodes(
+    reader: &ReadPool,
+    vectors: &VectorIndex,
+    embedder: &dyn EmbeddingProvider,
+    query: &str,
+    k: usize,
+    exclude_session: Option<i64>,
+    snippet_chars: usize,
+) -> DbResult<Vec<EpisodeHit>> {
+    if query.trim().is_empty() || k == 0 || vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let qvec = embedder
+        .embed_query(query)
+        .await
+        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
+    // Запас на отсев порогом/исключением текущей сессии.
+    let hits = vectors
+        .search(&qvec, (k * 4).max(8))
+        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
+    let ranked: Vec<(i64, f32)> = hits
+        .into_iter()
+        .filter(|h| h.score >= EPISODE_SIM_THRESHOLD)
+        .map(|h| (h.chunk_id as i64, h.score))
+        .collect();
+    resolve_episode_hits(reader, ranked, exclude_session, snippet_chars, k).await
 }
 
 /// Промпт суммаризации: транскрипт сессии в анти-инъекц-маркерах (контент сообщений — НЕДОВЕРЕННЫЕ
@@ -704,5 +816,111 @@ mod tests {
         let (s2, t2) = parse_summary("Просто саммари").unwrap();
         assert_eq!(s2, "Просто саммари");
         assert!(t2.is_empty());
+    }
+
+    // ── EP-2: ретривал ──────────────────────────────────────────────────────────────────────────
+
+    /// Вставляет эпизод для существующей сессии (для тестов ретривала). Возвращает id эпизода.
+    async fn put_episode(db: &Database, session_id: i64, summary: &str, dismissed: i64) -> i64 {
+        let summary = summary.to_string();
+        db.writer()
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO chat_episodes(session_id, summary, topics, msg_count, last_msg_id, \
+                       started_at, ended_at, model, embed_model, generated_at, dismissed) \
+                     VALUES(?1,?2,NULL,4,10,1,2,'m','mock',3,?3)",
+                    params![session_id, summary, dismissed],
+                )?;
+                Ok(tx.last_insert_rowid())
+            })
+            .await
+            .unwrap()
+    }
+
+    /// resolve_episode_hits: фильтрует скрытые (dismissed) и текущую сессию, обрезает до k.
+    #[tokio::test]
+    async fn resolve_filters_dismissed_and_current() {
+        let (_d, db) = open().await;
+        let now = 1_000_000;
+        let sa = seed_session(&db, 4, now).await;
+        let sb = seed_session(&db, 4, now).await;
+        let sc = seed_session(&db, 4, now).await;
+        let ea = put_episode(&db, sa, "саммари A", 0).await;
+        let eb = put_episode(&db, sb, "саммари B", 1).await; // скрытый
+        let ec = put_episode(&db, sc, "саммари C", 0).await;
+
+        // Все три в ранжировании; текущая сессия = sc (исключаем её эпизод), eb скрыт.
+        let ranked = vec![(ea, 0.9f32), (eb, 0.8), (ec, 0.7)];
+        let hits = resolve_episode_hits(db.reader(), ranked, Some(sc), 100, 5)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "скрытый и текущий отсеяны");
+        assert_eq!(hits[0].episode_id, ea);
+        assert_eq!(hits[0].session_id, sa);
+        assert!(hits[0].summary_snippet.contains("саммари A"));
+    }
+
+    /// search_episodes: находит эпизод по семантически близкому запросу (точное совпадение → cosine 1.0
+    /// ≥ порога); пустой индекс/запрос → пусто.
+    #[tokio::test]
+    async fn search_finds_relevant_episode() {
+        let (_d, db) = open().await;
+        let now = 1_000_000;
+        let sa = seed_session(&db, 4, now).await;
+        let sb = seed_session(&db, 4, now).await;
+        let ea = put_episode(&db, sa, "разговор про настройку SearXNG на VPS", 0).await;
+        let eb = put_episode(&db, sb, "разговор про граф связей заметок", 0).await;
+
+        let dir = TempDir::new().unwrap();
+        let idx = VectorIndex::open(dir.path().join("ev.usearch"), 16).unwrap();
+        let emb = MockEmbedder { dim: 16 };
+        for (id, text) in [
+            (ea, "разговор про настройку SearXNG на VPS"),
+            (eb, "разговор про граф связей заметок"),
+        ] {
+            let v = emb.embed_documents(&[text]).await.unwrap();
+            idx.upsert(id as u64, &v[0]).unwrap();
+        }
+
+        // Пустой запрос → пусто (guard).
+        assert!(
+            search_episodes(db.reader(), &idx, &emb, "  ", EPISODE_K, None, 200)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        // Запрос ровно по саммари A → находит эпизод A (а не B).
+        let hits = search_episodes(
+            db.reader(),
+            &idx,
+            &emb,
+            "разговор про настройку SearXNG на VPS",
+            EPISODE_K,
+            None,
+            200,
+        )
+        .await
+        .unwrap();
+        assert!(!hits.is_empty(), "эпизод найден");
+        assert_eq!(hits[0].episode_id, ea, "ближайший — эпизод про SearXNG");
+        assert!(hits[0].score >= EPISODE_SIM_THRESHOLD);
+
+        // Исключение текущей сессии: если мы В сессии A, её эпизод не подмешиваем.
+        let excl = search_episodes(
+            db.reader(),
+            &idx,
+            &emb,
+            "разговор про настройку SearXNG на VPS",
+            EPISODE_K,
+            Some(sa),
+            200,
+        )
+        .await
+        .unwrap();
+        assert!(
+            excl.iter().all(|h| h.session_id != sa),
+            "текущая сессия исключена"
+        );
     }
 }

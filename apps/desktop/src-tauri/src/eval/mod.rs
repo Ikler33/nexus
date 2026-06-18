@@ -8,6 +8,8 @@
 /// EVAL-AI (§14.3): classification-харнесс closed-vocab авто-тега (precision/recall/F1 + гейт) — для AI-2c.
 pub mod classify;
 pub mod consolidation;
+/// EP-2: faithfulness-гейт саммари эпизодов (ловит ложную память) — блокирует ретривал эпизодов.
+pub mod episodes;
 
 use std::collections::HashSet;
 use std::path::Path;
