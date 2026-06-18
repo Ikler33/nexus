@@ -29,6 +29,7 @@ import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
 import { GoalsPanel } from './components/goals/GoalsPanel';
 import { MemoryPanel } from './components/memory/MemoryPanel';
+import { EpisodesPanel } from './components/episodes/EpisodesPanel';
 import { TasksPanel } from './components/tasks/TasksPanel';
 import { InboxPanel } from './components/inbox/InboxPanel';
 import { DigestPanel } from './components/digest/DigestPanel';
@@ -68,6 +69,7 @@ export function App() {
   const closeVersions = useUIStore((s) => s.closeVersions);
   const goalsOpen = useUIStore((s) => s.goalsOpen);
   const memoryOpen = useUIStore((s) => s.memoryOpen);
+  const episodesOpen = useUIStore((s) => s.episodesOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
   const inboxOpen = useUIStore((s) => s.inboxOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
@@ -198,6 +200,7 @@ export function App() {
         s.conflictOpen ||
         s.goalsOpen ||
         s.memoryOpen ||
+        s.episodesOpen ||
         s.tasksOpen ||
         s.inboxOpen ||
         s.digestOpen ||
@@ -316,6 +319,7 @@ export function App() {
       {tweaksOpen && <SettingsView />}
       {goalsOpen && <GoalsPanel />}
       {memoryOpen && <MemoryPanel />}
+      {episodesOpen && <EpisodesPanel />}
       {tasksOpen && <TasksPanel />}
       {inboxOpen && <InboxPanel />}
       {digestOpen && <DigestPanel />}

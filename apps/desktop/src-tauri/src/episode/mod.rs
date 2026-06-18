@@ -251,6 +251,97 @@ pub async fn search_episodes(
     resolve_episode_hits(reader, ranked, exclude_session, snippet_chars, k).await
 }
 
+// ── EP-3: панель эпизодов + обратимость (list / dismiss-restore / purge / тоггл) ──────────────────
+
+/// Эпизод для панели (EP-3): полная строка + заголовок сессии + распарсенные темы.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeRow {
+    pub id: i64,
+    pub session_id: i64,
+    pub session_title: String,
+    pub summary: String,
+    pub topics: Vec<String>,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub generated_at: i64,
+    pub dismissed: bool,
+}
+
+/// Все эпизоды для панели: обратная хронология по `ended_at` (включая скрытые — панель их помечает и даёт
+/// «восстановить»). `topics` парсятся из JSON (битый JSON → пусто).
+pub async fn list(reader: &ReadPool) -> DbResult<Vec<EpisodeRow>> {
+    reader
+        .query(|c| {
+            let mut stmt = c.prepare(
+                "SELECT e.id, e.session_id, s.title, e.summary, e.topics, e.started_at, e.ended_at, \
+                        e.generated_at, e.dismissed \
+                 FROM chat_episodes e JOIN chat_sessions s ON s.id = e.session_id \
+                 ORDER BY e.ended_at DESC, e.id DESC",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                let topics_json: Option<String> = r.get(4)?;
+                Ok(EpisodeRow {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    session_title: r.get(2)?,
+                    summary: r.get(3)?,
+                    topics: topics_json
+                        .and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok())
+                        .unwrap_or_default(),
+                    started_at: r.get(5)?,
+                    ended_at: r.get(6)?,
+                    generated_at: r.get(7)?,
+                    dismissed: r.get::<_, i64>(8)? != 0,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await
+}
+
+/// EP-3: скрыть/восстановить эпизод (обратимо). `dismissed=1` убирает из ретривала; строка и вектор
+/// живы. Фоновое пересжатие НЕ сбрасывает этот флаг (`upsert_for_session` не пишет `dismissed`).
+pub async fn set_dismissed(writer: &WriteActor, id: i64, dismissed: bool) -> DbResult<()> {
+    let d = i64::from(dismissed);
+    writer
+        .call(move |c| {
+            c.execute(
+                "UPDATE chat_episodes SET dismissed=?2 WHERE id=?1",
+                params![id, d],
+            )
+            .map(|_| ())
+        })
+        .await
+}
+
+/// EP-3: жёсткое удаление эпизода (НЕОБРАТИМО) — DELETE строки. Вектор чистит вызывающий
+/// (`episode_vectors.remove`). Это РЕАЛЬНЫЙ путь стереть саммари (CASCADE мёртв — команды удаления
+/// сессии в коде нет; см. §3 спеки).
+pub async fn purge(writer: &WriteActor, id: i64) -> DbResult<()> {
+    writer
+        .call(move |c| {
+            c.execute("DELETE FROM chat_episodes WHERE id=?1", [id])
+                .map(|_| ())
+        })
+        .await
+}
+
+/// EP-3: persist тоггла `episodic.enabled` (читается фоновой джобой через [`is_enabled`]). "1"/"0".
+pub async fn set_enabled(writer: &WriteActor, on: bool) -> DbResult<()> {
+    let v = if on { "1" } else { "0" };
+    writer
+        .call(move |c| {
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES('episodic.enabled', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [v],
+            )
+            .map(|_| ())
+        })
+        .await
+}
+
 /// Промпт суммаризации: транскрипт сессии в анти-инъекц-маркерах (контент сообщений — НЕДОВЕРЕННЫЕ
 /// данные, как дайджест/judge). Просим связное саммари 3–6 предложений + строку «Темы: …».
 fn build_summarize_messages(transcript: &[(String, String)]) -> Vec<ChatMessage> {
@@ -921,6 +1012,80 @@ mod tests {
         assert!(
             excl.iter().all(|h| h.session_id != sa),
             "текущая сессия исключена"
+        );
+    }
+
+    // ── EP-3: панель + обратимость ──────────────────────────────────────────────────────────────
+
+    /// list: обратная хронология по ended_at, со скрытыми (панель их помечает); topics парсятся.
+    #[tokio::test]
+    async fn list_returns_all_reverse_chron() {
+        let (_d, db) = open().await;
+        let now = 1_000_000;
+        let s_old = seed_session(&db, 4, now).await;
+        let s_new = seed_session(&db, 4, now).await;
+        // ended_at у put_episode = 2; зададим разные явно через UPDATE для порядка.
+        let e_old = put_episode(&db, s_old, "старый", 0).await;
+        let e_new = put_episode(&db, s_new, "новый", 1).await; // скрытый
+        db.writer()
+            .call(move |c| {
+                c.execute("UPDATE chat_episodes SET ended_at=100 WHERE id=?1", [e_old])?;
+                c.execute("UPDATE chat_episodes SET ended_at=200 WHERE id=?1", [e_new])
+                    .map(|_| ())
+            })
+            .await
+            .unwrap();
+
+        let rows = list(db.reader()).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, e_new, "свежий сверху (ended_at DESC)");
+        assert!(rows[0].dismissed, "скрытый помечен");
+        assert_eq!(rows[1].id, e_old);
+        assert!(!rows[1].dismissed);
+        assert!(
+            !rows[0].session_title.is_empty(),
+            "заголовок сессии подтянут"
+        );
+    }
+
+    /// dismiss → restore: обратимое скрытие.
+    #[tokio::test]
+    async fn dismiss_then_restore() {
+        let (_d, db) = open().await;
+        let s = seed_session(&db, 4, 1).await;
+        let e = put_episode(&db, s, "саммари", 0).await;
+        set_dismissed(db.writer(), e, true).await.unwrap();
+        assert!(list(db.reader()).await.unwrap()[0].dismissed);
+        set_dismissed(db.writer(), e, false).await.unwrap();
+        assert!(!list(db.reader()).await.unwrap()[0].dismissed);
+    }
+
+    /// purge: DELETE строки (вектор чистит команда отдельно) — необратимо.
+    #[tokio::test]
+    async fn purge_removes_row() {
+        let (_d, db) = open().await;
+        let s = seed_session(&db, 4, 1).await;
+        let e = put_episode(&db, s, "стереть", 0).await;
+        assert_eq!(list(db.reader()).await.unwrap().len(), 1);
+        purge(db.writer(), e).await.unwrap();
+        assert!(
+            list(db.reader()).await.unwrap().is_empty(),
+            "строка удалена"
+        );
+    }
+
+    /// set_enabled persist → is_enabled читает.
+    #[tokio::test]
+    async fn set_enabled_persists_and_is_read() {
+        let (_d, db) = open().await;
+        assert!(!is_enabled(db.reader()).await, "дефолт OFF");
+        // `super::` — рядом тест-хелпер set_enabled(db,on), берём ПРОДАКШН set_enabled(writer,on).
+        super::set_enabled(db.writer(), true).await.unwrap();
+        assert!(is_enabled(db.reader()).await, "ON после set_enabled(true)");
+        super::set_enabled(db.writer(), false).await.unwrap();
+        assert!(
+            !is_enabled(db.reader()).await,
+            "OFF после set_enabled(false)"
         );
     }
 }

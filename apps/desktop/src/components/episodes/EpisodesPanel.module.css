@@ -1,0 +1,200 @@
+/* Панель «Эпизоды» (EP-3): таймлайн саммари завершённых сессий + dismiss/restore/purge. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(0 0 0 / 0.4);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: var(--space-4);
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, 94vw);
+  max-height: min(700px, 86vh);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  overflow: hidden;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 1.6;
+}
+.spacer {
+  flex: 1;
+}
+.iconBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.iconBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-3) var(--space-3);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.dismissedCard {
+  opacity: 0.6;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px var(--space-2);
+  min-width: 0;
+}
+.date {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cardTitle {
+  flex: 1;
+  /* Не схлопываться в 0 при узком окне: floor вынуждает actions перенестись (flex-wrap), а не
+     отъедать весь титул. На широком (модалка 580px) растёт и показывает полный заголовок. */
+  min-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.cardTitle:hover {
+  color: var(--color-ai);
+  text-decoration: underline;
+}
+.hiddenBadge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+}
+.cardActions {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.actBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.actBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+.delBtn:hover {
+  color: var(--color-danger, #c0392b);
+}
+.summary {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+.topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.topic {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--color-ai);
+  background: color-mix(in srgb, var(--color-ai) 10%, transparent);
+  white-space: nowrap;
+}
+
+.thinking {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-7) var(--space-4);
+}
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-6) var(--space-4);
+}
+.emptyIco {
+  color: var(--color-text-faint);
+}
+.empty {
+  margin: 0;
+  color: var(--color-text-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}

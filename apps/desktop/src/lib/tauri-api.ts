@@ -5,6 +5,7 @@ import * as mockBoard from './mock/board';
 import * as mockProps from './mock/properties';
 import * as mockEgress from './mock/egress';
 import * as mockMemory from './mock/memory';
+import * as mockEpisode from './mock/episode';
 import * as mockGit from './mock/git';
 import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
@@ -462,6 +463,20 @@ export interface EpisodeHit {
   startedAt: number;
   endedAt: number;
   score: number;
+}
+
+/** Эпизод для панели (EP-3, зеркалит Rust `episode::EpisodeRow`) — полная строка + темы + флаг
+ *  скрытия. `topics` — распарсенный JSON; `dismissed` — скрыт из ретривала (обратимо). */
+export interface EpisodeRow {
+  id: number;
+  sessionId: number;
+  sessionTitle: string;
+  summary: string;
+  topics: string[];
+  startedAt: number;
+  endedAt: number;
+  generatedAt: number;
+  dismissed: boolean;
 }
 
 /** Факт памяти агента (MEM, зеркалит Rust `memory::MemoryFact`). `source`: 'explicit' | 'auto' (D1).
@@ -1397,6 +1412,28 @@ export const tauriApi = {
       isTauri()
         ? invoke<boolean>('memory_consolidate_undo', { opGroup })
         : mockMemory.consolidateUndo(opGroup),
+  },
+
+  /** Эпизодическая память (EP-3): панель эпизодов + обратимость + тоггл. Вне Tauri — in-memory мок. */
+  episode: {
+    /** Все эпизоды для панели (обратная хронология, со скрытыми). */
+    list: (): Promise<EpisodeRow[]> =>
+      isTauri() ? invoke<EpisodeRow[]>('episode_list') : mockEpisode.list(),
+    /** Скрыть эпизод (обратимо — убирает из ретривала, строка/вектор живы). */
+    dismiss: (id: number): Promise<void> =>
+      isTauri() ? invoke<void>('episode_dismiss', { id }) : mockEpisode.dismiss(id),
+    /** Восстановить скрытый эпизод. */
+    restore: (id: number): Promise<void> =>
+      isTauri() ? invoke<void>('episode_restore', { id }) : mockEpisode.restore(id),
+    /** Удалить эпизод НАВСЕГДА (строка + вектор). Необратимо; первоисточник-сессия цел. */
+    purge: (id: number): Promise<void> =>
+      isTauri() ? invoke<void>('episode_purge', { id }) : mockEpisode.purge(id),
+    /** Текущее состояние тоггла эпизодической памяти (persisted). */
+    getEnabled: (): Promise<boolean> =>
+      isTauri() ? invoke<boolean>('episode_get_enabled') : mockEpisode.getEnabled(),
+    /** Переключить эпизодическую память; ВКЛ enqueue'ит kick-генерацию (контракт MAJOR-2). */
+    setEnabled: (on: boolean): Promise<void> =>
+      isTauri() ? invoke<void>('episode_set_enabled', { on }) : mockEpisode.setEnabled(on),
   },
 
   /** Политика эгресса ядра (срез 2 net.md): тоггл «офлайн» (E2) + per-feature opt-in (E6).
