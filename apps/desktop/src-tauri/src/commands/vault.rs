@@ -56,8 +56,8 @@ pub async fn open_vault(
         Some(cfg) => build_rag(&root, &db, cfg, &state.egress_policy, &state.egress_audit).await,
         None => None,
     };
-    let (vectors, chat_vectors, memory_vectors, embedder, indexer) = match rag {
-        Some((embedder, vec_index, chat_vec_index, mem_vec_index, force)) => {
+    let (vectors, chat_vectors, memory_vectors, episode_vectors, embedder, indexer) = match rag {
+        Some((embedder, vec_index, chat_vec_index, mem_vec_index, ep_vec_index, force)) => {
             let idx = crate::indexer::Indexer::with_rag(
                 &db,
                 root.clone(),
@@ -69,11 +69,13 @@ pub async fn open_vault(
                 Some(vec_index),
                 Some(chat_vec_index),
                 Some(mem_vec_index),
+                Some(ep_vec_index),
                 Some(embedder),
                 idx,
             )
         }
         None => (
+            None,
             None,
             None,
             None,
@@ -199,6 +201,20 @@ pub async fn open_vault(
         registry.insert(kind.clone(), handler);
         widget_registry.register(key, &kind);
     }
+    // Эпизодическая память (EP-1): фоновая суммаризация «созревших» чат-сессий в эпизоды. Примитив-
+    // суммаризация → утилитарная `chat_util` (с фолбэком на gemma-fast). Гейт по `chat_util` + persisted-
+    // тоггл `episodic.enabled` (handler рано выходит NOOP при OFF). Эмбеддер/индекс — для вектора саммари.
+    if let Some(util) = &chat_util {
+        let handler: Arc<dyn crate::scheduler::JobHandler> =
+            Arc::new(crate::episode::EpisodeRollupHandler::new(
+                db.reader().clone(),
+                db.writer().clone(),
+                util.clone(),
+                embedder.clone(),
+                episode_vectors.clone(),
+            ));
+        registry.insert(crate::episode::KIND_EPISODE_ROLLUP.to_string(), handler);
+    }
     // Лента новостей (NF-4, AC-NF-6/7): хендлер прогона — guarded-фетчер (NewsFeed-фича,
     // DNS-гард) + утилитарная модель (примитив без reasoning). Регистрируем при наличии LLM;
     // конфиг news.json хендлер перечитывает на каждый прогон (выключено → no-op, consent).
@@ -276,6 +292,15 @@ pub async fn open_vault(
     if chat_util.is_some() {
         recurring.insert(crate::home::stale::KIND_STALE.to_string(), DAY_SECS);
     }
+    // Эпизоды (EP) — scheduled-only (как context drift / open questions; добавлено ПОСЛЕ снятия
+    // on_change, чтобы НЕ реагировать на каждую правку: эпизод — «успокаивающийся» сигнал, сессии
+    // должны затихнуть). Чаще суток: ~6 ч, чтобы завершённые днём сессии суммировались тем же днём.
+    if chat_util.is_some() {
+        recurring.insert(
+            crate::episode::KIND_EPISODE_ROLLUP.to_string(),
+            DAY_SECS / 4,
+        );
+    }
     // Лента (D3): раз/сутки, НЕ on-change (сетевая, от правок vault не зависит); при выключенной
     // фиче прогон — дешёвый no-op хендлера.
     if news_active {
@@ -319,6 +344,36 @@ pub async fn open_vault(
                 tracing::info!(
                     messages = n,
                     "chat-memory: бэкфилл векторов переписки завершён"
+                );
+            }
+        });
+    }
+    // Бэкфилл эпизодической памяти (EP): эпизоды без вектора (RAG включился позже / смена эмбеддера
+    // дропнула индекс §6) — эмбеддим summary в фоне. `contains` — источник правды (как chat_vectors).
+    // Best-effort, не держит open_vault.
+    if let (Some(ep_vec), Some(emb)) = (&episode_vectors, &embedder) {
+        let (reader, ep_vec, emb) = (db.reader().clone(), ep_vec.clone(), emb.clone());
+        tokio::spawn(async move {
+            if let Ok(rows) = crate::episode::episodes_for_backfill(&reader).await {
+                let pending: Vec<_> = rows
+                    .into_iter()
+                    .filter(|(id, _)| !ep_vec.contains(*id as u64))
+                    .collect();
+                if pending.is_empty() {
+                    return;
+                }
+                let n = pending.len();
+                for (id, summary) in pending {
+                    if let Ok(v) = emb.embed_documents(&[summary.as_str()]).await {
+                        if let Some(vec) = v.first() {
+                            let _ = ep_vec.upsert(id as u64, vec);
+                        }
+                    }
+                }
+                let _ = ep_vec.save();
+                tracing::info!(
+                    episodes = n,
+                    "episodic-memory: бэкфилл векторов эпизодов завершён"
                 );
             }
         });
@@ -414,6 +469,26 @@ pub async fn open_vault(
             crate::scheduler::enqueue(db.writer(), crate::contradictions::KIND_CONTRA, "", 0, 2)
                 .await;
     }
+    // Эпизоды (EP) — сид run-if-overdue на открытии: тоггл ON, есть «созревшие» сессии без актуального
+    // эпизода, и нет уже готовой/выполняющейся джобы (`has_ready_job`, как contra: будущая
+    // recurring-pending НЕ блокирует немедленный overdue — урок B17/#63).
+    if chat_util.is_some()
+        && crate::episode::is_enabled(db.reader()).await
+        && crate::episode::has_stale_episodes(db.reader(), crate::scheduler::now_secs())
+            .await
+            .unwrap_or(false)
+        && !crate::scheduler::has_ready_job(
+            db.reader(),
+            crate::episode::KIND_EPISODE_ROLLUP,
+            crate::scheduler::now_secs(),
+        )
+        .await
+        .unwrap_or(false)
+    {
+        let _ =
+            crate::scheduler::enqueue(db.writer(), crate::episode::KIND_EPISODE_ROLLUP, "", 0, 2)
+                .await;
+    }
 
     // Фасад §4.3 (AC-EGR-13): ВСЕ провайдеры + политика — одним полем; policy — тот же Arc, что
     // в AppState (один экземпляр на приложение, через него hot-swap пересоберёт guarded-клиент).
@@ -423,6 +498,7 @@ pub async fn open_vault(
         vectors,
         chat_vectors,
         memory_vectors,
+        episode_vectors,
         ai: AIClient {
             chat,
             chat_fast,
@@ -464,6 +540,7 @@ async fn build_rag(
     audit: &Arc<EgressAudit>,
 ) -> Option<(
     Arc<dyn EmbeddingProvider>,
+    Arc<VectorIndex>,
     Arc<VectorIndex>,
     Arc<VectorIndex>,
     Arc<VectorIndex>,
@@ -526,6 +603,14 @@ async fn build_rag(
             |e| tracing::warn!(error = %e, "memory_vectors open не удался — память агента off"),
         )
         .ok()?;
+    // EP: индекс эпизодической памяти (саммари сессий) — ключи = `chat_episodes.id`, тот же эмбеддер/dim.
+    // Параллельный канал, как chat_vectors/memory_vectors; per-vault. Заполняется rollup-джобой/бэкфиллом.
+    let episode_vectors = VectorIndex::open(
+        root.join(".nexus").join("episode_vectors.usearch"),
+        dim,
+    )
+    .map_err(|e| tracing::warn!(error = %e, "episode_vectors open не удался — память эпизодов off"))
+    .ok()?;
 
     tracing::info!(model = %model, dim, force, "RAG включён");
     Some((
@@ -533,6 +618,7 @@ async fn build_rag(
         Arc::new(vectors),
         Arc::new(chat_vectors),
         Arc::new(memory_vectors),
+        Arc::new(episode_vectors),
         force,
     ))
 }
@@ -606,6 +692,18 @@ async fn reconcile_embedding_model(
             .await
             .map_err(|e| tracing::warn!(error = %e, "reconcile: очистка chunks — RAG отключён"))?;
         let _ = std::fs::remove_file(root.join(".nexus").join("vectors.usearch"));
+        // EP: эпизоды эмбеддились старой моделью → дропаем их индекс и помечаем на переэмбеддинг
+        // (summary-текст остаётся, бэкфилл на открытии переэмбеддит дёшево). Иначе запрос новой моделью
+        // против старых векторов → DimMismatch/семантический мусор (ложная память). chat_vectors/
+        // memory_vectors — пред-существующая orphan-дыра того же класса, чинится отдельной задачей.
+        let _ = std::fs::remove_file(root.join(".nexus").join("episode_vectors.usearch"));
+        db.writer()
+            .call(|c| {
+                c.execute("UPDATE chat_episodes SET embed_model=NULL", [])
+                    .map(|_| ())
+            })
+            .await
+            .map_err(|e| tracing::warn!(error = %e, "reconcile: сброс embed_model эпизодов"))?;
         tracing::info!(from = ?prev_model, to = %model, "смена embedding-модели → переэмбеддизация vault (§6.5)");
     }
     set_setting(db, "embedding.model", model)

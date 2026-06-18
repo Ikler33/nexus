@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Эпизодическая память: фундамент — генерация саммари сессий (EP-1)
+
+Третий слой памяти агента (после ФАКТОВ MEM и сырой памяти переписки N4b): **эпизод** = связное нарративное саммари ОДНОЙ завершённой чат-сессии («о чём был разговор и к чему пришли»). Спека `docs/specs/agent-episodic-memory.md` (decision-complete, 17 решений). EP-1 — только фундамент: генерация + хранение, БЕЗ ретривала/инъекции (EP-2) и UI (EP-3).
+- **Схема (миграция 019)** `chat_episodes` (1:1 с `chat_sessions`, `session_id` UNIQUE): summary, topics, водяной знак `last_msg_id`/`msg_count`, время `started_at`/`ended_at`, `model`/`embed_model`, `dismissed`. Производна от `chat_messages` — дроп безопасен (пере-генерируется). Параллельный usearch-индекс `episode_vectors`.
+- **Генерация — фоновая scheduler-джоба `episode_rollup`** (НЕ in-memory debounce: единственный писатель — воркер планировщика, гонка `UNIQUE(session_id)` исключена архитектурно). recurring scheduled-only (~6 ч) + seed run-if-overdue на открытии (`has_stale_episodes && !has_ready_job`). `defer_under_interactive` (уступает интерактивному чату).
+- **Гейт «созревшей» сессии:** ≥4 сообщений, простой ≥2 ч, нет актуального эпизода (idempotency по `last_msg_id` — не жжём LLM на неизменном). Детерминированный SQL, юнит-тестируем.
+- **Модель** `chat_util`→`chat_fast` фолбэк (паттерн `set_title`), транскрипт в `injection_marker()` (анти-инъекция). Best-effort: ошибка/пустое саммари → не пишем, джоба `Ok`.
+- **Тоггл** `episodic.enabled` (persisted в `settings`, дефолт **OFF**: фоновая джоба не получает per-call флаг). OFF → ноль LLM-вызовов и записи. UI-тоггл — EP-3.
+- **Реконсиляция эмбеддера (фикс orphan-вектора):** смена модели дропает `episode_vectors.usearch` + `UPDATE chat_episodes SET embed_model=NULL`; backfill на открытии переэмбеддит summary (как `chat_vectors`). Иначе запрос новой моделью против старых векторов → DimMismatch/мусор. (Пред-существующая orphan-дыра `chat_vectors`/`memory_vectors` — отдельная задача, не EP-1.)
+- **Обратимость:** `ON CONFLICT(session_id) DO UPDATE` при пересжатии НЕ сбрасывает `dismissed` (фон не отменяет намерение скрыть). Полное удаление — `episode_purge` (EP-3, не CASCADE: команды удаления сессии в коде нет).
+- 7 backend-тестов (гейт quiet/min-msgs, idempotency-не-перевызывает-LLM, пересжатие-сохраняет-dismissed, тоггл-OFF-NOOP, пустое-саммари-не-пишет, эмбеддинг-в-индекс, parse тем). Backend 491 зелёных.
+
 ### Память агента: авто-режим консолидации — «Предлагать ↔ Авто» (MEM-8c-b, завершение эпика)
 
 Завершает эпик консолидации: под-режим **«Авто»** применяет слияния/замещения молча (без чипа), с защитой и обратимостью. За мастер-флагом `aiMemoryConsolidation`; под-тоггл `aiMemoryConsolidationMode` (`propose`|`auto`, дефолт **propose**).
