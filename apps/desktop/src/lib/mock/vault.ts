@@ -118,7 +118,8 @@ export async function writeFile(path: string, content: string): Promise<string> 
 /** BOARD-1: JS-порт бэкенд-`set_frontmatter_field` (мок зеркалит контракт — иначе превью/тесты «зелёные»
  *  на неверном поведении, урок MEM-5). Валидирует ключ (как `value_key`), правит/добавляет один плоский
  *  ключ (дубль → последнее вхождение), нет блока — создаёт; незакрытый `---` → throw (Malformed);
- *  значение без round-trip (перевод строки/краевые кавычки/инлайн-список) → throw (Unrepresentable). */
+ *  значение без round-trip (перевод строки/краевые кавычки/инлайн-список) → throw (Unrepresentable);
+ *  целевой ключ уже хранит СПИСОК/блок-родитель → throw (NonScalarTarget) — файл НЕ трогаем (m8). */
 export async function setFrontmatterField(
   path: string,
   key: string,
@@ -168,6 +169,24 @@ function isFieldLine(line: string, key: string): boolean {
   const k = line.slice(0, c).trim();
   return k === key && /^[\p{L}\p{N}_-]+$/u.test(k);
 }
+/** Зеркало Rust `is_block_scalar_indicator`: голый YAML `|`/`>` с опц. chomp/indent (`|`,`>`,`|-`,`>2`). */
+function isBlockScalarIndicator(value: string): boolean {
+  return /^[|>][+\-0-9]*$/.test(value);
+}
+/** m8: зеркало Rust `is_non_scalar_target` — текущее значение совпавшего ключа НЕ плоский скаляр
+ *  (инлайн-список/объект `[`/`{`; либо пустое/`|`/`>` + ниже отступной дочерний блок или `- …`).
+ *  Блок через пустую строку НЕ ловим — симметрично читателю. Строки без EOL. */
+function isNonScalarTarget(keyLine: string, nextLine: string | undefined): boolean {
+  const c = keyLine.indexOf(':');
+  if (c < 0) return false;
+  const value = readScalar(keyLine.slice(c + 1));
+  if (value.startsWith('[') || value.startsWith('{')) return true;
+  if ((value === '' || isBlockScalarIndicator(value)) && nextLine !== undefined) {
+    const trimmed = nextLine.trimStart();
+    return nextLine.length !== trimmed.length || trimmed.startsWith('-');
+  }
+  return false;
+}
 function setFmField(content: string, key: string, value: string): string {
   const quoted = fmValueRepr(value);
   if (quoted === null) throw new Error('Unrepresentable frontmatter value (перевод строки/краевые кавычки)');
@@ -189,8 +208,14 @@ function setFmField(content: string, key: string, value: string): string {
     if (isFieldLine(lines[i].replace(/\r$/, ''), key)) last = i;
   }
   if (last >= 0) {
-    const cr = lines[last].endsWith('\r') ? '\r' : '';
     const bare = lines[last].replace(/\r$/, '');
+    const nextBare = last + 1 < close ? lines[last + 1].replace(/\r$/, '') : undefined;
+    // m8: ключ хранит список/блок-родитель — перезапись скаляром осиротила бы `- a`/`- b` или
+    // потеряла бы инлайн-список → throw (NonScalarTarget), CONTENT НЕ мутируем (файл цел).
+    if (isNonScalarTarget(bare, nextBare)) {
+      throw new Error('NonScalarTarget: свойство хранит список — нельзя перезаписать одним значением');
+    }
+    const cr = lines[last].endsWith('\r') ? '\r' : '';
     lines[last] = `${bare.slice(0, bare.indexOf(':'))}: ${quoted}${cr}`;
   } else {
     // EOL новой строки — как у блока (CRLF, если открывающий `---` был CRLF).

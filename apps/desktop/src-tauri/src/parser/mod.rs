@@ -393,6 +393,11 @@ pub enum FmWriteError {
     /// краевые кавычки, инлайн-список) — читатель — тупой edge-stripper, не YAML-парсер. Лучше явная
     /// ошибка, чем тихая порча: `say "hi"` потеряло бы хвостовую кавычку при чтении.
     Unrepresentable,
+    /// m8: целевой ключ существует, но его ТЕКУЩЕЕ значение — НЕ плоский скаляр (инлайн-список `[…]`,
+    /// инлайн-объект `{…}` или блок-список из `- ` ниже). Перезаписать его как скаляр осиротило бы
+    /// `- a`/`- b` строки или потеряло бы инлайн-список (читатель такие ключи не видит как скаляр —
+    /// см. [`frontmatter_fields`]). Round-trip-reject: лучше явная ошибка, чем тихая порча. Файл не трогаем.
+    NonScalarTarget,
 }
 
 /// ЕДИНСТВЕННАЯ точка очистки скалярного значения frontmatter — общий источник для чтения
@@ -436,6 +441,46 @@ fn is_field_line(line: &str, target: &str) -> bool {
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
 }
 
+/// Голый YAML block-scalar-индикатор: `|`/`>` с опц. chomp (`+`/`-`) и indent-цифрой (`|`, `>`, `|-`,
+/// `>2`, `|2-`…). Такое «значение» означает, что НИЖЕ идёт многострочный блок-литерал — перезапись
+/// его скаляром осиротила бы продолжающие строки. (Читатель показывает такой ключ со значением «|» —
+/// это его собственный баг; писатель обязан НЕ затирать, иначе тихая порча, см. m8 review.)
+fn is_block_scalar_indicator(value: &str) -> bool {
+    let mut ch = value.chars();
+    matches!(ch.next(), Some('|' | '>')) && ch.all(|c| matches!(c, '+' | '-' | '0'..='9'))
+}
+
+/// m8: текущее значение совпавшего ключа — НЕ плоский скаляр (значит, перезапись как скаляра осиротила
+/// бы/потеряла бы вложенный блок)? Симметрично читателю [`frontmatter_fields`] (через тот же
+/// [`read_scalar`]) и блок-парсерам [`frontmatter_aliases`]/[`frontmatter_tags`] — НЕ второй парсер.
+/// `key_line` — строка `ключ: значение` без EOL; `next_line` — следующая строка региона frontmatter
+/// без EOL (если есть). Не-скаляр, если значение после [`read_scalar`]:
+///   • инлайн-список/объект (`[`/`{`) — читатель пропускает как нескаляр; перезапись потеряла бы список;
+///   • ПУСТОЕ или голый block-scalar-индикатор (`|`/`>`) И следующая строка — отступная продолжающая
+///     (дочерний маппинг `  sub:` / литерал `  l1`) ИЛИ элемент списка `- …`: ключ владеет блоком ниже,
+///     перезапись скаляром осиротила бы его строки.
+/// Пустое значение БЕЗ блока ниже (просто `key:` + не-отступная строка/конец) — НЕ нескаляр: безопасно
+/// заполнить. ОГРАНИЧЕНИЕ: блок, отделённый ПУСТОЙ строкой (`key:\n\n  - a`), не ловим — симметрично
+/// читателю, чьи блок-парсеры рвутся на пустой строке (см. BACKLOG m8-хвост для произвольных ключей).
+fn is_non_scalar_target(key_line: &str, next_line: Option<&str>) -> bool {
+    let Some((_, value)) = key_line.split_once(':') else {
+        return false;
+    };
+    let value = read_scalar(value);
+    if value.starts_with('[') || value.starts_with('{') {
+        return true; // инлайн-список/объект
+    }
+    if value.is_empty() || is_block_scalar_indicator(value) {
+        // Ключ владеет блоком ниже, если следующая строка — отступная продолжающая (дочерний
+        // маппинг/литерал) ИЛИ элемент списка `- …` (peek как у frontmatter_aliases/tags).
+        if let Some(next) = next_line {
+            let trimmed = next.trim_start();
+            return next.len() != trimmed.len() || trimmed.starts_with('-');
+        }
+    }
+    false
+}
+
 /// Нужно ли квотировать скаляр-значение YAML (BOARD-1, защита от потери данных). Покрывает
 /// YAML-индикаторы в начале, блок-конструкции `- `/`? `/`: `, флоу-символы, висячий `:`, комментарий
 /// ` #`, резерв-слова (null/bool во всех регистрах), пустое/с краевыми пробелами. Симметрично чтению
@@ -473,8 +518,10 @@ fn quote_yaml_value(v: &str) -> String {
 /// байт-в-байт. serde_yaml архивирован → ручной write-back; это единая точка записи frontmatter (статус
 /// при DnD, project/priority/due, Properties-панель). Нет frontmatter-блока — создаётся. Незакрытый блок
 /// (`---` без пары) → `Err(Malformed)`; значение, которое не переживёт round-trip через читатель
-/// (перевод строки/краевые кавычки/инлайн-список) → `Err(Unrepresentable)` — файл в обоих случаях НЕ
-/// трогаем. Дубль-ключ: правим ПОСЛЕДНЕЕ вхождение (читатель — last-key-wins).
+/// (перевод строки/краевые кавычки/инлайн-список) → `Err(Unrepresentable)`; целевой ключ уже хранит
+/// СПИСОК/блок-родитель (инлайн `[…]`/`{…}` или блок `- ` ниже) → `Err(NonScalarTarget)` (m8: иначе
+/// осиротили бы `- a`/`- b` или потеряли инлайн-список) — файл во всех случаях НЕ трогаем. Дубль-ключ:
+/// правим ПОСЛЕДНЕЕ вхождение (читатель — last-key-wins).
 pub fn set_frontmatter_field(
     content: &str,
     key: &str,
@@ -514,6 +561,13 @@ pub fn set_frontmatter_field(
     let mut new_fm = String::new();
     match last_match {
         Some(mi) => {
+            // m8: нельзя перезаписать как скаляр ключ, чьё текущее значение — список/блок-родитель
+            // (осиротит `- a`/`- b` или потеряет инлайн-список). Round-trip-reject, файл не трогаем.
+            let matched = lines[mi].trim_end_matches(['\n', '\r']);
+            let next = lines.get(mi + 1).map(|l| l.trim_end_matches(['\n', '\r']));
+            if is_non_scalar_target(matched, next) {
+                return Err(FmWriteError::NonScalarTarget);
+            }
             for (i, line) in lines.iter().enumerate() {
                 if i == mi {
                     let trimmed = line.trim_end_matches(['\n', '\r']);
@@ -815,6 +869,91 @@ mod tests {
                 ("status".to_string(), "say \"hi\" there".to_string()),
             ]
         );
+    }
+
+    /// m8: целевой ключ хранит СПИСОК/блок-родитель → `Err(NonScalarTarget)`, файл байт-в-байт ЦЕЛ
+    /// (никаких осиротевших `- a`/`- b`, потери инлайн-списка или частичной правки). Симметрично читателю:
+    /// такие ключи `frontmatter_fields` не видит как скаляр, значит писать в них как в скаляр нельзя.
+    #[test]
+    fn set_frontmatter_field_refuses_non_scalar_target() {
+        // (b) Инлайн-список — перезапись потеряла бы `[a, b]`; файл не трогаем.
+        let inline = "---\nstatus: [a, b]\nproject: Alpha\n---\n# H\nтело\n";
+        assert_eq!(
+            set_frontmatter_field(inline, "status", "doing"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+        assert_eq!(
+            set_frontmatter_field(inline, "status", "doing").err(),
+            Some(FmWriteError::NonScalarTarget)
+        );
+
+        // (c) Блок-список (`- ` ниже) — перезапись осиротила бы `- a`/`- b`; файл не трогаем.
+        let block = "---\ntags:\n  - a\n  - b\nproject: Alpha\n---\nbody\n";
+        assert_eq!(
+            set_frontmatter_field(block, "tags", "x"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+
+        // Инлайн-объект `{…}` — тоже нескаляр.
+        let obj = "---\nmeta: {a: 1}\n---\nbody\n";
+        assert_eq!(
+            set_frontmatter_field(obj, "meta", "v"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+
+        // (f) Запись СКАЛЯРА в ключ НАД чужим блок-списком не съедает чужой список.
+        let above = "---\nstatus: todo\ntags:\n  - a\n  - b\n---\nbody\n";
+        let out = set_frontmatter_field(above, "status", "doing").unwrap();
+        assert_eq!(out, "---\nstatus: doing\ntags:\n  - a\n  - b\n---\nbody\n");
+        // Читатель: status — обновлённый скаляр, блок-список tags ЦЕЛ.
+        assert_eq!(
+            parse(&out).fields,
+            vec![("status".to_string(), "doing".to_string())]
+        );
+        assert_eq!(parse(&out).tags, vec!["a".to_string(), "b".to_string()]);
+
+        // Дубль-ключ: чинится ПОСЛЕДНЕЕ вхождение — если оно список, отказываем (а не правим первое).
+        let dup_block = "---\ntags: scalar\ntags:\n  - a\n  - b\n---\nbody\n";
+        assert_eq!(
+            set_frontmatter_field(dup_block, "tags", "x"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+
+        // Пустое значение БЕЗ блок-списка ниже (`key:` затем другой ключ) — НЕ нескаляр: заполняем.
+        let empty = "---\nstatus:\nproject: Alpha\n---\nbody\n";
+        let out = set_frontmatter_field(empty, "status", "doing").unwrap();
+        assert_eq!(out, "---\nstatus: doing\nproject: Alpha\n---\nbody\n");
+
+        // Пустое значение как ПОСЛЕДНЯЯ строка региона (нет следующей строки) — НЕ нескаляр: заполняем.
+        let empty_last = "---\nproject: Alpha\nstatus:\n---\nbody\n";
+        let out = set_frontmatter_field(empty_last, "status", "doing").unwrap();
+        assert_eq!(out, "---\nproject: Alpha\nstatus: doing\n---\nbody\n");
+
+        // (m8-review HIGH) Блок-СКАЛЯР `|`/`>` (литерал/folded ± chomp) — перезапись осиротила бы строки
+        // блока (читатель ошибочно показывает значение «|», но писать туда скаляр = тихая порча).
+        let block_scalar = "---\ndesc: |\n  l1\n  l2\nproject: A\n---\nbody\n";
+        assert_eq!(
+            set_frontmatter_field(block_scalar, "desc", "v"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+        let folded = "---\ndesc: >-\n  l1\n---\nbody\n";
+        assert_eq!(
+            set_frontmatter_field(folded, "desc", "v"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+
+        // (m8-review HIGH) Вложенный блок-МАППИНГ — дочерние `  sub:` отступные; перезапись осиротила
+        // бы их (читатель исключает такой ключ из fields, см. nested-тест).
+        let nested = "---\nnested:\n  sub: 1\nproject: Alpha\n---\nbody\n";
+        assert_eq!(
+            set_frontmatter_field(nested, "nested", "v"),
+            Err(FmWriteError::NonScalarTarget)
+        );
+
+        // Не-FP: вырожденный `|` БЕЗ отступного блока ниже (следующая строка — другой ключ) — заполняем.
+        let degenerate = "---\ndesc: |\nproject: A\n---\nbody\n";
+        let out = set_frontmatter_field(degenerate, "desc", "v").unwrap();
+        assert_eq!(out, "---\ndesc: v\nproject: A\n---\nbody\n");
     }
 
     /// BOARD-1: квотирование спецсимволов + round-trip через чтение frontmatter_fields (снимает кавычки).

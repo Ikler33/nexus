@@ -862,6 +862,10 @@ pub async fn set_frontmatter_field(
             crate::parser::FmWriteError::Unrepresentable => AppError::Msg(
                 "значение нельзя сохранить в свойство (перевод строки или краевые кавычки)".into(),
             ),
+            crate::parser::FmWriteError::NonScalarTarget => AppError::Msg(
+                "свойство хранит список — его нельзя перезаписать одним значением (правьте файл вручную)"
+                    .into(),
+            ),
         })?;
     let hash = vault::content_hash(new_content.as_bytes());
     if new_content != old {
