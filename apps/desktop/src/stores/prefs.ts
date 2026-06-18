@@ -106,6 +106,9 @@ const AI_CHAT_MEMORY_KEY = 'nexus.ai.chatMemory';
 const AI_AGENT_MEMORY_KEY = 'nexus.ai.agentMemory';
 /** Эпизодическая память (EP, саммари сессий) — ВЫКЛ по умолчанию (приватность-first). */
 const AI_EPISODIC_MEMORY_KEY = 'nexus.ai.episodicMemory';
+/** Глубокие размышления чата (reasoning gemma) — ВЫКЛ по умолчанию = «Быстрый» (замер 2026-06-18:
+ *  reasoning +30–40с на ответ БЕЗ выигрыша качества на RAG-по-базе; «Глубокий» доступен тогглом). */
+const AI_CHAT_DEEP_KEY = 'nexus.ai.chatDeep';
 /** Консолидация памяти (MEM-8) — ВЫКЛ по умолчанию (owner-gated: LLM сливает/замещает факты). */
 const AI_MEMORY_CONSOLIDATION_KEY = 'nexus.ai.memoryConsolidation';
 const AI_EXPLAIN_RELATIONS_KEY = 'nexus.ai.explainRelations';
@@ -170,6 +173,10 @@ interface PrefsState {
   /** Эпизодическая память (EP): подмешивать саммари релевантных прошлых СЕССИЙ в контекст ответа.
    *  ВЫКЛ по умолчанию (приватность-first); тумблер в Настройках → AI — EP-3. */
   aiEpisodicMemory: boolean;
+  /** Глубокие размышления в чате (reasoning gemma): точнее на редких сложных выводах, НО +30–40с на
+   *  ответ. ВЫКЛ по умолчанию = «Быстрый» (замер 2026-06-18: на RAG-по-базе reasoning не повышал
+   *  качество); тумблер в Настройках → AI. */
+  aiChatDeep: boolean;
   /** Консолидация памяти (MEM-8): при подтверждении факта ИИ предлагает объединить/заменить близкий
    *  существующий (режим «Предлагать» — каждое слияние/замещение через подтверждение, обратимо). ВЫКЛ
    *  по умолчанию (owner-gated). Работает только при `aiAgentMemory` + наличии основной модели. */
@@ -192,6 +199,7 @@ interface PrefsState {
   setAiChatMemory: (on: boolean) => void;
   setAiAgentMemory: (on: boolean) => void;
   setAiEpisodicMemory: (on: boolean) => void;
+  setAiChatDeep: (on: boolean) => void;
   setAiMemoryConsolidation: (on: boolean) => void;
   setAiMemoryConsolidationMode: (mode: ConsolidationMode) => void;
   setAiExplainRelations: (on: boolean) => void;
@@ -209,6 +217,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   aiChatMemory: readBoolDefaultTrue(AI_CHAT_MEMORY_KEY),
   aiAgentMemory: readBoolDefaultFalse(AI_AGENT_MEMORY_KEY),
   aiEpisodicMemory: readBoolDefaultFalse(AI_EPISODIC_MEMORY_KEY),
+  aiChatDeep: readBoolDefaultFalse(AI_CHAT_DEEP_KEY),
   aiMemoryConsolidation: readBoolDefaultFalse(AI_MEMORY_CONSOLIDATION_KEY),
   aiMemoryConsolidationMode: readConsolidationMode(),
   aiExplainRelations: readBoolDefaultTrue(AI_EXPLAIN_RELATIONS_KEY),
@@ -287,6 +296,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       /* ignore */
     }
     set({ aiEpisodicMemory: on });
+  },
+  setAiChatDeep: (on) => {
+    try {
+      localStorage.setItem(AI_CHAT_DEEP_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ aiChatDeep: on });
   },
   setAiMemoryConsolidation: (on) => {
     try {

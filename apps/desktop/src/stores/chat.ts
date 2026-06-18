@@ -660,6 +660,8 @@ export const useChatStore = create<ChatState>((set, get) => {
         agentMemory: usePrefsStore.getState().aiAgentMemory,
         // EP-2: эпизодическая память — саммари прошлых сессий. ВЫКЛ по умолчанию (UI-тоггл — EP-3).
         episodic: usePrefsStore.getState().aiEpisodicMemory,
+        // Reasoning-режим: «Глубокий» (с CoT) vs «Быстрый» (без). ВЫКЛ по умолчанию = Быстрый.
+        deep: usePrefsStore.getState().aiChatDeep,
         sessionId: get().sessionId,
         // P6-PIN: гарантированный контекст закреплённых заметок (полное содержимое).
         pinned: pinned.length ? pinned : undefined,

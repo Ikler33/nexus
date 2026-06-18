@@ -169,6 +169,7 @@ impl ChatProvider for OpenAiChatProvider {
         cancel: &Arc<AtomicBool>,
     ) -> AiResult<String> {
         let body = self.request_body(messages);
+        let start = std::time::Instant::now();
         // Через guarded-клиент: политика+audit ДО сокета; отказ — типизированный `AiError::Denied`.
         let send_fut = self.client.post_json(&self.endpoint, self.feature, &body);
         let mut resp = tokio::time::timeout(self.idle_timeout, send_fut)
@@ -180,6 +181,34 @@ impl ChatProvider for OpenAiChatProvider {
         }
 
         let mut full = String::new();
+        // Цепочка «размышления» reasoning-модели в `full` НЕ идёт (только живой 💭-индикатор через
+        // `on_reasoning`), но КОПИМ её здесь для отладочного лога: видеть, не зацикливается ли модель
+        // на одних и тех же выводах (диагностика латентности RAG-чата, 2026-06-18).
+        let mut reasoning = String::new();
+        // По завершении потока: счётчики reasoning/ответа + время — всегда в INFO (приватно-безопасно;
+        // по соотношению reasoning≫ответа видно зацикливание/over-thinking без текста заметок). Сам ТЕКСТ
+        // цепочки содержит данные заметок → по AC-SEC-6 в лог по умолчанию НЕ идёт; пишем его ТОЛЬКО при
+        // явном опте `NEXUS_TRACE_REASONING=1` (локальная отладка латентности reasoning; на INFO, чтобы
+        // реально печаталось — глобальный фильтр прибит к INFO). Эта строка срабатывает на ВСЕХ LLM-стримах
+        // (поле `model` различает источник); провайдеры без reasoning (новости/дайджест/судья) reasoning
+        // не шлют → строка пуста, текст не пишется.
+        let trace_reasoning = std::env::var_os("NEXUS_TRACE_REASONING").is_some();
+        let model = self.model.as_str();
+        let log_done = |reasoning: &str, content: &str| {
+            tracing::info!(
+                model,
+                reasoning_chars = reasoning.chars().count(),
+                content_chars = content.chars().count(),
+                elapsed_ms = start.elapsed().as_millis() as u64,
+                "llm: поток завершён"
+            );
+            if trace_reasoning && !reasoning.is_empty() {
+                tracing::info!(
+                    reasoning = %reasoning,
+                    "llm: полная цепочка рассуждений (NEXUS_TRACE_REASONING)"
+                );
+            }
+        };
         let mut buf: Vec<u8> = Vec::new();
         // Idle-таймаут на КАЖДЫЙ чанк: залип сервер (нет данных) → рвём, а не висим вечно.
         while let Some(chunk) = tokio::time::timeout(self.idle_timeout, resp.chunk())
@@ -188,6 +217,7 @@ impl ChatProvider for OpenAiChatProvider {
             .map_err(|e| AiError::Http(e.to_string()))?
         {
             if cancel.load(Ordering::Relaxed) {
+                log_done(&reasoning, &full);
                 return Ok(full);
             }
             buf.extend_from_slice(&chunk);
@@ -200,13 +230,21 @@ impl ChatProvider for OpenAiChatProvider {
                         full.push_str(&s);
                         on_token(s);
                     }
-                    // Размышление reasoning-модели НЕ копим в `full` — только живой индикатор (R1).
-                    SseEvent::Reasoning(s) => on_reasoning(s),
-                    SseEvent::Done => return Ok(full),
+                    // Размышление reasoning-модели: в `full` НЕ копим (живой 💭-индикатор R1) — но
+                    // накапливаем в `reasoning` для отладочного лога завершения.
+                    SseEvent::Reasoning(s) => {
+                        reasoning.push_str(&s);
+                        on_reasoning(s);
+                    }
+                    SseEvent::Done => {
+                        log_done(&reasoning, &full);
+                        return Ok(full);
+                    }
                     SseEvent::Other => {}
                 }
             }
         }
+        log_done(&reasoning, &full);
         Ok(full)
     }
 

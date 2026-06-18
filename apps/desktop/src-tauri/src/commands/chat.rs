@@ -135,6 +135,7 @@ pub async fn chat_rag(
     memory: Option<bool>,
     agent_memory: Option<bool>,
     episodic: Option<bool>,
+    deep: Option<bool>,
     session_id: Option<i64>,
     pinned: Option<Vec<String>>,
 ) -> AppResult<()> {
@@ -152,6 +153,11 @@ pub async fn chat_rag(
     // Эпизодическая память (EP-2) — саммари прошлых сессий (канал episode_vectors). ВЫКЛ по умолчанию
     // (приватность-first, как MEM); per-call флаг от фронта (тоггл `aiEpisodicMemory`). UI-тоггл — EP-3.
     let episodic = episodic.unwrap_or(false);
+    // Глубокие размышления в чате (reasoning gemma, `chat`) vs «Быстрый» без CoT (`chat_fast`). ВЫКЛ
+    // по умолчанию — «Быстрый» (тоггл `aiChatDeep` в Настройках → AI). Замер 2026-06-18: на RAG-по-базе
+    // reasoning добавляет 30–40с БЕЗ выигрыша в качестве (модель переписывает один вывод 3×), потому
+    // дефолт Быстрый; Глубокий остаётся доступен тогглом «на всякий случай» (решение владельца).
+    let deep = deep.unwrap_or(false);
     // Снимаем нужное из контекста и отпускаем лок ДО сетевых вызовов (эмбеддинг + LLM-стрим).
     let (
         root,
@@ -163,6 +169,7 @@ pub async fn chat_rag(
         episode_vectors,
         embedder,
         chat,
+        chat_fast,
         chat_util,
     ) = {
         let ctx = state.vault().await?;
@@ -176,8 +183,18 @@ pub async fn chat_rag(
             ctx.episode_vectors.clone(),
             ctx.ai.embedder.clone(),
             ctx.ai.chat.clone(),
+            ctx.ai.chat_fast.clone(),
             ctx.ai.chat_util.clone(),
         )
+    };
+    // Тоггл «Быстрый/Глубокий» (дефолт Быстрый): Быстрый → `chat_fast` (gemma БЕЗ reasoning),
+    // Глубокий → `chat` (С reasoning). Оба на ОСНОВНОЙ модели, разница только в `enable_thinking`.
+    // Fallback `.or(...)`: если нужной половины пары нет (напр. без `ai.fast`-секции), берём что есть —
+    // чат не должен падать из-за выбора режима.
+    let chat = if deep {
+        chat.or(chat_fast)
+    } else {
+        chat_fast.or(chat)
     };
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
