@@ -192,6 +192,9 @@ pub struct VaultContext {
     /// Индекс памяти агента (MEM, явные факты): векторы фактов, ключи = `memory_facts.id`. `None`
     /// синхронно с `vectors`. Per-vault (в `.nexus` хранилища) — память не течёт между vault'ами.
     pub memory_vectors: Option<Arc<VectorIndex>>,
+    /// Индекс эпизодической памяти (EP, саммари сессий): векторы саммари, ключи = `chat_episodes.id`.
+    /// `None` синхронно с `vectors`. Per-vault. Заполняется rollup-джобой/бэкфиллом (EP-1).
+    pub episode_vectors: Option<Arc<VectorIndex>>,
     /// Фасад AI-подсистемы (§4.3, AC-EGR-13): все провайдеры (chat/chat_fast/chat_util/embedder)
     /// плюс политика эгресса одним полем — вместо четырёх независимых `Arc`. Провайдеры ходят в
     /// сеть ТОЛЬКО через `net::GuardedClient` (ADR-005-ext).

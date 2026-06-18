@@ -128,6 +128,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/018_memory_fact_events.sql"),
         rebuild_fts: false, // история/supersede фактов памяти (MEM-7), заметочных производных не трогает
     },
+    Migration {
+        version: 19,
+        name: "chat_episodes",
+        sql: include_str!("migrations/019_chat_episodes.sql"),
+        rebuild_fts: false, // эпизодическая память (EP): саммари сессий, заметочных производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
