@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{AiError, AiResult};
-use crate::net::{EgressFeature, GuardedClient};
+use crate::net::{EgressFeature, GuardedClient, RunCtx};
 
 /// Один tool_call в сообщении роли `assistant` (OpenAI wire-shape). AGENT-1: цикл дописывает
 /// `assistant{tool_calls}` ПЕРЕД tool-результатами, чтобы массив сообщений был строго спек-совместим
@@ -388,7 +388,10 @@ impl ChatProvider for OpenAiChatProvider {
         // нельзя. Каждая попытка — заново post через guarded-клиент (политика+audit ДО сокета; отказ —
         // типизированный `AiError::Denied`, который классификатор помечает Fatal → не ретраится).
         let mut resp = retry_request(self.retry, cancel, || async {
-            let send_fut = self.client.post_json(&self.endpoint, self.feature, &body);
+            // chat-стрим вне прогона агента (интерактивный/util-чат) → RunCtx::NONE (не коррелируется).
+            let send_fut = self
+                .client
+                .post_json(&self.endpoint, self.feature, &body, RunCtx::NONE);
             // Idle-таймаут на саму инициацию: залипший на коннекте сервер → транзиентная ошибка (ретраибл).
             match tokio::time::timeout(self.idle_timeout, send_fut).await {
                 Err(_) => AttemptOutcome::Retryable(AiError::Http(

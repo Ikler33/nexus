@@ -12,7 +12,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::git::scan_secrets;
-use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, Resolver};
+use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, Resolver, RunCtx};
 use crate::news::{check_resolved_ips, read_body_capped, FEED_BODY_CAP};
 
 /// W3: таймаут поискового запроса и потолок тела ответа (как у ленты — единый web-класс).
@@ -151,7 +151,8 @@ impl WebSearcher {
         .map_err(|e| SearchError::Failed(e.to_string()))?
         .with_resolver(self.resolver.clone());
         let resp = client
-            .get(url.as_str(), EgressFeature::Web)
+            // Web-поиск вне прогона агента (интерактивный/news путь) → RunCtx::NONE.
+            .get(url.as_str(), EgressFeature::Web, RunCtx::NONE)
             .await
             .map_err(|e| SearchError::Failed(e.to_string()))?;
         if !resp.status().is_success() {

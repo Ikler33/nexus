@@ -24,7 +24,7 @@ use serde::Deserialize;
 use super::chat::ChatMessage;
 use super::{AiError, AiResult};
 use crate::agent::tool::{ToolCall, ToolSpec};
-use crate::net::{EgressFeature, GuardedClient};
+use crate::net::{EgressFeature, GuardedClient, RunCtx};
 
 /// Idle-таймаут стрима (зеркалит `chat.rs`): нет байта за это время → рвём (не виснем вечно).
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
@@ -44,12 +44,17 @@ pub enum ToolTurn {
 pub trait ToolCapableProvider: Send + Sync {
     /// Один ход: шлёт `messages` + `tools` модели, СТРИМИТ контент в `on_token`, возвращает [`ToolTurn`]
     /// (запрошенные инструменты ИЛИ финальный текст). `cancel` прерывает (партиал дропается, без исполнения).
+    ///
+    /// `ctx` — per-call run-контекст (AGENT-3a): эгресс этого хода аудитится с `ctx.run_id`. Провайдер
+    /// СТАТЕЛЕССЕН — run-контекст НЕ хранится на нём, а едет по каналу вызова (как `cancel`), поэтому
+    /// конкурентные прогоны через ОДИН провайдер атрибутируют эгресс независимо (каждый несёт свой `ctx`).
     async fn stream_chat_tools(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSpec],
         on_token: &mut (dyn FnMut(String) + Send),
         cancel: &Arc<AtomicBool>,
+        ctx: RunCtx,
     ) -> AiResult<ToolTurn>;
 
     /// Идентификатор модели (для истории/диагностики).
@@ -132,11 +137,15 @@ impl ToolCapableProvider for OpenAiToolProvider {
         tools: &[ToolSpec],
         on_token: &mut (dyn FnMut(String) + Send),
         cancel: &Arc<AtomicBool>,
+        ctx: RunCtx,
     ) -> AiResult<ToolTurn> {
         let body = self.request_body(messages, tools);
         // Инициация стрима (post + статус) ДО первого байта — без ретрая здесь (AGENT-1 держит цикл
         // простым; P0-d-ретрай живёт в chat-пути). Idle-таймаут страхует от залипшего коннекта.
-        let send_fut = self.client.post_json(&self.endpoint, self.feature, &body);
+        // `ctx` коррелирует ЭТОТ эгресс на прогон (per-call, не глобальный слот; AGENT-3a).
+        let send_fut = self
+            .client
+            .post_json(&self.endpoint, self.feature, &body, ctx);
         let resp = match tokio::time::timeout(self.idle_timeout, send_fut).await {
             Err(_) => {
                 return Err(AiError::Http(
@@ -638,7 +647,13 @@ mod tests {
         .with_idle_timeout(std::time::Duration::from_secs(2));
         let cancel = Arc::new(AtomicBool::new(true)); // взведён сразу → первый же чанк отменяет
         let res = provider
-            .stream_chat_tools(&[ChatMessage::user("hi")], &[], &mut |_| {}, &cancel)
+            .stream_chat_tools(
+                &[ChatMessage::user("hi")],
+                &[],
+                &mut |_| {},
+                &cancel,
+                RunCtx::NONE,
+            )
             .await;
         assert!(
             matches!(res, Err(AiError::Http(ref m)) if m.contains("отменён")),

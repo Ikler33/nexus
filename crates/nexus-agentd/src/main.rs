@@ -207,17 +207,18 @@ async fn run() -> Result<(), String> {
         Arc::new(health::HealthHandler),
     );
     // AGENT-2: прогон цикла агента как ДОЛГОВЕЧНАЯ джоба. Хендлер держит долю db (writer/reader),
-    // AIClient (agent_tools-провайдер + токенайзер/бюджет внутри), egress-audit (для set_run-корреляции).
+    // AIClient (agent_tools-провайдер + токенайзер/бюджет внутри).
     // defer_under_interactive()==true → уступает интерактивному LLM (S5 backpressure, глобальный гейт
     // run_due отложит agent_run, пока interactive_busy). Здесь interactive_busy всегда false (headless
     // без интерактивного чата) — гейт реально сработает в десктопе/будущей проводке.
     //
-    // ⚠ ИНВАРИАНТ КОРРЕЛЯЦИИ (set_run): `EgressAudit.run_id` — ПРОЦЕСС-ГЛОБАЛЬНЫЙ слот, НЕ per-run.
-    // Атрибуция egress к прогону корректна ТОЛЬКО пока agent_run-прогоны строго ПОСЛЕДОВАТЕЛЬНЫ
-    // (один worker_loop, единственный egress-делающий kind, никакого фонового/параллельного egress во
-    // время прогона). НЕ регистрировать рядом второй egress-делающий kind и НЕ параллелить прогоны,
-    // пока `set_run` не заменён на ЯВНО-ПРОБРАСЫВАЕМЫЙ `RunCtx` (ADR-009 §P0-b). Это БЛОКИРУЮЩИЙ гейт
-    // AGENT-3 (актуатор / web-egress) — там RunCtx + concurrent-run тест обязательны до мержа.
+    // ✓ КОРРЕЛЯЦИЯ ЭГРЕССА (AGENT-3a, RunCtx): процесс-глобальный слот `EgressAudit.run_id` УДАЛЁН —
+    // run_id ЯВНО ПРОБРАСЫВАЕТСЯ per-call как `RunCtx` (хендлер → run_agent_loop → провайдер → net).
+    // Поэтому КОНКУРЕНТНЫЕ прогоны корректно атрибутируют свой эгресс независимо (у каждого свой ctx в
+    // своём стеке вызова — перетереть друг друга нечем), и фоновый/параллельный egress с другим ctx не
+    // путает атрибуцию. ПРЕЖНЕЕ ограничение «только строго последовательные прогоны / один egress-kind»
+    // БОЛЬШЕ НЕ ДЕЙСТВУЕТ — это и был БЛОКИРУЮЩИЙ гейт, документированный AGENT-2 перед AGENT-3, теперь
+    // снятый (доказано `concurrent_runs_tag_egress_independently` в agent/job.rs).
     // AGENT-MEM-1: мост к памяти. Строим всегда (degrade-safe): None-эмбеддер/индексы → recall пуст,
     // прогон стартует с голым контекстом (поведение AGENT-2). exclude_session=None — прогон не
     // привязан к chat-сессии (линковка agent_runs.session_id — поздний срез); прогон агента пишет в
@@ -239,7 +240,6 @@ async fn run() -> Result<(), String> {
             db.writer().clone(),
             db.reader().clone(),
             ai_client.clone(),
-            egress_audit.clone(),
             agent_context_window,
             Some(agent_memory),
         )),
@@ -316,7 +316,7 @@ async fn run() -> Result<(), String> {
         // (строка agent_runs=queued + джоба KIND_AGENT_RUN payload=run_id). Воркер заклеймит и
         // проведёт его AgentRunHandler'ом до ТЕРМИНАЛА. Деградирует чисто: если agent_tools=None
         // (нет ai.chat в конфиге → offline-smoke), прогон финишируется 'error' ("agent tools
-        // unavailable") — что всё равно ДОКАЗЫВАЕТ жизненный цикл джобы + set_run-проводку. Если
+        // unavailable") — что всё равно ДОКАЗЫВАЕТ жизненный цикл джобы + RunCtx-проводку. Если
         // провайдер сконфигурирован и сделал эгресс — durable egress_audit-строки несут run_id.
         let run_id = nexus_core::agent::enqueue_agent_run(
             db.writer(),
@@ -352,7 +352,7 @@ async fn run() -> Result<(), String> {
                     status = %run.status,
                     step = run.step,
                     egress_with_run_id = correlated,
-                    "nexus-agentd: AGENT-2 smoke — прогон достиг терминала (lifecycle + set_run проверены)"
+                    "nexus-agentd: AGENT-2 smoke — прогон достиг терминала (lifecycle + RunCtx-корреляция проверены)"
                 );
             }
             None => {
@@ -400,7 +400,7 @@ async fn wait_for_terminal_run(
 }
 
 /// AGENT-2 smoke: число durable egress_audit-строк, скоррелированных на `run_id` (доказательство
-/// set_run-проводки, когда прогон делал эгресс; 0 в offline-smoke без сконфигурированной модели).
+/// RunCtx-проводки, когда прогон делал эгресс; 0 в offline-smoke без сконфигурированной модели).
 async fn count_egress_for_run(db: &Database, run_id: i64) -> i64 {
     db.reader()
         .query(move |c| {
@@ -553,6 +553,7 @@ async fn agent_loop_smoke() {
     use nexus_core::ai::tools::ToolTurn;
     use nexus_core::ai::{ChatMessage, ContextBudget};
     use nexus_core::chunker::WordTokenizer;
+    use nexus_core::net::RunCtx;
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
 
@@ -568,6 +569,7 @@ async fn agent_loop_smoke() {
             _tools: &[ToolSpec],
             _on_token: &mut (dyn FnMut(String) + Send),
             _cancel: &Arc<AtomicBool>,
+            _ctx: RunCtx,
         ) -> nexus_core::ai::AiResult<ToolTurn> {
             self.turns
                 .lock()
@@ -607,6 +609,7 @@ async fn agent_loop_smoke() {
         &ContextBudget::from_context_window(Some(32768)),
         &tk,
         &cancel,
+        RunCtx::NONE,
         &mut |e| {
             if matches!(e, AgentEvent::ToolResult { .. }) {
                 tool_results += 1;

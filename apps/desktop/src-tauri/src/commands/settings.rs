@@ -15,7 +15,7 @@ use tauri::State;
 
 use crate::ai::{AiError, ChatProvider, LocalConfig, OpenAiChatProvider};
 use crate::error::{AppError, AppResult};
-use crate::net::{EgressFeature, GuardedClient, NetError};
+use crate::net::{EgressFeature, GuardedClient, NetError, RunCtx};
 use crate::state::AppState;
 
 /// Эндпоинт (chat/embedding) в форме настроек.
@@ -253,7 +253,8 @@ pub async fn test_ai_connection(state: State<'_, AppState>, url: String) -> AppR
 /// (i18n-канал — AC-EGR-14, фронт-срез).
 async fn probe_endpoint(probe: &GuardedClient, url: &str) -> AppResult<()> {
     let target = format!("{}/v1/models", crate::ai::api_base(url));
-    match probe.get(&target, EgressFeature::Probe).await {
+    // «Проверить связь» — вне прогона агента → RunCtx::NONE.
+    match probe.get(&target, EgressFeature::Probe, RunCtx::NONE).await {
         Ok(_) => Ok(()),
         Err(NetError::Denied(d)) => Err(AiError::Denied(d).into()),
         Err(NetError::BadUrl) => Err(AppError::Msg("некорректный URL".into())),

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use super::FeedFetcher;
 // `Resolver`/`SystemResolver` — реэкспорт общего модуля (P0-a): один трейт на весь эгресс.
-use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, RunCtx};
 pub use crate::net::{Resolver, SystemResolver};
 
 /// W3: таймаут запроса фида и потолок тела ответа.
@@ -112,7 +112,8 @@ impl FeedFetcher for GuardedNewsFetcher {
         .map_err(|e| e.to_string())?
         .with_resolver(self.resolver.clone());
         let resp = client
-            .get(url, EgressFeature::NewsFeed)
+            // Лента новостей вне прогона агента → RunCtx::NONE.
+            .get(url, EgressFeature::NewsFeed, RunCtx::NONE)
             .await
             .map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
@@ -249,7 +250,11 @@ mod tests {
         // Кап-логика отдельно от news-политики: unchecked-клиент (loopback живёт у Chat-фич).
         let client = GuardedClient::unchecked();
         let resp = client
-            .get(&format!("http://{addr}/big.xml"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/big.xml"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .unwrap();
         let err = read_body_capped(resp, 1024).await.expect_err("больше капа");

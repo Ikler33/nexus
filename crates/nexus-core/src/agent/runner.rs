@@ -23,6 +23,7 @@ use crate::ai::{
     fence_observation, injection_marker, ChatMessage, ContextBudget, ToolCallFn, ToolCallMsg,
 };
 use crate::chunker::Tokenizer;
+use crate::net::RunCtx;
 
 use super::event::AgentEvent;
 use super::registry::ToolRegistry;
@@ -85,6 +86,10 @@ fn count_used(tk: &dyn Tokenizer, messages: &[ChatMessage]) -> usize {
 ///
 /// `on_event` получает поток [`AgentEvent`] (UI-1 потребитель). `cancel` прерывает между/во время ходов.
 /// Эгресс провайдера уже за [`crate::net::GuardedClient`] — цикл сети напрямую не касается.
+///
+/// `ctx` — run-контекст прогона (AGENT-3a): ЯВНО пробрасывается в КАЖДЫЙ ход провайдера, чтобы эгресс
+/// этого прогона коррелировался на его `run_id` в audit (per-call, не процесс-глобальный слот —
+/// конкурентные прогоны не перетирают атрибуцию друг друга). Вне прогона/в смоук-тестах — [`RunCtx::NONE`].
 #[allow(clippy::too_many_arguments)] // цикл явно принимает все свои зависимости (тестируемость > эргономика)
 pub async fn run_agent_loop(
     provider: &dyn ToolCapableProvider,
@@ -94,6 +99,7 @@ pub async fn run_agent_loop(
     budget: &ContextBudget,
     tk: &dyn Tokenizer,
     cancel: &Arc<AtomicBool>,
+    ctx: RunCtx,
     on_event: &mut (dyn FnMut(AgentEvent) + Send),
 ) -> LoopOutcome {
     let specs = registry.specs();
@@ -138,7 +144,7 @@ pub async fn run_agent_loop(
                 on_event(AgentEvent::AssistantToken(t));
             };
             provider
-                .stream_chat_tools(&messages, &specs, &mut on_token, cancel)
+                .stream_chat_tools(&messages, &specs, &mut on_token, cancel, ctx)
                 .await
         };
         last_content = turn_content;
@@ -266,6 +272,7 @@ mod tests {
             _tools: &[crate::agent::tool::ToolSpec],
             on_token: &mut (dyn FnMut(String) + Send),
             _cancel: &Arc<AtomicBool>,
+            _ctx: RunCtx,
         ) -> AiResult<ToolTurn> {
             *self.calls_seen.lock().unwrap() += 1;
             self.seen_messages.lock().unwrap().push(messages.to_vec());
@@ -349,6 +356,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |e| events.push(e),
         )
         .await;
@@ -471,6 +479,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |_| {},
         )
         .await;
@@ -507,6 +516,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |e| events.push(e),
         )
         .await;
@@ -536,6 +546,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |_| {},
         )
         .await;
@@ -579,6 +590,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |e| events.push(e),
         )
         .await;
@@ -617,6 +629,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |e| events.push(e),
         )
         .await;
@@ -662,6 +675,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |e| events.push(e),
         )
         .await;
@@ -700,6 +714,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |_| {},
         )
         .await;
@@ -734,6 +749,7 @@ mod tests {
             &tiny,
             &tk,
             &cancel,
+            RunCtx::NONE,
             &mut |_| {},
         )
         .await;

@@ -895,7 +895,7 @@ async fn live_episode_summary_meets_gate() {
 async fn live_tokenizer_matches_server() {
     use crate::ai::QwenTokenizer;
     use crate::chunker::Tokenizer;
-    use crate::net::{EgressFeature, GuardedClient};
+    use crate::net::{EgressFeature, GuardedClient, RunCtx};
 
     let base =
         std::env::var("NEXUS_CHAT_URL").unwrap_or_else(|_| "http://192.168.0.31:8080".into());
@@ -927,7 +927,7 @@ async fn live_tokenizer_matches_server() {
     for (text, expected) in golden {
         let body = serde_json::json!({ "content": text });
         let resp = client
-            .post_json(&url, EgressFeature::Chat, &body)
+            .post_json(&url, EgressFeature::Chat, &body, RunCtx::NONE)
             .await
             .expect("POST /tokenize");
         let json: serde_json::Value = resp.json().await.expect("ответ /tokenize — JSON");
@@ -969,7 +969,7 @@ async fn live_tool_call_smoke() {
     use crate::ai::tools::OpenAiToolProvider;
     use crate::ai::{ChatMessage, ContextBudget};
     use crate::chunker::WordTokenizer;
-    use crate::net::{EgressFeature, GuardedClient};
+    use crate::net::{EgressFeature, GuardedClient, RunCtx};
     use std::sync::atomic::AtomicBool;
 
     let chat_url =
@@ -1017,6 +1017,7 @@ async fn live_tool_call_smoke() {
         &budget,
         &tk,
         &cancel,
+        RunCtx::NONE,
         &mut |e| match e {
             AgentEvent::ToolCall { kind, args, .. } => {
                 tool_calls += 1;
