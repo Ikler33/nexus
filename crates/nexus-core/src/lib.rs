@@ -68,3 +68,9 @@ pub mod memory;
 pub mod relation_reasons;
 /// AIP-SQ: контекстные стартовые вопросы для пустого чата (по активной заметке, best-effort).
 pub mod starting_questions;
+
+// ── SKILL-1: загрузчик SKILL.md ──────────────────────────────────────────────────────────────────
+/// Загрузчик скиллов открытого стандарта SKILL.md (SKILL-1): discovery (path-scoped) + parse
+/// (frontmatter БЕЗ serde_yaml, fail-closed) + каталог (single-def). Активация/инъекция/tools и
+/// вендоринг/capability-гейт — SKILL-2/3 (здесь capabilities только ЗАХВАТЫВАЮТСЯ, не применяются).
+pub mod skills;
