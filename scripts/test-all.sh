@@ -21,8 +21,8 @@ echo "── Rust: fmt · clippy · test ──"
 (
   cd apps/desktop/src-tauri
   cargo fmt --all -- --check
-  cargo clippy --all-targets -- -D warnings
-  cargo test
+  cargo clippy --workspace --all-targets -- -D warnings
+  cargo test --workspace
 )
 
 echo "── Frontend: tsc · eslint · vitest · build ──"

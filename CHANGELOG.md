@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Архитектура: выделен крейт `nexus-core` (агент CORE-1, ADR-009 D1)
+
+Фундамент под headless agent-service: agent-нужное ядро вынесено из Tauri-приложения в библиотечный крейт `crates/nexus-core`, переиспользуемый и десктопом, и будущим `nexus-agentd`. Слайс 1 — замкнутый набор из 9 модулей (`redact, db, parser, vector, plugin, vault, chunker, net, ai` — tauri-свободные, зависимости внутри набора), перенесён через `git mv` (история цела).
+- App переэкспортирует (`pub use nexus_core::{…}`) → существующие `crate::X` пути работают без правок call-site (минимум churn).
+- **Egress-чокпоинт сохранён**: `net`/`core_client_builder`/`is_private_host` переехали → `check-egress.mjs` (+ `check-ignored`/`check-traceability`/`check-dangling`) расширены на оба src-корня; покрытие доказано инъекцией raw-reqwest в nexus-core → линт ловит. CI и `test-all.sh` переведены на `--workspace` (тесты/линты nexus-core реально гоняются).
+- `test-util`-фича отдаёт тест-фикстуры (MockEmbedder/`unchecked`) только в dev (прод-бинарь не тянет). `cargo build/clippy/test --workspace` зелёный; **542 теста сохранены** (nexus-core 154 + app 388). Adversarial-ревью (3 скептика→судья): SHIP, 0 блокеров.
+- Дальше: развязать `scheduler/indexer/home` от `tauri::AppHandle` (через хуки) → довнести `search/memory/chat_log/episode/scheduler` в ядро.
+
 ### RAG: дедуп чанков по реальному пересечению текста, не по соседству индекса (M1 — recall-фикс)
 
 Баг из аудита (батч B, 🔴 MAJOR). `resolve_and_dedup` схлопывал чанки одного файла по `|Δchunk_index|≤1`, но `chunk_index` сквозной через секции → последний чанк секции A и первый секции B (0 пересечения текста) ложно схлопывались, второй молча выбрасывался → потеря recall на многосекционных заметках. Теперь дедуп по РЕАЛЬНОМУ пересечению `[char_start,char_end)` (персистятся, мигр.002): перекрывающиеся по тексту (overlap чанкера) схлопываются, на стыке секций — оба сохраняются. Регрессионный тест (две секции, соседний индекс, непересекающиеся диапазоны → оба сохранены) + офлайн eval-гейт `eval_fixture_meets_baseline` зелёный (без регрессии recall/nDCG). `cargo test --lib` 542/0. (Хвост n3 — multi-relevant golden для МЕТРИКИ выигрыша — остаётся, нужен живой bge-m3.)

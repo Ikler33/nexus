@@ -57,9 +57,9 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
       - run: cargo fmt --all -- --check
-      - run: cargo build --locked
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo build --locked --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
 
   # Security-gate (ревью B6 / AC-Q-5): supply-chain + secret-scan отдельным required-job,
   # чтобы проверки безопасности не тонули в общем cargo test. Дёшево, без матрицы ОС.

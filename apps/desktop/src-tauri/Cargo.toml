@@ -15,6 +15,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Переиспользуемое ядро (CORE-1): db/parser/vector/plugin/vault/redact/chunker/net/ai извлечены
+# в отдельный крейт для будущего headless agent-service. App ре-экспортит их (lib.rs) — все
+# `crate::net::…`/`crate::db::…` и т.п. по приложению резолвятся через ре-экспорт без правки call-site.
+nexus-core = { path = "../../../crates/nexus-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 # Открытие внешних http(s)-URL в СИСТЕМНОМ браузере (NF-6 «Оригинал», web-источники чата,
@@ -62,6 +66,10 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+# Тест-хелперы ядра (MockEmbedder, GuardedClient::unchecked, live_test_embedder/LIVE_EMBED_DIM):
+# до CORE-1 жили под `#[cfg(test)]` в одном крейте, теперь — за фичей `test-util` ядра, включаемой
+# ТОЛЬКО для dev/тестовой сборки app (в прод-бинарь фикстуры не попадают).
+nexus-core = { path = "../../../crates/nexus-core", features = ["test-util"] }
 # Для интеграционных тестов git-sync (#12): создать локальный bare-remote (init_bare) и клон. Те же
 # фичи, что у обычной зависимости — Cargo унифицирует сборку (без второго билда libgit2).
 git2 = { version = "0.21", default-features = false, features = [
