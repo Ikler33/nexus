@@ -50,8 +50,8 @@ use crate::agent::ToolError;
 use super::action::{Action, ActionTarget};
 use super::apply::{apply_action, ApplyOutcome, AuditSink};
 use super::audit::{
-    self, canonical_args, idempotency_key, ActionEntry, STATE_APPROVED, STATE_PROPOSED,
-    STATE_REJECTED,
+    self, canonical_args, idempotency_key, ActionEntry, ChangeKind, DiffSummary, STATE_APPROVED,
+    STATE_PROPOSED, STATE_REJECTED,
 };
 use super::classify::{classify, BlockReason, ClassifyCtx, RiskTier};
 use super::decision::{DecisionSource, ItemDecision, ProposalBatch, ProposalItem};
@@ -65,6 +65,12 @@ use super::decision::{DecisionSource, ItemDecision, ProposalBatch, ProposalItem}
 // agentd): предложения только ЛОГИРУЮТСЯ, не стримятся в UI; под [`PolicyDefault`] они тут же
 // auto-DENY-отклоняются (нет интерактивного одобрения). UI-1 добавит человеко-в-петле поверхность
 // (стрим Proposal/Diff пользователю + ответ Approve/Reject через DecisionSource).
+//
+// FIXME(UI-1, AGENT-6 §3): LIVE-EDITOR DIRTY-BUFFER → ФОРС-CONFIRM. Когда агент правит заметку,
+// открытую в десктоп-редакторе с НЕсохранёнными изменениями (dirty-буфер), действие обязано
+// ПРЕДЛОЖИТЬ (а не auto-apply) — иначе apply затрёт несохранённый буфер пользователя. Это desktop/UI-1
+// скоуп: headless agentd НЕ имеет живого редактора, а решение требует состояния dirty-буфера редактора
+// (его нет ни в ядре, ни в agentd). Здесь кода нет — граница зафиксирована (CHANGELOG AGENT-6).
 pub trait EventSink: Send + Sync {
     /// Принять событие хода (Proposal/Diff и т.п.).
     fn emit(&self, event: AgentEvent);
@@ -543,6 +549,26 @@ fn file_status(action: &Action) -> FileStatus {
     }
 }
 
+/// [`ChangeKind`] по виду действия (для долговечного `diff_summary` журнала): create → New,
+/// edit/frontmatter → Edit. Зеркало [`file_status`], но в audit-типе (журнал не тащит UI-FileStatus).
+fn change_kind(action: &Action) -> ChangeKind {
+    match &action.target {
+        ActionTarget::NoteCreate { .. } => ChangeKind::New,
+        ActionTarget::NoteEdit { .. } | ActionTarget::Frontmatter { .. } => ChangeKind::Edit,
+    }
+}
+
+/// ЕДИНЫЙ источник долговечного `diff_summary` (AGENT-6, приватность) — собирает [`DiffSummary`] из
+/// СЧЁТЧИКОВ строк диффа `current → proposed` + [`ChangeKind`]. Переиспользуется и пропоуз-путём
+/// ([`propose_and_decide`]), и авто-apply-путём ([`super::apply::apply_action`]) — оба пишут ИМЕННО эту
+/// редакция-гард-форму, поэтому ни один писатель колонки не может занести в журнал сырой текст.
+/// Счётчики получает [`line_diff`] (как в 3d-Diff); content тут НЕ хранится — только его счётчики.
+pub(in crate::actuator) fn diff_summary_for(action: &Action, current: &str) -> DiffSummary {
+    let proposed = proposed_content(action, current);
+    let (add, del) = line_diff(current, &proposed);
+    DiffSummary::new(add, del, change_kind(action))
+}
+
 /// БЕЗОПАСНОЕ чтение текущего содержимого цели IN-VAULT (для classify_hash + базы диффа). Резолвит путь
 /// через `resolve_vault_path_for_write` (канонизация родителя + конфайнмент) и отвергает leaf-симлинк —
 /// зеркало рубежа 1 apply, чтобы НЕ прочитать внешний файл сквозь симлинк (info-leak в диф/хеш). Любой
@@ -748,7 +774,9 @@ async fn propose_and_decide(
         } else {
             Some(classify_hash.to_string())
         },
-        diff_summary: Some(format!("+{add} -{del}")),
+        // ПРИВАТНОСТЬ (AGENT-6): долговечное резюме диффа строится ТОЛЬКО редакция-гвардом
+        // [`DiffSummary`] — счётчики строк + статус-токен, БЕЗ сырого содержимого заметки.
+        diff_summary: Some(DiffSummary::new(add, del, change_kind(action)).render()),
     };
     let action_id = match ledger.record_before(entry).await {
         Ok(id) => id,

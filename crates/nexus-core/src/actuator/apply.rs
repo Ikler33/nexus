@@ -273,6 +273,14 @@ pub(in crate::actuator) async fn apply_action(
     // ── РУБЕЖ 4: ledger WRITE-BEFORE-ACT (ДО любого write) ────────────────────────────────────
     // INSERT строки-якоря (outcome=NULL) — это ФЕНС. Успех ⇒ Fresh (мы первые). Дубль (UNIQUE) ⇒ это
     // replay того же действия в прогоне → ветвимся по присутствию outcome.
+    // ПРИВАТНОСТЬ (AGENT-6): долговечное резюме диффа — СТРУКТУРНОЕ, свободное от содержимого
+    // (`"+N -M (new|edit)"`). Строим ТОЛЬКО редакция-гвардом [`super::orchestrate::diff_summary_for`]
+    // → [`audit::DiffSummary`] (счётчики строк + статус-токен). База диффа — `current_content`,
+    // прочитанный в Рубеже 2 (для overwrite); для create база пуста (файла ещё нет) → счётчики от тела.
+    // НИ тело, ни значения frontmatter, ни хунки в журнал не попадают (нет канала для текста).
+    let diff_summary =
+        super::orchestrate::diff_summary_for(action, current_content.as_deref().unwrap_or(""))
+            .render();
     let entry = ActionEntry {
         run_id,
         idempotency_key: key.clone(),
@@ -281,7 +289,7 @@ pub(in crate::actuator) async fn apply_action(
         risk_tier: audit::TIER_AUTO.to_string(),
         state: STATE_EXECUTING.to_string(),
         content_hash: on_disk_hash.clone(),
-        diff_summary: None,
+        diff_summary: Some(diff_summary),
     };
     let is_fresh = match ledger.record_before(entry).await {
         Ok(_) => true, // Fresh: строка-якорь записана ДО касания диска.
@@ -427,6 +435,10 @@ pub(in crate::actuator) async fn apply_action(
                     let abs_w = abs.clone();
                     spawn_atomic_write(abs_w, new_content.into_bytes()).await
                 }
+                // AGENT-6 privacy-инвариант: `parser::FmWriteError` — enum ТОЛЬКО из unit-вариантов
+                // (Malformed/Unrepresentable/NonScalarTarget), поэтому `{e:?}` печатает лишь ИМЯ варианта,
+                // не контент. Если когда-нибудь добавят вариант с полем (значение/тело) — ОБЯЗАТЕЛЬНО
+                // маппить его в имя-варианта ДО попадания в `outcome` (durable ledger остаётся content-free).
                 Err(e) => Err(format!("set_frontmatter_field: {e:?}")),
             }
         }
@@ -457,8 +469,13 @@ pub(in crate::actuator) async fn apply_action(
 ///      ловит симлинк-КАТАЛОГ наружу (классификатор лексически слеп к нему).
 ///   2. leaf-СИМЛИНК reject (`symlink_metadata` без следования): `vault/evil.md -> /outside/secret.md`
 ///      имеет родителя ВНУТРИ, но сам — симлинк наружу; без этой проверки запись/чтение утекли бы наружу.
-///   3. (unix) ХАРДЛИНК reject (`nlink>1`): хардлинк на внешний inode симлинком НЕ детектится; запись
-///      по нему меняла бы внешний файл, чтение утекло бы внешним содержимым → `PathEscape`.
+///   3. ХАРДЛИНК reject (link-count > 1): хардлинк на внешний inode симлинком НЕ детектится; запись по
+///      нему меняла бы внешний файл, чтение утекло бы внешним содержимым → `PathEscape`. Кросс-платформ
+///      (AGENT-6): unix — `nlink>1` (`MetadataExt`); Windows — `nNumberOfLinks>1` через
+///      `GetFileInformationByHandle` (std не даёт переносимого link-count). Это закрывает Windows-щель,
+///      где раньше check был ТОЛЬКО под unix → пред-существующий хардлинк наружу не link-count-режектился
+///      (запись не могла «убежать» благодаря rename-семантике atomic_write, но READ снапшота/диффа мог
+///      затянуть внешнее содержимое в снапшот — info-leak). Теперь обе платформы режектят fail-closed.
 ///
 /// Любой Err ⇒ caller НЕ пишет/НЕ читает по пути. Это keystone-рубеж: restore НИКОГДА не обходит его.
 ///
@@ -488,7 +505,69 @@ pub(in crate::actuator) fn confine_for_overwrite(
             }
         }
     }
+    // Рубеж 3 (windows, AGENT-6): зеркало unix-проверки. std не даёт переносимого link-count, поэтому
+    // читаем `nNumberOfLinks` через `GetFileInformationByHandle`. >1 ⇒ хардлинк на (возможно внешний)
+    // inode ⇒ PathEscape (fail-closed) — закрывает Windows info-leak-щель (READ снапшота/диффа через
+    // хардлинк наружу). Существующий-файл случай; отсутствие/ошибка открытия трактуем как «не хардлинк»
+    // (нет файла → нечего режектить; реальную запись всё равно гейтят рубежи 1–2 + atomic_write rename).
+    #[cfg(windows)]
+    {
+        if windows_link_count_gt_one(&abs) {
+            return Err(crate::vault::VaultError::PathEscape);
+        }
+    }
     Ok(abs)
+}
+
+/// (windows) `nNumberOfLinks > 1` для существующего файла `abs` — хардлинк-детект (зеркало unix
+/// `nlink>1`). Открывает хэндл с `FILE_FLAG_BACKUP_SEMANTICS` (работает и для путей-каталогов, не
+/// следует за reparse без него — но leaf-симлинк уже отвергнут рубежом 2), читает
+/// `BY_HANDLE_FILE_INFORMATION` и сверяет счётчик ссылок. Любая ошибка (файла нет / нет доступа) ⇒
+/// `false` (не хардлинк / нечего режектить) — fail-safe-к-доступности, не к безопасности: запись всё
+/// равно идёт через atomic_write (rename заменяет dir-entry, НЕ пишет сквозь линк), а READ под
+/// снапшот защищён тем, что при хардлинке мы сюда вернём true ВЫШЕ и caller не прочитает.
+#[cfg(windows)]
+fn windows_link_count_gt_one(abs: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+    };
+
+    // Путь → NUL-терминированный UTF-16 для широкого WinAPI.
+    let mut wide: Vec<u16> = abs.as_os_str().encode_wide().collect();
+    wide.push(0);
+
+    // SAFETY: `wide` — валидный NUL-терминированный буфер на время вызова; остальные аргументы —
+    // константы/нулевые указатели по контракту CreateFileW. Дескрипторы безопасности не используем
+    // (NULL). Хэндл закрываем ниже на ВСЕХ путях.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            0, // запрашиваем НОЛЬ прав доступа — достаточно для метаданных (link count), не открывает на чтение содержимого.
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING, // только существующий файл (как unix-проверка по metadata).
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return false; // файла нет / нет доступа → не хардлинк (нечего режектить).
+    }
+
+    // SAFETY: нулевая инициализация POD-структуры WinAPI допустима (она заполняется вызовом ниже).
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `handle` валиден (проверен выше), `info` — валидный &mut на стеке.
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
+    // SAFETY: `handle` валиден; закрываем ровно один раз.
+    unsafe {
+        CloseHandle(handle);
+    }
+    // ok==0 → вызов не удался → не делаем вид, что знаем link-count → false (fail-safe к доступности).
+    ok != 0 && info.nNumberOfLinks > 1
 }
 
 /// Fix 1 — симлинк-безопасность ПЕРЕД create_dir_all: проходит компоненты РОДИТЕЛЯ цели от `canon_root`
@@ -714,6 +793,86 @@ mod tests {
         assert_eq!(row.state, "executed");
         assert_eq!(row.undo_kind.as_deref(), Some("snapshot"));
         assert_eq!(row.undo_ref.as_deref(), Some(ts.to_string().as_str()));
+    }
+
+    /// AGENT-6 MANDATORY (приватность): применяем NoteEdit с УЗНАВАЕМЫМ СЕКРЕТОМ в содержимом и
+    /// УБЕЖДАЕМСЯ, что НИ ОДНА TEXT-колонка долговечной строки `agent_actions` не несёт этот секрет.
+    /// Проверяем КАЖДУЮ текстовую колонку схемы (migration 022) сырым SELECT'ом — содержимое заметки
+    /// не должно попасть в аудит-БД ни через diff_summary, ни через outcome, ни через любую иную колонку.
+    /// diff_summary при этом == структурная форма "+N -M (kind)" (счётчики, не содержимое).
+    #[tokio::test]
+    async fn secret_content_never_lands_in_durable_ledger() {
+        const SECRET: &str = "SECRET-TOKEN-123";
+        let (_d, root, sink) = setup().await;
+        // Заметка существует; правим её, ВСТАВЛЯЯ секрет в новое содержимое (тело правки).
+        write_existing(&root, "Notes/S.md", "old line one\nold line two\n");
+        let new_content = format!("line A\n{SECRET}\nline B\n");
+        let action = Action::note_edit("Notes/S.md", &new_content);
+
+        let outcome = apply_action(&action, 1, &root, &sink, None).await;
+        assert!(
+            matches!(outcome, ApplyOutcome::Executed { .. }),
+            "правка применена, было {outcome:?}"
+        );
+        // Файл реально содержит секрет (доказывает, что секрет — настоящий контент действия).
+        assert!(
+            read(&root, "Notes/S.md").contains(SECRET),
+            "секрет действительно записан в заметку (контроль теста)"
+        );
+
+        // Сырой SELECT ВСЕХ TEXT-колонок строки (схема 022) — проверяем каждую на отсутствие секрета.
+        let cols: Vec<(String, Option<String>)> = sink
+            .reader
+            .query(|c| {
+                c.query_row(
+                    "SELECT idempotency_key, tool_name, target_rel, risk_tier, state, content_hash, \
+                     undo_kind, undo_ref, outcome, diff_summary FROM agent_actions WHERE state='executed'",
+                    [],
+                    |r| {
+                        Ok(vec![
+                            ("idempotency_key".to_string(), r.get::<_, Option<String>>(0)?),
+                            ("tool_name".to_string(), r.get::<_, Option<String>>(1)?),
+                            ("target_rel".to_string(), r.get::<_, Option<String>>(2)?),
+                            ("risk_tier".to_string(), r.get::<_, Option<String>>(3)?),
+                            ("state".to_string(), r.get::<_, Option<String>>(4)?),
+                            ("content_hash".to_string(), r.get::<_, Option<String>>(5)?),
+                            ("undo_kind".to_string(), r.get::<_, Option<String>>(6)?),
+                            ("undo_ref".to_string(), r.get::<_, Option<String>>(7)?),
+                            ("outcome".to_string(), r.get::<_, Option<String>>(8)?),
+                            ("diff_summary".to_string(), r.get::<_, Option<String>>(9)?),
+                        ])
+                    },
+                )
+            })
+            .await
+            .unwrap();
+
+        for (name, val) in &cols {
+            if let Some(v) = val {
+                assert!(
+                    !v.contains(SECRET),
+                    "СЕКРЕТ ПРОТЁК в долговечную колонку `{name}` = {v:?}"
+                );
+            }
+        }
+
+        // diff_summary — именно структурная форма "+N -M (kind)". Правка edit (2 строки → 3 строки):
+        // редакция-гвард рендерит счётчики, не содержимое.
+        let diff = cols
+            .iter()
+            .find(|(n, _)| n == "diff_summary")
+            .and_then(|(_, v)| v.clone())
+            .expect("diff_summary заполнен");
+        assert!(
+            diff.starts_with('+') && diff.contains(" -") && diff.ends_with("(edit)"),
+            "diff_summary — структурная форма +N -M (edit), получено {diff:?}"
+        );
+        // И не содержит ни одной буквы из секрета-как-текста (только цифры/+-()/{new,edit}).
+        assert!(
+            diff.chars()
+                .all(|c| c.is_ascii_digit() || " +-()newdit".contains(c)),
+            "diff_summary структурно чист: {diff:?}"
+        );
     }
 
     /// KEYSTONE throttle-bypass: две быстрые правки подряд ОБЕ оставляют снапшот (manual=true бьёт
@@ -1189,6 +1348,49 @@ mod tests {
             "хардлинк (nlink>1) на overwrite → PathEscape, получено {outcome:?}"
         );
         // Снапшот внешнего содержимого НЕ создан (чтения по хардлинку не было до reject).
+        let snaps = list_snapshots(&root, "hard.md").unwrap();
+        assert!(
+            snaps.is_empty(),
+            "info-leak: НЕ должно быть снапшота внешнего содержимого, есть {snaps:?}"
+        );
+    }
+
+    /// AGENT-6 (cfg windows) — зеркало unix hardlink-reject: ВНУТРИ vault хардлинк на ВНЕШНИЙ файл
+    /// (`std::fs::hard_link`, nNumberOfLinks=2). leaf-симлинк-проверка хардлинк НЕ ловит; Windows-рубеж 3
+    /// (`GetFileInformationByHandle`/nNumberOfLinks>1) → PathEscape: внешний файл НЕ затронут, его
+    /// содержимое НЕ утекает в снапшот. Закрывает Windows info-leak-щель (раньше check был только unix).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn hardlink_overwrite_rejected_no_outside_leak_windows() {
+        let (_d, root, sink) = setup().await;
+        let outside_dir = TempDir::new().unwrap();
+        let outside = outside_dir.path().canonicalize().unwrap().join("secret.md");
+        fs::write(&outside, "OUTSIDE-SECRET").unwrap();
+
+        // Хардлинк ВНУТРИ vault на ВНЕШНИЙ inode (на Windows hard_link тоже даёт nNumberOfLinks=2).
+        fs::hard_link(&outside, abs_of(&root, "hard.md")).unwrap();
+        // Sanity: это НЕ симлинк (иначе ловила бы leaf-проверка, а не Windows-рубеж 3).
+        assert!(
+            !fs::symlink_metadata(abs_of(&root, "hard.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "хардлинк — не симлинк"
+        );
+
+        let action = Action::note_edit("hard.md", "PWNED-THROUGH-HARDLINK");
+        let outcome = apply_action(&action, 1, &root, &sink, None).await;
+
+        assert_eq!(
+            fs::read_to_string(&outside).unwrap(),
+            "OUTSIDE-SECRET",
+            "Windows: внешний файл за хардлинком НЕ должен быть перезаписан"
+        );
+        assert_eq!(
+            outcome,
+            ApplyOutcome::PathEscape,
+            "хардлинк (nNumberOfLinks>1) на overwrite → PathEscape, получено {outcome:?}"
+        );
         let snaps = list_snapshots(&root, "hard.md").unwrap();
         assert!(
             snaps.is_empty(),
