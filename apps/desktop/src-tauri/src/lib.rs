@@ -13,47 +13,37 @@
 // переехал в ядро — ре-экспортим, чтобы `crate::indexer::…`/`crate::search::…`/… по приложению
 // (commands, home, board, …) резолвились без правки. Индексатор отвязан от Tauri (IndexerHooks);
 // desktop строит эмит-колбэки в `commands::vault::open_vault` и зовёт `indexer::events::spawn`.
+// CORE-1c-2: кластер памяти/движка (chat_log/contradictions/episode/eval/memory/relation_reasons/
+// starting_questions) тоже в ядре — ре-экспортим, чтобы `crate::memory::…`/`crate::eval::…`/… по
+// приложению (commands::memory/episode/contradictions, …) резолвились без правки call-site.
 pub use nexus_core::{
-    ai, chunker, db, graph, indexer, net, parser, plugin, redact, search, suggest, tagger, tags,
-    vault, vector, watcher,
+    ai, chat_log, chunker, contradictions, db, episode, eval, graph, indexer, memory, net, parser,
+    plugin, redact, relation_reasons, search, starting_questions, suggest, tagger, tags, vault,
+    vector, watcher,
 };
 
 /// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
 pub mod board;
-/// Сессии чата в vault-БД («второй мозг» переписки, решение владельца 2026-06-12).
-pub mod chat_log;
 /// Tauri IPC-команды.
 mod commands;
-/// «Поиск противоречий» (#vision): фоновый LLM-kind — пары-кандидаты → судья → таблица `contradictions`.
-pub mod contradictions;
 /// Локальный crash-reporter: panic-hook → scrubbed-лог в `~/.nexus/crashes/` (Ф4-14).
 pub mod crash;
 /// «Дайджест изменений» (#35): первый LLM-kind планировщика (суммаризация недавних заметок).
 pub mod digest;
-/// Эпизодическая память (EP): саммари завершённых чат-сессий — третий слой памяти агента.
-pub mod episode;
 /// Единый тип ошибки командного слоя (кросс-план #9): доменные ошибки через `?`, JS видит строку.
 pub mod error;
-/// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6.
-pub mod eval;
 /// git-sync (Фаза 3, §8): vault как git-репозиторий — фундамент (open/init, .gitignore, status).
 pub mod git;
 /// «Прогресс целей» (#35): кросс-файловый список заметок-целей (#goal) — vision-волна 2.
 pub mod goals;
 /// HOME-дашборд (бэкенд): агрегация виджетов (stats/recent/goals; LLM-виджеты — H2+).
 pub mod home;
-/// Персистентная память агента (MEM, спека `docs/specs/agent-memory.md`): слой явных фактов + инжекция.
-pub mod memory;
 /// Лента новостей (спека `docs/specs/news-feed.md`): NF-1 — парсеры фидов + keyword-фильтр.
 pub mod news;
 /// Реестр типов свойств (PROP-2, спека §7): `.nexus/property-types.json` + эвристика (Obsidian Properties).
 pub mod properties;
-/// LLM-объяснения связи пары заметок (AIP-10): кэш `relation_reasons`, переиспользует примитивы `contradictions`.
-pub mod relation_reasons;
 /// Планировщик фоновых задач (ADR-007): очередь `jobs` (слой данных — slice 1).
 pub mod scheduler;
-/// AIP-SQ: контекстные стартовые вопросы для пустого чата (по активной заметке, best-effort).
-pub mod starting_questions;
 /// Глобальное состояние (managed state).
 pub mod state;
 pub mod websearch;

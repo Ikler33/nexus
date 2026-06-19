@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Архитектура: memory/engine-кластер в `nexus-core` — CORE-1 ЗАВЕРШЁН (агент CORE-1c-2)
+
+Финальный под-срез CORE-1: `episode, chat_log, contradictions, relation_reasons, starting_questions, memory, eval` (+ data-фикстуры `eval/*.json`) перенесены в `crates/nexus-core` (git mv). Память Nexus (факты MEM / переписка N4b / эпизоды EP) + консолидация (MEM-8c) + eval-харнесс теперь в ядре — agent-service получит их напрямую. `include_str!("../../eval/*.json")` разрешаются (data-dir переехал вместе; `eval_fixture_meets_baseline` + consolidation DELETE-precision гейты проходят, фикстуры SHA-идентичны — golden не трогали; гейты не вакуумны — `golden_parses_and_is_well_formed` требует ≥30 consolidation/≥20 episode кейсов). Релокация байт-идентична (порог 0.30, fail-closed=ADD, §4.3 защита explicit-фактов, op_group — целы; 139 тестов). Единственная не-rename правка — `note_snippet pub(crate)→pub` (кросс-крейт из commands/suggest). `cargo test --workspace` 542 (369 core + 173 app). Adversarial-ревью (3 скептика→судья): SHIP, 0 блокеров.
+
+**CORE-1 ЗАВЕРШЁН:** `nexus-core` = полный data/engine-слой (vault/db/net/ai/scheduler/indexer/search/memory/episode/chat_log/graph/relation_reasons/contradictions/suggest/tagger/tags/watcher/vector/parser/chunker/plugin/redact/eval). В app остались: UI (home/board/goals/properties), tauri-команды, state, git, home-завязанные фичи (digest/news/websearch). Следующее — CORE-2 (headless `nexus-agentd` + P0-b durable аудит).
+
 ### Архитектура: index/retrieval-кластер вынесен в `nexus-core` (агент CORE-1c-1)
 
 Под-срез CORE-1: `watcher, tags, tagger, indexer, graph, suggest, search` перенесены в `crates/nexus-core` (git mv). Развязка `indexer` от Tauri: `events.rs` принимает инъектируемые `IndexerHooks` (on_progress/on_vault_changed/on_file_changed, Arc-замыкания) вместо `AppHandle`; десктоп строит emit-замыкания в `commands/vault.rs::indexer_hooks` — **имена событий (`vault:index-progress`/`vault:changed`/`vault:file-changed`) и camelCase-payload (`IndexProgress`/`FileChanged`) байт-идентичны → фронт не тронут** (SAFE-3 echo-suppression + watcher-debounce целы). Ядро теперь индексирует + гибридный поиск headless. Релокация байт-идентична (M1-дедуп + оба теста переехали в core; search = 100% rename). `cargo test --workspace` 542 (239 core + 303 app). Adversarial-ревью (3 скептика→судья): SHIP. Подчищена мёртвая прямая зависимость `notify-debouncer-full` из app (теперь транзитивно через core).
