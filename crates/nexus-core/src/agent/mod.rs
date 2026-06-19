@@ -15,11 +15,14 @@
 //!   запланированная джоба + корреляция эгресса на run_id + идемпотентный replay (AGENT-2).
 //! - [`memory`] — [`AgentMemory`] трейт + [`VaultAgentMemory`] адаптер: мост к 3 слоям памяти Nexus
 //!   (факты/переписка/эпизоды) — recall в начальный контекст + Add-only воронка записи (AGENT-MEM-1).
+//! - [`control`] — KILL-SWITCH персист (AGENT-5): [`AgentControlState`] (`agent.json`, зеркало
+//!   egress-kill-switch) — пауза агента переживает рестарт; agentd рестор + рантайм-Arc (UI — UI-1).
 //!
 //! tool-capable провайдер ([`crate::ai::tools::ToolCapableProvider`]/`OpenAiToolProvider`) — РАЗДЕЛЬНЫЙ
 //! от chat-провайдера тип (I-5/ADR-005): tools не протекают в chat/web путь. Стережёт grep-линт
 //! `scripts/check-tooluse.mjs`.
 
+pub mod control;
 pub mod event;
 pub mod job;
 pub mod memory;
@@ -29,6 +32,7 @@ pub mod runner;
 pub mod stubs;
 pub mod tool;
 
+pub use control::{load_control_state, save_control_state, AgentControlState};
 pub use event::{AgentEvent, FileStatus, ProposedFile};
 pub use job::{enqueue_agent_run, AgentRunHandler, KIND_AGENT_RUN};
 pub use memory::{AgentMemory, VaultAgentMemory};

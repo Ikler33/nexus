@@ -27,7 +27,7 @@
 //! тестом `concurrent_runs_tag_egress_independently`).
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -81,6 +81,7 @@ fn stub_registry() -> ToolRegistry {
 ///
 /// Этот реестр СТРОИТСЯ ТОЛЬКО при включённом флаге `agent_actuator_enabled` (см. [`AgentRunHandler`]);
 /// иначе используется [`stub_registry`] и реальный vault не затрагивается.
+#[allow(clippy::too_many_arguments)]
 fn actuator_registry(
     canon_root: PathBuf,
     ledger: AuditSink,
@@ -89,10 +90,15 @@ fn actuator_registry(
     overwrite_threshold: usize,
     blast_cap: u32,
     decision_source: Arc<dyn DecisionSource>,
+    agent_paused: Arc<AtomicBool>,
 ) -> ToolRegistry {
-    // ОДНА политика на прогон → общий blast-radius между всеми инструментами (анти-усталость
+    // ОДНА политика на прогон → общий токен-бакет между всеми инструментами (анти-усталость
     // кросс-инструментна). EventSink — tracing (headless; UI-стриминг предложений — UI-1).
-    let policy = DispatchPolicy::new(autonomy, overwrite_threshold, blast_cap);
+    // KILL-SWITCH (AGENT-5, чек-пойнт #3): политика несёт `agent_paused` — `dispatch_action` НЕ пишет
+    // под паузой (форс-предложение/отказ), даже если инструмент мид-цикл. Это страхует уже-идущий ход
+    // (цикл-чек #2 ловит лишь МЕЖДУ ходами): пока ход исполняет инструмент, запись в vault блокируется.
+    let policy =
+        DispatchPolicy::with_paused(autonomy, overwrite_threshold, blast_cap, agent_paused);
     // FIXME(UI-1): связать EventSink.emit → on_event цикла / control-plane-стрим для real-time ревью
     // предложений. Здесь передаётся [`TracingEventSink`] — headless только ЛОГИРУЕТ Proposal/Diff (нет
     // UI), а [`PolicyDefault`] (передаваемый decision_source) auto-DENY-отклоняет предложения. UI-1
@@ -132,6 +138,12 @@ pub struct AgentRunHandler {
     /// Источник решений по предложениям. Headless agentd передаёт [`crate::actuator::PolicyDefault`]
     /// (auto-DENY). Эффект только при `actuator_enabled` (стабы не предлагают).
     decision_source: Arc<dyn DecisionSource>,
+    /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** Process-global `Arc<AtomicBool>` (взведён ⇒
+    /// fail-safe останов). Проверяется на ТРЁХ слоях: (1) `drive` ДО старта (взведён ⇒ прогон остаётся
+    /// queued, ре-кьюится); (2) пробрасывается в `run_agent_loop` (мид-ран останов → `Paused`);
+    /// (3) пробрасывается в [`DispatchPolicy`] актуатора (НЕ пишет под паузой). Триггер — agentd
+    /// (персист `agent.json` + рантайм-Arc); UI-кнопка — UI-1.
+    agent_paused: Arc<AtomicBool>,
 }
 
 impl AgentRunHandler {
@@ -159,6 +171,7 @@ impl AgentRunHandler {
         overwrite_threshold: usize,
         blast_cap: u32,
         decision_source: Arc<dyn DecisionSource>,
+        agent_paused: Arc<AtomicBool>,
     ) -> Self {
         Self {
             writer,
@@ -171,7 +184,24 @@ impl AgentRunHandler {
             overwrite_threshold,
             blast_cap,
             decision_source,
+            agent_paused,
         }
+    }
+
+    /// Клон process-global kill-switch (AGENT-5) для рантайм-триггера/наблюдения проводкой (agentd
+    /// рестор персиста + будущий control-plane/UI-1). Взвести ⇒ `pause()`, снять ⇒ `resume()`.
+    pub fn pause_handle(&self) -> Arc<AtomicBool> {
+        self.agent_paused.clone()
+    }
+
+    /// Взвести kill-switch (пауза агента).
+    pub fn pause(&self) {
+        self.agent_paused.store(true, Ordering::Relaxed);
+    }
+
+    /// Снять kill-switch (возобновление). Прогоны, оставшиеся queued под паузой, возобновятся воркером.
+    pub fn resume(&self) {
+        self.agent_paused.store(false, Ordering::Relaxed);
     }
 
     /// Ведёт прогон цикла: статус-машина run_store + корреляция эгресса + run_agent_loop. Возвращает
@@ -252,6 +282,7 @@ impl AgentRunHandler {
                 self.overwrite_threshold,
                 self.blast_cap,
                 self.decision_source.clone(),
+                self.agent_paused.clone(),
             )
         } else {
             stub_registry()
@@ -276,7 +307,8 @@ impl AgentRunHandler {
             }
         };
 
-        // 5. Прогон цикла.
+        // 5. Прогон цикла. KILL-SWITCH (AGENT-5, чек-пойнт #2): пробрасываем `agent_paused` — пауза
+        //    мид-ран остановит цикл на следующей проверке границы → LoopOutcome BudgetExhausted{Paused}.
         let outcome = run_agent_loop(
             provider.as_ref(),
             &registry,
@@ -285,6 +317,7 @@ impl AgentRunHandler {
             &budget,
             &tk,
             &cancel,
+            &self.agent_paused,
             ctx,
             &mut on_event,
         )
@@ -299,7 +332,36 @@ impl AgentRunHandler {
             }
         }
 
-        // 7. Терминал прогона по исходу цикла. Отмена (cancel) → STATUS_CANCELLED (отдельный
+        // 7a. KILL-SWITCH (AGENT-5, чек-пойнт #2): пауза мид-ран — НЕ терминал. Прогон ВОЗВРАЩАЕТСЯ в
+        //     `queued` + пере-кьюется (как чек-пойнт #1), чтобы возобновиться на un-pause. replay-safe:
+        //     повторный заход перезапускает цикл С НАЧАЛА (актуатор идемпотентен per-op-group), а под
+        //     паузой записей всё равно не было (чек-пойнт #3 + цикл-чек остановил ДО хода). НЕ пишем
+        //     finish (прогон не завершён) — наоборот, requeue_to_queued возвращает строку в queued.
+        if let LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Paused,
+            ..
+        } = outcome
+        {
+            run_store::requeue_to_queued(&self.writer, run_id)
+                .await
+                .map_err(|e| format!("agent_run {run_id}: пауза мид-ран → queued: {e}"))?;
+            scheduler::enqueue(
+                &self.writer,
+                KIND_AGENT_RUN,
+                &run_id.to_string(),
+                scheduler::now_secs() + PAUSE_REQUEUE_DELAY_SECS,
+                3,
+            )
+            .await
+            .map_err(|e| format!("agent_run {run_id}: пере-кью паузы мид-ран: {e}"))?;
+            tracing::info!(
+                run_id,
+                "agent_run: kill-switch ВЗВЕДЁН мид-ран — прогон → queued, пере-кью на un-pause"
+            );
+            return Ok(());
+        }
+
+        // 7b. Терминал прогона по исходу цикла. Отмена (cancel) → STATUS_CANCELLED (отдельный
         //    терминал, не error): таксономия статусов не врёт. Прочее исчерпание бюджета (steps/
         //    wall_clock/tokens) → error (прогон не довёл задачу).
         let (status, outcome_text) = match outcome {
@@ -325,6 +387,11 @@ impl AgentRunHandler {
     }
 }
 
+/// Через сколько секунд ПЕРЕ-ПОСТАВИТЬ джобу прогона, отложенного kill-switch'ем (AGENT-5 чек-пойнт
+/// #1): пока пауза взведена, прогон остаётся `queued` и периодически пере-кьюится с этой задержкой,
+/// чтобы возобновиться вскоре после un-pause. Скромный период (как тик планировщика) — не «битый цикл».
+const PAUSE_REQUEUE_DELAY_SECS: i64 = 5;
+
 #[async_trait]
 impl JobHandler for AgentRunHandler {
     async fn handle(&self, job: &Job) -> Result<(), String> {
@@ -333,6 +400,37 @@ impl JobHandler for AgentRunHandler {
             .trim()
             .parse()
             .map_err(|e| format!("agent_run: payload не run_id ('{}'): {e}", job.payload))?;
+
+        // KILL-SWITCH (AGENT-5, чек-пойнт #1): ДО любого старта прогона. Взведён ⇒ НЕ запускаем цикл,
+        // прогон ОСТАЁТСЯ `queued` (drive ниже даже не зовётся → нет mark_running, нет хода модели, нет
+        // диспатча инструмента → НИ ОДНОЙ записи). Чтобы прогон возобновился на un-pause — пере-кьюим
+        // СВЕЖУЮ джобу с задержкой (текущая уйдёт в done). Прогон replay-safe (drive run-level
+        // идемпотентен), поэтому повторный заход безопасен. Не трогаем строку прогона — она и так queued.
+        if self.agent_paused.load(Ordering::Relaxed) {
+            // Пере-кьюим только пока строка прогона ещё НЕ терминальна (иначе плодили бы вечные джобы
+            // для давно завершённого прогона). Терминальный/отсутствующий ⇒ просто done (no-op).
+            let still_pending = matches!(
+                run_store::get_run(&self.reader, run_id).await,
+                Ok(Some(run)) if !run_store::is_terminal(&run.status)
+            );
+            if still_pending {
+                scheduler::enqueue(
+                    &self.writer,
+                    KIND_AGENT_RUN,
+                    &run_id.to_string(),
+                    scheduler::now_secs() + PAUSE_REQUEUE_DELAY_SECS,
+                    job.max_attempts,
+                )
+                .await
+                .map_err(|e| format!("agent_run {run_id}: пере-кью под паузой: {e}"))?;
+                tracing::info!(
+                    run_id,
+                    "agent_run: kill-switch ВЗВЕДЁН — прогон остаётся queued, пере-кью на un-pause"
+                );
+            }
+            return Ok(());
+        }
+
         self.drive(run_id).await
     }
 
@@ -468,8 +566,22 @@ mod tests {
         (addr, handle)
     }
 
+    /// Process-global kill-switch для тестов: по умолчанию НЕ взведён (без регрессии поведения).
+    fn unpaused() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     /// Хендлер для AGENT-2-тестов: актуатор ВЫКЛ (стабы) — не регрессируем поведение AGENT-2/MEM-1.
     fn handler(db: &Database, ai: Arc<AIClient>) -> AgentRunHandler {
+        handler_paused(db, ai, unpaused())
+    }
+
+    /// Хендлер как [`handler`], но с ЗАДАННЫМ kill-switch (AGENT-5 тесты паузы). Актуатор ВЫКЛ (стабы).
+    fn handler_paused(
+        db: &Database,
+        ai: Arc<AIClient>,
+        agent_paused: Arc<AtomicBool>,
+    ) -> AgentRunHandler {
         AgentRunHandler::new(
             db.writer().clone(),
             db.reader().clone(),
@@ -481,6 +593,7 @@ mod tests {
             64 * 1024,
             16,
             Arc::new(crate::actuator::PolicyDefault),
+            agent_paused,
         )
     }
 
@@ -502,12 +615,12 @@ mod tests {
             64 * 1024,
             16,
             Arc::new(crate::actuator::PolicyDefault),
+            unpaused(),
         )
     }
 
     /// Хендлер с ВКЛЮЧЁННЫМ актуатором (AGENT-3e) для go-live-тестов: гейтнутый реестр на `canon_root`,
-    /// заданный `decision_source`. Порог/кэп — параметры теста.
-    #[allow(clippy::too_many_arguments)]
+    /// заданный `decision_source`. Порог/кэп — параметры теста. kill-switch НЕ взведён.
     fn handler_with_actuator(
         db: &Database,
         ai: Arc<AIClient>,
@@ -515,6 +628,28 @@ mod tests {
         overwrite_threshold: usize,
         blast_cap: u32,
         decision_source: Arc<dyn crate::actuator::DecisionSource>,
+    ) -> AgentRunHandler {
+        handler_with_actuator_paused(
+            db,
+            ai,
+            canon_root,
+            overwrite_threshold,
+            blast_cap,
+            decision_source,
+            unpaused(),
+        )
+    }
+
+    /// Как [`handler_with_actuator`], но с ЗАДАННЫМ kill-switch (AGENT-5: пауза + актуатор).
+    #[allow(clippy::too_many_arguments)]
+    fn handler_with_actuator_paused(
+        db: &Database,
+        ai: Arc<AIClient>,
+        canon_root: std::path::PathBuf,
+        overwrite_threshold: usize,
+        blast_cap: u32,
+        decision_source: Arc<dyn crate::actuator::DecisionSource>,
+        agent_paused: Arc<AtomicBool>,
     ) -> AgentRunHandler {
         AgentRunHandler::new(
             db.writer().clone(),
@@ -527,6 +662,7 @@ mod tests {
             overwrite_threshold,
             blast_cap,
             decision_source,
+            agent_paused,
         )
     }
 
@@ -1448,6 +1584,164 @@ mod tests {
             .modified()
             .unwrap();
         assert_eq!(mtime1, mtime2, "файл физически не переписан при replay");
+    }
+
+    // ── AGENT-5: KILL-SWITCH (чек-пойнты #1/#2 на уровне хендлера + возобновление) ─────────────────
+
+    /// Провайдер, ПАНИКующий при вызове — доказывает «цикл не стартовал» (зеркало backpressure-теста).
+    struct PanicIfCalled;
+    #[async_trait]
+    impl ToolCapableProvider for PanicIfCalled {
+        async fn stream_chat_tools(
+            &self,
+            _m: &[ChatMessage],
+            _t: &[ToolSpec],
+            _o: &mut (dyn FnMut(String) + Send),
+            _c: &Arc<AtomicBool>,
+            _ctx: RunCtx,
+        ) -> AiResult<ToolTurn> {
+            panic!("под паузой цикл агента не должен стартовать");
+        }
+        fn model_id(&self) -> &str {
+            "panic-if-called"
+        }
+    }
+
+    /// **KILL-SWITCH чек-пойнт #1 (пауза ДО старта)**: kill-switch взведён → handle НЕ запускает цикл
+    /// (PanicIfCalled не паникует — значит не вызван), прогон ОСТАЁТСЯ `queued`, и пере-кьюена свежая
+    /// джоба (для возобновления на un-pause). Провайдер не тронут → ни одной записи.
+    #[tokio::test]
+    async fn paused_before_start_keeps_run_queued() {
+        let (_d, db) = open().await;
+        let paused = Arc::new(AtomicBool::new(true)); // ПАУЗА взведена
+        let ai = ai_with_tools(Some(Arc::new(PanicIfCalled)));
+        let h = handler_paused(&db, ai, paused.clone());
+
+        let run_id = enqueue_agent_run(db.writer(), "задача", Some("fake"), Some("auto"))
+            .await
+            .unwrap();
+        // handle не должен паниковать (провайдер не вызван) и не должен трогать строку прогона.
+        h.handle(&job_for(run_id))
+            .await
+            .expect("джоба ok под паузой");
+
+        let r = run_store::get_run(db.reader(), run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            r.status,
+            run_store::STATUS_QUEUED,
+            "под паузой прогон ОСТАЁТСЯ queued (цикл не стартовал)"
+        );
+        // Пере-кьюена свежая джоба прогона (для возобновления на un-pause): есть pending KIND_AGENT_RUN.
+        let pending = pending_agent_run_jobs(&db, run_id).await;
+        assert!(
+            pending >= 1,
+            "под паузой пере-кьюена джоба для возобновления: pending={pending}"
+        );
+    }
+
+    /// **KILL-SWITCH возобновление (un-pause → прогон идёт)**: пауза ДО старта оставила прогон queued;
+    /// снимаем паузу → тот же хендлер доводит прогон до `done` (с рабочим провайдером). Доказывает,
+    /// что прогон НЕ потерян под паузой — он возобновляется.
+    #[tokio::test]
+    async fn unpause_resumes_queued_run() {
+        let (_d, db) = open().await;
+        let paused = Arc::new(AtomicBool::new(true));
+        // Провайдер, который под паузой НЕ зовётся, а после un-pause доводит до Final.
+        let provider = Arc::new(FakeToolProvider::scripted(vec![Ok(ToolTurn::Final(
+            "возобновлён".into(),
+        ))]));
+        let ai = ai_with_tools(Some(provider));
+        let h = handler_paused(&db, ai, paused.clone());
+
+        let run_id = enqueue_agent_run(db.writer(), "задача", Some("fake"), Some("auto"))
+            .await
+            .unwrap();
+        // Под паузой: остаётся queued.
+        h.handle(&job_for(run_id)).await.expect("под паузой ok");
+        assert_eq!(
+            run_store::get_run(db.reader(), run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            run_store::STATUS_QUEUED
+        );
+
+        // Снимаем паузу → тот же хендлер на повторном handle доводит прогон до терминала.
+        paused.store(false, Ordering::Relaxed);
+        h.handle(&job_for(run_id)).await.expect("после un-pause ok");
+        let r = run_store::get_run(db.reader(), run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            r.status, STATUS_DONE,
+            "после un-pause прогон возобновлён → done"
+        );
+        assert_eq!(r.outcome.as_deref(), Some("возобновлён"));
+    }
+
+    /// **KILL-SWITCH чек-пойнт #2/#3 интегрально (актуатор ВКЛ): пауза мид-ран → НИ ОДНОЙ записи.**
+    /// Провайдер скриптует note.create (Auto-тир, autonomy=auto) — БЕЗ паузы это записало бы файл
+    /// (см. `auto_run_flag_on_auto_tier_applies_via_gate`). Со ВЗВЕДЁННОЙ паузой: цикл-чек #2 и
+    /// актуатор-чек #3 fail-safe → файл НЕ создан, ledger пуст, прогон ре-кьюен в queued (не done).
+    #[tokio::test]
+    async fn paused_actuator_run_writes_nothing_and_requeues() {
+        let (_d, root, db) = open_vault().await;
+        let paused = Arc::new(AtomicBool::new(true)); // ПАУЗА
+        let provider = Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
+            "note.create",
+            r#"{"path":"Notes/N.md","content":"тело"}"#,
+        )));
+        let ai = ai_with_tools(Some(provider));
+        let src: Arc<dyn crate::actuator::DecisionSource> =
+            Arc::new(crate::actuator::PolicyDefault);
+        let h = handler_with_actuator_paused(&db, ai, root.clone(), 64 * 1024, 16, src, paused);
+
+        let run_id = run_store::create_run(db.writer(), "создай", Some("fake"), Some("auto"))
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id))
+            .await
+            .expect("джоба ok под паузой");
+
+        assert!(
+            !root.join("Notes/N.md").exists(),
+            "под паузой актуатор НЕ записал файл (чек-пойнты #2/#3)"
+        );
+        assert_eq!(
+            executed_count(&db, run_id).await,
+            0,
+            "под паузой нет executed apply-строк"
+        );
+        // Прогон ре-кьюен в queued (пауза мид-ран — не терминал), не done/error.
+        let r = run_store::get_run(db.reader(), run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            r.status,
+            run_store::STATUS_QUEUED,
+            "пауза мид-ран → прогон возвращён в queued (возобновится на un-pause)"
+        );
+    }
+
+    /// Число pending джоб KIND_AGENT_RUN с payload=run_id (для проверки пере-кью под паузой).
+    async fn pending_agent_run_jobs(db: &Database, run_id: i64) -> i64 {
+        let payload = run_id.to_string();
+        db.reader()
+            .query(move |c| {
+                c.query_row(
+                    "SELECT count(*) FROM jobs WHERE kind=?1 AND payload=?2 AND state='pending'",
+                    rusqlite::params![KIND_AGENT_RUN, payload],
+                    |r| r.get(0),
+                )
+            })
+            .await
+            .unwrap()
     }
 
     // ── тест-хелперы корреляции ───────────────────────────────────────────────────────────────

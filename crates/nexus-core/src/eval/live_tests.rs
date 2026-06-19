@@ -993,6 +993,7 @@ async fn live_tool_call_smoke() {
         reserve_output: 1024,
     };
     let cancel = Arc::new(AtomicBool::new(false));
+    let agent_paused = Arc::new(AtomicBool::new(false));
 
     // Явно просим вызвать echo — это вход модели в tool-цикл.
     let messages = vec![
@@ -1017,6 +1018,7 @@ async fn live_tool_call_smoke() {
         &budget,
         &tk,
         &cancel,
+        &agent_paused,
         RunCtx::NONE,
         &mut |e| match e {
             AgentEvent::ToolCall { kind, args, .. } => {

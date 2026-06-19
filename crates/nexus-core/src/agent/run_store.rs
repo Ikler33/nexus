@@ -153,6 +153,31 @@ pub async fn finish_run(
         .await
 }
 
+/// KILL-SWITCH (AGENT-5): возвращает НЕ-терминальный прогон в `queued` (пауза мид-ран — прогон не
+/// завершён, должен возобновиться на un-pause). Терминальные строки (`done`/`error`/`cancelled`) НЕ
+/// трогаем (finished-прогон не «оживает»). `step` сохраняется (наблюдаемость; replay перезапустит цикл
+/// с начала — replay-safe, см. контракт `agent/job.rs`). Возвращает `true`, если строка реально
+/// возвращена в queued. Зеркало `requeue_stale_running`, но адресно по id и без TTL-условия.
+pub async fn requeue_to_queued(writer: &WriteActor, id: i64) -> DbResult<bool> {
+    writer
+        .transaction(move |tx| {
+            let n = tx.execute(
+                "UPDATE agent_runs SET status=?2, updated_at=?3 \
+                 WHERE id=?1 AND status NOT IN (?4,?5,?6)",
+                params![
+                    id,
+                    STATUS_QUEUED,
+                    now_secs(),
+                    STATUS_DONE,
+                    STATUS_ERROR,
+                    STATUS_CANCELLED
+                ],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// Читает строку прогона по id (`None` — нет такой).
 pub async fn get_run(reader: &ReadPool, id: i64) -> DbResult<Option<AgentRun>> {
     reader

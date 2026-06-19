@@ -58,6 +58,10 @@ pub enum BudgetKind {
     Tokens,
     /// Прогон отменён (`cancel`).
     Cancelled,
+    /// **KILL-SWITCH (AGENT-5): прогон остановлен глобальной паузой `agent_paused`.** Отдельный вид
+    /// (не `Cancelled`): таксономия не врёт — это не отмена прогона, а пауза агента; хендлер ре-кьюит
+    /// прогон, чтобы он возобновился на un-pause. Останов промптовый — на следующей проверке границы.
+    Paused,
 }
 
 /// Исход цикла.
@@ -90,6 +94,11 @@ fn count_used(tk: &dyn Tokenizer, messages: &[ChatMessage]) -> usize {
 /// `ctx` — run-контекст прогона (AGENT-3a): ЯВНО пробрасывается в КАЖДЫЙ ход провайдера, чтобы эгресс
 /// этого прогона коррелировался на его `run_id` в audit (per-call, не процесс-глобальный слот —
 /// конкурентные прогоны не перетирают атрибуцию друг друга). Вне прогона/в смоук-тестах — [`RunCtx::NONE`].
+/// `agent_paused` — глобальный KILL-SWITCH агента (AGENT-5): процесс-глобальный `Arc<AtomicBool>`,
+/// проверяемый fail-safe (взведён ⇒ НЕ действуем) на КАЖДОМ шаге РЯДОМ с `cancel`. Взведён мид-ран ⇒
+/// цикл останавливается на следующей проверке границы → [`BudgetKind::Paused`] (не `Cancelled`,
+/// не `Error`): хендлер ре-кьюит прогон для возобновления на un-pause. Это ВТОРОЙ из трёх чек-пойнтов
+/// kill-switch (1-й — `drive` до старта оставляет прогон queued; 3-й — актуатор не пишет под паузой).
 #[allow(clippy::too_many_arguments)] // цикл явно принимает все свои зависимости (тестируемость > эргономика)
 pub async fn run_agent_loop(
     provider: &dyn ToolCapableProvider,
@@ -99,6 +108,7 @@ pub async fn run_agent_loop(
     budget: &ContextBudget,
     tk: &dyn Tokenizer,
     cancel: &Arc<AtomicBool>,
+    agent_paused: &Arc<AtomicBool>,
     ctx: RunCtx,
     on_event: &mut (dyn FnMut(AgentEvent) + Send),
 ) -> LoopOutcome {
@@ -110,6 +120,17 @@ pub async fn run_agent_loop(
 
     for _step in 0..bounds.max_steps {
         // — границы ДО хода —
+        // KILL-SWITCH (AGENT-5, чек-пойнт #2): глобальная пауза агента проверяется ПЕРВОЙ и fail-safe
+        // (взведена ⇒ останов). Отдельный вид Paused (не Cancelled): хендлер ре-кьюит прогон для
+        // возобновления на un-pause. Останов промптовый — здесь, ДО хода модели/диспатча инструментов:
+        // взведённая мид-ран пауза не даст следующему ходу позвать ни модель, ни инструмент (значит и
+        // ни одной записи актуатора из ЭТОГО цикла — третий чек-пойнт страхует уже-идущий ход).
+        if agent_paused.load(Ordering::Relaxed) {
+            return LoopOutcome::BudgetExhausted {
+                kind: BudgetKind::Paused,
+                partial: last_content,
+            };
+        }
         if cancel.load(Ordering::Relaxed) {
             return LoopOutcome::BudgetExhausted {
                 kind: BudgetKind::Cancelled,
@@ -346,6 +367,7 @@ mod tests {
         reg.insert(Arc::new(EchoTool));
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let mut events: Vec<AgentEvent> = Vec::new();
 
         let outcome = run_agent_loop(
@@ -356,6 +378,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -467,6 +490,7 @@ mod tests {
         reg.insert(Arc::new(EchoTool));
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let bounds = LoopBounds {
             max_steps: 3,
             wall_clock: Duration::from_secs(60),
@@ -479,6 +503,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -507,6 +532,7 @@ mod tests {
         let reg = ToolRegistry::new();
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let mut events = Vec::new();
         let outcome = run_agent_loop(
             &provider,
@@ -516,6 +542,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -534,6 +561,7 @@ mod tests {
         let reg = ToolRegistry::new();
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let bounds = LoopBounds {
             max_steps: 5,
             wall_clock: Duration::ZERO,
@@ -546,6 +574,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -581,6 +610,7 @@ mod tests {
         let reg = ToolRegistry::new(); // пустой → инструмент неизвестен
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let mut events = Vec::new();
         let outcome = run_agent_loop(
             &provider,
@@ -590,6 +620,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -620,6 +651,7 @@ mod tests {
         let reg = ToolRegistry::new();
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let mut events = Vec::new();
         let outcome = run_agent_loop(
             &provider,
@@ -629,6 +661,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -666,6 +699,7 @@ mod tests {
         reg.insert(Arc::new(CountingTool(dispatched.clone())));
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let mut events = Vec::new();
         let outcome = run_agent_loop(
             &provider,
@@ -675,6 +709,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -706,6 +741,7 @@ mod tests {
         let reg = ToolRegistry::new();
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(true));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let outcome = run_agent_loop(
             &provider,
             &reg,
@@ -714,6 +750,7 @@ mod tests {
             &budget(),
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -728,6 +765,106 @@ mod tests {
         assert_eq!(*provider.calls_seen.lock().unwrap(), 0);
     }
 
+    /// **KILL-SWITCH чек-пойнт #2 (взведён ДО старта)**: `agent_paused=true` до первого хода →
+    /// BudgetExhausted{Paused}, провайдер НЕ вызван (ни одного хода модели, значит ни одного диспатча
+    /// инструмента → ни одной записи актуатора из цикла).
+    #[tokio::test]
+    async fn loop_paused_before_start_does_not_run() {
+        let provider = FakeToolProvider::new(vec![]); // не должен быть вызван
+        let reg = ToolRegistry::new();
+        let tk = WordTokenizer;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(true)); // ПАУЗА взведена
+        let outcome = run_agent_loop(
+            &provider,
+            &reg,
+            vec![ChatMessage::user("q")],
+            LoopBounds::default(),
+            &budget(),
+            &tk,
+            &cancel,
+            &agent_paused,
+            RunCtx::NONE,
+            &mut |_| {},
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                LoopOutcome::BudgetExhausted {
+                    kind: BudgetKind::Paused,
+                    ..
+                }
+            ),
+            "пауза до старта → Paused: {outcome:?}"
+        );
+        assert_eq!(
+            *provider.calls_seen.lock().unwrap(),
+            0,
+            "под паузой провайдер (и значит инструменты) не вызывается"
+        );
+    }
+
+    /// **KILL-SWITCH чек-пойнт #2 (взведён МИД-РАН)**: первый ход — ToolCalls(echo), ВО ВРЕМЯ on_event
+    /// взводим паузу → цикл ОБЯЗАН остановиться на СЛЕДУЮЩЕЙ проверке границы (до второго хода
+    /// модели/диспатча). Доказываем: провайдер вызван РОВНО 1 раз (второго хода не было), исход Paused,
+    /// при этом инструмент ПЕРВОГО (уже-идущего) хода исполнился (счётчик >0) — пауза останавливает
+    /// ДАЛЬНЕЙШИЕ ходы, а третий чек-пойнт (актуатор) страхует записи уже-идущего хода.
+    #[tokio::test]
+    async fn loop_paused_mid_run_stops_at_next_step() {
+        // Ход 1: ToolCalls(echo). Ход 2: Final — НЕ должен быть достигнут (пауза остановит до него).
+        let provider = FakeToolProvider::new(vec![
+            ScriptedTurn {
+                stream: None,
+                result: Ok(ToolTurn::ToolCalls(vec![echo_call("c1", "x")])),
+            },
+            ScriptedTurn {
+                stream: None,
+                result: Ok(ToolTurn::Final("не достигнут".into())),
+            },
+        ]);
+        let mut reg = ToolRegistry::new();
+        reg.insert(Arc::new(EchoTool));
+        let tk = WordTokenizer;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
+        // Взводим паузу, как только увидим РЕЗУЛЬТАТ инструмента первого хода (т.е. ход 1 уже идёт).
+        let paused_for_cb = agent_paused.clone();
+        let mut on_event = move |e: AgentEvent| {
+            if matches!(e, AgentEvent::ToolResult { .. }) {
+                paused_for_cb.store(true, Ordering::Relaxed);
+            }
+        };
+        let outcome = run_agent_loop(
+            &provider,
+            &reg,
+            vec![ChatMessage::user("позови echo")],
+            LoopBounds::default(),
+            &budget(),
+            &tk,
+            &cancel,
+            &agent_paused,
+            RunCtx::NONE,
+            &mut on_event,
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                LoopOutcome::BudgetExhausted {
+                    kind: BudgetKind::Paused,
+                    ..
+                }
+            ),
+            "пауза мид-ран → Paused на следующей проверке границы: {outcome:?}"
+        );
+        assert_eq!(
+            *provider.calls_seen.lock().unwrap(),
+            1,
+            "ровно ОДИН ход модели — второй ход не стартовал (пауза остановила цикл)"
+        );
+    }
+
     /// Токен-бюджет: крошечное окно → used превышает input_budget → BudgetExhausted{Tokens} до хода.
     #[tokio::test]
     async fn loop_trips_token_budget() {
@@ -735,6 +872,7 @@ mod tests {
         let reg = ToolRegistry::new();
         let tk = WordTokenizer;
         let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
         let tiny = ContextBudget {
             context_window: 5,
             reserve_output: 4,
@@ -749,6 +887,7 @@ mod tests {
             &tiny,
             &tk,
             &cancel,
+            &agent_paused,
             RunCtx::NONE,
             &mut |_| {},
         )
