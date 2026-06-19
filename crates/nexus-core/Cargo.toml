@@ -35,6 +35,11 @@ getrandom = { workspace = true }
 notify-debouncer-full = { workspace = true }
 # CORE-1c-1: параллельный эмбеддинг чанков в индексаторе (futures::stream::buffered).
 futures = { workspace = true }
+# P0-c: реальный BPE-токенайзер задеплоенной модели (ai/tokenizer.rs) для оценки бюджета контекста.
+# default-features=false + onig — http/hf-hub/rustls ВЫКЛЮЧЕНЫ, в дерево не приходит reqwest/hyper
+# (egress-chokepoint цел). flate2 распаковывает встроенный gz-ассет токенайзера один раз.
+tokenizers = { workspace = true }
+flate2 = { workspace = true }
 # Атомарная запись заметок (vault::atomic_write): tmp-в-той-же-папке → fsync → rename. Рантайм-дека
 # (не только dev — как и в app Cargo.toml), плюс TempDir в тестах модулей.
 tempfile = { workspace = true }

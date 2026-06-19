@@ -29,7 +29,11 @@ import { dirname, resolve } from 'node:path';
 // 21→22: + `live_episode_summary_meets_gate` (EP-2: реальный episode::summarize модели саммари по
 // `episode_eval.json` → гейт faithfulness≥0.85 разблокирует ретривал эпизодов в чат; нужен живой LLM;
 // запуск `NEXUS_CHAT_URL=… cargo test live_episode_summary_meets_gate -- --ignored`).
-const EXPECTED = 22;
+// 22→23: + `live_tokenizer_matches_server` (P0-c: встроенный QwenTokenizer == /tokenize задеплоенной
+// модели Qwen3.6-27B на golden-строках; нужен живой сервер :8080; офлайн-гейт качества —
+// `ai::tokenizer::tests::embedded_matches_deployed_model_counts` (в CI на встроенном ассете, без сети);
+// запуск `NEXUS_CHAT_URL=… cargo test live_tokenizer_matches_server -- --ignored`).
+const EXPECTED = 23;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src
