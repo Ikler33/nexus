@@ -36,6 +36,14 @@ use crate::scheduler::now_secs;
 /// [`super::ActionState`] (см. [`super::ActionState::as_str`]). Строковые литералы держим рядом с SQL,
 /// чтобы не разъехались по опечаткам.
 pub const STATE_CLASSIFIED: &str = "classified";
+/// Тир Confirm показан/предложен — батч ждёт решения (AGENT-3d). Строка `proposed` ещё НЕ терминальна
+/// (outcome NULL): её решает [`transition`] (→approved) или [`finish`] (→rejected с исходом).
+pub const STATE_PROPOSED: &str = "proposed";
+/// Предложение одобрено — действие разрешено к apply (AGENT-3d). Промежуточное (outcome NULL),
+/// дальше apply пишет СВОЮ строку executing→executed.
+pub const STATE_APPROVED: &str = "approved";
+/// Предложение отклонено — apply НЕ выполняется (AGENT-3d). Терминально (finish ставит outcome).
+pub const STATE_REJECTED: &str = "rejected";
 pub const STATE_EXECUTING: &str = "executing";
 pub const STATE_EXECUTED: &str = "executed";
 pub const STATE_FAILED: &str = "failed";
@@ -200,6 +208,28 @@ pub async fn finish(
         .await
 }
 
+/// Переход НЕтерминального состояния БЕЗ фиксации исхода (например `proposed → approved`, AGENT-3d).
+///
+/// В отличие от [`finish`], outcome НЕ ставится — строка остаётся НЕтерминальной (продолжит жить:
+/// apply допишет свою executing→executed-строку, либо последующий finish терминирует). Фенс
+/// fail-closed: `WHERE idempotency_key=? AND state=?from AND outcome IS NULL` — переход применяется,
+/// ТОЛЬКО если строка действительно в ожидаемом исходном состоянии И ещё не терминирована (нельзя
+/// «одобрить» уже отклонённое/исполненное/чужое-состояние действие — гонка/двойное решение отбивается).
+/// Возвращает `true`, если ровно эта строка переведена этим вызовом.
+pub async fn transition(writer: &WriteActor, key: &str, from: &str, to: &str) -> DbResult<bool> {
+    let (key, from, to) = (key.to_string(), from.to_string(), to.to_string());
+    writer
+        .transaction(move |tx| {
+            let n = tx.execute(
+                "UPDATE agent_actions SET state=?3, updated_at=?4 \
+                 WHERE idempotency_key=?1 AND state=?2 AND outcome IS NULL",
+                params![key, from, to, now_secs()],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// Читает строку действия по idempotency_key (`None` — нет такой). Это и есть replay-check на уровне
 /// хранилища; [`replay_decision`] оборачивает его в ветвление по outcome.
 pub async fn lookup(reader: &ReadPool, key: &str) -> DbResult<Option<ActionRow>> {
@@ -216,6 +246,25 @@ pub async fn lookup(reader: &ReadPool, key: &str) -> DbResult<Option<ActionRow>>
             .optional()
         })
         .await
+}
+
+/// Только `id` строки по idempotency_key (`None` — нет такой). Лёгкая выборка для гейта автономии:
+/// при дубле ключа предложения (то же действие предложено повторно в прогоне) берём существующий
+/// `action_id` без полного [`lookup`]. Зеркалит идемпотентность record_before.
+pub async fn lookup_id(reader: &ReadPool, key: &str) -> Option<i64> {
+    let key = key.to_string();
+    reader
+        .query(move |c| {
+            c.query_row(
+                "SELECT id FROM agent_actions WHERE idempotency_key=?1",
+                [key],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+        })
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Replay-решение по ключу — ВЕТВЛЕНИЕ ПО ПРИСУТСТВИЮ `outcome`, НЕ по присутствию ключа (см. модульный
@@ -338,6 +387,60 @@ mod tests {
             Some("первый"),
             "исход первого финала"
         );
+    }
+
+    /// transition: proposed→approved меняет state, НЕ ставит outcome (строка остаётся НЕтерминальной).
+    #[tokio::test]
+    async fn transition_changes_state_keeps_outcome_null() {
+        let (_d, db) = open().await;
+        let mut e = entry(1, "t");
+        e.state = STATE_PROPOSED.to_string();
+        record_before(db.writer(), e).await.unwrap();
+
+        assert!(
+            transition(db.writer(), "t", STATE_PROPOSED, STATE_APPROVED)
+                .await
+                .unwrap(),
+            "proposed→approved применён"
+        );
+        let row = lookup(db.reader(), "t").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_APPROVED);
+        assert!(row.outcome.is_none(), "transition НЕ ставит outcome");
+        assert!(!row.is_terminal(), "одобренная строка ещё не терминальна");
+    }
+
+    /// transition fail-closed: переход НЕ применяется, если строка не в ожидаемом from-состоянии
+    /// (двойное решение/гонка) ИЛИ уже терминирована (outcome зафиксирован).
+    #[tokio::test]
+    async fn transition_fail_closed_on_wrong_state_or_terminal() {
+        let (_d, db) = open().await;
+        let mut e = entry(1, "g");
+        e.state = STATE_PROPOSED.to_string();
+        record_before(db.writer(), e).await.unwrap();
+
+        // from не совпадает (ожидаем approved, а строка proposed) → no-op.
+        assert!(
+            !transition(db.writer(), "g", STATE_APPROVED, STATE_EXECUTING)
+                .await
+                .unwrap(),
+            "несовпадение from → переход не применён"
+        );
+        let row = lookup(db.reader(), "g").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_PROPOSED, "state не тронут");
+
+        // Терминируем (reject с исходом) — после этого transition больше не применим.
+        finish(db.writer(), "g", STATE_REJECTED, "отклонено", None)
+            .await
+            .unwrap();
+        assert!(
+            !transition(db.writer(), "g", STATE_REJECTED, STATE_APPROVED)
+                .await
+                .unwrap(),
+            "терминированную (outcome задан) строку нельзя «переодобрить»"
+        );
+        let row = lookup(db.reader(), "g").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_REJECTED, "исход reject сохранён");
+        assert_eq!(row.outcome.as_deref(), Some("отклонено"));
     }
 
     /// finish сохраняет UndoHandle (kind+ref).
