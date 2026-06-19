@@ -59,7 +59,22 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo build --locked --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --workspace
+      # Тесты. ubuntu/macOS — ПОЛНЫЙ набор воркспейса (вкл. nexus-desktop: ~217 unit + integration).
+      - name: cargo test (full workspace)
+        if: matrix.os != 'windows-latest'
+        run: cargo test --locked --workspace
+      # Windows — портативные крейты ТОЛЬКО (nexus-core/nexus-agentd), nexus-desktop ИСКЛЮЧЁН.
+      # Почему: lib-test бинарь nexus-desktop (Tauri-app крейт) на headless windows-latest падает на
+      # ЗАГРУЗКЕ процесса с 0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND — линкуется WebView2Loader/webkit
+      # нативщина, и одна из DLL присутствует, но не экспортирует импортируемую точку входа. Это
+      # происходит ДО запуска любого теста (логики-бага нет). desktop-крейт всё равно ПОЛНОСТЬЮ
+      # компилируется (`cargo build --workspace`) и линтуется (`cargo clippy --workspace`) на Windows —
+      # пропускаем ТОЛЬКО исполнение его незагружаемого тест-бинаря. Его тесты гоняются на ubuntu/macOS.
+      # См. PR fix/windows-ci-desktop-testbin. Альтернатива (поставить WebView2-runtime в headless
+      # раннер) хрупка и не покрывает webkit-линк — отклонена.
+      - name: cargo test (exclude nexus-desktop — Tauri lib-test exe can't load on headless Windows)
+        if: matrix.os == 'windows-latest'
+        run: cargo test --locked --workspace --exclude nexus-desktop
 
   # Security-gate (ревью B6 / AC-Q-5): supply-chain + secret-scan отдельным required-job,
   # чтобы проверки безопасности не тонули в общем cargo test. Дёшево, без матрицы ОС.
