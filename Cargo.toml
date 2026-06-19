@@ -26,6 +26,10 @@ thiserror = "2"
 notify-debouncer-full = "0.3"
 pulldown-cmark = "0.12"
 blake3 = "1"
+# SKILL-3 (вендоринг): SHA-256 для hash-pin сверки vendored SKILL.md против vendor.lock-манифеста.
+# Манифест пинит upstream-хэши в SHA-256 (а не blake3) → нужен sha2. Уже транзитивно в Cargo.lock
+# (sha2 0.10 через tauri-codegen), новой версии в дерево не приходит.
+sha2 = "0.10"
 # AI-слой (§4.3, ADR-005): HTTP к chat/embedding серверам. rustls — без системного OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-trait = "0.1"

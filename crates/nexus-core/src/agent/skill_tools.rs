@@ -28,7 +28,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::ai::{fence_observation, injection_marker};
-use crate::skills::{resolve_skill_resource, SkillCatalog};
+use crate::skills::{
+    parse_typed_capabilities, resolve_capabilities, resolve_skill_resource, CapabilityResolution,
+    RunPolicy, SkillCatalog,
+};
 
 use super::tool::{Tool, ToolError, ToolSpec};
 
@@ -105,9 +108,13 @@ struct ActivateArgs {
 /// `lookup` в каталоге не найдёт → [`ToolError::UnknownTool`]). Пустой каталог → enum пуст (активировать
 /// нечего).
 ///
-/// # Инертность
+/// # Инертность + SKILL-3 сурфейсинг (AC#2)
 /// Возвращает ТЕКСТ тела, обёрнутый [`fence_observation`] (недоверенные ДАННЫЕ, I-5). НИЧЕГО не
-/// регистрирует и не разрешает — `capabilities` скилла остаются инертны (SKILL-3 owns the gate).
+/// регистрирует и не разрешает. SKILL-3: после тела ВНУТРИ фенса добавляется advisory «Доступно: … /
+/// Заявлено-но-инертно: … — <причина>», управляемый [`resolve_capabilities`] (Фаза C: forced ∩
+/// run-policy). Скилл, запросивший `shell`/`web`, АКТИВИРУЕТСЯ (тело грузится), но модели ЯВНО сказано,
+/// что эти способности недоступны и почему (НЕ молчаливый no-op). Скилл с caps ⊆ {VaultRead,VaultWrite}
+/// → без inert-заметки (чистый zero-setup).
 pub struct ActivateSkillTool {
     ctx: SkillContext,
 }
@@ -156,17 +163,54 @@ impl Tool for ActivateSkillTool {
             .catalog
             .get(&parsed.skill)
             .ok_or_else(|| ToolError::UnknownTool(parsed.skill.clone()))?;
-        // Tier-2 раскрытие: тело — недоверенные ДАННЫЕ (его написал автор скилла, не пользователь).
+        // SKILL-3 (AC#2): сурфейсим granted-vs-inert capability-сводку. Фаза-C политика — vault
+        // read+write (declared лишь ЗАПРАШИВАЕТ; эффективный = forced ∩ run-policy). Скилл, попросивший
+        // shell/web, активируется (тело грузится), но получает явную пометку «инертно + причина» —
+        // НЕ молчаливый no-op. ⊆ {VaultRead,VaultWrite} → без inert-заметки.
+        let declared = parse_typed_capabilities(&skill.capabilities);
+        let resolution = resolve_capabilities(&declared, skill.tier, &RunPolicy::phase_c_vault());
+        let advisory = capability_advisory(&resolution);
+
+        // Тело + advisory кладём ВНУТРЬ одного фенса (advisory — тоже часть наблюдения; не отдельный
+        // доверенный канал). Tier-2 раскрытие: тело — недоверенные ДАННЫЕ (написал автор скилла).
         // Фенсим per-request маркером (I-5/AC-SEC-7): автор тела не знает маркер → не «закроет» блок.
         // Цикл агента ДОПОЛНИТЕЛЬНО обернёт результат в fence_observation("tool", …) при ре-инъекции
-        // (defense-in-depth — двойной фенс не вредит). Метка несёт имя скилла (вне маркеров — не доверие).
+        // (defense-in-depth). Метка несёт имя скилла (вне маркеров — не доверие).
+        let observation = match advisory {
+            Some(note) => format!("{}\n\n{note}", skill.body),
+            None => skill.body.clone(),
+        };
         let marker = injection_marker();
         Ok(fence_observation(
             &format!("skill:{}", skill.name),
-            &skill.body,
+            &observation,
             &marker,
         ))
     }
+}
+
+/// Строит advisory-строку «Доступно: … / Заявлено-но-инертно: … — <причина>» из [`CapabilityResolution`]
+/// (AC#2). `None`, если инертных способностей нет (caps ⊆ {VaultRead,VaultWrite} → чистый zero-setup —
+/// шум не добавляем). Это ТЕКСТ внутри фенса (часть наблюдения-данных), а не управляющая инструкция.
+fn capability_advisory(resolution: &CapabilityResolution) -> Option<String> {
+    if !resolution.has_inert() {
+        return None; // нет инертных — нечего сурфейсить.
+    }
+    let granted = resolution
+        .granted
+        .iter()
+        .map(|c| c.label())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let inert = resolution
+        .inert
+        .iter()
+        .map(|(c, reason)| format!("{} ({reason})", c.label()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!(
+        "[capabilities] Доступно: {granted}. Заявлено-но-ИНЕРТНО в этом режиме: {inert}."
+    ))
 }
 
 /// Аргументы [`ReadSkillResourceTool`]: `skill` + `resource_path`. `deny_unknown_fields` — fail-closed.
@@ -546,6 +590,84 @@ mod tests {
             ctx.tools().len(),
             2,
             "активация не изменила набор инструментов"
+        );
+    }
+
+    // ── SKILL-3: activate сурфейсит инертные capabilities (AC#2) ─────────────────────────────────────
+
+    /// Скилл, объявивший `shell`/`web`, АКТИВИРУЕТСЯ (тело грузится), НО результат содержит advisory
+    /// «инертно + причина» — НЕ молчаливый no-op. Тело и advisory — внутри фенса (ДАННЫЕ).
+    #[tokio::test]
+    async fn activate_surfaces_inert_capabilities_with_reason() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let d = root.join("dangerous");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("SKILL.md"),
+            "---\nname: dangerous\ndescription: claims shell\ncapabilities: [shell, web_post]\n---\nBODY-INSTRUCTIONS\n",
+        )
+        .unwrap();
+        let cat = Arc::new(discover_skills(&root));
+        let ctx = SkillContext::new(cat, root);
+        let out = ActivateSkillTool::new(ctx)
+            .invoke(r#"{"skill":"dangerous"}"#)
+            .await
+            .unwrap();
+        // Тело раскрыто (активировано, не no-op).
+        assert!(out.contains("BODY-INSTRUCTIONS"), "тело раскрыто: {out}");
+        // Advisory присутствует: granted vault + inert shell/web_post с причинами.
+        assert!(out.contains("[capabilities]"), "advisory-блок: {out}");
+        assert!(out.contains("ИНЕРТНО"), "помечено инертно: {out}");
+        assert!(out.contains("Shell"), "shell заявлен-но-инертен: {out}");
+        assert!(
+            out.contains("WebPost"),
+            "web_post заявлен-но-инертен: {out}"
+        );
+        // Доступное vault — тоже в сводке.
+        assert!(
+            out.contains("VaultRead") || out.contains("VaultWrite"),
+            "доступное: {out}"
+        );
+    }
+
+    /// Скилл с caps ⊆ {VaultRead,VaultWrite} → активируется БЕЗ inert-заметки (чистый zero-setup).
+    #[tokio::test]
+    async fn activate_vault_only_no_inert_note() {
+        let (_t, ctx) = ctx_with(&[("clean", "clean", "vault-only", "CLEAN-BODY")]);
+        // skill без объявленных capabilities → declared пуст → нет инертных.
+        let out = ActivateSkillTool::new(ctx)
+            .invoke(r#"{"skill":"clean"}"#)
+            .await
+            .unwrap();
+        assert!(out.contains("CLEAN-BODY"), "тело: {out}");
+        assert!(
+            !out.contains("[capabilities]"),
+            "нет inert-заметки для vault-only: {out}"
+        );
+    }
+
+    /// Скилл, объявивший ТОЛЬКО vault-способности → нет inert-заметки (они granted).
+    #[tokio::test]
+    async fn activate_declared_vault_caps_no_inert_note() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let d = root.join("vaultskill");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("SKILL.md"),
+            "---\nname: vaultskill\ndescription: vault\ncapabilities: [read, write]\n---\nVBODY\n",
+        )
+        .unwrap();
+        let cat = Arc::new(discover_skills(&root));
+        let out = ActivateSkillTool::new(SkillContext::new(cat, root))
+            .invoke(r#"{"skill":"vaultskill"}"#)
+            .await
+            .unwrap();
+        assert!(out.contains("VBODY"));
+        assert!(
+            !out.contains("[capabilities]"),
+            "vault-only declared → granted, без inert: {out}"
         );
     }
 
