@@ -58,6 +58,63 @@ pub const TIER_AUTO: &str = "auto";
 pub const TIER_CONFIRM: &str = "confirm";
 pub const TIER_HARDBLOCKED: &str = "hardblocked";
 
+/// Вид изменения файла для [`DiffSummary`] — СТРУКТУРНЫЙ дискриминант (new|edit), НЕ содержимое.
+/// Локален для audit (зеркало [`crate::agent::event::FileStatus`], но НЕ зависим от него: журнал
+/// подотчётности не должен тащить UI-тип). По построению несёт только перечислимый статус.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    /// Новая заметка (create) — статус-токен `new`.
+    New,
+    /// Правка существующей заметки (edit/frontmatter) — статус-токен `edit`.
+    Edit,
+}
+
+impl ChangeKind {
+    /// Структурный токен статуса (`new`|`edit`) — фиксированный набор, не свободный текст.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChangeKind::New => "new",
+            ChangeKind::Edit => "edit",
+        }
+    }
+}
+
+/// **РЕДАКЦИЯ-ГВАРД содержимого для ДОЛГОВЕЧНОГО журнала (AGENT-6, приватность).** Резюме диффа,
+/// которое ПО ПОСТРОЕНИЮ не может нести сырой текст заметки: его поля — ТОЛЬКО числовые счётчики строк
+/// (`added`/`deleted`) + перечислимый [`ChangeKind`]. НЕТ ни одного `String`-поля → передать через
+/// него тело/значение frontmatter/хунк диффа НЕВОЗМОЖНО (нет канала). Единственный конструктор —
+/// [`DiffSummary::new`] (принимает `u32 + u32 + ChangeKind`), единственный рендер — [`DiffSummary::render`]
+/// (`"+N -M (new|edit)"`). Любой писатель `agent_actions.diff_summary` ОБЯЗАН строить значение ТОЛЬКО
+/// через этот тип — тогда колонка журнала структурно свободна от содержимого пользователя.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffSummary {
+    /// Число ДОБАВЛЕННЫХ строк (счётчик — не содержимое).
+    added: u32,
+    /// Число УДАЛЁННЫХ строк (счётчик — не содержимое).
+    deleted: u32,
+    /// Структурный вид изменения (new|edit) — перечислимый, не текст.
+    kind: ChangeKind,
+}
+
+impl DiffSummary {
+    /// Собрать резюме из СЧЁТЧИКОВ строк (добавлено/удалено) и [`ChangeKind`]. Сигнатура принимает
+    /// ТОЛЬКО `u32 + u32 + ChangeKind` — нет параметра-строки, поэтому сырое содержимое заметки
+    /// физически не может попасть в журнал через этот путь (структурная редакция).
+    pub fn new(added: u32, deleted: u32, kind: ChangeKind) -> Self {
+        Self {
+            added,
+            deleted,
+            kind,
+        }
+    }
+
+    /// Долговечная форма для `agent_actions.diff_summary`: `"+N -M (new|edit)"`. Только счётчики +
+    /// статус-токен — никакого содержимого. Это ЕДИНСТВЕННЫЙ способ получить строку для колонки.
+    pub fn render(&self) -> String {
+        format!("+{} -{} ({})", self.added, self.deleted, self.kind.as_str())
+    }
+}
+
 /// Параметры вставки строки действия (write-before-act). `outcome` НЕ передаётся — он стартует NULL и
 /// ставится только [`finish`] (присутствие outcome — ветка replay).
 #[derive(Debug, Clone)]
@@ -71,7 +128,9 @@ pub struct ActionEntry {
     pub state: String,
     /// on-disk hash цели на момент classify (токен оптимистичной конкуренции). None — у действий без файла.
     pub content_hash: Option<String>,
-    /// Усечённое резюме диффа (приватность; AGENT-6 ужесточит). None пока нет.
+    /// СТРУКТУРНОЕ, СВОБОДНОЕ ОТ СОДЕРЖИМОГО резюме диффа (`"+N -M (new|edit)"`) — строится ТОЛЬКО через
+    /// [`DiffSummary::render`] (AGENT-6). НЕ хранит тело/значения/хунки заметки (редакция-гвард по
+    /// построению). `None` — у действий без диффа (например крашнутая строка-якорь до вычисления).
     pub diff_summary: Option<String>,
 }
 
@@ -717,6 +776,47 @@ mod tests {
         );
         let row = lookup(db.reader(), "f").await.unwrap().unwrap();
         assert_eq!(row.state, STATE_FAILED, "state failed не тронут");
+    }
+
+    /// REDACTION-GUARD (AGENT-6): DiffSummary рендерит ТОЛЬКО счётчики + статус-токен — `"+N -M (kind)"`.
+    /// Структурная гарантия: тип не имеет String-поля, поэтому сырое содержимое в него не попадает.
+    #[test]
+    fn diff_summary_renders_counts_and_status_only() {
+        assert_eq!(
+            DiffSummary::new(3, 1, ChangeKind::Edit).render(),
+            "+3 -1 (edit)"
+        );
+        assert_eq!(
+            DiffSummary::new(5, 0, ChangeKind::New).render(),
+            "+5 -0 (new)"
+        );
+        assert_eq!(
+            DiffSummary::new(0, 0, ChangeKind::Edit).render(),
+            "+0 -0 (edit)"
+        );
+        assert_eq!(ChangeKind::New.as_str(), "new");
+        assert_eq!(ChangeKind::Edit.as_str(), "edit");
+    }
+
+    /// REDACTION-GUARD (AGENT-6): рендер диффа НИКОГДА не несёт «содержимое» — даже если бы счётчики были
+    /// получены из заметки с секретом, выход состоит ИСКЛЮЧИТЕЛЬНО из ASCII-цифр, знаков `+-()` и
+    /// фиксированных токенов `new`/`edit`. Доказываем форматом: рендер матчит строгий шаблон.
+    #[test]
+    fn diff_summary_render_is_structural_only() {
+        for (a, d, k) in [
+            (0u32, 0u32, ChangeKind::New),
+            (42, 7, ChangeKind::Edit),
+            (1, 1000, ChangeKind::New),
+        ] {
+            let s = DiffSummary::new(a, d, k).render();
+            // Только цифры, пробелы, +-() и буквы из {new,edit} — никакого произвольного текста.
+            assert!(
+                s.chars()
+                    .all(|c| c.is_ascii_digit() || " +-()newdit".contains(c)),
+                "рендер содержит только структурные символы: {s:?}"
+            );
+            assert_eq!(s, format!("+{a} -{d} ({})", k.as_str()));
+        }
     }
 
     /// Индекс по run_id присутствует (выборка действий прогона — горячий путь).

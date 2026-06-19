@@ -43,3 +43,18 @@ flate2 = { workspace = true }
 # Атомарная запись заметок (vault::atomic_write): tmp-в-той-же-папке → fsync → rename. Рантайм-дека
 # (не только dev — как и в app Cargo.toml), плюс TempDir в тестах модулей.
 tempfile = { workspace = true }
+
+# AGENT-6 (приватность): хардлинк-reject в `actuator::apply::confine_for_overwrite` на Windows —
+# зеркало unix `nlink>1`. std не даёт переносимого link-count, поэтому читаем `nNumberOfLinks` через
+# `GetFileInformationByHandle`. `windows-sys` 0.61 УЖЕ транзитивно в Cargo.lock (десятки крейтов; без
+# build-script, на `windows-link`) → новой версии/тяжёлой деки в дерево не приходит. ТОЛЬКО под Windows.
+[target.'cfg(windows)'.dependencies]
+# Win32_Security нужен ТОЛЬКО ради типа `SECURITY_ATTRIBUTES` в сигнатуре `CreateFileW` (мы передаём
+# NULL — дескриптор безопасности не используем, но тип обязан существовать, иначе линк-макрос
+# `CreateFileW` не резолвится). Foundation — `HANDLE`/`CloseHandle`/`INVALID_HANDLE_VALUE`;
+# Storage_FileSystem — `CreateFileW`/`GetFileInformationByHandle`/`BY_HANDLE_FILE_INFORMATION`+флаги.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+] }

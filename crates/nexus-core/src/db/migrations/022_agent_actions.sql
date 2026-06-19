@@ -33,8 +33,8 @@ CREATE TABLE agent_actions (
     content_hash    TEXT,                        -- on-disk hash цели на момент classify (токен оптимистичной конкуренции для re-check в 3c)
     undo_kind       TEXT,                        -- дискриминант UndoHandle (snapshot|trash); NULL до исполнения
     undo_ref        TEXT,                        -- ссылка отката (snapshot ts / trash rel); NULL до исполнения
-    outcome         TEXT,                        -- NULL до терминала; ПРИСУТСТВИЕ — ветка replay (НЕ значение)
-    diff_summary    TEXT,                        -- усечённое резюме диффа (приватность; AGENT-6 ужесточит)
+    outcome         TEXT,                        -- NULL до терминала; ПРИСУТСТВИЕ — ветка replay (НЕ значение). СТАТУС/короткое сообщение (путь+ключ frontmatter), НЕ содержимое заметки (AGENT-6 аудит)
+    diff_summary    TEXT,                        -- СТРУКТУРНОЕ резюме диффа "+N -M (new|edit)" — счётчики+статус, БЕЗ содержимого (AGENT-6: строится ТОЛЬКО через audit::DiffSummary, редакция-гвард по построению)
     created_at      INTEGER NOT NULL,            -- unix-сек вставки (write-before-act)
     updated_at      INTEGER NOT NULL             -- unix-сек последнего перехода
 );
