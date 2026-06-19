@@ -91,6 +91,19 @@ impl AuditSink {
     pub async fn replay_decision(&self, key: &str) -> DbResult<ReplayDecision> {
         audit::replay_decision(&self.reader, key).await
     }
+
+    /// Клон writer-хэндла (ADR-003 — дёшев, актор сериализует мутации). Нужен гейту автономии
+    /// ([`super::orchestrate`]) для `proposed→approved` ([`audit::transition`]) — переход состояния
+    /// предложения вне набора методов sink'а. Не расширяет инварианты: те же сериализованные мутации.
+    pub fn writer_handle(&self) -> WriteActor {
+        self.writer.clone()
+    }
+
+    /// Клон reader-хэндла. Нужен гейту автономии для lookup строки предложения (идемпотентность
+    /// предложения / проверки ledger в тестах).
+    pub fn reader_handle(&self) -> ReadPool {
+        self.reader.clone()
+    }
 }
 
 /// Исход исполнения одного действия [`apply_action`]. Несёт ровно то, что нужно вызывающему (tools.rs):

@@ -15,24 +15,39 @@
 //!   + [`apply::AuditSink`] (обёртка ledger).
 //! - [`tools`] (3c) — файловые инструменты [`tools::NoteCreateTool`]/[`tools::NoteEditTool`]/
 //!   [`tools::SetFrontmatterTool`] (impl [`crate::agent::Tool`]): classify→apply/propose диспетч.
+//! - [`decision`] (3d) — [`decision::DecisionSource`] (fail-closed [`decision::PolicyDefault`] +
+//!   [`decision::ChannelDecision`]) + [`decision::ProposalBatch`]/[`decision::BatchDecision`]
+//!   (отсутствующий айтем = Reject).
+//! - [`orchestrate`] (3d) — гейт автономии [`orchestrate::dispatch_action`]: матрица `(RiskTier ×
+//!   autonomy)`, эмиссия Proposal/Diff ([`orchestrate::EventSink`]), blast-radius-кэп, propose→decide→
+//!   apply/reject ledger-флоу; `classify_hash` ОБЯЗАТЕЛЕН на пути apply; `overwrite_threshold` ИЗ КОНФИГА.
 //!
-//! Enforcement автономии (confirm|auto run-level, DecisionSource, Proposal/Diff-эмиссия, blast-radius) —
-//! AGENT-3d. Регистрация в реестр/agentd и живая проводка — AGENT-3e. ЗДЕСЬ их НЕТ намеренно; инструменты
-//! только конструируются и гоняются В ТЕСТАХ (реальный vault пользователя срезом не затронут).
+//! Регистрация в реестр/agentd и ЖИВАЯ ПРОВОДКА — AGENT-3e. ЗДЕСЬ её НЕТ намеренно: гейт автономии,
+//! DecisionSource и инструменты только конструируются и гоняются В ТЕСТАХ (с `ChannelDecision`/моком/
+//! коллектором) — реальный vault пользователя срезом не затронут. kill-switch / полный token-bucket — AGENT-5.
 
 pub mod action;
 pub mod apply;
 pub mod audit;
 pub mod classify;
+pub mod decision;
+pub mod orchestrate;
 pub mod tools;
 
 pub use action::{Action, ActionTarget};
 pub use apply::{apply_action, ApplyOutcome, AuditSink};
 pub use audit::{
-    canonical_args, idempotency_key, replay_decision, ActionEntry, ActionRow, ReplayDecision,
-    UndoCols,
+    canonical_args, idempotency_key, replay_decision, transition, ActionEntry, ActionRow,
+    ReplayDecision, UndoCols,
 };
 pub use classify::{classify, BlockReason, ClassifyCtx, ConfirmReason, RiskTier};
+pub use decision::{
+    BatchDecision, ChannelDecision, DecisionSource, ItemDecision, PolicyDefault, ProposalBatch,
+    ProposalItem,
+};
+pub use orchestrate::{
+    dispatch_action, BlastRadius, CollectingSink, DispatchOutcome, DispatchPolicy, EventSink,
+};
 pub use tools::{
     FileToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
 };

@@ -29,7 +29,7 @@ pub mod runner;
 pub mod stubs;
 pub mod tool;
 
-pub use event::AgentEvent;
+pub use event::{AgentEvent, FileStatus, ProposedFile};
 pub use job::{enqueue_agent_run, AgentRunHandler, KIND_AGENT_RUN};
 pub use memory::{AgentMemory, VaultAgentMemory};
 pub use registry::{ToolRegistry, ToolResult};
