@@ -6,6 +6,9 @@
 //! db/parser/vector/plugin/vault/redact — листья; chunker→parser; net→plugin,redact,vault; ai→net.
 //! CORE-1b — обобщённый движок планировщика (`scheduler`): tauri-free, зависит только на `db` (хуки к
 //! окружению инъектируются вызывающим); app-specific spawn/handlers остаются в desktop-крейте.
+//! CORE-1c-1 — кластер индекса/ретривала (`watcher`/`tags`/`tagger`/`indexer`/`graph`/`suggest`/`search`):
+//! замкнутый набор (зависит только на уже-ядровые модули и друг на друга). Индексатор отвязан от Tauri —
+//! watcher-петля зовёт инъектируемые [`indexer::IndexerHooks`]; desktop строит их из `AppHandle::emit`.
 
 /// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
 pub mod ai;
@@ -28,3 +31,19 @@ pub mod scheduler;
 pub mod vault;
 /// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.
 pub mod vector;
+
+// ── CORE-1c-1: кластер индекса/ретривала ─────────────────────────────────────────────────────────
+/// Граф ссылок: беклинки из SQLite (ADR-004).
+pub mod graph;
+/// Инкрементальный индексатор (files/links/tags) — §4.2. Watcher-петля tauri-free (через `IndexerHooks`).
+pub mod indexer;
+/// Поиск по метаданным (title/path/tags) + контент-поиск (RAG) — Ф0.
+pub mod search;
+/// Предложения связей (режим 1 max-sim) — §6.
+pub mod suggest;
+/// LLM-теггер заметок (suggest_tags): словарь vault + классификация (gated `eval::classify`).
+pub mod tagger;
+/// Теги vault: список с количеством для панели «Теги» сайдбара (DP-2).
+pub mod tags;
+/// Файловый watcher (debounce + ignore + нормализация по пути).
+pub mod watcher;

@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Архитектура: index/retrieval-кластер вынесен в `nexus-core` (агент CORE-1c-1)
+
+Под-срез CORE-1: `watcher, tags, tagger, indexer, graph, suggest, search` перенесены в `crates/nexus-core` (git mv). Развязка `indexer` от Tauri: `events.rs` принимает инъектируемые `IndexerHooks` (on_progress/on_vault_changed/on_file_changed, Arc-замыкания) вместо `AppHandle`; десктоп строит emit-замыкания в `commands/vault.rs::indexer_hooks` — **имена событий (`vault:index-progress`/`vault:changed`/`vault:file-changed`) и camelCase-payload (`IndexProgress`/`FileChanged`) байт-идентичны → фронт не тронут** (SAFE-3 echo-suppression + watcher-debounce целы). Ядро теперь индексирует + гибридный поиск headless. Релокация байт-идентична (M1-дедуп + оба теста переехали в core; search = 100% rename). `cargo test --workspace` 542 (239 core + 303 app). Adversarial-ревью (3 скептика→судья): SHIP. Подчищена мёртвая прямая зависимость `notify-debouncer-full` из app (теперь транзитивно через core).
+
 ### Архитектура: scheduler-движок вынесен в `nexus-core` (агент CORE-1b)
 
 Под-срез CORE-1: генерик-движок планировщика (`Registry`/`JobHandler`/`WorkerHooks`/`worker_loop`/`tick_once`/`run_due`/`enqueue`/watchdog/crash-recovery/backoff) расщеплён из app в `crates/nexus-core/src/scheduler.rs` (tauri-free, dep только `db`) — будущий agent-service сможет гонять джобы headless. APP-glue (`WorkerSpawner`+`AppHandle`, `start()`/супервизор, `emit_jobs_changed`, `GcHandler`+`KIND_GC` с `contradictions`/`relation_reasons`, `default_registry`) остался в app и реэкспортит движок (`pub use nexus_core::scheduler::*`) → call-sites без правок. Семантика **байт-идентична** (все тайминг-константы + watchdog/requeue/анти-старвейшн неизменны; adversarial-ревью 3 скептика→судья подтвердил, GC через границу крейтов гоняется). `cargo test --workspace` 542 (173 core + 369 app); egress/CI-инварианты целы.
