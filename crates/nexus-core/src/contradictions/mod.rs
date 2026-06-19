@@ -96,9 +96,10 @@ async fn all_note_paths(reader: &ReadPool) -> DbResult<Vec<String>> {
         .await
 }
 
-/// Сниппет заметки (первый чанк, нормализованные пробелы, до `SNIPPET_CHARS`). `pub(crate)` —
-/// переиспользуется `relation_reasons` (AIP-10), чтобы кэш связей жил в ТОМ ЖЕ хэш-домене.
-pub(crate) async fn note_snippet(reader: &ReadPool, path: &str) -> DbResult<String> {
+/// Сниппет заметки (первый чанк, нормализованные пробелы, до `SNIPPET_CHARS`). `pub` —
+/// переиспользуется `relation_reasons` (AIP-10), чтобы кэш связей жил в ТОМ ЖЕ хэш-домене, и
+/// desktop-командой `suggest::explain_relation` (CORE-1c-2: модули в ядре, call-site через ре-экспорт).
+pub async fn note_snippet(reader: &ReadPool, path: &str) -> DbResult<String> {
     let path = path.to_string();
     let raw: Option<String> = reader
         .query(move |c| {

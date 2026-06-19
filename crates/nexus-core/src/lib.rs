@@ -47,3 +47,20 @@ pub mod tagger;
 pub mod tags;
 /// Файловый watcher (debounce + ignore + нормализация по пути).
 pub mod watcher;
+
+// ── CORE-1c-2: кластер памяти/движка ─────────────────────────────────────────────────────────────
+// Замкнутый набор (зависит только на уже-ядровые модули и друг на друга, tauri-free).
+/// Сессии чата в vault-БД («второй мозг» переписки, решение владельца 2026-06-12).
+pub mod chat_log;
+/// «Поиск противоречий» (#vision): пары-кандидаты → судья → таблица `contradictions`.
+pub mod contradictions;
+/// Эпизодическая память (EP): саммари завершённых чат-сессий — третий слой памяти агента.
+pub mod episode;
+/// Eval-харнесс качества RAG (golden + recall@k/nDCG/MRR + baseline) — §6.6. Фикстуры — `crates/nexus-core/eval/`.
+pub mod eval;
+/// Персистентная память агента (MEM, спека `docs/specs/agent-memory.md`): слой явных фактов + инжекция.
+pub mod memory;
+/// LLM-объяснения связи пары заметок (AIP-10): кэш `relation_reasons`, переиспользует примитивы `contradictions`.
+pub mod relation_reasons;
+/// AIP-SQ: контекстные стартовые вопросы для пустого чата (по активной заметке, best-effort).
+pub mod starting_questions;
