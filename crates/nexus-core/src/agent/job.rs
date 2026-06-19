@@ -36,7 +36,7 @@ use crate::actuator::{
     AuditSink, DecisionSource, DispatchPolicy, GatedToolCtx, NoteCreateTool, NoteEditTool,
     SetFrontmatterTool, TracingEventSink,
 };
-use crate::ai::{AIClient, ChatMessage, ContextBudget, QwenTokenizer};
+use crate::ai::{injection_marker, AIClient, ChatMessage, ContextBudget, QwenTokenizer};
 use crate::db::{ReadPool, WriteActor};
 use crate::net::RunCtx;
 use crate::scheduler::{self, Job, JobHandler};
@@ -46,6 +46,7 @@ use super::memory::AgentMemory;
 use super::registry::ToolRegistry;
 use super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
 use super::runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
+use super::skill_tools::SkillContext;
 use super::stubs::{EchoTool, NoopTool};
 
 /// Kind джобы прогона агента (значение колонки `jobs.kind`).
@@ -138,6 +139,11 @@ pub struct AgentRunHandler {
     /// Источник решений по предложениям. Headless agentd передаёт [`crate::actuator::PolicyDefault`]
     /// (auto-DENY). Эффект только при `actuator_enabled` (стабы не предлагают).
     decision_source: Arc<dyn DecisionSource>,
+    /// **SKILL-2: контекст скиллов прогона.** `Some` ⇔ skills-каталог сконфигурирован: drive инжектит
+    /// tier-1 МЕНЮ каталога (user-role, фенсен) в начальный контекст И регистрирует `activate_skill`
+    /// (tier 2) + `read_skill_resource` (tier 3) в реестр. `None` → ни меню, ни инструментов скиллов
+    /// (поведение AGENT-2/MEM-1, без регрессии). Скиллы READ-ONLY — работают и при ВЫКЛ актуаторе.
+    skills: Option<SkillContext>,
     /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** Process-global `Arc<AtomicBool>` (взведён ⇒
     /// fail-safe останов). Проверяется на ТРЁХ слоях: (1) `drive` ДО старта (взведён ⇒ прогон остаётся
     /// queued, ре-кьюится); (2) пробрасывается в `run_agent_loop` (мид-ран останов → `Paused`);
@@ -159,6 +165,8 @@ impl AgentRunHandler {
     /// AGENT-3e (go-live актуатора): `canon_root`/`actuator_enabled`/`overwrite_threshold`/`blast_cap`/
     /// `decision_source` — параметры гейтнутого реестра. При `actuator_enabled=false` (дефолт конфига)
     /// они НЕ используются: прогон работает со стаб-реестром, реальный vault не затрагивается.
+    /// SKILL-2: `skills` — контекст скиллов (`Some` при сконфигурированном skills-каталоге → меню в
+    /// контекст + tier-2/3 инструменты в реестр; `None` → без скиллов, без регрессии AGENT-2/MEM-1).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         writer: WriteActor,
@@ -172,6 +180,7 @@ impl AgentRunHandler {
         blast_cap: u32,
         decision_source: Arc<dyn DecisionSource>,
         agent_paused: Arc<AtomicBool>,
+        skills: Option<SkillContext>,
     ) -> Self {
         Self {
             writer,
@@ -185,6 +194,7 @@ impl AgentRunHandler {
             blast_cap,
             decision_source,
             agent_paused,
+            skills,
         }
     }
 
@@ -260,9 +270,22 @@ impl AgentRunHandler {
             Some(mem) => mem.recall(&run.task, RECALL_BUDGET_TOKENS).await,
             None => Vec::new(),
         };
-        let mut messages = Vec::with_capacity(recalled.len() + 2);
+        // SKILL-2 (tier 1): когда skills-каталог сконфигурирован — инжектим МЕНЮ скиллов как фенсенный
+        // user-role блок (name+description, бюджетирован; НИКОГДА тела). Per-request injection_marker
+        // → автор frontmatter не угадает маркер. Это ДАННЫЕ, не инструкции (I-5): кладём в роль user,
+        // НЕ system. Пустой каталог → None → ничего не добавляем (no regression). Тела раскрывает лишь
+        // tier-2 `activate_skill`; меню только говорит модели, ЧТО существует и как активировать.
+        let skill_menu: Option<ChatMessage> = self
+            .skills
+            .as_ref()
+            .and_then(|sk| sk.catalog_block(&injection_marker()))
+            .map(ChatMessage::user);
+        let mut messages =
+            Vec::with_capacity(recalled.len() + 2 + usize::from(skill_menu.is_some()));
         messages.push(ChatMessage::system(AGENT_PREAMBLE));
         messages.extend(recalled);
+        // Меню скиллов — ПОСЛЕ recall, ПЕРЕД задачей (тот же приём, что recall-блоки): данные-фон.
+        messages.extend(skill_menu);
         messages.push(ChatMessage::user(&run.task));
         let bounds = LoopBounds::default();
         let budget = ContextBudget::from_context_window(self.context_window);
@@ -272,7 +295,7 @@ impl AgentRunHandler {
         // self.decision_source = PolicyDefault в headless). ВЫКЛ (дефолт) → стабы; реальный vault НЕ
         // затрагивается. Каждый прогон получает СВОЙ ledger (AuditSink) и СВОЙ blast-radius (внутри
         // DispatchPolicy::new) — счётчик не протекает между прогонами.
-        let registry = if self.actuator_enabled {
+        let mut registry = if self.actuator_enabled {
             let ledger = AuditSink::new(self.writer.clone(), self.reader.clone());
             actuator_registry(
                 self.canon_root.clone(),
@@ -287,6 +310,16 @@ impl AgentRunHandler {
         } else {
             stub_registry()
         };
+        // SKILL-2 (tier 2 + 3): при сконфигурированном skills-каталоге регистрируем READ-ONLY
+        // инструменты скиллов — `activate_skill` (загрузить тело) + `read_skill_resource` (читать
+        // ресурс в подкаталоге скилла). НЕЗАВИСИМО от actuator-флага: скиллы только читают, vault не
+        // пишут. Активация скилла НЕ добавляет НИКАКИХ других инструментов (capability-инертность —
+        // SKILL-3 owns the gate): registry получает ровно эти два, и больше ничего.
+        if let Some(skills) = &self.skills {
+            for tool in skills.tools() {
+                registry.insert(tool);
+            }
+        }
         let cancel = Arc::new(AtomicBool::new(false));
 
         // on_event: считаем результаты инструментов синхронно в общий счётчик (наблюдаемость/replay).
@@ -594,6 +627,7 @@ mod tests {
             16,
             Arc::new(crate::actuator::PolicyDefault),
             agent_paused,
+            None, // SKILL-2: без skills (AGENT-2-поведение, без регрессии)
         )
     }
 
@@ -616,6 +650,7 @@ mod tests {
             16,
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
+            None, // SKILL-2: без skills
         )
     }
 
@@ -663,6 +698,7 @@ mod tests {
             blast_cap,
             decision_source,
             agent_paused,
+            None, // SKILL-2: без skills (go-live-тесты актуатора не про скиллы)
         )
     }
 
@@ -1161,6 +1197,174 @@ mod tests {
         assert_eq!(seen[0].role, "system");
         assert_eq!(seen[1].role, "user");
         assert_eq!(seen[1].content, "задача");
+    }
+
+    // ── SKILL-2: проводка SkillContext (меню в контекст + tier-2/3 инструменты в реестр) ────────────
+
+    /// Провайдер, ЗАХВАТЫВАЮЩИЙ messages И tool-specs первого хода, затем Final.
+    struct CaptureMsgsAndTools {
+        seen_msgs: Mutex<Option<Vec<ChatMessage>>>,
+        seen_tools: Mutex<Option<Vec<ToolSpec>>>,
+    }
+    #[async_trait]
+    impl ToolCapableProvider for CaptureMsgsAndTools {
+        async fn stream_chat_tools(
+            &self,
+            messages: &[ChatMessage],
+            tools: &[ToolSpec],
+            _o: &mut (dyn FnMut(String) + Send),
+            _c: &Arc<AtomicBool>,
+            _ctx: RunCtx,
+        ) -> AiResult<ToolTurn> {
+            let mut m = self.seen_msgs.lock().unwrap();
+            if m.is_none() {
+                *m = Some(messages.to_vec());
+                *self.seen_tools.lock().unwrap() = Some(tools.to_vec());
+            }
+            Ok(ToolTurn::Final("ok".into()))
+        }
+        fn model_id(&self) -> &str {
+            "capture-msgs-tools"
+        }
+    }
+
+    /// Хендлер с подключённым SkillContext (actuator ВЫКЛ — скиллы read-only, работают и без него).
+    fn handler_with_skills(
+        db: &Database,
+        ai: Arc<AIClient>,
+        skills: SkillContext,
+    ) -> AgentRunHandler {
+        AgentRunHandler::new(
+            db.writer().clone(),
+            db.reader().clone(),
+            ai,
+            Some(32768),
+            None,
+            std::env::temp_dir(),
+            false,
+            64 * 1024,
+            16,
+            Arc::new(crate::actuator::PolicyDefault),
+            unpaused(),
+            Some(skills),
+        )
+    }
+
+    /// Строит SkillContext из временного skills-каталога с одним скиллом.
+    fn skills_ctx_one(name: &str, desc: &str, body: &str) -> (TempDir, SkillContext) {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let d = root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {desc}\n---\n{body}"),
+        )
+        .unwrap();
+        let cat = Arc::new(crate::skills::discover_skills(&root));
+        let ctx = SkillContext::new(cat, root);
+        (tmp, ctx)
+    }
+
+    /// **skills сконфигурированы → tier-1 МЕНЮ инжектится (user-role, фенсен, без тела) + tier-2/3
+    /// инструменты зарегистрированы.** Провайдер видит меню в начальном контексте и оба инструмента
+    /// в tool-specs. Меню — роль user (I-5), и НЕ содержит тела скилла.
+    #[tokio::test]
+    async fn skills_configured_injects_menu_and_registers_tools() {
+        let (_d, db) = open().await;
+        let (_sktmp, skills) = skills_ctx_one("pdf-tools", "Работа с PDF", "ТЕЛО-СЕКРЕТ-tier2");
+        let provider = Arc::new(CaptureMsgsAndTools {
+            seen_msgs: Mutex::new(None),
+            seen_tools: Mutex::new(None),
+        });
+        let ai = ai_with_tools(Some(provider.clone()));
+        let h = handler_with_skills(&db, ai, skills);
+
+        let run_id = run_store::create_run(db.writer(), "сделай PDF", None, Some("auto"))
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        // Меню в контексте: [system, skill-menu(user), task(user)].
+        let msgs = provider.seen_msgs.lock().unwrap().clone().unwrap();
+        assert_eq!(msgs.len(), 3, "system + меню + задача: {msgs:?}");
+        assert_eq!(msgs[0].role, "system");
+        assert_eq!(
+            msgs[1].role, "user",
+            "меню скиллов — ДАННЫЕ роли user (I-5), не system"
+        );
+        assert!(
+            msgs[1].content.contains("pdf-tools"),
+            "меню несёт имя скилла"
+        );
+        assert!(
+            msgs[1].content.contains("Работа с PDF"),
+            "меню несёт описание"
+        );
+        assert!(
+            !msgs[1].content.contains("ТЕЛО-СЕКРЕТ-tier2"),
+            "tier-1 меню НЕ содержит тела: {}",
+            msgs[1].content
+        );
+        assert_eq!(msgs[2].content, "сделай PDF", "задача последней");
+        // НИ ОДНО сообщение роли system не несёт контента скилла (I-5).
+        for m in &msgs {
+            if m.role == "system" {
+                assert!(
+                    !m.content.contains("pdf-tools"),
+                    "скилл НЕ в system: {}",
+                    m.content
+                );
+            }
+        }
+
+        // Инструменты: activate_skill + read_skill_resource зарегистрированы (плюс стабы echo/noop).
+        let tools = provider.seen_tools.lock().unwrap().clone().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"activate_skill"),
+            "tier-2 инструмент: {names:?}"
+        );
+        assert!(
+            names.contains(&"read_skill_resource"),
+            "tier-3 инструмент: {names:?}"
+        );
+        // enum activate_skill отражает текущий каталог.
+        let act = tools.iter().find(|t| t.name == "activate_skill").unwrap();
+        let enum_names: Vec<&str> = act.parameters["properties"]["skill"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(enum_names, vec!["pdf-tools"], "enum = живой каталог");
+    }
+
+    /// **skills НЕ сконфигурированы → НЕТ меню, НЕТ инструментов скиллов (no-regression).** Контекст =
+    /// [system, task]; tool-specs не содержат activate_skill/read_skill_resource (только стабы).
+    #[tokio::test]
+    async fn skills_absent_no_menu_no_tools_no_regression() {
+        let (_d, db) = open().await;
+        let provider = Arc::new(CaptureMsgsAndTools {
+            seen_msgs: Mutex::new(None),
+            seen_tools: Mutex::new(None),
+        });
+        let ai = ai_with_tools(Some(provider.clone()));
+        let h = handler(&db, ai); // skills=None
+
+        let run_id = run_store::create_run(db.writer(), "задача", None, None)
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        let msgs = provider.seen_msgs.lock().unwrap().clone().unwrap();
+        assert_eq!(msgs.len(), 2, "без skills — только system + task: {msgs:?}");
+        let tools = provider.seen_tools.lock().unwrap().clone().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            !names.contains(&"activate_skill") && !names.contains(&"read_skill_resource"),
+            "без skills инструменты скиллов НЕ зарегистрированы: {names:?}"
+        );
     }
 
     /// enqueue_agent_run: создаёт queued-прогон И джобу KIND_AGENT_RUN с payload=run_id.

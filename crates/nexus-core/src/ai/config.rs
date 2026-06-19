@@ -48,6 +48,16 @@ pub struct AiConfig {
     /// `agent_actuator_enabled=true` имеет эффект.
     #[serde(default)]
     pub agent_blast_radius_cap: Option<u32>,
+
+    /// **SKILL-2: каталог скиллов (SKILL.md) для прогона агента.** Путь к каталогу со скиллами
+    /// открытого стандарта SKILL.md (`<dir>/<skill>/SKILL.md`). `None` (ДЕФОЛТ) → агент работает БЕЗ
+    /// скиллов (нет меню в контексте, нет `activate_skill`/`read_skill_resource` — поведение без
+    /// регрессии). Когда задан → [`crate::agent::AgentRunHandler`] инжектит фенсенное МЕНЮ скиллов
+    /// (tier 1) и регистрирует READ-ONLY инструменты раскрытия (tier 2/3). Скиллы лишь читаются;
+    /// активация даёт ТОЛЬКО текст-инструкции (capability-гейт — SKILL-3). Относительный путь
+    /// резолвится вызывающим относительно vault (рекомендация: `<vault>/.nexus/skills`).
+    #[serde(default)]
+    pub agent_skills_dir: Option<String>,
 }
 
 impl AiConfig {
@@ -193,6 +203,22 @@ mod tests {
         assert!(on.ai.agent_actuator_enabled);
         assert_eq!(on.ai.agent_overwrite_threshold, Some(4096));
         assert_eq!(on.ai.agent_blast_radius_cap, Some(4));
+    }
+
+    /// SKILL-2: `agent_skills_dir` по умолчанию None (агент без скиллов, без регрессии); парсится явно.
+    #[test]
+    fn parses_agent_skills_dir() {
+        assert!(LocalConfig::parse(r#"{"ai":{}}"#)
+            .unwrap()
+            .ai
+            .agent_skills_dir
+            .is_none());
+        let on =
+            LocalConfig::parse(r#"{"ai":{"agent_skills_dir":"/vault/.nexus/skills"}}"#).unwrap();
+        assert_eq!(
+            on.ai.agent_skills_dir.as_deref(),
+            Some("/vault/.nexus/skills")
+        );
     }
 
     #[test]

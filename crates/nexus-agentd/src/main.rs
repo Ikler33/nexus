@@ -431,6 +431,11 @@ async fn run() -> Result<(), String> {
     // (control-plane/UI — UI-1; SIGUSR1-тоггл ниже как опциональный рантайм-вход).
     let agent_paused = Arc::new(AtomicBool::new(false));
     apply_persisted_agent_pause(&agent_paused);
+    // SKILL-2: контекст скиллов прогона. `ai.agent_skills_dir` задан → discovery (path-scoped) +
+    // SkillContext (меню tier-1 + READ-ONLY инструменты tier-2/3). Относительный путь резолвится от
+    // vault-корня (рекомендация `<vault>/.nexus/skills`). Не задан → None (агент без скиллов, без
+    // регрессии). Скиллы — недоверенный внешний контент: они фенсятся в самом хендлере (I-5).
+    let agent_skills = build_skill_context(local_cfg.as_ref(), &root);
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
         Arc::new(nexus_core::agent::AgentRunHandler::new(
@@ -445,6 +450,7 @@ async fn run() -> Result<(), String> {
             blast_cap,
             decision_source,
             agent_paused.clone(),
+            agent_skills,
         )),
     );
     let registry = Arc::new(registry);
@@ -635,6 +641,49 @@ async fn load_local_config(root: &Path) -> Option<LocalConfig> {
     LocalConfig::parse(&raw)
         .map_err(|e| tracing::warn!(error = %e, "local.json: разбор не удался — AI отключён"))
         .ok()
+}
+
+/// SKILL-2: строит [`SkillContext`] прогона из `ai.agent_skills_dir`. Не задан → `None` (агент без
+/// скиллов, без регрессии). Задан → канонизирует каталог (граница path-конфайна tier-3) и гонит
+/// `discover_skills` (path-scoped, fail-closed; битые скиллы видимы в `errors`). Относительный путь
+/// резолвится ОТ vault-корня. Каталог не существует/не каталог / нет валидных скиллов → `None`
+/// (хендлер тогда работает как без скиллов). Скиллы — недоверенный контент: фенсятся в хендлере (I-5).
+fn build_skill_context(
+    cfg: Option<&LocalConfig>,
+    root: &Path,
+) -> Option<nexus_core::agent::SkillContext> {
+    let dir = cfg?.ai.agent_skills_dir.as_deref()?;
+    let p = Path::new(dir);
+    // Относительный путь — от vault-корня; абсолютный — как есть.
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
+    // Канонизируем КАТАЛОГ — это база path-конфайна ресурсов (tier 3) и корень discovery.
+    let canon = match abs.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(skills_dir = %abs.display(), error = %e, "skills: каталог недоступен — скиллы выключены");
+            return None;
+        }
+    };
+    let catalog = nexus_core::skills::discover_skills(&canon);
+    if !catalog.errors().is_empty() {
+        tracing::warn!(
+            count = catalog.errors().len(),
+            "skills: часть скиллов битые (см. errors) — пропущены"
+        );
+    }
+    if catalog.is_empty() {
+        tracing::info!(skills_dir = %canon.display(), "skills: каталог задан, но валидных скиллов нет — скиллы выключены");
+        return None;
+    }
+    tracing::info!(skills_dir = %canon.display(), count = catalog.len(), "skills: каталог загружен (tier-1 меню + activate_skill/read_skill_resource)");
+    Some(nexus_core::agent::SkillContext::new(
+        std::sync::Arc::new(catalog),
+        canon,
+    ))
 }
 
 /// RAG + ПАМЯТЬ агента headless (AGENT-MEM-1): эмбеддер + note-RAG индекс + ТРИ индекса памяти
@@ -944,6 +993,8 @@ async fn drive_actuator_gate_run(
         Arc::new(nexus_core::actuator::PolicyDefault),
         // KILL-SWITCH (AGENT-5): smoke/CI-путь — kill-switch НЕ взведён (проверяем go-live apply).
         Arc::new(AtomicBool::new(false)),
+        // SKILL-2: actuator-gate smoke не про скиллы → без skills.
+        None,
     );
 
     let run_id = enqueue_agent_run(
