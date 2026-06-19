@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Архитектура: scheduler-движок вынесен в `nexus-core` (агент CORE-1b)
+
+Под-срез CORE-1: генерик-движок планировщика (`Registry`/`JobHandler`/`WorkerHooks`/`worker_loop`/`tick_once`/`run_due`/`enqueue`/watchdog/crash-recovery/backoff) расщеплён из app в `crates/nexus-core/src/scheduler.rs` (tauri-free, dep только `db`) — будущий agent-service сможет гонять джобы headless. APP-glue (`WorkerSpawner`+`AppHandle`, `start()`/супервизор, `emit_jobs_changed`, `GcHandler`+`KIND_GC` с `contradictions`/`relation_reasons`, `default_registry`) остался в app и реэкспортит движок (`pub use nexus_core::scheduler::*`) → call-sites без правок. Семантика **байт-идентична** (все тайминг-константы + watchdog/requeue/анти-старвейшн неизменны; adversarial-ревью 3 скептика→судья подтвердил, GC через границу крейтов гоняется). `cargo test --workspace` 542 (173 core + 369 app); egress/CI-инварианты целы.
+
 ### Архитектура: выделен крейт `nexus-core` (агент CORE-1, ADR-009 D1)
 
 Фундамент под headless agent-service: agent-нужное ядро вынесено из Tauri-приложения в библиотечный крейт `crates/nexus-core`, переиспользуемый и десктопом, и будущим `nexus-agentd`. Слайс 1 — замкнутый набор из 9 модулей (`redact, db, parser, vector, plugin, vault, chunker, net, ai` — tauri-свободные, зависимости внутри набора), перенесён через `git mv` (история цела).
