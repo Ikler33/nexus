@@ -1,0 +1,6 @@
+# Vendored, hash-pinned skill bundles (SKILL-3): their SHA-256 is pinned in
+# `_skills/vendor/<bundle>/vendor.lock` and verified byte-exact at load time.
+# Disable ALL EOL/text conversion so a checkout (notably Windows core.autocrlf)
+# never rewrites LF→CRLF and breaks the integrity check. Files stay byte-identical
+# on every platform == the pinned hash. Keep them diffable (use -text, not binary).
+_skills/vendor/** -text
