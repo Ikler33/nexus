@@ -205,32 +205,20 @@ pub(in crate::actuator) async fn apply_action(
                         reject_symlinked_components(&canon_root, &rel_path)?;
                         std::fs::create_dir_all(parent)?;
                     }
-                }
-            }
-            let abs = crate::vault::resolve_vault_path_for_write(&canon_root, &rel_path)?;
-            // symlink_metadata НЕ следует по симлинку — детектит САМ leaf-симлинк (в т.ч. на
-            // несуществующую/внешнюю цель). Нет файла (create) → Err NotFound → не симлинк → ок.
-            if let Ok(meta) = std::fs::symlink_metadata(&abs) {
-                if meta.file_type().is_symlink() {
-                    return Err(crate::vault::VaultError::PathEscape);
-                }
-            }
-            // Fix 3 (defense-in-depth, OVERWRITE): hardlink-reject. symlink_metadata().is_symlink()
-            // ЛОЖЕН для ХАРДЛИНКА на внешний inode (хардлинк — не симлинк). Чтение current_content по
-            // такому листу утекло бы внешним содержимым в снапшот (info-leak), и хотя rename atomic_write
-            // НЕ пишет СКВОЗЬ линк, fail-closed корректнее. Для существующего файла (overwrite) сверяем
-            // число жёстких ссылок: nlink>1 ⇒ файл разделяет inode ещё с кем-то (вне vault) ⇒ PathEscape.
-            // metadata (СЛЕДУЕТ по симлинку) тут безопасна — leaf-симлинк уже отвергнут выше.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if let Ok(meta) = std::fs::metadata(&abs) {
-                    if meta.is_file() && meta.nlink() > 1 {
-                        return Err(crate::vault::VaultError::PathEscape);
+                    // Для create leaf'а ещё нет: достаточно рубежа 1 (resolve) + проверки leaf-симлинка
+                    // (на случай, если кто-то подложил симлинк-пустышку с тем же именем).
+                    let abs = crate::vault::resolve_vault_path_for_write(&canon_root, &rel_path)?;
+                    if let Ok(meta) = std::fs::symlink_metadata(&abs) {
+                        if meta.file_type().is_symlink() {
+                            return Err(crate::vault::VaultError::PathEscape);
+                        }
                     }
+                    return Ok::<_, crate::vault::VaultError>(abs);
                 }
             }
-            Ok::<_, crate::vault::VaultError>(abs)
+            // OVERWRITE (edit/frontmatter): полный конфайнмент (resolve + leaf-симлинк + хардлинк) —
+            // ЕДИНЫЙ helper, который переиспользует и AGENT-4 restore-снапшота (тот же рубеж на записи).
+            confine_for_overwrite(&canon_root, &rel_path)
         })
         .await;
         match resolved {
@@ -460,6 +448,47 @@ pub(in crate::actuator) async fn apply_action(
             ApplyOutcome::Failed(e)
         }
     }
+}
+
+/// КАНОНИЗ-РУБЕЖ для записи ПО СУЩЕСТВУЮЩЕМУ файлу (overwrite). Единый источник конфайнмента, который
+/// переиспользует и apply (overwrite-путь), и AGENT-4 undo (restore-снапшота — это ТОЖЕ запись в vault).
+/// СИНХРОННЫЙ (вызывать из `spawn_blocking`). Порядок рубежей строгий:
+///   1. `resolve_vault_path_for_write` — канонизирует РОДИТЕЛЯ и сверяет `starts_with(canon_root)`:
+///      ловит симлинк-КАТАЛОГ наружу (классификатор лексически слеп к нему).
+///   2. leaf-СИМЛИНК reject (`symlink_metadata` без следования): `vault/evil.md -> /outside/secret.md`
+///      имеет родителя ВНУТРИ, но сам — симлинк наружу; без этой проверки запись/чтение утекли бы наружу.
+///   3. (unix) ХАРДЛИНК reject (`nlink>1`): хардлинк на внешний inode симлинком НЕ детектится; запись
+///      по нему меняла бы внешний файл, чтение утекло бы внешним содержимым → `PathEscape`.
+///
+/// Любой Err ⇒ caller НЕ пишет/НЕ читает по пути. Это keystone-рубеж: restore НИКОГДА не обходит его.
+///
+/// NB: применимо к ПЕРЕЗАПИСИ существующего leaf'а (overwrite/restore-снапшота). Для create (leaf'а ещё
+/// нет) симлинк-leaf отсутствует, а симлинк-КОМПОНЕНТ родителя ловит [`reject_symlinked_components`] ДО
+/// create_dir_all — поэтому create-путь в apply делает рубеж 1 отдельно (после возможного create_dir_all).
+pub(in crate::actuator) fn confine_for_overwrite(
+    canon_root: &Path,
+    rel: &Path,
+) -> Result<PathBuf, crate::vault::VaultError> {
+    // Рубеж 1: канонизируем родителя + starts_with(canon_root) (симлинк-каталог наружу → PathEscape).
+    let abs = crate::vault::resolve_vault_path_for_write(canon_root, rel)?;
+    // Рубеж 2: leaf-симлинк (symlink_metadata НЕ следует). Нет файла → не симлинк → ок (но для restore
+    // overwrite файл обычно есть). Симлинк наружу/внутрь — отвергаем fail-closed (легитимных нет).
+    if let Ok(meta) = std::fs::symlink_metadata(&abs) {
+        if meta.file_type().is_symlink() {
+            return Err(crate::vault::VaultError::PathEscape);
+        }
+    }
+    // Рубеж 3 (unix): хардлинк на внешний inode (nlink>1) — defense-in-depth против записи/info-leak.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(&abs) {
+            if meta.is_file() && meta.nlink() > 1 {
+                return Err(crate::vault::VaultError::PathEscape);
+            }
+        }
+    }
+    Ok(abs)
 }
 
 /// Fix 1 — симлинк-безопасность ПЕРЕД create_dir_all: проходит компоненты РОДИТЕЛЯ цели от `canon_root`

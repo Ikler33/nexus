@@ -47,6 +47,11 @@ pub const STATE_REJECTED: &str = "rejected";
 pub const STATE_EXECUTING: &str = "executing";
 pub const STATE_EXECUTED: &str = "executed";
 pub const STATE_FAILED: &str = "failed";
+/// Успешное действие ОТКАЧЕНО (AGENT-4): снапшот восстановлен / created-файл перенесён в корзину. Ставится
+/// [`mark_undone`] переходом `executed → undone`; [`actions_for_undo`] таких строк уже НЕ возвращает →
+/// повторный `undo_run` их пропускает (идемпотентность отката). НЕ трогает `outcome` (он зафиксирован при
+/// executed) — undo меняет только `state` (запись остаётся аудируемой).
+pub const STATE_UNDONE: &str = "undone";
 
 /// Дискриминанты тира риска (значения `agent_actions.risk_tier`) — зеркало [`super::classify::RiskTier::as_str`].
 pub const TIER_AUTO: &str = "auto";
@@ -265,6 +270,56 @@ pub async fn lookup_id(reader: &ReadPool, key: &str) -> Option<i64> {
         .await
         .ok()
         .flatten()
+}
+
+/// Действия прогона, ПОДЛЕЖАЩИЕ откату (AGENT-4): строки в state `executed` с НЕ-NULL `undo_kind`,
+/// упорядоченные NEWEST-FIRST (`id DESC` = обратный порядок применения). `undo_run` идёт по ним так,
+/// чтобы откатить сначала самое позднее действие — зависимые правки разматываются корректно (две правки
+/// одной заметки v0→v1→v2 откатываются v2-снапшот(=v1) затем v1-снапшот(=v0) → итог v0).
+///
+/// Фильтр `state='executed'` — ЕДИНСТВЕННЫЙ источник идемпотентности отбора: уже откаченные строки
+/// (`state='undone'`) сюда НЕ попадают, поэтому повторный `undo_run` видит пустой набор (no-op). Failed/
+/// proposed/rejected действия НЕ откатываются (диск ими не менялся / отката нет). `undo_kind IS NOT NULL`
+/// отсекает теоретические executed-строки без хэндла (их откатить нечем) — fail-closed.
+pub async fn actions_for_undo(reader: &ReadPool, run_id: i64) -> DbResult<Vec<ActionRow>> {
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT id,run_id,idempotency_key,tool_name,target_rel,risk_tier,state,content_hash,\
+                 undo_kind,undo_ref,outcome,diff_summary,created_at,updated_at \
+                 FROM agent_actions \
+                 WHERE run_id=?1 AND state='executed' AND undo_kind IS NOT NULL \
+                 ORDER BY id DESC",
+            )?;
+            let rows = stmt
+                .query_map([run_id], row_to_action)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+}
+
+/// Помечает успешное действие ОТКАЧЕННЫМ (AGENT-4): переход `executed → undone`. ИДЕМПОТЕНТЕН и
+/// fail-closed через фенс `WHERE idempotency_key=? AND state='executed'`:
+/// - строка в `executed` → переводится в `undone`, возвращает `true` (этот вызов её откатил);
+/// - строка уже `undone` (повторный undo / гонка двух откатчиков) → 0 строк обновлено, `false` (no-op);
+/// - строка в любом ином state (executing/failed/audited/…) → не трогаем, `false`.
+///
+/// `outcome` НЕ трогаем — он зафиксирован при executed (подотчётность исхода apply сохраняется); undo
+/// меняет ТОЛЬКО `state` + `updated_at`. Это НЕ [`finish`] (тот фенсится на `outcome IS NULL` и здесь
+/// не сработал бы — у executed-строки outcome уже есть): отдельный санкционированный переход по state.
+pub async fn mark_undone(writer: &WriteActor, key: &str) -> DbResult<bool> {
+    let key = key.to_string();
+    writer
+        .transaction(move |tx| {
+            let n = tx.execute(
+                "UPDATE agent_actions SET state=?2, updated_at=?3 \
+                 WHERE idempotency_key=?1 AND state=?4",
+                params![key, STATE_UNDONE, now_secs(), STATE_EXECUTED],
+            )?;
+            Ok(n > 0)
+        })
+        .await
 }
 
 /// Replay-решение по ключу — ВЕТВЛЕНИЕ ПО ПРИСУТСТВИЮ `outcome`, НЕ по присутствию ключа (см. модульный
@@ -565,6 +620,103 @@ mod tests {
             canonical_args(Some("x"), None),
             "Some(\"\") != None для payload"
         );
+    }
+
+    /// Готовит executed-строку с undo-хэндлом (как оставил бы apply): record_before + finish(executed,
+    /// undo). Возвращает её ключ — для последующих actions_for_undo / mark_undone.
+    async fn executed_with_undo(db: &Database, run_id: i64, key: &str, undo: UndoCols) -> String {
+        record_before(db.writer(), entry(run_id, key))
+            .await
+            .unwrap();
+        finish(db.writer(), key, STATE_EXECUTED, "ok", Some(undo))
+            .await
+            .unwrap();
+        key.to_string()
+    }
+
+    /// actions_for_undo: только executed-строки прогона с undo_kind, NEWEST-FIRST (id DESC). failed /
+    /// другой run_id / executed-без-undo НЕ попадают.
+    #[tokio::test]
+    async fn actions_for_undo_filters_and_orders() {
+        let (_d, db) = open().await;
+        let snap = |ts: &str| UndoCols {
+            kind: "snapshot".to_string(),
+            reference: ts.to_string(),
+        };
+        // Прогон 1: два откатываемых действия (a — раньше, b — позже).
+        executed_with_undo(&db, 1, "a", snap("100")).await;
+        executed_with_undo(&db, 1, "b", snap("200")).await;
+        // Прогон 1: failed (диск не менялся) — НЕ откатываем.
+        record_before(db.writer(), entry(1, "failed"))
+            .await
+            .unwrap();
+        finish(db.writer(), "failed", STATE_FAILED, "упало", None)
+            .await
+            .unwrap();
+        // Прогон 1: executed БЕЗ undo_kind — откатить нечем, отсекаем.
+        record_before(db.writer(), entry(1, "noundo"))
+            .await
+            .unwrap();
+        finish(db.writer(), "noundo", STATE_EXECUTED, "ok", None)
+            .await
+            .unwrap();
+        // Прогон 2: чужой — не должен попасть в выборку прогона 1.
+        executed_with_undo(&db, 2, "other", snap("999")).await;
+
+        let rows = actions_for_undo(db.reader(), 1).await.unwrap();
+        let keys: Vec<&str> = rows.iter().map(|r| r.idempotency_key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["b", "a"],
+            "только executed+undo прогона 1, NEWEST-FIRST (b позже a)"
+        );
+    }
+
+    /// mark_undone: executed → undone идемпотентно. Первый вызов true (откатил), второй false (no-op);
+    /// outcome НЕ тронут (подотчётность исхода apply сохранена). actions_for_undo больше не вернёт строку.
+    #[tokio::test]
+    async fn mark_undone_idempotent_keeps_outcome() {
+        let (_d, db) = open().await;
+        let undo = UndoCols {
+            kind: "trash".to_string(),
+            reference: "Notes/N.md".to_string(),
+        };
+        executed_with_undo(&db, 1, "k", undo).await;
+
+        assert!(
+            mark_undone(db.writer(), "k").await.unwrap(),
+            "executed → undone: первый вызов откатил"
+        );
+        let row = lookup(db.reader(), "k").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_UNDONE);
+        assert_eq!(row.outcome.as_deref(), Some("ok"), "outcome НЕ тронут undo");
+
+        // Второй вызов — no-op (строка уже undone): идемпотентность на уровне ledger.
+        assert!(
+            !mark_undone(db.writer(), "k").await.unwrap(),
+            "повторный mark_undone — no-op"
+        );
+        // И из набора к откату строка ушла.
+        assert!(
+            actions_for_undo(db.reader(), 1).await.unwrap().is_empty(),
+            "undone-строка больше не подлежит откату"
+        );
+    }
+
+    /// mark_undone fail-closed: НЕ executed-строку (failed) откатить нельзя — no-op, state не тронут.
+    #[tokio::test]
+    async fn mark_undone_fail_closed_on_non_executed() {
+        let (_d, db) = open().await;
+        record_before(db.writer(), entry(1, "f")).await.unwrap();
+        finish(db.writer(), "f", STATE_FAILED, "упало", None)
+            .await
+            .unwrap();
+        assert!(
+            !mark_undone(db.writer(), "f").await.unwrap(),
+            "failed нельзя пометить undone"
+        );
+        let row = lookup(db.reader(), "f").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_FAILED, "state failed не тронут");
     }
 
     /// Индекс по run_id присутствует (выборка действий прогона — горячий путь).
