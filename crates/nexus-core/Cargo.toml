@@ -19,11 +19,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { workspace = true }
-# Ядро напрямую использует tokio::time (sleep/timeout в ai/chat) и tokio::net (lookup_host в
-# net/resolve) — фичи time/net добавляются к базовым из [workspace.dependencies]
-# (rt-multi-thread/sync/macros). В app-сборке они и так включались транзитивно (reqwest), но
-# standalone-крейт обязан объявить то, что использует напрямую.
-tokio = { workspace = true, features = ["time", "net"] }
+# Ядро напрямую использует tokio::time (sleep/timeout в ai/chat), tokio::net (lookup_host в
+# net/resolve) и tokio::fs (read/metadata в indexer — CORE-1c-1) — фичи добавляются к базовым из
+# [workspace.dependencies] (rt-multi-thread/sync/macros). В app-сборке они и так включались
+# транзитивно (reqwest/tauri), но standalone-крейт обязан объявить то, что использует напрямую.
+tokio = { workspace = true, features = ["time", "net", "fs"] }
 thiserror = { workspace = true }
 pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }
@@ -31,6 +31,10 @@ reqwest = { workspace = true }
 async-trait = { workspace = true }
 usearch = { workspace = true }
 getrandom = { workspace = true }
+# CORE-1c-1: watcher-петля индексатора (debounce fs-событий vault).
+notify-debouncer-full = { workspace = true }
+# CORE-1c-1: параллельный эмбеддинг чанков в индексаторе (futures::stream::buffered).
+futures = { workspace = true }
 # Атомарная запись заметок (vault::atomic_write): tmp-в-той-же-папке → fsync → rename. Рантайм-дека
 # (не только dev — как и в app Cargo.toml), плюс TempDir в тестах модулей.
 tempfile = { workspace = true }

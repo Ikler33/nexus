@@ -26,7 +26,7 @@ const BASENAME_EXPR: &str = "replace(path, rtrim(path, replace(path, '/', '')), 
 /// 3) мульти-сегментный шорткат `[[dir/Note]]` (target с `/`) — суффикс не индексируется, скан;
 ///    редкий путь (только если в цели есть `/`), поэтому не делает скан O(N²) на обычном vault;
 /// 4) алиас.
-pub(crate) fn resolve_target(tx: &Connection, target_raw: &str) -> rusqlite::Result<Option<i64>> {
+pub fn resolve_target(tx: &Connection, target_raw: &str) -> rusqlite::Result<Option<i64>> {
     // 1) Точный путь / путь+`.md` (индекс).
     let by_path = tx
         .query_row(

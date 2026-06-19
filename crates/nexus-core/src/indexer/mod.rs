@@ -32,10 +32,12 @@ mod rag;
 #[cfg(test)]
 mod tests;
 
-pub use events::spawn;
+pub use events::{spawn, IndexerHooks};
 /// Ре-экспорт для команды `resolve_note` (кросс-план #22): клик по `[[ссылке]]` резолвится той же
 /// функцией, что и индексация links — одна семантика (путь/±.md/basename, затем алиас).
-pub(crate) use links::resolve_target;
+/// `pub` (не `pub(crate)`): после CORE-1c-1 индексатор в nexus-core, а команда — в desktop-крейте
+/// (зовёт через ре-экспорт `crate::indexer::resolve_target`).
+pub use links::resolve_target;
 
 use fs::{collect_md, mtime_secs, now_secs};
 use links::{path_forms, resolve_all_dangling};

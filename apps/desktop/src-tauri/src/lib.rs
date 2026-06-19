@@ -9,7 +9,14 @@
 // Ре-экспортим под теми же именами, чтобы существующие `crate::net::…`, `crate::db::…`,
 // `crate::ai::…` и т.д. по всему приложению (commands, error.rs, indexer, …) резолвились без правки
 // call-site (low-churn-стратегия среза). Будущий headless agent-service использует `nexus_core::*`.
-pub use nexus_core::{ai, chunker, db, net, parser, plugin, redact, vault, vector};
+// CORE-1c-1: кластер индекса/ретривала (watcher/tags/tagger/indexer/graph/suggest/search) тоже
+// переехал в ядро — ре-экспортим, чтобы `crate::indexer::…`/`crate::search::…`/… по приложению
+// (commands, home, board, …) резолвились без правки. Индексатор отвязан от Tauri (IndexerHooks);
+// desktop строит эмит-колбэки в `commands::vault::open_vault` и зовёт `indexer::events::spawn`.
+pub use nexus_core::{
+    ai, chunker, db, graph, indexer, net, parser, plugin, redact, search, suggest, tagger, tags,
+    vault, vector, watcher,
+};
 
 /// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
 pub mod board;
@@ -33,12 +40,8 @@ pub mod eval;
 pub mod git;
 /// «Прогресс целей» (#35): кросс-файловый список заметок-целей (#goal) — vision-волна 2.
 pub mod goals;
-/// Граф ссылок: беклинки из SQLite (ADR-004).
-pub mod graph;
 /// HOME-дашборд (бэкенд): агрегация виджетов (stats/recent/goals; LLM-виджеты — H2+).
 pub mod home;
-/// Инкрементальный индексатор (files/links/tags) — §4.2.
-pub mod indexer;
 /// Персистентная память агента (MEM, спека `docs/specs/agent-memory.md`): слой явных фактов + инжекция.
 pub mod memory;
 /// Лента новостей (спека `docs/specs/news-feed.md`): NF-1 — парсеры фидов + keyword-фильтр.
@@ -49,20 +52,10 @@ pub mod properties;
 pub mod relation_reasons;
 /// Планировщик фоновых задач (ADR-007): очередь `jobs` (слой данных — slice 1).
 pub mod scheduler;
-/// Поиск по метаданным (title/path/tags) — Ф0.
-pub mod search;
 /// AIP-SQ: контекстные стартовые вопросы для пустого чата (по активной заметке, best-effort).
 pub mod starting_questions;
 /// Глобальное состояние (managed state).
 pub mod state;
-/// Предложения связей (режим 1 max-sim) — §6.
-pub mod suggest;
-/// Теги vault: список с количеством для панели «Теги» сайдбара (DP-2).
-pub mod tagger;
-
-pub mod tags;
-/// Файловый watcher (debounce + ignore + нормализация по пути).
-pub mod watcher;
 pub mod websearch;
 
 /// Live-smoke LLM-этапов на прод-серверах (тесты игнорируются по умолчанию, см. модуль).

@@ -1,33 +1,39 @@
 //! Watcher-петля индексатора: спавн фоновой задачи (начальный скан → реакция на события vault) и
-//! Tauri-эвент «индекс обновлён» для живого пересчёта зависимых вьюх (ADR-007 S8).
+//! инъектируемые хуки «индекс обновлён» для живого пересчёта зависимых вьюх (ADR-007 S8).
+//!
+//! CORE-1c-1: модуль отвязан от Tauri. Раньше [`spawn`] принимал Tauri `AppHandle` и сам строил
+//! Tauri-эвенты (`vault:changed` / `vault:file-changed` / `vault:index-progress`). Теперь он
+//! принимает [`IndexerHooks`] — набор колбэков к окружению вызывающего; desktop-крейт строит их из
+//! `AppHandle::emit(...)` на месте проводки (`commands::vault::open_vault`). Зеркалит паттерн
+//! `scheduler::WorkerHooks` (CORE-1b): генерик-петля tauri-free и тестируется без `AppHandle`.
 
-use serde::Serialize;
+use std::sync::Arc;
 
 use crate::watcher::{VaultEvent, VaultWatcher};
-
-/// Payload события `vault:index-progress` (camelCase для фронта).
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IndexProgress {
-    done: usize,
-    total: usize,
-}
-
-/// Payload события `vault:file-changed` (SAFE-3): относительный путь + blake3-хеш текущего диска.
-/// Фронт сверяет хеш с `Buffer.baseHash`: совпал → эхо своего сейва (игнор); расходится → тихий
-/// reload (чистый буфер) либо баннер guard'а (грязный буфер). camelCase для фронта.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FileChanged {
-    path: String,
-    hash: String,
-}
 
 use super::fs::rel_of;
 use super::Indexer;
 
+/// Хуки watcher-петли индексатора к окружению вызывающего (вынесены, чтобы петля была tauri-free и
+/// тестировалась без `AppHandle`). Desktop строит их из `AppHandle::emit(...)`:
+/// - `on_progress` → событие `vault:index-progress` (статусбар «Индексация N/M»);
+/// - `on_vault_changed` → событие `vault:changed` (живой пересчёт зависимых вьюх, ADR-007 S8);
+/// - `on_file_changed(rel, hash)` → событие `vault:file-changed` (SAFE-3: судьба открытого буфера).
+///
+/// `Arc` — колбэки шарятся между прогресс-хуком индексатора и петлёй (оба `'static`, Send+Sync).
+#[derive(Clone)]
+pub struct IndexerHooks {
+    /// Прогресс полного скана (done, total) — для статусбара. Best-effort у вызывающего.
+    pub on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    /// «Индекс vault обновлён» — UI перечитывает зависимые от индекса вьюхи. Best-effort.
+    pub on_vault_changed: Arc<dyn Fn() + Send + Sync>,
+    /// «Конкретный файл на диске изменился» (rel-путь + blake3-хеш диска) — SAFE-3. Best-effort.
+    pub on_file_changed: Arc<dyn Fn(String, String) + Send + Sync>,
+}
+
 /// Запускает watcher + фоновый цикл индексации для готового `Indexer` (вызывается из `open_vault`,
-/// который решает, с RAG или без).
+/// который решает, с RAG или без). `hooks` инъектирует эмит-колбэки окружения (desktop строит их из
+/// `AppHandle`); ядро/headless могут передать no-op или собственные стоки.
 ///
 /// **Владение watcher'ом — у ВЫЗЫВАЮЩЕГО** (фикс «вечных воркеров», аудит 2026-06-10): возвращаемые
 /// `VaultWatcher` + sender живут в `VaultContext`; замена контекста (повторный `open_vault`)
@@ -41,15 +47,12 @@ use super::Indexer;
 #[must_use = "watcher обязан жить в VaultContext::lifecycle — иначе петля индексации умрёт сразу"]
 pub fn spawn(
     indexer: Indexer,
-    app: tauri::AppHandle,
+    hooks: IndexerHooks,
 ) -> Option<(VaultWatcher, tokio::sync::mpsc::UnboundedSender<VaultEvent>)> {
     let root = indexer.root.clone();
-    // Прогресс полного скана → событие фронту (статусбар «Индексация N/M», макет app.jsx).
-    let progress_app = app.clone();
-    let indexer = indexer.with_progress(move |done, total| {
-        use tauri::Emitter;
-        let _ = progress_app.emit("vault:index-progress", IndexProgress { done, total });
-    });
+    // Прогресс полного скана → колбэк окружению (статусбар «Индексация N/M», макет app.jsx).
+    let on_progress = hooks.on_progress.clone();
+    let indexer = indexer.with_progress(move |done, total| on_progress(done, total));
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<VaultEvent>();
     let watcher = match VaultWatcher::new(&root, tx.clone()) {
         Ok(w) => w,
@@ -58,19 +61,20 @@ pub fn spawn(
             return None;
         }
     };
-    let changed_app = app.clone();
+    let on_vault_changed = hooks.on_vault_changed.clone();
+    let on_file_changed = hooks.on_file_changed.clone();
     tokio::spawn(event_loop(
         indexer,
         rx,
-        move || emit_vault_changed(&app),
-        move |path, hash| emit_file_changed(&changed_app, path, hash),
+        move || on_vault_changed(),
+        move |path, hash| on_file_changed(path, hash),
     ));
     Some((watcher, tx))
 }
 
 /// Петля индексации: начальный скан → инкрементальные события до закрытия канала (= дропа
-/// watcher'а из `VaultContext`). `notify` — хук «индекс обновлён» (в проде Tauri-эвент; вынесен,
-/// чтобы петля тестировалась без `AppHandle`).
+/// watcher'а из `VaultContext`). `notify` — хук «индекс обновлён» (в проде Tauri-эвент через
+/// [`IndexerHooks`]; вынесен, чтобы петля тестировалась без `AppHandle`).
 pub(super) async fn event_loop(
     indexer: Indexer,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<VaultEvent>,
@@ -127,20 +131,4 @@ pub(super) async fn event_loop(
         }
     }
     tracing::debug!("indexer event loop stopped (vault закрыт/заменён)");
-}
-
-/// Tauri-событие «индекс vault обновлён» (backend→фронт, ADR-007 S8 — event-канал планировщика). Фронт
-/// по нему перечитывает зависимые от индекса вьюхи (напр. «Цели» #35, AC-GP-3). Best-effort: ошибка
-/// emit (нет окна и т.п.) не критична.
-fn emit_vault_changed(app: &tauri::AppHandle) {
-    use tauri::Emitter;
-    let _ = app.emit("vault:changed", ());
-}
-
-/// Tauri-событие «конкретный файл на диске изменился» (SAFE-3, backend→фронт). Фронт по нему
-/// решает судьбу открытого буфера этого пути (эхо своего сейва / тихий reload / баннер guard'а).
-/// Best-effort: ошибка emit (нет окна) не критична.
-fn emit_file_changed(app: &tauri::AppHandle, path: String, hash: String) {
-    use tauri::Emitter;
-    let _ = app.emit("vault:file-changed", FileChanged { path, hash });
 }

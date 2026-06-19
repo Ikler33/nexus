@@ -104,7 +104,9 @@ pub async fn open_vault(
     // Запускаем watcher + фоновую индексацию (начальный скан + инкрементальные события).
     // Watcher живёт в VaultContext::lifecycle: его дроп (повторный open_vault) гасит петлю.
     // Sender — управляющий вход той же петли для `rescan_vault` (VaultEvent::Rescan).
-    let (watcher, index_tx) = match crate::indexer::spawn(indexer, app.clone()) {
+    // CORE-1c-1: индексатор tauri-free — проводка Tauri-эвентов теперь ЗДЕСЬ. Строим
+    // `IndexerHooks` из `AppHandle` (прогресс/индекс-обновлён/файл-изменён) и инъектируем в ядро.
+    let (watcher, index_tx) = match crate::indexer::spawn(indexer, indexer_hooks(app.clone())) {
         Some((w, tx)) => (Some(w), Some(tx)),
         None => (None, None),
     };
@@ -523,6 +525,51 @@ pub async fn open_vault(
     });
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
+}
+
+// ── проводка индексатора к Tauri (CORE-1c-1) ─────────────────────────────────────────────────────
+// Индексатор (nexus-core) tauri-free: watcher-петля зовёт инъектируемые `IndexerHooks`. Эмит-glue
+// (payload-структуры + `AppHandle::emit`) живёт ЗДЕСЬ, в desktop-крейте, и собирается в хуки.
+
+/// Payload события `vault:index-progress` (camelCase для фронта).
+#[derive(serde::Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct IndexProgress {
+    done: usize,
+    total: usize,
+}
+
+/// Payload события `vault:file-changed` (SAFE-3): относительный путь + blake3-хеш текущего диска.
+/// Фронт сверяет хеш с `Buffer.baseHash`: совпал → эхо своего сейва (игнор); расходится → тихий
+/// reload (чистый буфер) либо баннер guard'а (грязный буфер). camelCase для фронта.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FileChanged {
+    path: String,
+    hash: String,
+}
+
+/// Строит [`crate::indexer::IndexerHooks`] из `AppHandle`: три best-effort Tauri-эвента
+/// (прогресс полного скана / «индекс обновлён» / «файл на диске изменился»). Раньше эта glue жила
+/// внутри `indexer::events` — после CORE-1c-1 индексатор tauri-free, проводка эвентов — в app.
+fn indexer_hooks(app: tauri::AppHandle) -> crate::indexer::IndexerHooks {
+    use tauri::Emitter;
+    let progress_app = app.clone();
+    let changed_app = app.clone();
+    crate::indexer::IndexerHooks {
+        // Прогресс полного скана → событие фронту (статусбар «Индексация N/M», макет app.jsx).
+        on_progress: Arc::new(move |done, total| {
+            let _ = progress_app.emit("vault:index-progress", IndexProgress { done, total });
+        }),
+        // «Индекс vault обновлён» (ADR-007 S8): фронт перечитывает зависимые вьюхи (напр. «Цели» #35).
+        on_vault_changed: Arc::new(move || {
+            let _ = app.emit("vault:changed", ());
+        }),
+        // «Конкретный файл на диске изменился» (SAFE-3): фронт решает судьбу открытого буфера пути.
+        on_file_changed: Arc::new(move |path, hash| {
+            let _ = changed_app.emit("vault:file-changed", FileChanged { path, hash });
+        }),
+    }
 }
 
 /// Читает и парсит `.nexus/local.json` ОДИН раз (кросс-план #8 — раньше парсили дважды). `None` —
