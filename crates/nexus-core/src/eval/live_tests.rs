@@ -568,7 +568,7 @@ async fn bench_local_pipeline_scale() {
 #[tokio::test]
 #[ignore = "нужны embedding-сервер и LLM (NEXUS_EMBED_URL/NEXUS_FAST_URL)"]
 async fn live_eval_llm_rerank_experiment() {
-    use crate::ai::{default_prefixes, ChatMessage, ChatProvider, OpenAiChatProvider};
+    use crate::ai::{default_prefixes, ChatProvider, OpenAiChatProvider};
     use crate::net::{EgressFeature, GuardedClient};
     use std::collections::HashSet;
     use std::sync::atomic::AtomicBool;
@@ -638,20 +638,14 @@ async fn live_eval_llm_rerank_experiment() {
         b_n += ndcg_at_k(&base_ranked, &relevant, k);
         b_m += reciprocal_rank(&base_ranked, &relevant);
 
-        // LLM-реранк: нумерованные кандидаты → JSON-массив номеров по релевантности.
-        let mut listing = String::new();
-        for (i, (path, snip)) in files.iter().enumerate() {
-            let cut: String = snip.chars().take(240).collect();
-            listing.push_str(&format!("[{}] {path}: {cut}\n", i + 1));
-        }
-        let messages = [
-            ChatMessage::system(
-                "Ты ранжируешь фрагменты заметок по релевантности вопросу. Ответь СТРОГО \
-                 JSON-массивом номеров фрагментов от самого релевантного к наименее, без \
-                 пояснений: [3,1,2,...]. Включи каждый номер ровно один раз.",
-            ),
-            ChatMessage::user(format!("Вопрос: {}\n\nФрагменты:\n{listing}", case.query)),
-        ];
+        // LLM-реранк: нумерованные кандидаты → JSON-массив номеров по релевантности. Промпт строит
+        // ЕДИНАЯ прод-функция `rerank::build_rerank_messages` (тот же per-request маркер и ограждение,
+        // AC-SEC-7) — eval мерит РЕАЛЬНЫЙ прод-промпт, не ручную копию (защита от дрейфа, P0-e).
+        let fragments: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, snip)| (path.as_str(), snip.as_str()))
+            .collect();
+        let messages = crate::search::rerank::build_rerank_messages(&case.query, &fragments);
         let mut out = String::new();
         reranker
             .stream_chat(&messages, &mut |t| out.push_str(&t), &cancel)
