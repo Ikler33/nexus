@@ -35,6 +35,7 @@ pub mod classify;
 pub mod decision;
 pub mod orchestrate;
 pub mod tools;
+pub mod undo;
 
 pub use action::{Action, ActionTarget};
 // `apply_action` НЕ реэкспортируется (AGENT-3e Fix-2): его видимость сужена до
@@ -43,8 +44,8 @@ pub use action::{Action, ActionTarget};
 // через `orchestrate::dispatch_action` (гейт автономии). Здесь реэкспортируем лишь типы исхода/леджера.
 pub use apply::{ApplyOutcome, AuditSink};
 pub use audit::{
-    canonical_args, idempotency_key, replay_decision, transition, ActionEntry, ActionRow,
-    ReplayDecision, UndoCols,
+    actions_for_undo, canonical_args, idempotency_key, mark_undone, replay_decision, transition,
+    ActionEntry, ActionRow, ReplayDecision, UndoCols, STATE_UNDONE,
 };
 pub use classify::{classify, BlockReason, ClassifyCtx, ConfirmReason, RiskTier};
 pub use decision::{
@@ -58,14 +59,15 @@ pub use orchestrate::{
 pub use tools::{
     GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
 };
+pub use undo::{undo_run, ActionUndo, UndoOutcome, UndoStatus};
 
 /// Состояние действия в статус-машине актуатора (значения `agent_actions.state`).
 ///
 /// Жизненный цикл (ребро = допустимый переход, см. [`ActionState::can_transition_to`]):
 /// ```text
-///   Classified ─┬─► Approved ──► Executing ─┬─► Executed ─► Audited
-///               ├─► Proposed ──► Approved          └─► Failed ───► Audited
-///               │           └──► Rejected ──► Audited
+///   Classified ─┬─► Approved ──► Executing ─┬─► Executed ─┬─► Audited
+///               ├─► Proposed ──► Approved          │       └─► Undone (AGENT-4: откат executed)
+///               │           └──► Rejected ──► Audited └─► Failed ──► Audited
 ///               └─► Rejected ──► Audited
 /// ```
 /// - `Classified` — classify вынес тир; ещё не решено исполнять.
@@ -75,6 +77,10 @@ pub use tools::{
 /// - `Executing` — apply начат (write-before-act записан) — AGENT-3c.
 /// - `Executed` — apply успешен.
 /// - `Failed` — apply упал.
+/// - `Undone` — успешное действие ОТКАЧЕНО (AGENT-4): снапшот восстановлен / created-файл в корзине;
+///   единственный путь сюда — `executed → undone` (откат необратим иначе). Помечает строку, чтобы
+///   повторный `undo_run` её ПРОПУСТИЛ (идемпотентность отката). НЕ терминал статус-машины: остаётся
+///   аудируемой записью (исход уже зафиксирован finish'ем при executed — undo лишь меняет state).
 /// - `Audited` — терминал: исход зафиксирован в журнале (поглощающий, исходящих рёбер нет).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionState {
@@ -85,6 +91,7 @@ pub enum ActionState {
     Executing,
     Executed,
     Failed,
+    Undone,
     Audited,
 }
 
@@ -100,6 +107,7 @@ impl ActionState {
             ActionState::Executing => "executing",
             ActionState::Executed => "executed",
             ActionState::Failed => "failed",
+            ActionState::Undone => "undone",
             ActionState::Audited => "audited",
         }
     }
@@ -131,9 +139,11 @@ impl ActionState {
             Rejected => matches!(next, Audited),
             // Исполняется: успех → Executed, провал → Failed.
             Executing => matches!(next, Executed | Failed),
-            // Успех/провал: в аудит.
-            Executed => matches!(next, Audited),
+            // Успех: в аудит ЛИБО откат (AGENT-4: executed → undone — единственное новое ребро).
+            Executed => matches!(next, Audited | Undone),
             Failed => matches!(next, Audited),
+            // Откачено: в аудит (фиксация подотчётности). Повторно откатить нечего.
+            Undone => matches!(next, Audited),
             // Терминал: исходящих переходов нет.
             Audited => false,
         }
@@ -154,6 +164,7 @@ impl std::str::FromStr for ActionState {
             "executing" => ActionState::Executing,
             "executed" => ActionState::Executed,
             "failed" => ActionState::Failed,
+            "undone" => ActionState::Undone,
             "audited" => ActionState::Audited,
             _ => return Err(()),
         })
@@ -229,6 +240,7 @@ mod tests {
             ActionState::Executing,
             ActionState::Executed,
             ActionState::Failed,
+            ActionState::Undone,
             ActionState::Audited,
         ] {
             assert_eq!(ActionState::parse(s.as_str()), Some(s));
@@ -279,6 +291,41 @@ mod tests {
         // Rejected не исполняется.
         assert!(!Rejected.can_transition_to(Executing));
         assert!(!Rejected.can_transition_to(Approved));
+        // AGENT-4: откатить можно ТОЛЬКО успешное (executed → undone); прочие исходные → нет.
+        assert!(
+            !Failed.can_transition_to(Undone),
+            "провал откатывать нечего"
+        );
+        assert!(
+            !Executing.can_transition_to(Undone),
+            "ещё не исполнено — нечего откатывать"
+        );
+        assert!(
+            !Undone.can_transition_to(Executed),
+            "откат не «воскрешает» действие"
+        );
+        assert!(
+            !Undone.can_transition_to(Undone),
+            "повторный откат уже откаченного запрещён (идемпотентность на уровне машины)"
+        );
+    }
+
+    /// AGENT-4: единственное новое ребро отката — `executed → undone`, далее `undone → audited`.
+    #[test]
+    fn valid_undo_path() {
+        use ActionState::*;
+        assert!(
+            Executed.can_transition_to(Undone),
+            "успешное действие можно откатить"
+        );
+        assert!(
+            Executed.can_transition_to(Audited),
+            "executed по-прежнему может уйти в аудит (откат не обязателен)"
+        );
+        assert!(
+            Undone.can_transition_to(Audited),
+            "откаченное фиксируется в аудит"
+        );
     }
 
     /// Только Audited терминален.
@@ -293,6 +340,7 @@ mod tests {
             ActionState::Executing,
             ActionState::Executed,
             ActionState::Failed,
+            ActionState::Undone,
         ] {
             assert!(!s.is_terminal(), "{} не должен быть терминалом", s.as_str());
         }

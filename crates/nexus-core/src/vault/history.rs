@@ -68,6 +68,14 @@ pub fn list_snapshots(root: &Path, rel: &str) -> VaultResult<Vec<SnapshotMeta>> 
 }
 
 /// Содержимое снапшота по его `ts`.
+///
+/// КОНТРАКТ ВЫЗЫВАЮЩЕГО — `rel` ОБЯЗАН быть ПРЕД-конфайнут вызывающим. Эта функция джойнит
+/// `root/.nexus/history/<rel>/<ts>.md` НАПРЯМУЮ, БЕЗ внутреннего конфайнмента: `rel` с `..` или симлинк-
+/// компонентом увёл бы чтение НАРУЖУ `.nexus/history` (а history_dir не следит за побегом). Текущий
+/// вызыватель — `actuator::undo::restore_snapshot` — удовлетворяет контракт, прогоняя `rel` через
+/// `confine_for_overwrite` (канониз-рубеж: resolve-родителя + leaf-симлинк + хардлинк) ДО вызова
+/// read_snapshot. БУДУЩИЙ вызыватель НЕ ДОЛЖЕН передавать сюда недоверенный/непроконфайненный `rel`
+/// (особенно из пользовательского/агентского ввода) — сначала проконфайнить, иначе info-leak наружу vault.
 pub fn read_snapshot(root: &Path, rel: &str, ts: u64) -> VaultResult<String> {
     let path = history_dir(root, rel).join(format!("{ts}.md"));
     Ok(std::fs::read_to_string(path)?)
