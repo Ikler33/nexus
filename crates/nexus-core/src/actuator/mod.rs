@@ -1,28 +1,41 @@
-//! Слой актуатора (AGENT-3b, Фаза 1) — ЯДРО ЛОГИКИ + персистентность, БЕЗ побочных эффектов.
+//! Слой актуатора (AGENT-3b/3c, Фаза 1) — ЯДРО ЛОГИКИ + персистентность + host-side APPLY/инструменты.
 //!
-//! Этот срез — ПУРЕ-логика + одна таблица БД, ноль записи на диск, ноль инструментов, ноль apply, ноль
-//! enforcement автономии, ноль проводки в agentd. Безопасно лендить до vault-write-чекпойнта. Состав:
+//! 3b-фундамент (пуре-логика + одна таблица БД) + 3c-исполнение (запись в vault за всеми рубежами).
+//! ЗАПИСЬ НА ДИСК происходит ТОЛЬКО в [`apply`] (и только через временные vault'ы тестов — живой проводки
+//! нет). Состав:
 //! - [`action`] — типизированная алгебра [`Action`]/[`ActionTarget`]: fail-closed граница by-construction
 //!   (shell/web/host-варианты НЕПРЕДСТАВИМЫ).
 //! - [`classify`] — PURE fail-closed [`classify::classify`]: exhaustive по [`ActionTarget`] БЕЗ catch-all
 //!   (keystone D4 «no catch-all-downgrade»).
 //! - [`audit`] — idempotency-ledger (`agent_actions`, миграция 022): write-before-act API + replay по
 //!   ПРИСУТСТВИЮ outcome (не ключа).
-//! - этот модуль — типы статус-машины [`ActionState`] + ПУРЕ-валидация переходов + scaffold [`UndoHandle`].
+//! - этот модуль — типы статус-машины [`ActionState`] + ПУРЕ-валидация переходов + [`UndoHandle`].
+//! - [`apply`] (3c) — [`apply::apply_action`]: host-side исполнитель за всеми рубежами (canonicalize/
+//!   symlink rampart → drift → ledger write-before-act → snapshot manual=true → atomic_write → finish)
+//!   + [`apply::AuditSink`] (обёртка ledger).
+//! - [`tools`] (3c) — файловые инструменты [`tools::NoteCreateTool`]/[`tools::NoteEditTool`]/
+//!   [`tools::SetFrontmatterTool`] (impl [`crate::agent::Tool`]): classify→apply/propose диспетч.
 //!
-//! Исполнение/apply (запись в vault, snapshot, undo-наполнение), реальные инструменты, enforcement
-//! автономии и проводка headless-демона — это AGENT-3c/3d/3e. ЗДЕСЬ их НЕТ намеренно.
+//! Enforcement автономии (confirm|auto run-level, DecisionSource, Proposal/Diff-эмиссия, blast-radius) —
+//! AGENT-3d. Регистрация в реестр/agentd и живая проводка — AGENT-3e. ЗДЕСЬ их НЕТ намеренно; инструменты
+//! только конструируются и гоняются В ТЕСТАХ (реальный vault пользователя срезом не затронут).
 
 pub mod action;
+pub mod apply;
 pub mod audit;
 pub mod classify;
+pub mod tools;
 
 pub use action::{Action, ActionTarget};
+pub use apply::{apply_action, ApplyOutcome, AuditSink};
 pub use audit::{
     canonical_args, idempotency_key, replay_decision, ActionEntry, ActionRow, ReplayDecision,
     UndoCols,
 };
 pub use classify::{classify, BlockReason, ClassifyCtx, ConfirmReason, RiskTier};
+pub use tools::{
+    FileToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
+};
 
 /// Состояние действия в статус-машине актуатора (значения `agent_actions.state`).
 ///
@@ -125,14 +138,16 @@ impl std::str::FromStr for ActionState {
     }
 }
 
-/// Хэндл отмены действия (AGENT-4 consumes; AGENT-3c populates; ЗДЕСЬ — только тип-scaffold).
+/// Хэндл отмены действия (AGENT-4 consumes; AGENT-3c [`apply`] populates).
 ///
 /// Дискриминант + ссылка сериализуются в ledger (`agent_actions.undo_kind`/`undo_ref`) через [`UndoCols`].
-/// Это scaffold: способа СОЗДАТЬ реальный snapshot/trash в этом срезе нет (apply — 3c). Зеркало
+/// 3c [`apply::apply_action`] эмитит КОРРЕКТНЫЙ хэндл: Snapshot{rel,ts} (откат overwrite — restore точки)
+/// для NoteEdit/Frontmatter, Trash{trash_rel} (откат create — move_to_trash) для NoteCreate. Зеркало
 /// (kind,ref) ↔ вариант держим в [`UndoHandle::to_cols`]/[`UndoHandle::from_cols`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UndoHandle {
-    /// Снимок прежнего содержимого заметки `rel` на отметке `ts` (unix-сек) — откат NoteEdit/Frontmatter.
+    /// Снимок прежнего содержимого заметки `rel` на отметке `ts` (unix-МС — имя файла снапшота, см.
+    /// [`crate::vault::history`]) — откат NoteEdit/Frontmatter через restore этой точки.
     Snapshot { rel: String, ts: i64 },
     /// Файл перенесён в vault-корзину по `trash_rel` — откат удаления/перезаписи через восстановление.
     Trash { trash_rel: String },
