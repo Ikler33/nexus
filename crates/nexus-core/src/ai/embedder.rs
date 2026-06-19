@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use super::{AiError, AiResult};
-use crate::net::{EgressFeature, GuardedClient};
+use crate::net::{EgressFeature, GuardedClient, RunCtx};
 
 /// Провайдер эмбеддингов (**ADR-005**): отдельная сущность от chat. `query`/`document` —
 /// асимметрия задач (nomic/bge требуют разные префиксы); L2-нормализация — внутри.
@@ -95,7 +95,7 @@ impl OpenAiEmbedder {
         let endpoint = format!("{}/v1/embeddings", crate::ai::api_base(base_url));
         let body = serde_json::json!({ "model": model, "input": ["dim probe"] });
         let resp = client
-            .post_json(&endpoint, EgressFeature::Probe, &body)
+            .post_json(&endpoint, EgressFeature::Probe, &body, RunCtx::NONE)
             .await
             .map_err(AiError::from)?;
         if !resp.status().is_success() {
@@ -117,7 +117,7 @@ impl OpenAiEmbedder {
         let body = serde_json::json!({ "model": self.model, "input": inputs });
         let resp = self
             .client
-            .post_json(&self.endpoint, self.feature, &body)
+            .post_json(&self.endpoint, self.feature, &body, RunCtx::NONE)
             .await
             .map_err(AiError::from)?;
         if !resp.status().is_success() {

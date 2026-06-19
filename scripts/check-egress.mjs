@@ -7,6 +7,11 @@
 // определён ровно ОДИН раз (net/ импортирует ре-экспорт, не копию). Zero-dep (node:fs) — как
 // check-ignored.mjs, гоняется в CI без pnpm install. Скрипт самопроверяется фейк-нарушением
 // (AC-EGR-1: «тест добавляет фейк-нарушение → линт падает») перед сканом дерева.
+//
+// AGENT-3a (RunCtx): дополнительно проверяет, что egress-точки входа `net/mod.rs`
+// (`record`/`authorize`/`get`/`post_json`) несут параметр `RunCtx` — процесс-глобального run_id-слота
+// больше нет, корреляция эгресса с прогоном агента идёт ЯВНЫМ per-call контекстом; ни один будущий
+// egress-путь не должен молча ронять её. Тоже zero-dep + самотестируется (good/bad фейк-сигнатуры).
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +37,50 @@ const FORBIDDEN = [/reqwest::Client::builder/, /core_client_builder/];
 // Маркер обоснованного исключения; честен ТОЛЬКО в файлах из WHITELIST_MARKER.
 const ALLOW_MARKER = 'egress-lint: allow';
 const WHITELIST_MARKER = new Set(['commands/plugin.rs']);
+
+// AGENT-3a (RunCtx-корреляция): публичные точки входа эгресса И приватный audit-`record` ОБЯЗАНЫ нести
+// run-контекст-параметр (`ctx: RunCtx`), чтобы никакой будущий egress-путь молча не «ронял» корреляцию
+// эгресса с прогоном агента. Проверяем по сигнатуре `fn <name>(` в `net/mod.rs`: между объявлением и его
+// `)` (закрытием списка параметров) должно встретиться `RunCtx`. Чисто текстовый grep-инвариант (zero-dep).
+const RUNCTX_FNS = ['record', 'authorize', 'get', 'post_json'];
+
+/**
+ * Проверяет, что каждая из `RUNCTX_FNS` в тексте `net/mod.rs` несёт `RunCtx` в списке параметров.
+ * Возвращает { missing: string[], checked: string[] } — `missing` для функций без RunCtx или ненайденных.
+ * Многострочные сигнатуры: от строки с `fn <name>(` до первой строки, закрывающей список параметров
+ * (`)` на нужном уровне; берём упрощённо — до строки, содержащей `) ->` или `) {` либо одиночный `)`).
+ */
+function checkRunCtxParams(text) {
+  const lines = text.split('\n');
+  const missing = [];
+  const checked = [];
+  for (const name of RUNCTX_FNS) {
+    // Ищем объявление `fn <name>(` или `async fn <name>(` (в КОДЕ, не в комментарии).
+    const declRe = new RegExp(`\\bfn\\s+${name}\\s*\\(`);
+    let found = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (!declRe.test(lines[i].split('//')[0])) continue;
+      found = true;
+      checked.push(name);
+      // Собираем текст сигнатуры до закрытия списка параметров.
+      let sig = '';
+      for (let j = i; j < lines.length && j < i + 30; j++) {
+        const code = lines[j].split('//')[0];
+        sig += code + '\n';
+        // Конец списка параметров: строка с `)` (для наших сигнатур — `) ->`/`) {`/`)`).
+        if (/\)\s*(->|\{|$)/.test(code.trimEnd())) break;
+      }
+      if (!/\bRunCtx\b/.test(sig)) {
+        missing.push(`net/mod.rs: fn ${name}(...) без параметра RunCtx (AGENT-3a: корреляция эгресса)`);
+      }
+      break; // первое объявление каждой fn (их по одному в net/mod.rs вне тестов)
+    }
+    if (!found) {
+      missing.push(`net/mod.rs: не найдено объявление fn ${name}( (RUNCTX_FNS — egress chokepoint)`);
+    }
+  }
+  return { missing, checked };
+}
 
 /**
  * Сканирует список файлов `{path, text}` (path — относительно src/, с '/').
@@ -79,6 +128,32 @@ if (selftest.violations.length !== 3 || selftest.privateHostDefs.length !== 2) {
   process.exit(2);
 }
 
+// ── Самопроверка RunCtx-детектора (AGENT-3a): фейк-net/mod.rs без RunCtx обязан дать N нарушений ──
+const runCtxSelftestBad = checkRunCtxParams(
+  // record/authorize/post_json БЕЗ RunCtx (нарушение); get С RunCtx (ОК).
+  'async fn record(&self, feature: F, host: String) {}\n' +
+    'async fn authorize(&self, url: &str) -> X {}\n' +
+    'pub async fn get(&self, url: &str, ctx: RunCtx) -> R {}\n' +
+    'pub async fn post_json(&self, url: &str, body: &V) -> R {}\n'
+);
+// 3 без RunCtx (record/authorize/post_json) → 3 missing; get с RunCtx → не в missing.
+if (runCtxSelftestBad.missing.length !== 3) {
+  console.error('❌ self-test RunCtx-детектора провалился: ожидалось 3 нарушения (AGENT-3a).');
+  for (const m of runCtxSelftestBad.missing) console.error(`   - ${m}`);
+  process.exit(2);
+}
+const runCtxSelftestGood = checkRunCtxParams(
+  'async fn record(&self, f: F, ctx: RunCtx) {}\n' +
+    'async fn authorize(&self, url: &str, ctx: RunCtx) -> X {}\n' +
+    'pub async fn get(&self, url: &str, ctx: RunCtx) -> R {}\n' +
+    'pub async fn post_json(&self, url: &str, body: &V, ctx: RunCtx) -> R {}\n'
+);
+if (runCtxSelftestGood.missing.length !== 0) {
+  console.error('❌ self-test RunCtx-детектора: чистый случай дал ложные нарушения (AGENT-3a).');
+  for (const m of runCtxSelftestGood.missing) console.error(`   - ${m}`);
+  process.exit(2);
+}
+
 // ── Реальный скан дерева ──
 const files = [];
 const walk = (dir, srcRoot) => {
@@ -97,6 +172,22 @@ for (const srcRoot of SRC_ROOTS) walk(srcRoot, srcRoot);
 
 const { violations, privateHostDefs } = scan(files);
 const errors = [];
+
+// AGENT-3a: net/mod.rs egress-точки входа обязаны нести RunCtx (корреляция эгресса с прогоном).
+const netModFile = files.find((f) => f.path === 'net/mod.rs');
+if (!netModFile) {
+  errors.push('AGENT-3a: net/mod.rs не найден в дереве — невозможно проверить RunCtx-инвариант.');
+} else {
+  const { missing } = checkRunCtxParams(netModFile.text);
+  if (missing.length > 0) {
+    errors.push(
+      'AGENT-3a: egress-точки входа ОБЯЗАНЫ нести RunCtx (per-call корреляция эгресса с прогоном; ' +
+        'процесс-глобального run_id-слота больше нет — ни один путь не должен молча ронять корреляцию):',
+      ...missing.map((m) => `  - ${m}`)
+    );
+  }
+}
+
 if (violations.length > 0) {
   errors.push(
     'Голое построение HTTP-клиента ядра вне net/ (AC-EGR-1). Эгресс ядра — ТОЛЬКО через ' +
@@ -120,5 +211,5 @@ if (errors.length > 0) {
 }
 console.log(
   `✅ egress-chokepoint цел: билдеры клиента только в net/ (+ dispatch_net с обоснованием), ` +
-    `is_private_host один (${files.length} .rs-файлов).`
+    `is_private_host один, egress-точки входа несут RunCtx (${files.length} .rs-файлов).`
 );

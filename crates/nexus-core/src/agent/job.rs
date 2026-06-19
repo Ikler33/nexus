@@ -2,8 +2,8 @@
 //!
 //! AGENT-1 крутил `run_agent_loop` ин-процесс (smoke). AGENT-2 делает прогон ДОЛГОВЕЧНОЙ запланированной
 //! джобой планировщика: payload джобы несёт `run_id` (id строки `agent_runs`), хендлер по нему ведёт
-//! прогон через статус-машину (run_store) и корректирует `EgressAudit::set_run` так, чтобы весь эгресс
-//! ВНУТРИ прогона атрибутировался на этот run_id в durable-журнале.
+//! прогон через статус-машину (run_store) и ЯВНО пробрасывает [`RunCtx::run(run_id)`] в цикл, чтобы весь
+//! эгресс ВНУТРИ прогона атрибутировался на этот run_id в durable-журнале.
 //!
 //! # Идемпотентность / replay (контракт)
 //! `handle` идемпотентен на УРОВНЕ ПРОГОНА: если строка прогона уже терминальна
@@ -17,16 +17,14 @@
 //! применения), прежде чем полагаться на этот replay — иначе requeue после краша применит изменение
 //! дважды. Леджер op-group здесь НЕ строится (scaffold-нота под AGENT-3).
 //!
-//! # Сброс set_run (RAII-гард)
-//! `set_run(Some(run_id))` ставится в начале прогона и ОБЯЗАН сброситься в `None` на ЛЮБОМ пути выхода
-//! (успех/ошибка/ранний return/паника), иначе ПОСЛЕДУЮЩИЙ эгресс (другой джобы/фона) ложно
-//! атрибутировался бы на завершённый run_id. Гарантируется [`RunScope`] — RAII-гард: его `Drop`
-//! зовёт `set_run(None)`. Замечание о гонке: `EgressAudit::set_run` — процессный single-slot (не
-//! per-task), поэтому КОНКУРЕНТНЫЕ прогоны перетёрли бы run_id друг друга. В AGENT-2 это не
-//! возникает: воркер планировщика исполняет джобы ПОСЛЕДОВАТЕЛЬНО (один claim→handle→complete за
-//! раз в `run_due`), а agentd регистрирует один agent_run-хендлер. Параллельные прогоны — будущий
-//! срез (потребует per-run audit-контекста вместо процессного слота); зафиксировано как остаточный
-//! риск в отчёте.
+//! # Корреляция эгресса ([`RunCtx`], AGENT-3a)
+//! run_id прогона ЯВНО ПРОБРАСЫВАЕТСЯ через [`run_agent_loop`] в провайдера инструментов как per-call
+//! [`RunCtx::run(run_id)`] — а НЕ выставляется в процесс-глобальный слот audit. Поэтому: (а) сброс не
+//! нужен (нет общего изменяемого состояния — ctx живёт в стеке вызова прогона и исчезает с ним; эгресс
+//! ПОСЛЕ прогона по другому пути несёт свой ctx, обычно [`RunCtx::NONE`]); (б) КОНКУРЕНТНЫЕ прогоны
+//! атрибутируют эгресс независимо — у каждого свой ctx в своём стеке, перетереть друг друга нечем.
+//! Это снимает гонку процессного single-slot, бывшую блокирующим гейтом AGENT-2 перед AGENT-3 (доказано
+//! тестом `concurrent_runs_tag_egress_independently`).
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -35,7 +33,7 @@ use async_trait::async_trait;
 
 use crate::ai::{AIClient, ChatMessage, ContextBudget, QwenTokenizer};
 use crate::db::{ReadPool, WriteActor};
-use crate::net::EgressAudit;
+use crate::net::RunCtx;
 use crate::scheduler::{self, Job, JobHandler};
 
 use super::event::AgentEvent;
@@ -60,28 +58,6 @@ const AGENT_PREAMBLE: &str =
     "Ты — автономный агент-ассистент Nexus. Реши задачу пользователя, при \
     необходимости вызывая доступные инструменты. Когда задача решена — дай финальный ответ.";
 
-/// RAII-гард корреляции эгресса: ставит `set_run(Some(run_id))` при создании и ГАРАНТИРОВАННО
-/// сбрасывает `set_run(None)` в `Drop` — на любом пути выхода (успех/ошибка/ранний return/паника).
-/// Так эгресс ПОСЛЕ прогона не атрибутируется на завершённый run_id.
-struct RunScope {
-    audit: Arc<EgressAudit>,
-}
-
-impl RunScope {
-    /// Входит в скоуп прогона: с этого момента эгресс ядра аудитится с `run_id`.
-    fn enter(audit: Arc<EgressAudit>, run_id: i64) -> Self {
-        audit.set_run(Some(run_id));
-        Self { audit }
-    }
-}
-
-impl Drop for RunScope {
-    fn drop(&mut self) {
-        // Сброс на ЛЮБОМ выходе — иначе последующий эгресс ложно нёс бы завершённый run_id.
-        self.audit.set_run(None);
-    }
-}
-
 /// Реестр стаб-инструментов прогона (AGENT-2): echo + noop. Актуаторные инструменты — AGENT-3.
 fn stub_registry() -> ToolRegistry {
     let mut reg = ToolRegistry::new();
@@ -98,7 +74,6 @@ pub struct AgentRunHandler {
     writer: WriteActor,
     reader: ReadPool,
     ai: Arc<AIClient>,
-    audit: Arc<EgressAudit>,
     /// Контекстное окно модели (токены) — из конфига; `None` → консервативный дефолт ContextBudget.
     context_window: Option<usize>,
     /// Память агента (AGENT-MEM-1): recall в начальный контекст + Add-only запись. `None` →
@@ -111,11 +86,15 @@ impl AgentRunHandler {
     /// Собирает хендлер из ядровых зависимостей. `context_window` — окно модели агента из конфига
     /// (`ai.chat.context_window`), `None` → дефолт [`ContextBudget::from_context_window`].
     /// `memory` — мост к памяти (`None` → прогон без recall, как AGENT-2: нет регрессии).
+    ///
+    /// AGENT-3a: хендлер БОЛЬШЕ НЕ держит `Arc<EgressAudit>` — корреляция эгресса идёт через per-call
+    /// [`RunCtx`], а не через касание процесс-глобального слота audit. Audit-сток (`set_writer`) и
+    /// общий [`EgressAudit`] живут в провайдере инструментов (через его [`GuardedClient`]) и
+    /// композиционном корне.
     pub fn new(
         writer: WriteActor,
         reader: ReadPool,
         ai: Arc<AIClient>,
-        audit: Arc<EgressAudit>,
         context_window: Option<usize>,
         memory: Option<Arc<dyn AgentMemory>>,
     ) -> Self {
@@ -123,7 +102,6 @@ impl AgentRunHandler {
             writer,
             reader,
             ai,
-            audit,
             context_window,
             memory,
         }
@@ -153,14 +131,16 @@ impl AgentRunHandler {
             return Ok(());
         }
 
-        // 2. running + корреляция эгресса. RunScope::Drop сбросит set_run(None) на любом выходе ниже.
+        // 2. running. Корреляция эгресса — через per-call RunCtx ниже (НЕ процесс-глобальный слот):
+        //    строим ctx прогона и пробрасываем его в цикл явно. Сброса не нужно — ctx живёт в стеке
+        //    этого вызова и исчезает с ним (последующий эгресс другого пути несёт свой ctx).
         run_store::mark_running(&self.writer, run_id)
             .await
             .map_err(|e| format!("agent_run {run_id}: mark_running: {e}"))?;
-        let _scope = RunScope::enter(self.audit.clone(), run_id);
+        let ctx = RunCtx::run(run_id);
 
         // 3. Провайдер инструментов: нет — финишируем прогон с error (НЕ сбой джобы — деградируем
-        //    чисто, доказываем lifecycle + set_run-проводку даже без живой модели).
+        //    чисто, доказываем lifecycle + RunCtx-проводку даже без живой модели).
         let Some(provider) = self.ai.agent_tools.clone() else {
             run_store::finish_run(
                 &self.writer,
@@ -220,6 +200,7 @@ impl AgentRunHandler {
             &budget,
             &tk,
             &cancel,
+            ctx,
             &mut on_event,
         )
         .await;
@@ -255,7 +236,6 @@ impl AgentRunHandler {
             .await
             .map_err(|e| format!("agent_run {run_id}: finish({status}): {e}"))?;
         tracing::info!(run_id, status, "agent_run: прогон завершён");
-        // _scope дропается здесь → set_run(None).
         Ok(())
     }
 }
@@ -305,7 +285,7 @@ mod tests {
     use crate::ai::tools::{ToolCapableProvider, ToolTurn};
     use crate::ai::AiResult;
     use crate::db::Database;
-    use crate::net::{EgressFeature, EgressPolicy, GuardedClient};
+    use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
     use std::collections::VecDeque;
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
@@ -350,10 +330,12 @@ mod tests {
             _tools: &[ToolSpec],
             _on_token: &mut (dyn FnMut(String) + Send),
             _cancel: &Arc<AtomicBool>,
+            ctx: RunCtx,
         ) -> AiResult<ToolTurn> {
             if let Some((client, url)) = &self.egress {
-                // Реальный guarded-эгресс на loopback-мок: durable-строка понесёт текущий run_id.
-                let _ = client.get(url, EgressFeature::Chat).await;
+                // Реальный guarded-эгресс на loopback-мок: durable-строка понесёт run_id из ПРОБРОШЕННОГО
+                // per-call ctx (не из глобального слота) — так конкурентные прогоны не путают атрибуцию.
+                let _ = client.get(url, EgressFeature::Chat, ctx).await;
             }
             self.turns
                 .lock()
@@ -401,12 +383,11 @@ mod tests {
         (addr, handle)
     }
 
-    fn handler(db: &Database, ai: Arc<AIClient>, audit: Arc<EgressAudit>) -> AgentRunHandler {
+    fn handler(db: &Database, ai: Arc<AIClient>) -> AgentRunHandler {
         AgentRunHandler::new(
             db.writer().clone(),
             db.reader().clone(),
             ai,
-            audit,
             Some(32768),
             None,
         )
@@ -417,14 +398,12 @@ mod tests {
     fn handler_with_memory(
         db: &Database,
         ai: Arc<AIClient>,
-        audit: Arc<EgressAudit>,
         memory: Arc<dyn AgentMemory>,
     ) -> AgentRunHandler {
         AgentRunHandler::new(
             db.writer().clone(),
             db.reader().clone(),
             ai,
-            audit,
             Some(32768),
             Some(memory),
         )
@@ -448,13 +427,12 @@ mod tests {
     #[tokio::test]
     async fn handle_drives_loop_to_done() {
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
         let provider = Arc::new(FakeToolProvider::scripted(vec![
             Ok(ToolTurn::ToolCalls(vec![echo_call("c1")])),
             Ok(ToolTurn::Final("итог".into())),
         ]));
         let ai = ai_with_tools(Some(provider));
-        let h = handler(&db, ai, audit);
+        let h = handler(&db, ai);
 
         let run_id = run_store::create_run(db.writer(), "задача", Some("fake"), Some("auto"))
             .await
@@ -476,7 +454,6 @@ mod tests {
     #[tokio::test]
     async fn handle_on_terminal_run_is_noop() {
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
         // Провайдер, который ПАНИКует если позван — доказывает, что цикл не запускался.
         struct PanicProvider;
         #[async_trait]
@@ -487,6 +464,7 @@ mod tests {
                 _t: &[ToolSpec],
                 _o: &mut (dyn FnMut(String) + Send),
                 _c: &Arc<AtomicBool>,
+                _ctx: RunCtx,
             ) -> AiResult<ToolTurn> {
                 panic!("провайдер не должен вызываться для терминального прогона");
             }
@@ -495,7 +473,7 @@ mod tests {
             }
         }
         let ai = ai_with_tools(Some(Arc::new(PanicProvider)));
-        let h = handler(&db, ai, audit);
+        let h = handler(&db, ai);
 
         let run_id = run_store::create_run(db.writer(), "t", None, None)
             .await
@@ -519,14 +497,15 @@ mod tests {
         );
     }
 
-    /// Деградация: agent_tools=None → прогон финишируется error чисто (джоба ok — lifecycle доказан),
-    /// и set_run сброшен (последующий эгресс — run_id NULL).
+    /// Деградация: agent_tools=None → прогон финишируется error чисто (джоба ok — lifecycle доказан).
+    /// Эгресс ВНЕ прогона (по своему пути с [`RunCtx::NONE`]) несёт run_id=NULL — корреляция не
+    /// «протекает» из завершённого прогона (RunCtx per-call, нет глобального слота, который мог бы залипнуть).
     #[tokio::test]
-    async fn handle_without_tools_finishes_error_and_resets_set_run() {
+    async fn handle_without_tools_finishes_error_egress_outside_run_is_uncorrelated() {
         let (_d, db) = open().await;
         let audit = Arc::new(EgressAudit::default());
         let ai = ai_with_tools(None);
-        let h = handler(&db, ai, audit.clone());
+        let h = handler(&db, ai);
 
         let run_id = run_store::create_run(db.writer(), "t", None, None)
             .await
@@ -541,16 +520,17 @@ mod tests {
         assert_eq!(r.status, STATUS_ERROR);
         assert_eq!(r.outcome.as_deref(), Some("agent tools unavailable"));
 
-        // set_run сброшен в None после прогона: durable-запись последующего эгресса несёт run_id=NULL.
+        // Эгресс ВНЕ прогона (явный RunCtx::NONE) → durable-запись несёт run_id=NULL.
         audit.set_writer(db.writer().clone());
-        let (policy, _) = (
-            Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false)))),
-            (),
-        );
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
         let (addr, server) = serve_once();
         let client = GuardedClient::new(policy, audit.clone(), |b| b).unwrap();
         client
-            .get(&format!("http://{addr}/x"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/x"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback ok");
         server.join().unwrap();
@@ -558,14 +538,14 @@ mod tests {
         assert_eq!(
             run_ids.last(),
             Some(&None),
-            "эгресс после прогона: run_id=NULL (set_run сброшен): {run_ids:?}"
+            "эгресс вне прогона (RunCtx::NONE): run_id=NULL: {run_ids:?}"
         );
     }
 
-    /// run_id-корреляция + сброс: во время прогона guarded-эгресс несёт run_id == id прогона; после
-    /// прогона (RunScope::Drop) следующий эгресс несёт run_id=NULL.
+    /// run_id-корреляция (AGENT-3a): во время прогона guarded-эгресс несёт run_id == id прогона
+    /// (ПРОБРОШЕННЫЙ per-call RunCtx); эгресс ВНЕ прогона (явный RunCtx::NONE) несёт run_id=NULL.
     #[tokio::test]
-    async fn egress_during_run_is_correlated_then_reset() {
+    async fn egress_during_run_is_correlated_uncorrelated_outside() {
         let (_d, db) = open().await;
         let audit = Arc::new(EgressAudit::default());
         audit.set_writer(db.writer().clone());
@@ -582,7 +562,7 @@ mod tests {
             url.clone(),
         ));
         let ai = ai_with_tools(Some(provider));
-        let h = handler(&db, ai, audit.clone());
+        let h = handler(&db, ai);
 
         let run_id = run_store::create_run(db.writer(), "t", None, None)
             .await
@@ -590,10 +570,15 @@ mod tests {
         h.handle(&job_for(run_id)).await.expect("джоба ok");
         server.join().unwrap();
 
-        // Эгресс ПОСЛЕ прогона: должен нести run_id=NULL (set_run сброшен Drop'ом RunScope).
+        // Эгресс ВНЕ прогона (тот же клиент, но явный RunCtx::NONE): несёт run_id=NULL — корреляция
+        // не «протекает» из завершённого прогона (нет глобального слота; ctx — per-call).
         let (addr2, server2) = serve_once();
         client
-            .get(&format!("http://{addr2}/after"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr2}/after"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback ok");
         server2.join().unwrap();
@@ -606,55 +591,200 @@ mod tests {
         assert_eq!(
             run_ids.last(),
             Some(&None),
-            "эгресс ПОСЛЕ прогона: run_id=NULL (сброшен): {run_ids:?}"
+            "эгресс вне прогона (RunCtx::NONE): run_id=NULL: {run_ids:?}"
         );
     }
 
-    /// RunScope::Drop сбрасывает set_run даже при ПАНИКЕ внутри скоупа (no-leak run_id). Читаем
-    /// выставленный run_id косвенно: in-memory audit-запись (через guarded denied-эгресс — сети не
-    /// касается) несёт текущий run_id из слота. Эгрессы — ДО/ПОСЛЕ catch_unwind (async), а сам скоуп
-    /// создаётся/паникует/дропается СИНХРОННО внутри catch_unwind.
+    /// **THE GATE (AGENT-3a, регрессия-гард конкурентности)**: ДВА overlapping прогона A и B, каждый
+    /// делает guarded-эгресс к СВОЕЙ хост-идентичности (`run-a.test` / `run-b.test`), драйвятся
+    /// ИНТЕРЛИВНО через `tokio::join!` двух `handle`-вызовов. Каждый провайдер на КАЖДОМ ходу шлёт
+    /// несколько GET'ов с `yield_now` между ними → исполнения двух прогонов чередуются на рантайме.
+    ///
+    /// ИНВАРИАНТ: КАЖДАЯ durable-строка `egress_audit` с host=`run-a.test` несёт run_id == run_a, а
+    /// каждая с host=`run-b.test` — run_id == run_b. НОЛЬ кросс-тегирования.
+    ///
+    /// Почему ВАЛИЛОСЬ на старом процесс-глобальном слоте: `set_run(A)` и `set_run(B)` писали в ОДИН
+    /// `Mutex<Option<i64>>`; при чередовании B перетирал слот, и часть эгресса прогона A читала слот=B
+    /// (и наоборот) → строки `run-a.test` с run_id=B. С per-call `RunCtx` слота нет: каждый прогон
+    /// несёт свой ctx в СВОЁМ стеке вызова до самого `record()`, перетереть нечем.
     #[tokio::test]
-    async fn run_scope_resets_set_run_on_panic() {
+    async fn concurrent_runs_tag_egress_independently() {
+        // Резолвер: ЛЮБОЙ хост → loopback-адрес мок-сервера (домены проходят как allowlisted +
+        // резолвятся в loopback, который для Chat допустим local-first; host в audit = доменное имя).
+        struct ToLoopback(std::net::IpAddr);
+        #[async_trait]
+        impl crate::net::Resolver for ToLoopback {
+            async fn resolve(&self, _host: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+                Ok(vec![self.0])
+            }
+        }
+
+        // Мок-сервер, принимающий МНОГО соединений (оба прогона бьют по одному адресу; различаем по
+        // доменному host в audit, не по сокету). Дренажный поток в фоне.
+        fn serve_many() -> std::net::SocketAddr {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    match conn {
+                        Ok(mut sock) => {
+                            let mut buf = [0u8; 1024];
+                            let _ = sock.read(&mut buf);
+                            let _ =
+                                sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            addr
+        }
+
+        /// Провайдер, делающий за ход несколько guarded-GET'ов к своему URL с `yield_now` между ними
+        /// (форсит чередование двух прогонов на рантайме), затем Final.
+        struct MultiEgressProvider {
+            client: GuardedClient,
+            url: String,
+            per_turn: usize,
+        }
+        #[async_trait]
+        impl ToolCapableProvider for MultiEgressProvider {
+            async fn stream_chat_tools(
+                &self,
+                _m: &[ChatMessage],
+                _t: &[ToolSpec],
+                _o: &mut (dyn FnMut(String) + Send),
+                _c: &Arc<AtomicBool>,
+                ctx: RunCtx,
+            ) -> AiResult<ToolTurn> {
+                for _ in 0..self.per_turn {
+                    // Эгресс под ПРОБРОШЕННЫМ ctx (run_id этого прогона). yield → даём шанс другому прогону.
+                    let _ = self.client.get(&self.url, EgressFeature::Chat, ctx).await;
+                    tokio::task::yield_now().await;
+                }
+                Ok(ToolTurn::Final("done".into()))
+            }
+            fn model_id(&self) -> &str {
+                "multi-egress"
+            }
+        }
+
+        let (_d, db) = open().await;
+        let audit = Arc::new(EgressAudit::default());
+        audit.set_writer(db.writer().clone());
+        let mock_ip = serve_many().ip();
+
+        // Общая политика: ОБА доменных хоста в allowlist (host-гейт пропустит), резолв → loopback.
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        policy.set_allowlist(["run-a.test".to_string(), "run-b.test".to_string()]);
+        let make_client = || {
+            GuardedClient::new(policy.clone(), audit.clone(), |b| b)
+                .unwrap()
+                .with_resolver(Arc::new(ToLoopback(mock_ip)))
+        };
+
+        const PER_TURN: usize = 6;
+        let provider_a = Arc::new(MultiEgressProvider {
+            client: make_client(),
+            url: "http://run-a.test/v1/chat".to_string(),
+            per_turn: PER_TURN,
+        });
+        let provider_b = Arc::new(MultiEgressProvider {
+            client: make_client(),
+            url: "http://run-b.test/v1/chat".to_string(),
+            per_turn: PER_TURN,
+        });
+
+        let ai_a = ai_with_tools(Some(provider_a));
+        let ai_b = ai_with_tools(Some(provider_b));
+        let h_a = handler(&db, ai_a);
+        let h_b = handler(&db, ai_b);
+
+        let run_a = run_store::create_run(db.writer(), "задача A", None, None)
+            .await
+            .unwrap();
+        let run_b = run_store::create_run(db.writer(), "задача B", None, None)
+            .await
+            .unwrap();
+        assert_ne!(run_a, run_b);
+
+        // ИНТЕРЛИВНЫЙ драйв: оба прогона исполняются конкурентно.
+        let job_a = job_for(run_a);
+        let job_b = job_for(run_b);
+        let (ra, rb) = tokio::join!(h_a.handle(&job_a), h_b.handle(&job_b));
+        ra.expect("джоба A ok");
+        rb.expect("джоба B ok");
+
+        // Снимок durable: (host, run_id). Проверяем НОЛЬ кросс-тегирования.
+        let rows = durable_host_run_ids(&db).await;
+        let a_rows: Vec<_> = rows.iter().filter(|(h, _)| h == "run-a.test").collect();
+        let b_rows: Vec<_> = rows.iter().filter(|(h, _)| h == "run-b.test").collect();
+        assert!(!a_rows.is_empty(), "прогон A сделал эгресс: {rows:?}");
+        assert!(!b_rows.is_empty(), "прогон B сделал эгресс: {rows:?}");
+
+        for (host, rid) in &a_rows {
+            assert_eq!(
+                *rid,
+                Some(run_a),
+                "host={host} (прогон A) обязан нести run_id={run_a}, а не {rid:?} — КРОСС-ТЕГИРОВАНИЕ"
+            );
+        }
+        for (host, rid) in &b_rows {
+            assert_eq!(
+                *rid,
+                Some(run_b),
+                "host={host} (прогон B) обязан нести run_id={run_b}, а не {rid:?} — КРОСС-ТЕГИРОВАНИЕ"
+            );
+        }
+        // И симметрично: НИ одна строка run_a не привязана к чужому хосту, и наоборот.
+        for (host, rid) in &rows {
+            if *rid == Some(run_a) {
+                assert_eq!(host, "run-a.test", "run_id=A на чужом хосте {host}");
+            }
+            if *rid == Some(run_b) {
+                assert_eq!(host, "run-b.test", "run_id=B на чужом хосте {host}");
+            }
+        }
+    }
+
+    /// AGENT-3a (per-call корреляция без скоупа/слота): эгресс с ПРОБРОШЕННЫМ RunCtx::run несёт этот
+    /// run_id; следующий эгресс с RunCtx::NONE по тому же клиенту — снова None. Нет общего состояния,
+    /// которое могло бы «залипнуть» (заменяет удалённый `run_scope_resets_set_run_on_panic`: с явным
+    /// per-call ctx нет слота, который паника могла бы оставить выставленным).
+    #[tokio::test]
+    async fn per_call_runctx_does_not_leak_between_egress() {
         let audit = Arc::new(EgressAudit::default());
         let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
         let client = GuardedClient::new(policy, audit.clone(), |b| b).unwrap();
 
-        // Скоуп создаётся и паникует синхронно; Drop отрабатывает при разворачивании стека.
-        let audit_in = audit.clone();
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _scope = RunScope::enter(audit_in, 42);
-            panic!("boom");
-        }));
-        assert!(res.is_err(), "паника проброшена");
-
-        // После панического Drop слот сброшен → denied-эгресс (без сокета) несёт run_id=None.
+        // Эгресс с ctx run=7 (denied — без сокета) несёт run_id=Some(7).
         let _ = client
-            .get("http://blocked.example.com/y", EgressFeature::Probe)
+            .get(
+                "http://blocked.example.com/x",
+                EgressFeature::Probe,
+                RunCtx::run(7),
+            )
+            .await;
+        assert_eq!(
+            audit.entries().last().and_then(|e| e.run_id),
+            Some(7),
+            "эгресс с RunCtx::run(7) несёт run_id=7"
+        );
+
+        // Следующий эгресс с RunCtx::NONE — снова None: ctx не «протекает» (нет глобального слота).
+        let _ = client
+            .get(
+                "http://blocked.example.com/z",
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await;
         assert_eq!(
             audit.entries().last().and_then(|e| e.run_id),
             None,
-            "Drop сбросил set_run даже при панике (последующий эгресс run_id=None)"
+            "следующий эгресс с RunCtx::NONE → run_id=None (ctx per-call, не залипает)"
         );
-
-        // Контр-проба: внутри живого скоупа эгресс несёт run_id.
-        {
-            let _scope = RunScope::enter(audit.clone(), 7);
-            let _ = client
-                .get("http://blocked.example.com/x", EgressFeature::Probe)
-                .await;
-            assert_eq!(
-                audit.entries().last().and_then(|e| e.run_id),
-                Some(7),
-                "внутри скоупа эгресс несёт run_id"
-            );
-        }
-        // Скоуп вышел нормально → снова None.
-        let _ = client
-            .get("http://blocked.example.com/z", EgressFeature::Probe)
-            .await;
-        assert_eq!(audit.entries().last().and_then(|e| e.run_id), None);
     }
 
     /// AGENT-MEM-1: с подключённой MockAgentMemory recall попадает в НАЧАЛЬНЫЙ контекст прогона —
@@ -665,7 +795,6 @@ mod tests {
         use crate::agent::memory::MockAgentMemory;
 
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
 
         // Провайдер, ЗАХВАТЫВАЮЩИЙ messages первого хода, затем Final.
         struct CapturingProvider {
@@ -679,6 +808,7 @@ mod tests {
                 _t: &[ToolSpec],
                 _o: &mut (dyn FnMut(String) + Send),
                 _c: &Arc<AtomicBool>,
+                _ctx: RunCtx,
             ) -> AiResult<ToolTurn> {
                 let mut slot = self.seen.lock().unwrap();
                 if slot.is_none() {
@@ -700,7 +830,7 @@ mod tests {
             "⟦m⟧\nфакт #1\nпользователь любит Rust\n⟦m⟧",
         )];
         let mem: Arc<dyn AgentMemory> = Arc::new(MockAgentMemory::with_canned(canned));
-        let h = handler_with_memory(&db, ai, audit, mem);
+        let h = handler_with_memory(&db, ai, mem);
 
         let run_id = run_store::create_run(db.writer(), "почини сборку", None, Some("auto"))
             .await
@@ -730,7 +860,6 @@ mod tests {
     #[tokio::test]
     async fn handler_without_memory_keeps_agent2_context() {
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
         struct CapturingProvider {
             seen: Mutex<Option<Vec<ChatMessage>>>,
         }
@@ -742,6 +871,7 @@ mod tests {
                 _t: &[ToolSpec],
                 _o: &mut (dyn FnMut(String) + Send),
                 _c: &Arc<AtomicBool>,
+                _ctx: RunCtx,
             ) -> AiResult<ToolTurn> {
                 let mut slot = self.seen.lock().unwrap();
                 if slot.is_none() {
@@ -757,7 +887,7 @@ mod tests {
             seen: Mutex::new(None),
         });
         let ai = ai_with_tools(Some(provider.clone()));
-        let h = handler(&db, ai, audit); // memory=None
+        let h = handler(&db, ai); // memory=None
 
         let run_id = run_store::create_run(db.writer(), "задача", None, None)
             .await
@@ -805,7 +935,6 @@ mod tests {
     async fn run_due_defers_agent_run_under_interactive() {
         use std::collections::HashMap;
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
         // Провайдер ПАНИКует при вызове — доказывает, что под busy цикл не стартовал.
         struct PanicProvider;
         #[async_trait]
@@ -816,6 +945,7 @@ mod tests {
                 _t: &[ToolSpec],
                 _o: &mut (dyn FnMut(String) + Send),
                 _c: &Arc<AtomicBool>,
+                _ctx: RunCtx,
             ) -> AiResult<ToolTurn> {
                 panic!("под backpressure цикл не должен стартовать");
             }
@@ -824,7 +954,7 @@ mod tests {
             }
         }
         let ai = ai_with_tools(Some(Arc::new(PanicProvider)));
-        let h: Arc<dyn JobHandler> = Arc::new(handler(&db, ai, audit));
+        let h: Arc<dyn JobHandler> = Arc::new(handler(&db, ai));
         let mut reg = scheduler::Registry::new();
         reg.insert(KIND_AGENT_RUN.to_string(), h);
 
@@ -869,12 +999,11 @@ mod tests {
     async fn run_due_runs_agent_run_when_not_busy() {
         use std::collections::HashMap;
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
         let provider = Arc::new(FakeToolProvider::scripted(vec![Ok(ToolTurn::Final(
             "готово".into(),
         ))]));
         let ai = ai_with_tools(Some(provider));
-        let h: Arc<dyn JobHandler> = Arc::new(handler(&db, ai, audit));
+        let h: Arc<dyn JobHandler> = Arc::new(handler(&db, ai));
         let mut reg = scheduler::Registry::new();
         reg.insert(KIND_AGENT_RUN.to_string(), h);
 
@@ -901,12 +1030,11 @@ mod tests {
     async fn crash_recovery_requeues_stale_run_then_worker_completes_it() {
         use std::collections::HashMap;
         let (_d, db) = open().await;
-        let audit = Arc::new(EgressAudit::default());
         let provider = Arc::new(FakeToolProvider::scripted(vec![Ok(ToolTurn::Final(
             "восстановлено".into(),
         ))]));
         let ai = ai_with_tools(Some(provider));
-        let h: Arc<dyn JobHandler> = Arc::new(handler(&db, ai, audit));
+        let h: Arc<dyn JobHandler> = Arc::new(handler(&db, ai));
         let mut reg = scheduler::Registry::new();
         reg.insert(KIND_AGENT_RUN.to_string(), h);
 
@@ -962,6 +1090,22 @@ mod tests {
                 let mut stmt = c.prepare("SELECT run_id FROM egress_audit ORDER BY id")?;
                 let rows = stmt
                     .query_map([], |r| r.get::<_, Option<i64>>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// (host, run_id) всех durable-строк egress_audit — для проверки per-run атрибуции без кросс-тегирования.
+    async fn durable_host_run_ids(db: &Database) -> Vec<(String, Option<i64>)> {
+        db.reader()
+            .query(|c| {
+                let mut stmt = c.prepare("SELECT host, run_id FROM egress_audit ORDER BY id")?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })

@@ -231,6 +231,30 @@ impl EgressPolicy {
     }
 }
 
+/// Контекст прогона для корреляции эгресса (ADR D7-b: **ЯВНО ПРОБРАСЫВАЕТСЯ**, не task-local/процесс-
+/// глобальный слот). Несёт AgentRun `run_id`, который [`EgressAudit::record`] пишет в audit-строку.
+/// `Copy` — дёшево передаётся по значению на каждый guarded-вызов (как `cancel` ездит по per-call
+/// каналу). Конструкторы ТОЛЬКО [`RunCtx::NONE`] (нет прогона: chat/embed/probe вне агента) и
+/// [`RunCtx::run`] (живой прогон) — `Default` НЕ выводим намеренно, чтобы выбор «без run-context» был
+/// всегда ЯВНЫМ и grep-аудируемым (исключаем `..Default::default()`, молча дающий uncorrelated-строку
+/// внутри прогона). Per-call значение УСТРАНЯЕТ кросс-атрибуцию конкурентных прогонов (каждый несёт
+/// свой run_id в СВОЁМ стеке вызова, общего изменяемого состояния нет).
+#[derive(Debug, Clone, Copy)]
+pub struct RunCtx {
+    pub run_id: Option<i64>,
+}
+
+impl RunCtx {
+    /// Нет прогона: эгресс не коррелирован (chat/embed/probe вне агента). `run_id=None` в audit.
+    pub const NONE: RunCtx = RunCtx { run_id: None };
+    /// Живой прогон агента: эгресс коррелируется на этот `run_id` в audit.
+    pub fn run(run_id: i64) -> Self {
+        Self {
+            run_id: Some(run_id),
+        }
+    }
+}
+
 /// Запись audit-журнала эгресса (E8, AC-EGR-4): ось `{feature, host, bytes_out?, decision}` —
 /// ОТДЕЛЬНЫЙ тип от брокерского `AuditEntry` (другая ось: plugin_id/method/target). Без URL/тела.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,8 +266,9 @@ pub struct EgressAuditEntry {
     pub bytes_out: Option<usize>,
     pub allowed: bool,
     pub denied_reason: Option<String>,
-    /// AgentRun correlation-id (SCAFFOLD, P0-b): связывает эгресс с прогоном агента. None для всех
-    /// текущих вызывающих (run-контекста ещё нет) — колонка+сеттер заложены под будущее threading.
+    /// AgentRun correlation-id (AGENT-3a): связывает эгресс с прогоном агента. Берётся из
+    /// ЯВНО ПРОБРОШЕННОГО [`RunCtx`] per-call (не из процесс-глобального слота): `Some(run_id)` для
+    /// эгресса внутри прогона, `None` для chat/embed/probe вне агента ([`RunCtx::NONE`]).
     pub run_id: Option<i64>,
 }
 
@@ -265,9 +290,6 @@ pub struct EgressAudit {
     /// (только in-memory). `Mutex` (а не `OnceLock`): десктоп может переоткрыть vault (новая БД) →
     /// сток заменяем. `WriteActor` клонируется дёшево (общий канал).
     writer: Mutex<Option<crate::db::WriteActor>>,
-    /// AgentRun correlation-id (SCAFFOLD): `record()` читает его в каждую запись. Остаётся None у всех
-    /// текущих вызывающих; сеттер заложен под будущее run-context threading (НЕ реализуется здесь).
-    run_id: Mutex<Option<i64>>,
 }
 
 impl EgressAudit {
@@ -277,14 +299,6 @@ impl EgressAudit {
     pub fn set_writer(&self, writer: crate::db::WriteActor) {
         if let Ok(mut w) = self.writer.lock() {
             *w = Some(writer);
-        }
-    }
-
-    /// SCAFFOLD (P0-b): выставляет текущий AgentRun correlation-id, который `record()` пишет в каждую
-    /// запись. Все текущие вызывающие оставляют None — это задел под run-context threading агента.
-    pub fn set_run(&self, run_id: Option<i64>) {
-        if let Ok(mut r) = self.run_id.lock() {
-            *r = run_id;
         }
     }
 
@@ -301,8 +315,11 @@ impl EgressAudit {
         host: String,
         bytes_out: Option<usize>,
         decision: &Result<(), EgressDenied>,
+        ctx: RunCtx,
     ) {
-        let run_id = self.run_id.lock().map(|r| *r).unwrap_or(None);
+        // run_id берётся из ЯВНО ПРОБРОШЕННОГО per-call контекста (AGENT-3a) — НЕ из процесс-глобального
+        // слота: конкурентные прогоны не перетирают атрибуцию друг друга (каждый несёт свой ctx в стеке).
+        let run_id = ctx.run_id;
         let entry = EgressAuditEntry {
             feature,
             // Хост хранится РЕАЛЬНЫЙ: локальная БД vault — собственный аудит пользователя; Redacted —
@@ -447,25 +464,29 @@ impl GuardedClient {
     }
 
     /// GET через политику (probe `/v1/models`). `bytes_out=None` — тела запроса нет (AC-EGR-10).
+    /// `ctx` — per-call run-контекст (AGENT-3a): [`RunCtx::NONE`] вне прогона, [`RunCtx::run`] внутри.
     pub async fn get(
         &self,
         url: &str,
         feature: EgressFeature,
+        ctx: RunCtx,
     ) -> Result<reqwest::Response, NetError> {
-        let client = self.authorize(url, feature, None).await?;
+        let client = self.authorize(url, feature, None, ctx).await?;
         Ok(client.get(url).send().await?)
     }
 
     /// POST JSON-тела через политику. `bytes_out=Some(len)` — длина сериализованного тела ЗАПРОСА
     /// известна и для стрим-ответа (AC-EGR-10: best-effort, тело запроса, не ответ).
+    /// `ctx` — per-call run-контекст (AGENT-3a): [`RunCtx::NONE`] вне прогона, [`RunCtx::run`] внутри.
     pub async fn post_json(
         &self,
         url: &str,
         feature: EgressFeature,
         body: &serde_json::Value,
+        ctx: RunCtx,
     ) -> Result<reqwest::Response, NetError> {
         let bytes = serde_json::to_vec(body).expect("serde_json::Value сериализуем всегда");
-        let client = self.authorize(url, feature, Some(bytes.len())).await?;
+        let client = self.authorize(url, feature, Some(bytes.len()), ctx).await?;
         Ok(client
             .post(url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -488,6 +509,7 @@ impl GuardedClient {
         url: &str,
         feature: EgressFeature,
         bytes_out: Option<usize>,
+        ctx: RunCtx,
     ) -> Result<reqwest::Client, NetError> {
         let parsed = reqwest::Url::parse(url).ok();
         let host = parsed
@@ -501,6 +523,7 @@ impl GuardedClient {
                     url.to_string(),
                     bytes_out,
                     &Err(EgressDenied::HostNotAllowed(Redacted::new(url.to_string()))),
+                    ctx,
                 )
                 .await;
             return Err(NetError::BadUrl);
@@ -509,7 +532,7 @@ impl GuardedClient {
         // 1. Host-string-гейт (metadata/офлайн/opt-in/allowlist|приватность) — без сети.
         if let Err(denied) = self.policy.check(&host, feature) {
             self.audit
-                .record(feature, host, bytes_out, &Err(denied.clone()))
+                .record(feature, host, bytes_out, &Err(denied.clone()), ctx)
                 .await;
             return Err(NetError::from(denied));
         }
@@ -522,7 +545,7 @@ impl GuardedClient {
                 // Резолв упал — НЕ молчаливый allow: типизированный отказ + audit как denial.
                 let denied = EgressDenied::HostNotAllowed(Redacted::new(host.clone()));
                 self.audit
-                    .record(feature, host, bytes_out, &Err(denied.clone()))
+                    .record(feature, host, bytes_out, &Err(denied.clone()), ctx)
                     .await;
                 return Err(NetError::from(denied));
             }
@@ -530,14 +553,14 @@ impl GuardedClient {
         let ip_decision = check_resolved_ips(&ips, feature.denies_private());
         if let Err(denied) = ip_decision {
             self.audit
-                .record(feature, host, bytes_out, &Err(denied.clone()))
+                .record(feature, host, bytes_out, &Err(denied.clone()), ctx)
                 .await;
             return Err(NetError::from(denied));
         }
 
         // 3. Успех — ровно одна audit-запись.
         self.audit
-            .record(feature, host.clone(), bytes_out, &Ok(()))
+            .record(feature, host.clone(), bytes_out, &Ok(()), ctx)
             .await;
 
         // 4. ПИН: пересобираем клиент с `resolve_to_addrs` на первый проверенный IP (порт из URL).
@@ -640,7 +663,11 @@ mod tests {
         );
         let (client, _) = guarded(policy_with_switch().0);
         let resp = client
-            .get(&format!("http://{addr}/"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback разрешён local-first");
         assert_eq!(
@@ -654,6 +681,7 @@ mod tests {
             .get(
                 "http://169.254.169.254/latest/meta-data",
                 EgressFeature::Probe,
+                RunCtx::NONE,
             )
             .await;
         assert!(
@@ -804,6 +832,7 @@ mod tests {
                 &format!("http://{addr}/v1/chat/completions"),
                 EgressFeature::Chat,
                 &serde_json::json!({"messages": []}),
+                RunCtx::NONE,
             )
             .await;
         assert!(matches!(
@@ -833,6 +862,7 @@ mod tests {
             .get(
                 "http://egress-foundation-test.invalid/v1/models",
                 EgressFeature::Probe,
+                RunCtx::NONE,
             )
             .await;
         assert!(
@@ -851,14 +881,18 @@ mod tests {
         let (client, _) = guarded(policy);
 
         let resp = client
-            .get(&format!("http://{addr}/v1/models"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/v1/models"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback живёт при офлайн (E2)");
         assert_eq!(resp.status().as_u16(), 200);
         server.join().unwrap();
 
         let denied = client
-            .get("http://203.0.113.7/", EgressFeature::Probe)
+            .get("http://203.0.113.7/", EgressFeature::Probe, RunCtx::NONE)
             .await;
         assert!(matches!(
             denied,
@@ -875,12 +909,20 @@ mod tests {
         let (client, audit) = guarded(policy.clone());
 
         client
-            .get(&format!("http://{addr}/v1/models"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/v1/models"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback разрешён");
         server.join().unwrap();
         let denied = client
-            .get("http://api.example.com/v1/models", EgressFeature::Probe)
+            .get(
+                "http://api.example.com/v1/models",
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await;
         assert!(matches!(denied, Err(NetError::Denied(_))));
 
@@ -916,12 +958,17 @@ mod tests {
                 &format!("http://{addr}/v1/chat/completions"),
                 EgressFeature::Chat,
                 &body,
+                RunCtx::NONE,
             )
             .await
             .expect("loopback разрешён");
         server.join().unwrap();
         let denied_get = client
-            .get("http://api.example.com/x", EgressFeature::Probe)
+            .get(
+                "http://api.example.com/x",
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await;
         assert!(denied_get.is_err());
 
@@ -955,6 +1002,7 @@ mod tests {
                 "http://chat.example.com/v1/chat/completions",
                 EgressFeature::Chat,
                 &serde_json::json!({"messages": []}),
+                RunCtx::NONE,
             )
             .await;
         assert!(
@@ -986,7 +1034,7 @@ mod tests {
         // URL-порт должен совпасть с портом пина → используем порт мок-сервера в URL.
         let url = format!("http://chat.example.com:{}/v1/models", addr.port());
         let resp = client
-            .get(&url, EgressFeature::Chat)
+            .get(&url, EgressFeature::Chat, RunCtx::NONE)
             .await
             .expect("loopback/LAN для chat живёт (local-first)");
         assert_eq!(resp.status().as_u16(), 200);
@@ -1000,7 +1048,11 @@ mod tests {
         // Коннекта к 192.168.0.31 не будет (нет сервера) — но гард обязан ПРОПУСТИТЬ (ip-allow),
         // отказ может прийти только сетевой (Http), не Denied. Проверяем именно это разграничение.
         let res = client2
-            .get("http://lan.example.com/v1/models", EgressFeature::Chat)
+            .get(
+                "http://lan.example.com/v1/models",
+                EgressFeature::Chat,
+                RunCtx::NONE,
+            )
             .await;
         assert!(
             !matches!(res, Err(NetError::Denied(_))),
@@ -1017,7 +1069,11 @@ mod tests {
         let (client, audit) = guarded_with_ips(policy, vec!["10.0.0.7".parse().unwrap()]);
 
         let res = client
-            .get("https://feeds.example.com/rss", EgressFeature::NewsFeed)
+            .get(
+                "https://feeds.example.com/rss",
+                EgressFeature::NewsFeed,
+                RunCtx::NONE,
+            )
             .await;
         assert!(
             matches!(res, Err(NetError::Denied(EgressDenied::HostNotAllowed(_)))),
@@ -1033,7 +1089,11 @@ mod tests {
         policy.set_allowlist(["chat.example.com".to_string()]);
         let (client, audit) = guarded_with_ips(policy, vec![]);
         let res = client
-            .get("http://chat.example.com/v1/models", EgressFeature::Chat)
+            .get(
+                "http://chat.example.com/v1/models",
+                EgressFeature::Chat,
+                RunCtx::NONE,
+            )
             .await;
         assert!(matches!(
             res,
@@ -1051,7 +1111,7 @@ mod tests {
             guarded(policy)
         };
         let res = client
-            .get("definitely not a url", EgressFeature::Probe)
+            .get("definitely not a url", EgressFeature::Probe, RunCtx::NONE)
             .await;
         assert!(matches!(res, Err(NetError::BadUrl)));
         assert_eq!(audit.len(), 1);
@@ -1110,13 +1170,21 @@ mod tests {
 
         // Успех на loopback.
         client
-            .get(&format!("http://{addr}/v1/models"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/v1/models"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback разрешён");
         server.join().unwrap();
         // Отказ: публичный хост вне allowlist (api.example.com в allowlist → используем другой).
         let denied = client
-            .get("http://blocked.example.com/x", EgressFeature::Probe)
+            .get(
+                "http://blocked.example.com/x",
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await;
         assert!(matches!(denied, Err(NetError::Denied(_))));
 
@@ -1169,6 +1237,7 @@ mod tests {
                 "http://chat.example.com/v1/chat/completions",
                 EgressFeature::Chat,
                 &serde_json::json!({"messages": []}),
+                RunCtx::NONE,
             )
             .await;
         assert!(
@@ -1196,7 +1265,11 @@ mod tests {
         let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
         let (client, audit) = guarded(policy_with_switch().0);
         client
-            .get(&format!("http://{addr}/v1/models"), EgressFeature::Probe)
+            .get(
+                &format!("http://{addr}/v1/models"),
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await
             .expect("loopback разрешён");
         server.join().unwrap();
@@ -1227,7 +1300,9 @@ mod tests {
         // (127.0.0.1 резолвится в себя), затем success-`record()` AWAITED, затем строится пин-клиент.
         // send НЕ делается → между коммитом записи и проверкой БД сетевого I/O нет.
         let url = format!("http://{addr}/v1/models");
-        let authorized = client.authorize(&url, EgressFeature::Probe, None).await;
+        let authorized = client
+            .authorize(&url, EgressFeature::Probe, None, RunCtx::NONE)
+            .await;
         assert!(authorized.is_ok(), "loopback success-путь: {authorized:?}");
 
         // Durable success-строка УЖЕ есть сразу после возврата authorize, ДО какого-либо send.
@@ -1267,7 +1342,11 @@ mod tests {
         // Сток = A. Один denied-эгресс → строка в A.
         audit.set_writer(db_a.writer().clone());
         let denied_a = client
-            .get("http://first.example.com/x", EgressFeature::Probe)
+            .get(
+                "http://first.example.com/x",
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await;
         assert!(matches!(denied_a, Err(NetError::Denied(_))));
 
@@ -1279,7 +1358,11 @@ mod tests {
         // Переоткрытие vault: подменяем сток на B. Следующий эгресс должен попасть ТОЛЬКО в B.
         audit.set_writer(db_b.writer().clone());
         let denied_b = client
-            .get("http://second.example.com/y", EgressFeature::Probe)
+            .get(
+                "http://second.example.com/y",
+                EgressFeature::Probe,
+                RunCtx::NONE,
+            )
             .await;
         assert!(matches!(denied_b, Err(NetError::Denied(_))));
 
