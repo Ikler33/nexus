@@ -2797,7 +2797,9 @@ name = "nexus-agentd"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "dirs 5.0.1",
  "nexus-core",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

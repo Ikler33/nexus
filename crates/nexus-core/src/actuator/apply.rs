@@ -151,7 +151,16 @@ fn drift_msg(rel: &str) -> String {
 /// drift-проверка Рубежа 3 (по `classify_hash`) ПЛЮС безусловный ре-рид прямо перед записью (Fix 2,
 /// overwrite-путь, независим от classify_hash). 3d ОБЯЗАН передавать `classify_hash` на пути живого
 /// changeset, чтобы дрейф ловился и до снапшота (Рубеж 3), а не только ре-ридом перед записью.
-pub async fn apply_action(
+///
+/// ## No-bypass — КОМПАЙЛ-ТАЙМ (AGENT-3e Fix-2)
+/// Видимость СУЖЕНА до `pub(in crate::actuator)`: вызвать `apply_action` может ТОЛЬКО код внутри
+/// модуля `actuator` — на практике это [`super::orchestrate::apply_now`] (единственный не-тестовый
+/// вызыватель) и юнит-тесты этого файла. Любой будущий инструмент/модуль ВНЕ `crate::actuator`,
+/// попытавшийся применить действие напрямую в обход гейта автономии
+/// ([`super::orchestrate::dispatch_action`]), НЕ СКОМПИЛИРУЕТСЯ (E0603). Так no-bypass-гарантия (3e
+/// hard-gate #1) держится компилятором, а не конвенцией. НЕ расширять видимость обратно до `pub` —
+/// это вернёт ungated direct-apply путь, который go-live-ревью требует закрыть.
+pub(in crate::actuator) async fn apply_action(
     action: &Action,
     run_id: i64,
     canon_root: &Path,

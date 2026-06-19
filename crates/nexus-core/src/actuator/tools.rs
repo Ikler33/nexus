@@ -1,25 +1,32 @@
-//! Файловые инструменты-актуаторы (AGENT-3c, Фаза 1): `note.create` / `note.edit` /
+//! Файловые инструменты-актуаторы (AGENT-3c/3e, Фаза 1): `note.create` / `note.edit` /
 //! `note.set_frontmatter` — ПЕРВЫЕ инструменты с побочным эффектом (запись в vault).
 //!
 //! Каждый реализует [`crate::agent::Tool`]. `invoke(args)`:
 //!  1. строгий разбор аргументов (`serde` + `deny_unknown_fields`) → [`ToolError::BadArgs`] (I-4 fail-closed);
 //!  2. сборка типизированного [`Action`];
-//!  3. [`classify`] (ctx: canon_root + overwrite_threshold);
-//!  4. диспетч по тиру риска:
-//!     - HardBlocked(reason) → [`ToolError::Exec`] (зафенсенная ошибка — цикл выживает, модель восстановится);
-//!     - Auto → [`apply_action`] → строка-резюме (tool-результат);
-//!     - Confirm(reason) → **3c: «proposed — awaiting approval (not applied)», БЕЗ записи** (см. ниже).
+//!  3. **маршрутизация ТОЛЬКО через гейт автономии** [`orchestrate::dispatch_action`] — он сам делает
+//!     classify (порог из политики, не хардкод), матч `(RiskTier × autonomy)`, эмиссию Proposal/Diff,
+//!     спрос [`DecisionSource`] и apply ТОЛЬКО одобренного с ОБЯЗАТЕЛЬНЫМ `classify_hash`;
+//!  4. свёртка [`DispatchOutcome`] в строку-результат инструмента (Applied/Rejected → Ok; Failed →
+//!     зафенсенная [`ToolError::Exec`], HardBlocked → [`ToolError::Exec`] изнутри гейта).
 //!
-//! ## Граница 3c / 3d (Confirm-seam)
-//! Здесь Confirm НЕ исполняется и НЕ пишет — возвращается явная строка «предложено, ожидает подтверждения
-//! (не применено)». Настоящее предложение (эмиссия Proposal/Diff AgentEvent), DecisionSource и enforcement
-//! автономии (confirm|auto на уровне прогона) — AGENT-3d. `overwrite_threshold` здесь — РАЗУМНАЯ КОНСТАНТА
-//! [`OVERWRITE_THRESHOLD`]; в 3d/agentd порог придёт из конфигурации прогона. Это намеренный шов: см. TODO.
+//! ## AGENT-3e hard-gate #1 — НЕТ УНГЕЙТЕД-ПУТИ
+//! 3c-helper `dispatch` (classify→ПРЯМОЙ `apply_action` для Auto, стаб-строка для Confirm) **УДАЛЁН**.
+//! Инструмент БОЛЬШЕ НЕ зовёт [`apply_action`] напрямую и НЕ имеет ветки, минующей решение автономии:
+//! ЕДИНСТВЕННЫЙ путь, которым зарегистрированный инструмент касается диска, — через
+//! [`orchestrate::dispatch_action`] (он один зовёт `apply_action`). Это акцептанс go-live: ни одно
+//! применение не происходит без гейта.
 //!
-//! ## Граница 3c / 3e (нет проводки)
-//! Инструменты ЗДЕСЬ только конструируются и гоняются В ТЕСТАХ. Регистрации в `ToolRegistry`/agentd и
-//! живой проводки НЕТ — это AGENT-3e (после autonomy-гейта 3d). Поэтому реальный vault пользователя
-//! этим срезом не затрагивается: все дисковые записи — во временных vault'ах тестов.
+//! ## Зависимости гейта несёт сам инструмент ([`GatedToolCtx`])
+//! Инструмент держит ВСЕ deps `dispatch_action`: `canon_root`, `ledger` ([`AuditSink`]), `run_id`,
+//! [`DispatchPolicy`] (автономия прогона + `overwrite_threshold` из конфига + общий на прогон
+//! [`BlastRadius`]), [`DecisionSource`] и [`EventSink`] — все за [`Arc`] (инструменты дёшево
+//! клонируются в реестр и переживают прогон; политика делит счётчик blast-radius между инструментами).
+//!
+//! ## Проводка (AGENT-3e)
+//! Реестр гейтнутых инструментов СТРОИТСЯ ПО-ПРОГОННО в [`crate::agent::AgentRunHandler`] — и ТОЛЬКО
+//! когда конфиг-флаг `agent_actuator_enabled` ВКЛ (по умолчанию ВЫКЛ → стабы, реальный vault не
+//! затронут). Headless agentd собирает их с [`super::decision::PolicyDefault`] (auto-DENY).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,100 +37,73 @@ use serde::Deserialize;
 use crate::agent::{Tool, ToolError, ToolSpec};
 
 use super::action::Action;
-use super::apply::{apply_action, ApplyOutcome, AuditSink};
-use super::classify::{classify, BlockReason, ClassifyCtx, RiskTier};
+use super::apply::AuditSink;
+use super::decision::DecisionSource;
+use super::orchestrate::{dispatch_action, DispatchPolicy, EventSink};
 
-/// Порог «крупной перезаписи» (байт) для NoteEdit → Confirm(LargeOverwrite). РАЗУМНАЯ КОНСТАНТА 3c.
-/// TODO(AGENT-3d): источник — конфигурация прогона (run-policy), не хардкод; ctx будет собираться из неё.
+/// Порог «крупной перезаписи» (байт) по умолчанию для NoteEdit → Confirm(LargeOverwrite). РАЗУМНЫЙ
+/// ДЕФОЛТ конфига (`ai.chat`/run-policy задаёт реальный порог). Гейт получает порог из
+/// [`DispatchPolicy::overwrite_threshold`], а НЕ из этой константы — она лишь дефолт композиционного корня.
 pub const OVERWRITE_THRESHOLD: usize = 64 * 1024;
 
-/// Общий контекст файловых инструментов: канонизированный корень vault + ledger + run_id прогона.
-/// Держим за [`Arc`] — инструменты дёшево клонируются в реестр и переживают прогон.
+/// Общий контекст гейтнутых файловых инструментов: ВСЕ зависимости [`dispatch_action`]. Держим за
+/// [`Arc`] (инструменты дёшево клонируются в реестр и переживают прогон). [`DispatchPolicy`] несёт
+/// общий на прогон [`super::orchestrate::BlastRadius`] — поэтому инструменты ДЕЛЯТ счётчик авто-
+/// применений (анти-усталость работает кросс-инструментно в рамках одного прогона).
 #[derive(Clone)]
-pub struct FileToolCtx {
+pub struct GatedToolCtx {
     /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие resolve_vault_path_for_write).
     pub canon_root: Arc<PathBuf>,
     /// Idempotency-ledger (`agent_actions`).
     pub ledger: Arc<AuditSink>,
     /// Идентификатор прогона (ledger-корреляция + idempotency_key).
     pub run_id: i64,
+    /// Политика автономии прогона + порог перезаписи + blast-radius (общий счётчик).
+    pub policy: DispatchPolicy,
+    /// Источник решений по предложениям (headless agentd → [`super::decision::PolicyDefault`] auto-DENY).
+    pub decision_source: Arc<dyn DecisionSource>,
+    /// Приёмник Proposal/Diff (headless → [`super::orchestrate::TracingEventSink`]).
+    pub events: Arc<dyn EventSink>,
 }
 
-impl FileToolCtx {
-    /// Собрать контекст из канон-корня, ledger и run_id.
-    pub fn new(canon_root: PathBuf, ledger: AuditSink, run_id: i64) -> Self {
+impl GatedToolCtx {
+    /// Собрать контекст из всех deps гейта. `canon_root`/`ledger` оборачиваются в [`Arc`] (политика и
+    /// источники уже разделяемы).
+    pub fn new(
+        canon_root: PathBuf,
+        ledger: AuditSink,
+        run_id: i64,
+        policy: DispatchPolicy,
+        decision_source: Arc<dyn DecisionSource>,
+        events: Arc<dyn EventSink>,
+    ) -> Self {
         Self {
             canon_root: Arc::new(canon_root),
             ledger: Arc::new(ledger),
             run_id,
-        }
-    }
-
-    fn classify_ctx(&self) -> ClassifyCtx<'_> {
-        ClassifyCtx {
-            root: self.canon_root.as_path(),
-            overwrite_threshold: OVERWRITE_THRESHOLD,
+            policy,
+            decision_source,
+            events,
         }
     }
 }
 
-/// Сообщение HardBlocked для зафенсенной ошибки инструмента (модель видит причину и переспрашивает).
-fn block_message(reason: &BlockReason) -> String {
-    match reason {
-        BlockReason::PathEscape => {
-            "путь вне vault (traversal/абсолютный) — действие заблокировано".to_string()
-        }
-        BlockReason::ReservedPath => {
-            "путь в служебном каталоге (.nexus/.git/dotfile) — действие заблокировано".to_string()
-        }
-        BlockReason::EmptyPath => "пустой/невалидный путь — действие заблокировано".to_string(),
-    }
-}
-
-/// Сообщение «предложено, ожидает подтверждения (не применено)» для Confirm-тира (3c-seam).
-fn proposed_message(rel: &str) -> String {
-    format!(
-        "предложено — ожидает подтверждения (НЕ применено): перезапись {rel} превышает порог \
-         авто-применения. Подтверждение/применение — AGENT-3d."
+/// ЕДИНСТВЕННЫЙ путь применения зарегистрированного инструмента — через гейт автономии
+/// [`dispatch_action`]. Свёртывает [`DispatchOutcome`] в строку-результат: Applied/Rejected → `Ok`
+/// (резюме), Failed → зафенсенная [`ToolError::Exec`]; HardBlocked гейт сам отдаёт как `Err(Exec)`.
+/// НЕТ ветки, минующей решение автономии (3e hard-gate #1).
+async fn dispatch_via_gate(ctx: &GatedToolCtx, action: Action) -> Result<String, ToolError> {
+    dispatch_action(
+        &action,
+        ctx.run_id,
+        &ctx.policy,
+        &ctx.decision_source,
+        ctx.events.as_ref(),
+        ctx.ledger.as_ref(),
+        ctx.canon_root.as_path(),
     )
-}
-
-/// Общий диспетч classify→apply/propose для всех трёх инструментов. Возвращает строку-результат
-/// (Auto/Confirm) либо [`ToolError`] (HardBlocked/ошибка apply). Confirm и HardBlocked НЕ пишут на диск.
-async fn dispatch(ctx: &FileToolCtx, action: Action) -> Result<String, ToolError> {
-    let rel = action.target.rel().to_string();
-    match classify(&action, &ctx.classify_ctx()) {
-        // HardBlocked — зафенсенная ошибка (цикл выживает). Диск НЕ трогаем.
-        RiskTier::HardBlocked(reason) => Err(ToolError::Exec(block_message(&reason))),
-        // Confirm — 3c: proposed-not-applied. БЕЗ записи. (Реальный аппрув — 3d.)
-        RiskTier::Confirm(_) => Ok(proposed_message(&rel)),
-        // Auto — исполняем через apply_action (все рубежи внутри).
-        RiskTier::Auto => {
-            // classify_hash=None: 3c-инструмент не несёт at-classify on-disk hash (его источник —
-            // changeset/proposal 3d). apply делает существенные рубежи (canonicalize/existence/ledger/
-            // snapshot) и при None пропускает ТОЛЬКО drift-сравнение — остальные рубежи в силе.
-            match apply_action(
-                &action,
-                ctx.run_id,
-                ctx.canon_root.as_path(),
-                &ctx.ledger,
-                None,
-            )
-            .await
-            {
-                ApplyOutcome::Executed { summary, .. } => Ok(summary),
-                ApplyOutcome::AlreadyDone(outcome) => {
-                    Ok(format!("уже применено ранее (идемпотентно): {outcome}"))
-                }
-                // PathEscape ловит симлинк ВНУТРИ vault наружу (lexical classify пропустил как Auto) —
-                // зафенсенная ошибка, диск (внешняя цель) НЕ тронут.
-                ApplyOutcome::PathEscape => Err(ToolError::Exec(format!(
-                    "путь {rel} разрешился ВНЕ vault (симлинк-побег) — запись заблокирована"
-                ))),
-                ApplyOutcome::Failed(reason) => Err(ToolError::Exec(reason)),
-            }
-        }
-    }
+    .await?
+    .into_tool_result()
 }
 
 /// Аргументы [`NoteCreateTool`] / [`NoteEditTool`]: путь + тело. `deny_unknown_fields` (I-4).
@@ -156,11 +136,11 @@ fn parse_args<T: for<'de> Deserialize<'de>>(args: &str) -> Result<T, ToolError> 
 
 /// `note.create` — создаёт НОВУЮ заметку (fail-closed: цель не должна существовать).
 pub struct NoteCreateTool {
-    ctx: FileToolCtx,
+    ctx: GatedToolCtx,
 }
 
 impl NoteCreateTool {
-    pub fn new(ctx: FileToolCtx) -> Self {
+    pub fn new(ctx: GatedToolCtx) -> Self {
         Self { ctx }
     }
 }
@@ -188,17 +168,17 @@ impl Tool for NoteCreateTool {
 
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: PathContentArgs = parse_args(args)?;
-        dispatch(&self.ctx, Action::note_create(a.path, a.content)).await
+        dispatch_via_gate(&self.ctx, Action::note_create(a.path, a.content)).await
     }
 }
 
 /// `note.edit` — перезаписывает тело СУЩЕСТВУЮЩЕЙ заметки (снапшот-перед-правкой; крупная → Confirm).
 pub struct NoteEditTool {
-    ctx: FileToolCtx,
+    ctx: GatedToolCtx,
 }
 
 impl NoteEditTool {
-    pub fn new(ctx: FileToolCtx) -> Self {
+    pub fn new(ctx: GatedToolCtx) -> Self {
         Self { ctx }
     }
 }
@@ -227,18 +207,18 @@ impl Tool for NoteEditTool {
 
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: PathContentArgs = parse_args(args)?;
-        dispatch(&self.ctx, Action::note_edit(a.path, a.content)).await
+        dispatch_via_gate(&self.ctx, Action::note_edit(a.path, a.content)).await
     }
 }
 
 /// `note.set_frontmatter` — ставит ОДИН плоский top-level frontmatter-ключ (через единственный
 /// санкционированный писатель `set_frontmatter_field`; снапшот-перед-правкой).
 pub struct SetFrontmatterTool {
-    ctx: FileToolCtx,
+    ctx: GatedToolCtx,
 }
 
 impl SetFrontmatterTool {
-    pub fn new(ctx: FileToolCtx) -> Self {
+    pub fn new(ctx: GatedToolCtx) -> Self {
         Self { ctx }
     }
 }
@@ -267,20 +247,28 @@ impl Tool for SetFrontmatterTool {
 
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: FrontmatterArgs = parse_args(args)?;
-        dispatch(&self.ctx, Action::frontmatter(a.path, a.key, a.value)).await
+        dispatch_via_gate(&self.ctx, Action::frontmatter(a.path, a.key, a.value)).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actuator::decision::{BatchDecision, ChannelDecision, ItemDecision, PolicyDefault};
+    use crate::actuator::orchestrate::CollectingSink;
+    use crate::agent::event::AgentEvent;
     use crate::db::Database;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// Временный vault + БД + FileToolCtx (canon_root канонизирован). Возвращаем dir, чтобы жил.
-    async fn setup() -> (TempDir, PathBuf, FileToolCtx) {
+    /// Порог перезаписи теста (мал, чтобы крупная правка легко перешагнула в Confirm).
+    const T: usize = 100;
+    /// Кэп blast-radius теста.
+    const CAP: u32 = 8;
+
+    /// Временный vault + БД + AuditSink (canon_root канонизирован). Возвращаем dir, чтобы жил.
+    async fn setup() -> (TempDir, PathBuf, AuditSink) {
         let dir = TempDir::new().unwrap();
         let canon_root = dir.path().canonicalize().unwrap();
         let db = Database::open(canon_root.join(".nexus/nexus.db"))
@@ -288,8 +276,29 @@ mod tests {
             .unwrap();
         let sink = AuditSink::new(db.writer().clone(), db.reader().clone());
         std::mem::forget(db); // writer/reader клонированы в sink — актор жив, пока жив клон.
-        let ctx = FileToolCtx::new(canon_root.clone(), sink, 1);
-        (dir, canon_root, ctx)
+        (dir, canon_root, sink)
+    }
+
+    /// Гейтнутый ctx с заданной автономией и источником решений (CollectingSink для событий).
+    fn ctx_with(
+        canon_root: &std::path::Path,
+        sink: &AuditSink,
+        autonomy: Option<&str>,
+        decision_source: Arc<dyn DecisionSource>,
+    ) -> GatedToolCtx {
+        GatedToolCtx::new(
+            canon_root.to_path_buf(),
+            sink.clone(),
+            1,
+            DispatchPolicy::new(autonomy, T, CAP),
+            decision_source,
+            Arc::new(CollectingSink::new()),
+        )
+    }
+
+    /// auto-прогон + PolicyDefault (не должен быть спрошен для Auto-тира).
+    fn auto_ctx(canon_root: &std::path::Path, sink: &AuditSink) -> GatedToolCtx {
+        ctx_with(canon_root, sink, Some("auto"), Arc::new(PolicyDefault))
     }
 
     fn read(root: &std::path::Path, rel: &str) -> String {
@@ -304,11 +313,11 @@ mod tests {
         fs::write(abs, content).unwrap();
     }
 
-    /// note.create: пишет новую заметку (Auto), возвращает резюме.
+    /// auto-run + note.create (Auto-тир) → ПРИМЕНЯЕТСЯ ЧЕРЕЗ ГЕЙТ (файл записан, резюме apply).
     #[tokio::test]
-    async fn note_create_writes() {
-        let (_d, root, ctx) = setup().await;
-        let t = NoteCreateTool::new(ctx);
+    async fn auto_run_note_create_applies_via_gate() {
+        let (_d, root, sink) = setup().await;
+        let t = NoteCreateTool::new(auto_ctx(&root, &sink));
         let res = t
             .invoke(r#"{"path":"Notes/N.md","content":"hi"}"#)
             .await
@@ -317,42 +326,44 @@ mod tests {
         assert_eq!(read(&root, "Notes/N.md"), "hi");
     }
 
-    /// note.edit: малая правка (Auto) → перезапись; крупная → Confirm proposed-not-applied (НЕ пишет).
+    /// auto-run + note.edit малая (Auto) → перезапись через гейт; КРУПНАЯ (> порог) → Confirm-тир,
+    /// который даже в auto-прогоне ПРЕДЛАГАЕТСЯ и под PolicyDefault auto-DENY-отклоняется (НЕ пишет).
     #[tokio::test]
-    async fn note_edit_small_auto_large_proposed() {
-        let (_d, root, ctx) = setup().await;
+    async fn auto_run_small_edit_applies_large_proposed_then_denied() {
+        let (_d, root, sink) = setup().await;
         write_existing(&root, "E.md", "orig");
-        let t = NoteEditTool::new(ctx);
+        let t = NoteEditTool::new(auto_ctx(&root, &sink));
 
-        // Малая правка — Auto, пишет.
+        // Малая правка — Auto-тир, в auto-прогоне применяется через гейт.
         let res = t
             .invoke(r#"{"path":"E.md","content":"small edit"}"#)
             .await
             .unwrap();
-        assert!(res.contains("отредактирована"));
+        assert!(res.contains("отредактирована"), "резюме: {res}");
         assert_eq!(read(&root, "E.md"), "small edit");
 
-        // Крупная правка (> OVERWRITE_THRESHOLD) — Confirm → proposed, НЕ применяется.
-        let big = "x".repeat(OVERWRITE_THRESHOLD + 1);
+        // Крупная правка (> T) — Confirm-тир: auto НЕ перекрывает Confirm → предложение → PolicyDefault
+        // отклоняет → файл НЕ перезаписан. (Резюме гейта — «отклонено».)
+        let big = "x".repeat(T + 1);
         let args = format!(r#"{{"path":"E.md","content":"{big}"}}"#);
         let res = t.invoke(&args).await.unwrap();
         assert!(
-            res.contains("ожидает подтверждения") && res.contains("НЕ применено"),
-            "Confirm-резюме: {res}"
+            res.contains("отклонено"),
+            "Confirm под PolicyDefault: {res}"
         );
         assert_eq!(
             read(&root, "E.md"),
             "small edit",
-            "Confirm НЕ перезаписал файл"
+            "Confirm-тир НЕ перезаписал файл (auto не override Confirm)"
         );
     }
 
-    /// note.set_frontmatter: ставит ключ (Auto), сохраняет YAML/тело.
+    /// auto-run + note.set_frontmatter (Auto) → ставит ключ через гейт, сохраняет YAML/тело.
     #[tokio::test]
-    async fn set_frontmatter_writes_key() {
-        let (_d, root, ctx) = setup().await;
+    async fn auto_run_set_frontmatter_applies_via_gate() {
+        let (_d, root, sink) = setup().await;
         write_existing(&root, "F.md", "---\ntitle: T\n---\n\nbody\n");
-        let t = SetFrontmatterTool::new(ctx);
+        let t = SetFrontmatterTool::new(auto_ctx(&root, &sink));
         let res = t
             .invoke(r#"{"path":"F.md","key":"status","value":"done"}"#)
             .await
@@ -362,11 +373,77 @@ mod tests {
         assert!(new.contains("status: done") && new.contains("title: T"));
     }
 
-    /// HardBlocked (../escape, .nexus/x) → ToolError::Exec, диск НЕ тронут (файла нет).
+    /// **3e hard-gate #1**: confirm-прогон + Auto-тир под PolicyDefault → инструмент ПРЕДЛАГАЕТ
+    /// (Proposal/Diff эмитированы) и auto-DENY-отклоняется → файл НЕ записан. НЕТ ветки, которая бы
+    /// применила инструмент в обход решения автономии (доказательство «нет ungated-пути»).
+    #[tokio::test]
+    async fn confirm_run_auto_tier_proposes_not_written_under_policy_default() {
+        let (_d, root, sink) = setup().await;
+        let events = Arc::new(CollectingSink::new());
+        let ctx = GatedToolCtx::new(
+            root.clone(),
+            sink.clone(),
+            1,
+            DispatchPolicy::new(Some("confirm"), T, CAP),
+            Arc::new(PolicyDefault),
+            events.clone(),
+        );
+        let t = NoteCreateTool::new(ctx);
+
+        let res = t
+            .invoke(r#"{"path":"Notes/N.md","content":"hi"}"#)
+            .await
+            .unwrap();
+        // Предложено и отклонено (PolicyDefault) — файл НЕ создан.
+        assert!(res.contains("отклонено"), "résumé: {res}");
+        assert!(
+            !root.join("Notes/N.md").exists(),
+            "confirm-run Auto под PolicyDefault: файл НЕ записан (нет ungated-пути)"
+        );
+        // Гейт реально ПРЕДЛОЖИЛ (Proposal эмитирован) — а не молча применил.
+        assert!(
+            events
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Proposal { .. })),
+            "Auto-тир в confirm-прогоне эмитит Proposal"
+        );
+    }
+
+    /// confirm-прогон + Auto-тир + Approve (ChannelDecision) → ПРИМЕНЯЕТСЯ через гейт (файл записан).
+    /// Доказывает, что путь applied-через-гейт у инструмента работает (apply случается ТОЛЬКО по решению).
+    #[tokio::test]
+    async fn confirm_run_approve_applies_via_gate() {
+        let (_d, root, sink) = setup().await;
+        // action_id строки proposed в пустой БД = 1 (первый INSERT). Засеваем Approve по id=1.
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(BatchDecision::from_pairs([(1, ItemDecision::Approve)]))
+            .await
+            .unwrap();
+        let ctx = GatedToolCtx::new(
+            root.clone(),
+            sink.clone(),
+            1,
+            DispatchPolicy::new(Some("confirm"), T, CAP),
+            Arc::new(chan),
+            Arc::new(CollectingSink::new()),
+        );
+        let t = NoteCreateTool::new(ctx);
+
+        let res = t
+            .invoke(r#"{"path":"Notes/N.md","content":"hello"}"#)
+            .await
+            .unwrap();
+        assert!(res.contains("создана"), "résumé: {res}");
+        assert_eq!(read(&root, "Notes/N.md"), "hello", "записан после Approve");
+    }
+
+    /// HardBlocked (../escape, .nexus/x) → ToolError::Exec ИЗ ГЕЙТА (при любой автономии), диск НЕ
+    /// тронут (файла нет). Апрув не разблокирует HardBlocked.
     #[tokio::test]
     async fn hardblocked_paths_error_no_write() {
-        let (_d, root, ctx) = setup().await;
-        let create = NoteCreateTool::new(ctx.clone());
+        let (_d, root, sink) = setup().await;
+        let create = NoteCreateTool::new(auto_ctx(&root, &sink));
 
         // Traversal-побег.
         let err = create
@@ -396,12 +473,13 @@ mod tests {
     }
 
     /// Строгие аргументы: неизвестное поле / отсутствующее поле / не-JSON → BadArgs (I-4 fail-closed).
+    /// Разбор аргументов происходит ДО гейта — ошибочный args не доходит до dispatch_action.
     #[tokio::test]
     async fn strict_args_bad_args() {
-        let (_d, _root, ctx) = setup().await;
-        let create = NoteCreateTool::new(ctx.clone());
-        let edit = NoteEditTool::new(ctx.clone());
-        let fm = SetFrontmatterTool::new(ctx);
+        let (_d, root, sink) = setup().await;
+        let create = NoteCreateTool::new(auto_ctx(&root, &sink));
+        let edit = NoteEditTool::new(auto_ctx(&root, &sink));
+        let fm = SetFrontmatterTool::new(auto_ctx(&root, &sink));
 
         // Неизвестное поле (deny_unknown_fields).
         assert!(matches!(
@@ -427,11 +505,17 @@ mod tests {
     /// Имена инструментов — дотированные kinds (идут в AgentEvent ToolCall.kind).
     #[tokio::test]
     async fn tool_names_are_dotted_kinds() {
-        let (_d, _root, ctx) = setup().await;
-        assert_eq!(NoteCreateTool::new(ctx.clone()).spec().name, "note.create");
-        assert_eq!(NoteEditTool::new(ctx.clone()).spec().name, "note.edit");
+        let (_d, root, sink) = setup().await;
         assert_eq!(
-            SetFrontmatterTool::new(ctx).spec().name,
+            NoteCreateTool::new(auto_ctx(&root, &sink)).spec().name,
+            "note.create"
+        );
+        assert_eq!(
+            NoteEditTool::new(auto_ctx(&root, &sink)).spec().name,
+            "note.edit"
+        );
+        assert_eq!(
+            SetFrontmatterTool::new(auto_ctx(&root, &sink)).spec().name,
             "note.set_frontmatter"
         );
     }

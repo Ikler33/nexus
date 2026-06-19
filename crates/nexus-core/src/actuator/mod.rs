@@ -13,8 +13,9 @@
 //! - [`apply`] (3c) — [`apply::apply_action`]: host-side исполнитель за всеми рубежами (canonicalize/
 //!   symlink rampart → drift → ledger write-before-act → snapshot manual=true → atomic_write → finish)
 //!   + [`apply::AuditSink`] (обёртка ledger).
-//! - [`tools`] (3c) — файловые инструменты [`tools::NoteCreateTool`]/[`tools::NoteEditTool`]/
-//!   [`tools::SetFrontmatterTool`] (impl [`crate::agent::Tool`]): classify→apply/propose диспетч.
+//! - [`tools`] (3c/3e) — файловые инструменты [`tools::NoteCreateTool`]/[`tools::NoteEditTool`]/
+//!   [`tools::SetFrontmatterTool`] (impl [`crate::agent::Tool`]): `invoke` маршрутизирует ТОЛЬКО через
+//!   гейт [`orchestrate::dispatch_action`] (3e hard-gate #1 — ungated direct-apply путь УДАЛЁН).
 //! - [`decision`] (3d) — [`decision::DecisionSource`] (fail-closed [`decision::PolicyDefault`] +
 //!   [`decision::ChannelDecision`]) + [`decision::ProposalBatch`]/[`decision::BatchDecision`]
 //!   (отсутствующий айтем = Reject).
@@ -22,9 +23,10 @@
 //!   autonomy)`, эмиссия Proposal/Diff ([`orchestrate::EventSink`]), blast-radius-кэп, propose→decide→
 //!   apply/reject ledger-флоу; `classify_hash` ОБЯЗАТЕЛЕН на пути apply; `overwrite_threshold` ИЗ КОНФИГА.
 //!
-//! Регистрация в реестр/agentd и ЖИВАЯ ПРОВОДКА — AGENT-3e. ЗДЕСЬ её НЕТ намеренно: гейт автономии,
-//! DecisionSource и инструменты только конструируются и гоняются В ТЕСТАХ (с `ChannelDecision`/моком/
-//! коллектором) — реальный vault пользователя срезом не затронут. kill-switch / полный token-bucket — AGENT-5.
+//! ЖИВАЯ ПРОВОДКА (AGENT-3e): [`crate::agent::AgentRunHandler`] строит реестр гейтнутых инструментов
+//! ПО-ПРОГОННО — но ТОЛЬКО когда конфиг-флаг `agent_actuator_enabled` ВКЛ (по умолчанию ВЫКЛ → стабы,
+//! реальный vault не затронут из коробки). Headless agentd собирает их с [`decision::PolicyDefault`]
+//! (auto-DENY). polный token-bucket — AGENT-5.
 
 pub mod action;
 pub mod apply;
@@ -35,7 +37,11 @@ pub mod orchestrate;
 pub mod tools;
 
 pub use action::{Action, ActionTarget};
-pub use apply::{apply_action, ApplyOutcome, AuditSink};
+// `apply_action` НЕ реэкспортируется (AGENT-3e Fix-2): его видимость сужена до
+// `pub(in crate::actuator)` (no-bypass компайл-тайм). Реэкспорт `pub` поднял бы её обратно до
+// крейт-публичной — вернув ungated direct-apply путь. Снаружи актуатора применение идёт ТОЛЬКО
+// через `orchestrate::dispatch_action` (гейт автономии). Здесь реэкспортируем лишь типы исхода/леджера.
+pub use apply::{ApplyOutcome, AuditSink};
 pub use audit::{
     canonical_args, idempotency_key, replay_decision, transition, ActionEntry, ActionRow,
     ReplayDecision, UndoCols,
@@ -47,9 +53,10 @@ pub use decision::{
 };
 pub use orchestrate::{
     dispatch_action, BlastRadius, CollectingSink, DispatchOutcome, DispatchPolicy, EventSink,
+    TracingEventSink,
 };
 pub use tools::{
-    FileToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
+    GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
 };
 
 /// Состояние действия в статус-машине актуатора (значения `agent_actions.state`).

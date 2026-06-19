@@ -58,6 +58,12 @@ use super::decision::{DecisionSource, ItemDecision, ProposalBatch, ProposalItem}
 /// Приёмник [`AgentEvent`] для гейта (эмиссия Proposal/Diff). Object-safe (`&self` + interior mutability
 /// у реализаций) — гейт держит `&dyn EventSink` и шлёт события синхронно. 3e свяжет его с `on_event`
 /// цикла (адаптер-обёртка над `FnMut`); тесты используют [`CollectingSink`] (копит события в `Vec`).
+///
+// FIXME(UI-1): связать EventSink.emit → on_event цикла / control-plane-стрим для real-time ревью
+// предложений. Сегодня единственная живая реализация на проводке — [`TracingEventSink`] (headless
+// agentd): предложения только ЛОГИРУЮТСЯ, не стримятся в UI; под [`PolicyDefault`] они тут же
+// auto-DENY-отклоняются (нет интерактивного одобрения). UI-1 добавит человеко-в-петле поверхность
+// (стрим Proposal/Diff пользователю + ответ Approve/Reject через DecisionSource).
 pub trait EventSink: Send + Sync {
     /// Принять событие хода (Proposal/Diff и т.п.).
     fn emit(&self, event: AgentEvent);
@@ -85,6 +91,46 @@ impl CollectingSink {
 impl EventSink for CollectingSink {
     fn emit(&self, event: AgentEvent) {
         self.events.lock().expect("event mutex").push(event);
+    }
+}
+
+/// EventSink-мост для HEADLESS agentd (AGENT-3e §4): `tracing`-логирует Proposal/Diff. Долговечная
+/// запись changeset'а — это ledger (`agent_actions`); UI-стриминг предложений в `on_event`/AgentEvent
+/// поток — это UI-1 (нет UI у headless). Здесь — наблюдаемость: оператор видит в логе, ЧТО гейт
+/// предложил. Под [`PolicyDefault`] предложения короткоживущи (тут же auto-DENY-отклоняются), но лог
+/// предложения остаётся для аудита. Прочие события игнорируются (цикл шлёт свои через `on_event`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TracingEventSink;
+
+impl TracingEventSink {
+    /// Новый sink (бесстейтовый).
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl EventSink for TracingEventSink {
+    fn emit(&self, event: AgentEvent) {
+        match event {
+            AgentEvent::Proposal { run_id, files } => {
+                tracing::info!(
+                    run_id,
+                    files = files.len(),
+                    paths = ?files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+                    "actuator: предложение changeset'а (headless — решает DecisionSource)"
+                );
+            }
+            AgentEvent::Diff {
+                path,
+                add,
+                del,
+                status,
+            } => {
+                tracing::info!(%path, add, del, ?status, "actuator: дифф предложенного файла");
+            }
+            // Прочие события цикла идут через on_event — здесь не наша забота.
+            _ => {}
+        }
     }
 }
 

@@ -26,6 +26,34 @@ pub struct AiConfig {
     /// без пересборки (см. `ai::QwenTokenizer`). Относительный путь резолвится вызывающим.
     #[serde(default)]
     pub tokenizer_path: Option<String>,
+
+    /// **GO-LIVE АКТУАТОРА (AGENT-3e), SAFE BY DEFAULT.** Когда `false` (ДЕФОЛТ) — прогон агента
+    /// работает ТОЛЬКО со стаб-инструментами (echo/noop); реальный vault НИКОГДА не затрагивается из
+    /// коробки. Когда `true` — [`crate::agent::AgentRunHandler`] регистрирует файловые инструменты-
+    /// актуаторы (note.create/edit/set_frontmatter), маршрутизируемые ИСКЛЮЧИТЕЛЬНО через гейт
+    /// автономии (`actuator::dispatch_action`). Даже включённый, headless-agentd под `PolicyDefault`
+    /// авто-применяет лишь Auto-тир на `autonomy=auto`-прогоне; Confirm-тир всегда предлагается и
+    /// auto-DENY-отклоняется (нет UI/контрол-плейна). Владелец opt-in'ит осознанно.
+    #[serde(default)]
+    pub agent_actuator_enabled: bool,
+
+    /// Порог «крупной перезаписи» (байт) для гейта актуатора → Confirm-тир (`DispatchPolicy
+    /// .overwrite_threshold`). `None` → дефолт [`crate::actuator::OVERWRITE_THRESHOLD`] (64 KiB).
+    /// Только при `agent_actuator_enabled=true` имеет эффект.
+    #[serde(default)]
+    pub agent_overwrite_threshold: Option<usize>,
+
+    /// Кэп кумулятивных авто-применений Auto-тира В ПРОГОНЕ (анти-усталость): за ним даже Auto-тир
+    /// форсирует предложение. `None` → дефолт [`AiConfig::DEFAULT_BLAST_RADIUS_CAP`]. Только при
+    /// `agent_actuator_enabled=true` имеет эффект.
+    #[serde(default)]
+    pub agent_blast_radius_cap: Option<u32>,
+}
+
+impl AiConfig {
+    /// Дефолт кэпа blast-radius прогона, если не задан в конфиге (консервативный — небольшая пачка
+    /// авто-применений до форс-предложения).
+    pub const DEFAULT_BLAST_RADIUS_CAP: u32 = 16;
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,6 +167,32 @@ mod tests {
             .ai
             .tokenizer_path
             .is_none());
+    }
+
+    /// AGENT-3e SAFE-BY-DEFAULT: флаг актуатора по умолчанию FALSE (нет ключа → стабы, реальный vault
+    /// не затронут). Связанные пороги по умолчанию None (берётся ядровый дефолт). Включается явно.
+    #[test]
+    fn agent_actuator_disabled_by_default() {
+        // Пустой ai-блок → флаг false, пороги None.
+        let cfg = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert!(
+            !cfg.ai.agent_actuator_enabled,
+            "актуатор ВЫКЛ по умолчанию (safe-by-default)"
+        );
+        assert!(cfg.ai.agent_overwrite_threshold.is_none());
+        assert!(cfg.ai.agent_blast_radius_cap.is_none());
+
+        // Полностью пустой конфиг → тоже false.
+        assert!(!LocalConfig::default().ai.agent_actuator_enabled);
+
+        // Явный opt-in + пороги читаются.
+        let on = LocalConfig::parse(
+            r#"{"ai":{"agent_actuator_enabled":true,"agent_overwrite_threshold":4096,"agent_blast_radius_cap":4}}"#,
+        )
+        .unwrap();
+        assert!(on.ai.agent_actuator_enabled);
+        assert_eq!(on.ai.agent_overwrite_threshold, Some(4096));
+        assert_eq!(on.ai.agent_blast_radius_cap, Some(4));
     }
 
     #[test]
