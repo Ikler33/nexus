@@ -122,15 +122,23 @@ async fn run() -> Result<(), String> {
             .unwrap_or_default(),
     );
 
-    // RAG-фундамент: эмбеддер + векторный индекс. Реплика build_rag МИНИМАЛЬНО — без §6.5-реконсиляции
-    // модели (она трогает app-приватные settings/чистку чанков; здесь skeleton, переиндексацию не гоним).
+    // RAG-фундамент + ПАМЯТЬ агента (AGENT-MEM-1): эмбеддер + note-RAG индекс + ТРИ индекса памяти
+    // (переписка/факты/эпизоды). build_rag_min теперь ГОНИТ reconcile_embedding_model (CORE-2a #2):
+    // stale on-disk индекс под другой моделью/dim сбрасывается ДО открытия → нет DimMismatch на первом
+    // search/upsert (раньше skeleton наследовал чужой индекс — комментарий-предупреждение был, гард — нет).
     let rag = match &local_cfg {
-        Some(cfg) => build_rag_min(&root, cfg, &egress_policy, &egress_audit).await,
+        Some(cfg) => build_rag_min(&db, &root, cfg, &egress_policy, &egress_audit).await,
         None => None,
     };
-    let (vectors, embedder) = match rag {
-        Some((embedder, vec_index)) => (Some(vec_index), Some(embedder)),
-        None => (None, None),
+    let (vectors, chat_vectors, memory_vectors, episode_vectors, embedder) = match rag {
+        Some(r) => (
+            Some(r.vectors),
+            Some(r.chat_vectors),
+            Some(r.memory_vectors),
+            Some(r.episode_vectors),
+            Some(r.embedder),
+        ),
+        None => (None, None, None, None, None),
     };
 
     // Chat-провайдеры (реплика build_chat): обычный (reasoning) + быстрый (без reasoning).
@@ -210,6 +218,21 @@ async fn run() -> Result<(), String> {
     // время прогона). НЕ регистрировать рядом второй egress-делающий kind и НЕ параллелить прогоны,
     // пока `set_run` не заменён на ЯВНО-ПРОБРАСЫВАЕМЫЙ `RunCtx` (ADR-009 §P0-b). Это БЛОКИРУЮЩИЙ гейт
     // AGENT-3 (актуатор / web-egress) — там RunCtx + concurrent-run тест обязательны до мержа.
+    // AGENT-MEM-1: мост к памяти. Строим всегда (degrade-safe): None-эмбеддер/индексы → recall пуст,
+    // прогон стартует с голым контекстом (поведение AGENT-2). exclude_session=None — прогон не
+    // привязан к chat-сессии (линковка agent_runs.session_id — поздний срез); прогон агента пишет в
+    // agent_runs/memory_facts, НЕ в chat_messages/chat_episodes, так что протечь его сессии в N4b/EP
+    // физически нечему. remember (Add-only) работает и без эмбеддера (пишет факт в БД).
+    let agent_memory: Arc<dyn nexus_core::agent::AgentMemory> =
+        Arc::new(nexus_core::agent::VaultAgentMemory::new(
+            db.reader().clone(),
+            db.writer().clone(),
+            embedder.clone(),
+            memory_vectors.clone(),
+            chat_vectors.clone(),
+            episode_vectors.clone(),
+            None,
+        ));
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
         Arc::new(nexus_core::agent::AgentRunHandler::new(
@@ -218,6 +241,7 @@ async fn run() -> Result<(), String> {
             ai_client.clone(),
             egress_audit.clone(),
             agent_context_window,
+            Some(agent_memory),
         )),
     );
     let registry = Arc::new(registry);
@@ -400,19 +424,26 @@ async fn load_local_config(root: &Path) -> Option<LocalConfig> {
         .ok()
 }
 
-/// МИНИМАЛЬНАЯ реплика `vault::build_rag`: эмбеддер + основной векторный индекс. Опущено относительно
-/// app: §6.5-реконсиляция модели и параллельные индексы памяти (chat/memory/episode — не нужны skeleton'у).
-/// Размерность: из конфига или пробой у сервера. ВАЖНО: без реконсиляции существующий
-/// `.nexus/vectors.usearch`, записанный ПОД ДРУГОЙ моделью/dim (прошлый прогон десктопа), открывается
-/// как есть → рассинхрон всплывёт как `DimMismatch` на ПЕРВОМ search/upsert. Безопасно ТОЛЬКО потому, что
-/// skeleton индекс не читает/не пишет; RAG-запрашивающий agentd ОБЯЗАН сперва прогнать
-/// `reconcile_embedding_model` (или эквивалентный dim/model-гард).
+/// RAG + ПАМЯТЬ агента headless (AGENT-MEM-1): эмбеддер + note-RAG индекс + ТРИ индекса памяти
+/// (переписка/факты/эпизоды). Зеркало `vault::build_rag`, но: (1) ГОНИТ `reconcile_embedding_model`
+/// (CORE-2a #2) ДО открытия индексов — stale on-disk индекс под другой моделью/dim сбрасывается, иначе
+/// запрос новой моделью против старого индекса → `DimMismatch`/семантический мусор; (2) открывает все
+/// четыре индекса (десктоп держит их в VaultContext, agentd теперь читает память тем же эмбеддером).
+struct RagBundle {
+    embedder: Arc<dyn EmbeddingProvider>,
+    vectors: Arc<VectorIndex>,
+    chat_vectors: Arc<VectorIndex>,
+    memory_vectors: Arc<VectorIndex>,
+    episode_vectors: Arc<VectorIndex>,
+}
+
 async fn build_rag_min(
+    db: &Database,
     root: &Path,
     cfg: &LocalConfig,
     policy: &Arc<EgressPolicy>,
     audit: &Arc<EgressAudit>,
-) -> Option<(Arc<dyn EmbeddingProvider>, Arc<VectorIndex>)> {
+) -> Option<RagBundle> {
     let emb = cfg.ai.embedding.as_ref()?;
     let model = emb.model.clone().unwrap_or_else(|| "embedding".to_string());
 
@@ -442,12 +473,36 @@ async fn build_rag_min(
         ai::default_prefixes(&model),
     );
 
-    let vectors = VectorIndex::open(root.join(".nexus").join("vectors.usearch"), dim)
-        .map_err(|e| tracing::warn!(error = %e, "usearch open не удался — RAG off"))
+    // CORE-2a #2: сверяем on-disk индексы с активной моделью/dim ДО открытия. Смена → сброс файлов
+    // (перезаполнятся индексатором/бэкфиллом). Ошибка БД → RAG off (не открываем потенциально
+    // несовместимые индексы).
+    let reindex = nexus_core::vector::reconcile_embedding_model(db, root, &model, dim)
+        .await
+        .map_err(|e| tracing::warn!(error = %e, "reconcile embedding-модели не удался — RAG off"))
         .ok()?;
 
-    tracing::info!(model = %model, dim, "RAG включён (headless)");
-    Some((Arc::new(embedder), Arc::new(vectors)))
+    let nexus = root.join(".nexus");
+    let open = |name: &str| {
+        VectorIndex::open(nexus.join(name), dim)
+            .map_err(
+                |e| tracing::warn!(error = %e, index = name, "usearch open не удался — RAG off"),
+            )
+            .ok()
+            .map(Arc::new)
+    };
+    let vectors = open("vectors.usearch")?;
+    let chat_vectors = open("chat_vectors.usearch")?;
+    let memory_vectors = open("memory_vectors.usearch")?;
+    let episode_vectors = open("episode_vectors.usearch")?;
+
+    tracing::info!(model = %model, dim, reindex, "RAG + память агента включены (headless)");
+    Some(RagBundle {
+        embedder: Arc::new(embedder),
+        vectors,
+        chat_vectors,
+        memory_vectors,
+        episode_vectors,
+    })
 }
 
 /// Реплика `vault::build_chat`: пара провайдеров `(reasoning, fast)` из `ai.chat`. Доступность сервера
