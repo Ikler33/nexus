@@ -10,19 +10,26 @@
 //! - [`runner`] — [`run_agent_loop`]: цикл «спросить → исполнить → зафенсить → назад», ограниченный
 //!   [`LoopBounds`] + [`crate::ai::ContextBudget`].
 //! - [`stubs`] — безопасные стаб-инструменты ([`EchoTool`]/[`NoopTool`]).
+//! - [`run_store`] — async-CRUD над `agent_runs` (миграция 021): статус-машина прогона (AGENT-2).
+//! - [`job`] — [`AgentRunHandler`] ([`crate::scheduler::JobHandler`]) — прогон цикла как ДОЛГОВЕЧНАЯ
+//!   запланированная джоба + корреляция эгресса на run_id + идемпотентный replay (AGENT-2).
 //!
 //! tool-capable провайдер ([`crate::ai::tools::ToolCapableProvider`]/`OpenAiToolProvider`) — РАЗДЕЛЬНЫЙ
 //! от chat-провайдера тип (I-5/ADR-005): tools не протекают в chat/web путь. Стережёт grep-линт
 //! `scripts/check-tooluse.mjs`.
 
 pub mod event;
+pub mod job;
 pub mod registry;
+pub mod run_store;
 pub mod runner;
 pub mod stubs;
 pub mod tool;
 
 pub use event::AgentEvent;
+pub use job::{enqueue_agent_run, AgentRunHandler, KIND_AGENT_RUN};
 pub use registry::{ToolRegistry, ToolResult};
+pub use run_store::{requeue_stale_running, AgentRun};
 pub use runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
 pub use stubs::{EchoTool, NoopTool};
 pub use tool::{Tool, ToolCall, ToolError, ToolSpec};

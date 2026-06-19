@@ -140,6 +140,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/020_egress_audit.sql"),
         rebuild_fts: false, // durable egress-журнал (P0-b): append-only журнал подотчётности, производных не трогает
     },
+    Migration {
+        version: 21,
+        name: "agent_runs",
+        sql: include_str!("migrations/021_agent_runs.sql"),
+        rebuild_fts: false, // durable запись прогонов агента (AGENT-2): статус-машина прогона, производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

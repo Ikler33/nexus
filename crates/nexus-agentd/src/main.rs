@@ -30,6 +30,12 @@ mod health;
 /// поэтому ждём с запасом, чтобы воркер успел стартовать (crash-recovery) и хотя бы раз тикнуть.
 const SMOKE_TICKS_DEADLINE: Duration = Duration::from_secs(8);
 
+/// TTL «застрявшего» прогона агента (AGENT-2 crash-recovery): прогон в 'running', не обновлявшийся
+/// дольше этого, считается осиротевшим крахом → requeue в 'queued' на старте. Щедрый запас над самым
+/// долгим легитимным прогоном (LoopBounds.wall_clock = 5 мин): 30 мин — живой прогон heartbeat'ит
+/// updated_at (mark_running/bump_step/finish), поэтому в TTL не попадёт.
+const AGENT_RUN_STALE_TTL_SECS: i64 = 30 * 60;
+
 #[tokio::main]
 async fn main() {
     // tracing: компактный stdout-подписчик (без Tauri-файлового лога десктопа). Уровень из
@@ -151,18 +157,24 @@ async fn run() -> Result<(), String> {
     };
 
     // AIClient (тот же контейнер, что десктоп кладёт в VaultContext) — собран из ядровых провайдеров.
-    // Здесь не потребляется логикой (skeleton), но доказывает, что headless собирает полный AI-слой.
-    let ai_client = AIClient {
+    // AGENT-2: потребляется AgentRunHandler (нужен `agent_tools` + токенайзер/бюджет внутри хендлера),
+    // поэтому в `Arc` (хендлер держит долю).
+    let ai_client = Arc::new(AIClient {
         chat,
         chat_fast,
         chat_util,
         embedder: embedder.clone(),
         agent_tools,
         policy: egress_policy.clone(),
-    };
+    });
     let ai_ready = ai_client.chat.is_some();
     let embed_ready = ai_client.embedder.is_some();
     let agent_ready = ai_client.agent_tools.is_some();
+    // Окно контекста модели агента (для ContextBudget внутри хендлера) — из `ai.chat.context_window`.
+    let agent_context_window = local_cfg
+        .as_ref()
+        .and_then(|c| c.ai.chat.as_ref())
+        .and_then(|c| c.context_window);
 
     // Индексатор-фундамент. Десктоп тут спавнит watcher с Tauri-хуками (прогресс/файл-изменён); headless
     // конструирует Indexer (с RAG если есть эмбеддер/индекс), доказывая, что тип строится без Tauri.
@@ -180,13 +192,55 @@ async fn run() -> Result<(), String> {
 
     // Планировщик headless: МИНИМАЛЬНЫЙ реестр. App-овский default_registry зовёт app-приватные
     // модули (contradictions/relation_reasons в GcHandler), поэтому НЕ используем его. Регистрируем
-    // тривиальный health-kind (no-op) — доказательство, что воркер-луп тикает и диспатчит.
+    // тривиальный health-kind (no-op) — пульс воркер-лупа — и AGENT-2 agent_run-хендлер.
     let mut registry = nexus_core::scheduler::Registry::new();
     registry.insert(
         health::KIND_HEALTH.to_string(),
         Arc::new(health::HealthHandler),
     );
+    // AGENT-2: прогон цикла агента как ДОЛГОВЕЧНАЯ джоба. Хендлер держит долю db (writer/reader),
+    // AIClient (agent_tools-провайдер + токенайзер/бюджет внутри), egress-audit (для set_run-корреляции).
+    // defer_under_interactive()==true → уступает интерактивному LLM (S5 backpressure, глобальный гейт
+    // run_due отложит agent_run, пока interactive_busy). Здесь interactive_busy всегда false (headless
+    // без интерактивного чата) — гейт реально сработает в десктопе/будущей проводке.
+    //
+    // ⚠ ИНВАРИАНТ КОРРЕЛЯЦИИ (set_run): `EgressAudit.run_id` — ПРОЦЕСС-ГЛОБАЛЬНЫЙ слот, НЕ per-run.
+    // Атрибуция egress к прогону корректна ТОЛЬКО пока agent_run-прогоны строго ПОСЛЕДОВАТЕЛЬНЫ
+    // (один worker_loop, единственный egress-делающий kind, никакого фонового/параллельного egress во
+    // время прогона). НЕ регистрировать рядом второй egress-делающий kind и НЕ параллелить прогоны,
+    // пока `set_run` не заменён на ЯВНО-ПРОБРАСЫВАЕМЫЙ `RunCtx` (ADR-009 §P0-b). Это БЛОКИРУЮЩИЙ гейт
+    // AGENT-3 (актуатор / web-egress) — там RunCtx + concurrent-run тест обязательны до мержа.
+    registry.insert(
+        nexus_core::agent::KIND_AGENT_RUN.to_string(),
+        Arc::new(nexus_core::agent::AgentRunHandler::new(
+            db.writer().clone(),
+            db.reader().clone(),
+            ai_client.clone(),
+            egress_audit.clone(),
+            agent_context_window,
+        )),
+    );
     let registry = Arc::new(registry);
+
+    // Crash-recovery НА УРОВНЕ ПРОГОНА (AGENT-2): прогоны, застрявшие в 'running' дольше TTL (приложение
+    // упало во время прогона), возвращаются в 'queued' (их джобы — отдельный crash-recovery планировщика
+    // requeue_running в worker_loop). Replay идемпотентен на уровне прогона (handle на терминальном — no-op)
+    // и безопасен с AGENT-1 стаб-инструментами (без побочных эффектов); AGENT-3-актуатор обязан сделать
+    // side-effecting инструменты идемпотентными per-op-group ДО опоры на replay (см. agent/job.rs).
+    match nexus_core::agent::requeue_stale_running(
+        db.writer(),
+        AGENT_RUN_STALE_TTL_SECS,
+        nexus_core::scheduler::now_secs(),
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            recovered = n,
+            "agent_run crash-recovery: застрявшие прогоны → queued"
+        ),
+        Err(e) => tracing::warn!(error = %e, "agent_run crash-recovery не удался"),
+    }
 
     // Воркер-луп ядра с no-op-хуками: interactive_busy=false (нет интерактивного LLM в skeleton),
     // jobs_changed=() (нет UI). Shutdown-канал — наш; дроп sender'а гасит петлю (как в десктопе).
@@ -223,7 +277,7 @@ async fn run() -> Result<(), String> {
         // AGENT-1 smoke: цикл агента крутится end-to-end против СТАБ-провайдера (offline, без сети) и
         // безопасного реестра (echo) — доказывает execute→feed-back→Final без живой модели/актуатора.
         agent_loop_smoke().await;
-        // Smoke: ставим одну health-джобу, ждём ограниченное время (даём воркеру тикнуть), стоп. Выход 0.
+        // Smoke: ставим одну health-джобу — пульс воркера. Выход 0.
         nexus_core::scheduler::enqueue(
             db.writer(),
             health::KIND_HEALTH,
@@ -233,14 +287,57 @@ async fn run() -> Result<(), String> {
         )
         .await
         .map_err(|e| format!("smoke: enqueue health: {e}"))?;
+
+        // AGENT-2 smoke: ставим ДОЛГОВЕЧНЫЙ прогон агента через настоящий путь enqueue_agent_run
+        // (строка agent_runs=queued + джоба KIND_AGENT_RUN payload=run_id). Воркер заклеймит и
+        // проведёт его AgentRunHandler'ом до ТЕРМИНАЛА. Деградирует чисто: если agent_tools=None
+        // (нет ai.chat в конфиге → offline-smoke), прогон финишируется 'error' ("agent tools
+        // unavailable") — что всё равно ДОКАЗЫВАЕТ жизненный цикл джобы + set_run-проводку. Если
+        // провайдер сконфигурирован и сделал эгресс — durable egress_audit-строки несут run_id.
+        let run_id = nexus_core::agent::enqueue_agent_run(
+            db.writer(),
+            "smoke: проверь связку прогона агента",
+            ai_client
+                .agent_tools
+                .as_ref()
+                .map(|p| p.model_id())
+                .or(Some("none")),
+            Some("auto"),
+        )
+        .await
+        .map_err(|e| format!("smoke: enqueue_agent_run: {e}"))?;
         tracing::info!(
+            run_id,
             deadline_secs = SMOKE_TICKS_DEADLINE.as_secs(),
-            "nexus-agentd: smoke-режим — крутим воркер до дедлайна, затем выход 0"
+            "nexus-agentd: AGENT-2 smoke — прогон поставлен, крутим воркер до терминала"
         );
-        tokio::time::sleep(SMOKE_TICKS_DEADLINE).await;
+
+        // Ждём, пока воркер доведёт прогон до терминала (или дедлайн). Опрашиваем БД.
+        let terminal = wait_for_terminal_run(&db, run_id, SMOKE_TICKS_DEADLINE).await;
+
         // Дроп sender'а гасит воркер-луп (changed()→Err→break) — graceful stop, как при закрытии vault.
         drop(shutdown_tx);
         let _ = worker.await;
+
+        match terminal {
+            Some(run) => {
+                // Корреляция: сколько durable egress-строк несут этот run_id (0 в offline-smoke без модели).
+                let correlated = count_egress_for_run(&db, run_id).await;
+                tracing::info!(
+                    run_id,
+                    status = %run.status,
+                    step = run.step,
+                    egress_with_run_id = correlated,
+                    "nexus-agentd: AGENT-2 smoke — прогон достиг терминала (lifecycle + set_run проверены)"
+                );
+            }
+            None => {
+                return Err(format!(
+                    "smoke: agent_run {run_id} НЕ достиг терминала за {}с (воркер не диспатчит?)",
+                    SMOKE_TICKS_DEADLINE.as_secs()
+                ));
+            }
+        }
         tracing::info!("nexus-agentd: smoke завершён (vault открыт, воркер тикал) — выход 0");
         return Ok(());
     }
@@ -254,6 +351,43 @@ async fn run() -> Result<(), String> {
     let _ = worker.await;
     tracing::info!("nexus-agentd stopped");
     Ok(())
+}
+
+/// AGENT-2 smoke: опрашивает БД, пока прогон `run_id` не достигнет терминала ('done'/'error'/
+/// 'cancelled') ИЛИ не истечёт `deadline`. Возвращает терминальный снимок или `None` (дедлайн).
+/// Короткий интервал опроса (тик планировщика 5 с — прогон стаб-цикла мгновенен после клейма).
+async fn wait_for_terminal_run(
+    db: &Database,
+    run_id: i64,
+    deadline: Duration,
+) -> Option<nexus_core::agent::AgentRun> {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(Some(run)) = nexus_core::agent::run_store::get_run(db.reader(), run_id).await {
+            if nexus_core::agent::run_store::is_terminal(&run.status) {
+                return Some(run);
+            }
+        }
+        if start.elapsed() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// AGENT-2 smoke: число durable egress_audit-строк, скоррелированных на `run_id` (доказательство
+/// set_run-проводки, когда прогон делал эгресс; 0 в offline-smoke без сконфигурированной модели).
+async fn count_egress_for_run(db: &Database, run_id: i64) -> i64 {
+    db.reader()
+        .query(move |c| {
+            c.query_row(
+                "SELECT count(*) FROM egress_audit WHERE run_id=?1",
+                [run_id],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap_or(0)
 }
 
 /// Реплика `vault::load_local_config`: читает/парсит `.nexus/local.json` один раз. `None` — нет/битый.
