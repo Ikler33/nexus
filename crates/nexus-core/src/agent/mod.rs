@@ -15,6 +15,9 @@
 //!   запланированная джоба + корреляция эгресса на run_id + идемпотентный replay (AGENT-2).
 //! - [`memory`] — [`AgentMemory`] трейт + [`VaultAgentMemory`] адаптер: мост к 3 слоям памяти Nexus
 //!   (факты/переписка/эпизоды) — recall в начальный контекст + Add-only воронка записи (AGENT-MEM-1).
+//! - [`skill_tools`] — SKILL-2 3-tier раскрытие скиллов: [`SkillContext`] + tier-1 инъекция каталога
+//!   + [`ActivateSkillTool`] (tier 2) + [`ReadSkillResourceTool`] (tier 3). Контент скилла —
+//!   НЕДОВЕРЕННЫЕ ДАННЫЕ (фенсен, user/tool-роль, не system); capabilities ИНЕРТНЫ (гейт — SKILL-3).
 //! - [`control`] — KILL-SWITCH персист (AGENT-5): [`AgentControlState`] (`agent.json`, зеркало
 //!   egress-kill-switch) — пауза агента переживает рестарт; agentd рестор + рантайм-Arc (UI — UI-1).
 //!
@@ -29,6 +32,7 @@ pub mod memory;
 pub mod registry;
 pub mod run_store;
 pub mod runner;
+pub mod skill_tools;
 pub mod stubs;
 pub mod tool;
 
@@ -39,5 +43,9 @@ pub use memory::{AgentMemory, VaultAgentMemory};
 pub use registry::{ToolRegistry, ToolResult};
 pub use run_store::{requeue_stale_running, AgentRun};
 pub use runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
+pub use skill_tools::{
+    ActivateSkillTool, ReadSkillResourceTool, SkillContext, ACTIVATE_SKILL_TOOL,
+    READ_SKILL_RESOURCE_TOOL,
+};
 pub use stubs::{EchoTool, NoopTool};
 pub use tool::{Tool, ToolCall, ToolError, ToolSpec};
