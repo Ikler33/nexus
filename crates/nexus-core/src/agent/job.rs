@@ -26,11 +26,16 @@
 //! Это снимает гонку процессного single-slot, бывшую блокирующим гейтом AGENT-2 перед AGENT-3 (доказано
 //! тестом `concurrent_runs_tag_egress_independently`).
 
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::actuator::{
+    AuditSink, DecisionSource, DispatchPolicy, GatedToolCtx, NoteCreateTool, NoteEditTool,
+    SetFrontmatterTool, TracingEventSink,
+};
 use crate::ai::{AIClient, ChatMessage, ContextBudget, QwenTokenizer};
 use crate::db::{ReadPool, WriteActor};
 use crate::net::RunCtx;
@@ -58,11 +63,46 @@ const AGENT_PREAMBLE: &str =
     "Ты — автономный агент-ассистент Nexus. Реши задачу пользователя, при \
     необходимости вызывая доступные инструменты. Когда задача решена — дай финальный ответ.";
 
-/// Реестр стаб-инструментов прогона (AGENT-2): echo + noop. Актуаторные инструменты — AGENT-3.
+/// Реестр стаб-инструментов прогона (AGENT-2): echo + noop. Безопасны — НЕ касаются vault. Используется,
+/// когда go-live-флаг актуатора ВЫКЛ (по умолчанию) — реальный vault не затрагивается из коробки.
 fn stub_registry() -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.insert(Arc::new(EchoTool));
     reg.insert(Arc::new(NoopTool));
+    reg
+}
+
+/// Реестр ГЕЙТНУТЫХ инструментов-актуаторов (AGENT-3e), собранный ПО-ПРОГОННО. Каждый инструмент несёт
+/// единый [`GatedToolCtx`] → `invoke` маршрутизируется ТОЛЬКО через гейт автономии
+/// (`actuator::dispatch_action`). Все три делят ОДНУ [`DispatchPolicy`] (а значит — общий на прогон
+/// blast-radius-счётчик): политика собрана из автономии прогона (`confirm`|`auto`|`None`→confirm),
+/// `overwrite_threshold` и `blast_cap` ИЗ КОНФИГА. Headless agentd передаёт
+/// `decision_source = PolicyDefault` (auto-DENY) и [`TracingEventSink`].
+///
+/// Этот реестр СТРОИТСЯ ТОЛЬКО при включённом флаге `agent_actuator_enabled` (см. [`AgentRunHandler`]);
+/// иначе используется [`stub_registry`] и реальный vault не затрагивается.
+fn actuator_registry(
+    canon_root: PathBuf,
+    ledger: AuditSink,
+    run_id: i64,
+    autonomy: Option<&str>,
+    overwrite_threshold: usize,
+    blast_cap: u32,
+    decision_source: Arc<dyn DecisionSource>,
+) -> ToolRegistry {
+    // ОДНА политика на прогон → общий blast-radius между всеми инструментами (анти-усталость
+    // кросс-инструментна). EventSink — tracing (headless; UI-стриминг предложений — UI-1).
+    let policy = DispatchPolicy::new(autonomy, overwrite_threshold, blast_cap);
+    // FIXME(UI-1): связать EventSink.emit → on_event цикла / control-plane-стрим для real-time ревью
+    // предложений. Здесь передаётся [`TracingEventSink`] — headless только ЛОГИРУЕТ Proposal/Diff (нет
+    // UI), а [`PolicyDefault`] (передаваемый decision_source) auto-DENY-отклоняет предложения. UI-1
+    // заменит этот sink на стрим к UI + человеко-в-петле Approve/Reject.
+    let events = Arc::new(TracingEventSink::new());
+    let ctx = GatedToolCtx::new(canon_root, ledger, run_id, policy, decision_source, events);
+    let mut reg = ToolRegistry::new();
+    reg.insert(Arc::new(NoteCreateTool::new(ctx.clone())));
+    reg.insert(Arc::new(NoteEditTool::new(ctx.clone())));
+    reg.insert(Arc::new(SetFrontmatterTool::new(ctx)));
     reg
 }
 
@@ -80,6 +120,18 @@ pub struct AgentRunHandler {
     /// прогон стартует с «голым» контекстом (поведение AGENT-2, без регрессии). Композиционный
     /// корень (agentd) собирает [`super::VaultAgentMemory`] из ридера/райтера/эмбеддера/индексов.
     memory: Option<Arc<dyn AgentMemory>>,
+    /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие гейта/apply). Нужен ТОЛЬКО когда актуатор включён.
+    canon_root: PathBuf,
+    /// **GO-LIVE-флаг актуатора (AGENT-3e), SAFE BY DEFAULT.** `false` → прогон только со стабами
+    /// (реальный vault не затрагивается); `true` → регистрируются гейтнутые инструменты-актуаторы.
+    actuator_enabled: bool,
+    /// Порог «крупной перезаписи» → Confirm-тир (из конфига). Эффект только при `actuator_enabled`.
+    overwrite_threshold: usize,
+    /// Кэп blast-radius прогона (анти-усталость). Эффект только при `actuator_enabled`.
+    blast_cap: u32,
+    /// Источник решений по предложениям. Headless agentd передаёт [`crate::actuator::PolicyDefault`]
+    /// (auto-DENY). Эффект только при `actuator_enabled` (стабы не предлагают).
+    decision_source: Arc<dyn DecisionSource>,
 }
 
 impl AgentRunHandler {
@@ -91,12 +143,22 @@ impl AgentRunHandler {
     /// [`RunCtx`], а не через касание процесс-глобального слота audit. Audit-сток (`set_writer`) и
     /// общий [`EgressAudit`] живут в провайдере инструментов (через его [`GuardedClient`]) и
     /// композиционном корне.
+    ///
+    /// AGENT-3e (go-live актуатора): `canon_root`/`actuator_enabled`/`overwrite_threshold`/`blast_cap`/
+    /// `decision_source` — параметры гейтнутого реестра. При `actuator_enabled=false` (дефолт конфига)
+    /// они НЕ используются: прогон работает со стаб-реестром, реальный vault не затрагивается.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         writer: WriteActor,
         reader: ReadPool,
         ai: Arc<AIClient>,
         context_window: Option<usize>,
         memory: Option<Arc<dyn AgentMemory>>,
+        canon_root: PathBuf,
+        actuator_enabled: bool,
+        overwrite_threshold: usize,
+        blast_cap: u32,
+        decision_source: Arc<dyn DecisionSource>,
     ) -> Self {
         Self {
             writer,
@@ -104,6 +166,11 @@ impl AgentRunHandler {
             ai,
             context_window,
             memory,
+            canon_root,
+            actuator_enabled,
+            overwrite_threshold,
+            blast_cap,
+            decision_source,
         }
     }
 
@@ -170,7 +237,25 @@ impl AgentRunHandler {
         let bounds = LoopBounds::default();
         let budget = ContextBudget::from_context_window(self.context_window);
         let tk = QwenTokenizer::embedded();
-        let registry = stub_registry();
+        // AGENT-3e: реестр зависит от go-live-флага. ВКЛ → гейтнутые инструменты-актуаторы (per-run
+        // DispatchPolicy из автономии прогона + порога/кэпа конфига + свежий blast-radius; решает
+        // self.decision_source = PolicyDefault в headless). ВЫКЛ (дефолт) → стабы; реальный vault НЕ
+        // затрагивается. Каждый прогон получает СВОЙ ledger (AuditSink) и СВОЙ blast-radius (внутри
+        // DispatchPolicy::new) — счётчик не протекает между прогонами.
+        let registry = if self.actuator_enabled {
+            let ledger = AuditSink::new(self.writer.clone(), self.reader.clone());
+            actuator_registry(
+                self.canon_root.clone(),
+                ledger,
+                run_id,
+                run.autonomy.as_deref(),
+                self.overwrite_threshold,
+                self.blast_cap,
+                self.decision_source.clone(),
+            )
+        } else {
+            stub_registry()
+        };
         let cancel = Arc::new(AtomicBool::new(false));
 
         // on_event: считаем результаты инструментов синхронно в общий счётчик (наблюдаемость/replay).
@@ -383,6 +468,7 @@ mod tests {
         (addr, handle)
     }
 
+    /// Хендлер для AGENT-2-тестов: актуатор ВЫКЛ (стабы) — не регрессируем поведение AGENT-2/MEM-1.
     fn handler(db: &Database, ai: Arc<AIClient>) -> AgentRunHandler {
         AgentRunHandler::new(
             db.writer().clone(),
@@ -390,11 +476,16 @@ mod tests {
             ai,
             Some(32768),
             None,
+            std::env::temp_dir(), // canon_root не используется при actuator_enabled=false
+            false,                // actuator ВЫКЛ
+            64 * 1024,
+            16,
+            Arc::new(crate::actuator::PolicyDefault),
         )
     }
 
     /// Хендлер с подключённой памятью (AGENT-MEM-1): доказывает, что recall попадает в начальный
-    /// контекст между system-преамбулом и задачей.
+    /// контекст между system-преамбулом и задачей. Актуатор ВЫКЛ.
     fn handler_with_memory(
         db: &Database,
         ai: Arc<AIClient>,
@@ -406,6 +497,36 @@ mod tests {
             ai,
             Some(32768),
             Some(memory),
+            std::env::temp_dir(),
+            false,
+            64 * 1024,
+            16,
+            Arc::new(crate::actuator::PolicyDefault),
+        )
+    }
+
+    /// Хендлер с ВКЛЮЧЁННЫМ актуатором (AGENT-3e) для go-live-тестов: гейтнутый реестр на `canon_root`,
+    /// заданный `decision_source`. Порог/кэп — параметры теста.
+    #[allow(clippy::too_many_arguments)]
+    fn handler_with_actuator(
+        db: &Database,
+        ai: Arc<AIClient>,
+        canon_root: std::path::PathBuf,
+        overwrite_threshold: usize,
+        blast_cap: u32,
+        decision_source: Arc<dyn crate::actuator::DecisionSource>,
+    ) -> AgentRunHandler {
+        AgentRunHandler::new(
+            db.writer().clone(),
+            db.reader().clone(),
+            ai,
+            Some(32768),
+            None,
+            canon_root,
+            true, // actuator ВКЛ
+            overwrite_threshold,
+            blast_cap,
+            decision_source,
         )
     }
 
@@ -1079,6 +1200,254 @@ mod tests {
             .unwrap();
         assert_eq!(r.status, STATUS_DONE);
         assert_eq!(r.outcome.as_deref(), Some("восстановлено"));
+    }
+
+    // ── AGENT-3e: go-live актуатора через гейт (safe-by-default) ────────────────────────────────
+
+    /// Vault + БД с КАНОНИЗИРОВАННЫМ корнем (предусловие гейта/apply). Возвращаем dir, чтобы жил.
+    async fn open_vault() -> (TempDir, std::path::PathBuf, Database) {
+        let dir = TempDir::new().unwrap();
+        let canon_root = dir.path().canonicalize().unwrap();
+        let db = Database::open(canon_root.join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        (dir, canon_root, db)
+    }
+
+    /// Один вызов инструмента-актуатора, затем Final. `name`/`args` — имя гейтнутого инструмента и его JSON.
+    fn actuator_call_then_final(name: &str, args: &str) -> Vec<AiResult<ToolTurn>> {
+        vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "a1".into(),
+                name: name.into(),
+                arguments: args.into(),
+            }])),
+            Ok(ToolTurn::Final("готово".into())),
+        ]
+    }
+
+    /// Число executed-строк ledger (`agent_actions`) этого прогона — доказательство apply-через-гейт.
+    async fn executed_count(db: &Database, run_id: i64) -> i64 {
+        db.reader()
+            .query(move |c| {
+                c.query_row(
+                    "SELECT count(*) FROM agent_actions WHERE run_id=?1 AND state='executed'",
+                    [run_id],
+                    |r| r.get(0),
+                )
+            })
+            .await
+            .unwrap()
+    }
+
+    /// **Флаг ВЫКЛ (дефолт) → ТОЛЬКО стабы; vault НЕ затронут.** Прогон с провайдером, зовущим
+    /// `note.create`, НЕ создаёт файл: инструмент не зарегистрирован (стаб-реестр) → UnknownTool-ошибка,
+    /// диск не тронут. Прогон всё равно доходит до терминала (модель видит ошибку, финализирует).
+    #[tokio::test]
+    async fn flag_off_stubs_only_vault_untouched() {
+        let (_d, root, db) = open_vault().await;
+        let provider = Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
+            "note.create",
+            r#"{"path":"Notes/N.md","content":"hi"}"#,
+        )));
+        let ai = ai_with_tools(Some(provider));
+        // handler() строит хендлер с actuator_enabled=false (дефолт).
+        let h = handler(&db, ai);
+
+        let run_id =
+            run_store::create_run(db.writer(), "создай заметку", Some("fake"), Some("auto"))
+                .await
+                .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        assert!(
+            !root.join("Notes/N.md").exists(),
+            "флаг ВЫКЛ → актуатор не зарегистрирован → файл НЕ создан"
+        );
+        // Ни одной executed-строки актуатора (стабы ledger не пишут).
+        assert_eq!(executed_count(&db, run_id).await, 0, "ledger пуст (стабы)");
+        let r = run_store::get_run(db.reader(), run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.status, STATUS_DONE, "прогон дошёл до терминала");
+    }
+
+    /// **auto-прогон + флаг ВКЛ + Auto-тир → ПРИМЕНЯЕТСЯ ЧЕРЕЗ ГЕЙТ.** Файл записан, ledger executed.
+    /// PolicyDefault передан, но НЕ спрошен (Auto-тир в auto-прогоне применяется напрямую под кэпом).
+    #[tokio::test]
+    async fn auto_run_flag_on_auto_tier_applies_via_gate() {
+        let (_d, root, db) = open_vault().await;
+        let provider = Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
+            "note.create",
+            r#"{"path":"Notes/N.md","content":"тело"}"#,
+        )));
+        let ai = ai_with_tools(Some(provider));
+        let src: Arc<dyn crate::actuator::DecisionSource> =
+            Arc::new(crate::actuator::PolicyDefault);
+        let h = handler_with_actuator(&db, ai, root.clone(), 64 * 1024, 16, src);
+
+        let run_id = run_store::create_run(db.writer(), "создай", Some("fake"), Some("auto"))
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("Notes/N.md")).unwrap(),
+            "тело",
+            "Auto-тир в auto-прогоне применён через гейт"
+        );
+        assert_eq!(
+            executed_count(&db, run_id).await,
+            1,
+            "ровно одна executed apply-строка"
+        );
+    }
+
+    /// **confirm-прогон + флаг ВКЛ + Auto-тир под PolicyDefault → ПРЕДЛОЖЕНО → auto-DENY → НЕ записано.**
+    /// Доказывает hard-gate #1 на уровне ПРОВОДКИ: даже Auto-тир в confirm-прогоне идёт через гейт и
+    /// без явного Approve (PolicyDefault) файл не пишется.
+    #[tokio::test]
+    async fn confirm_run_flag_on_auto_tier_proposed_not_written() {
+        let (_d, root, db) = open_vault().await;
+        let provider = Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
+            "note.create",
+            r#"{"path":"Notes/N.md","content":"hi"}"#,
+        )));
+        let ai = ai_with_tools(Some(provider));
+        let src: Arc<dyn crate::actuator::DecisionSource> =
+            Arc::new(crate::actuator::PolicyDefault);
+        let h = handler_with_actuator(&db, ai, root.clone(), 64 * 1024, 16, src);
+
+        let run_id = run_store::create_run(db.writer(), "создай", Some("fake"), Some("confirm"))
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        assert!(
+            !root.join("Notes/N.md").exists(),
+            "confirm-прогон под PolicyDefault: предложено и auto-DENY-отклонено → файл НЕ записан"
+        );
+        assert_eq!(executed_count(&db, run_id).await, 0, "ничего не applied");
+    }
+
+    /// **auto-прогон + флаг ВКЛ + Confirm-тир (крупная правка > порога) под PolicyDefault → ПРЕДЛОЖЕНО →
+    /// auto-DENY → НЕ записано.** auto НЕ перекрывает Confirm-тир (keystone): крупная перезапись всегда
+    /// предлагается. Порог мал (16 байт) — правка легко перешагивает.
+    #[tokio::test]
+    async fn auto_run_flag_on_confirm_tier_proposed_not_written() {
+        let (_d, root, db) = open_vault().await;
+        // Существующий файл, чтобы note.edit был валиден.
+        std::fs::write(root.join("E.md"), "orig").unwrap();
+        let big = "x".repeat(64); // > порога 16
+        let args = format!(r#"{{"path":"E.md","content":"{big}"}}"#);
+        let provider = Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
+            "note.edit",
+            &args,
+        )));
+        let ai = ai_with_tools(Some(provider));
+        let src: Arc<dyn crate::actuator::DecisionSource> =
+            Arc::new(crate::actuator::PolicyDefault);
+        let h = handler_with_actuator(&db, ai, root.clone(), 16, 16, src);
+
+        let run_id = run_store::create_run(db.writer(), "правка", Some("fake"), Some("auto"))
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("E.md")).unwrap(),
+            "orig",
+            "Confirm-тир в auto-прогоне предложен, не применён (auto не override Confirm)"
+        );
+        assert_eq!(executed_count(&db, run_id).await, 0, "ничего не applied");
+    }
+
+    /// **Replay-safety: применённое действие при повторном прогоне НЕ дублируется (AlreadyDone).**
+    /// Прогон 1 применяет note.create (файл + ledger executed). Затем «откатываем» строку прогона в
+    /// running (имитируем requeue после краша) и гоняем ТОТ ЖЕ провайдер снова — actuator-ledger по
+    /// idempotency_key детектит уже-исполненное → apply возвращает AlreadyDone, файл НЕ переписан, и
+    /// НЕ появляется второй executed (idempotency_key тот же → record_before отбит UNIQUE).
+    #[tokio::test]
+    async fn replay_already_done_no_double_apply() {
+        let (_d, root, db) = open_vault().await;
+        // Тот же набор ходов оба раза (replay перезапускает цикл С НАЧАЛА).
+        let make_provider = || {
+            Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
+                "note.create",
+                r#"{"path":"Notes/R.md","content":"once"}"#,
+            )))
+        };
+        let src: Arc<dyn crate::actuator::DecisionSource> =
+            Arc::new(crate::actuator::PolicyDefault);
+
+        let run_id = run_store::create_run(db.writer(), "создай", Some("fake"), Some("auto"))
+            .await
+            .unwrap();
+
+        // Прогон 1 — применяет.
+        let h1 = handler_with_actuator(
+            &db,
+            ai_with_tools(Some(make_provider())),
+            root.clone(),
+            64 * 1024,
+            16,
+            src.clone(),
+        );
+        h1.handle(&job_for(run_id)).await.expect("прогон 1 ok");
+        assert_eq!(
+            std::fs::read_to_string(root.join("Notes/R.md")).unwrap(),
+            "once"
+        );
+        assert_eq!(executed_count(&db, run_id).await, 1, "applied один раз");
+        let mtime1 = std::fs::metadata(root.join("Notes/R.md"))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // Имитируем requeue после краша: строку прогона возвращаем в running (drive() иначе сделал бы
+        // run-level no-op на терминальном прогоне; нам нужен ПОВТОРНЫЙ заход в цикл, чтобы проверить
+        // именно ACTUATOR-ledger AlreadyDone, а не run-level гард).
+        db.writer()
+            .call(move |c| {
+                c.execute(
+                    "UPDATE agent_runs SET status='running', outcome=NULL WHERE id=?1",
+                    [run_id],
+                )
+                .map(|_| ())
+            })
+            .await
+            .unwrap();
+
+        // Прогон 2 (replay) — то же действие. Actuator-ledger: AlreadyDone → файл НЕ переписан, второй
+        // executed НЕ появляется (idempotency_key тот же).
+        let h2 = handler_with_actuator(
+            &db,
+            ai_with_tools(Some(make_provider())),
+            root.clone(),
+            64 * 1024,
+            16,
+            src.clone(),
+        );
+        h2.handle(&job_for(run_id))
+            .await
+            .expect("прогон 2 (replay) ok");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("Notes/R.md")).unwrap(),
+            "once",
+            "replay НЕ переписал файл (AlreadyDone)"
+        );
+        assert_eq!(
+            executed_count(&db, run_id).await,
+            1,
+            "ровно ОДНА executed-строка — нет двойного apply"
+        );
+        let mtime2 = std::fs::metadata(root.join("Notes/R.md"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(mtime1, mtime2, "файл физически не переписан при replay");
     }
 
     // ── тест-хелперы корреляции ───────────────────────────────────────────────────────────────

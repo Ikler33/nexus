@@ -22,3 +22,10 @@ tracing-subscriber = { workspace = true }
 # `#[async_trait]` для реализации ядрового `scheduler::JobHandler` в headless health-хендлере.
 # Уже в lockfile (workspace-зависимость ядра) — аддитивно, без скачивания.
 async-trait = { workspace = true }
+# CORE-2a tail: локация OS config-dir для персистентного egress.json kill-switch (зеркало десктопа,
+# который читает его из Tauri app_config_dir). Уже workspace-зависимость (десктоп) → в lockfile, без скачивания.
+dirs = { workspace = true }
+
+[dev-dependencies]
+# Временные vault'ы/config-dir для интеграционных тестов egress-restore (зеркало ядровых тестов).
+tempfile = { workspace = true }

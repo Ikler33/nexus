@@ -9,6 +9,16 @@
 //!
 //! Запуск: `nexus-agentd <vault>` или `NEXUS_VAULT=<vault> nexus-agentd`.
 //! `NEXUS_AGENTD_SMOKE=1` → один ограниченный прогон (несколько тиков) и выход 0 (headless smoke).
+//!
+//! ## Переменные окружения
+//! - `NEXUS_VAULT` — путь к vault (если не задан `argv[1]`).
+//! - `NEXUS_AGENTD_SMOKE=1` — headless smoke-прогон (несколько тиков, выход 0).
+//! - `RUST_LOG` — уровень лога (`trace`/`debug`/`info`/`warn`/`error`/`off`; дефолт `info`).
+//! - `NEXUS_CONFIG_DIR` — каталог app-local конфигов, где лежит egress kill-switch `egress.json`.
+//!   ОБЯЗАН указывать на ТОТ ЖЕ каталог, что Tauri-десктоп использует как `app_config_dir`
+//!   (`<OS config-dir>/app.nexus.desktop`) — иначе headless читает ДРУГОЙ `egress.json`, чем пишет
+//!   десктоп, и kill-switch владельца молча не применяется. Если НЕ задана — берётся
+//!   `<dirs::config_dir>/app.nexus.desktop` (зеркало десктопа). См. [`egress_config_dir`].
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -82,6 +92,74 @@ fn vault_path_from_args() -> Result<PathBuf, String> {
     Err("укажите путь к vault: `nexus-agentd <vault>` или env NEXUS_VAULT".to_string())
 }
 
+/// Каталог app-local конфигов (где живёт `egress.json`) — зеркало того, что десктоп получает из Tauri
+/// `app_config_dir` (`<OS config-dir>/<identifier>`). Порядок: env `NEXUS_CONFIG_DIR` (явное
+/// переопределение / тесты) → `<dirs::config_dir>/app.nexus.desktop` (тот же файл, что пишет десктоп) →
+/// `None`, если OS config-dir не определён (тогда kill-switch грузить неоткуда — local-first-дефолты).
+///
+/// ## КОНТРАКТ (AGENT-3e Fix-4) — kill-switch должен читать ТОТ ЖЕ файл, что пишет десктоп
+/// Разрешённый каталог ОБЯЗАН совпадать с Tauri-десктопным `app_config_dir`. Десктоп пишет `egress.json`
+/// в `<OS config-dir>/<bundle identifier>` — а identifier берётся из `tauri.conf.json` (`app.nexus.desktop`).
+/// Здесь хардкод-сегмент `app.nexus.desktop` ДУБЛИРУЕТ этот identifier. ЕСЛИ identifier в конфиге
+/// десктопа изменится (ребрендинг/смена bundle id), а эта строка — нет, headless будет читать ДРУГОЙ
+/// `egress.json`, чем пишет десктоп: владелец жмёт «offline»/выключает фичу в UI, десктоп пишет в свой
+/// каталог, а agentd грузит local-first-дефолты из несуществующего/другого файла → **kill-switch молча
+/// неэффективен** (headless продолжит эгресс). Поэтому при смене bundle identifier ОБЯЗАТЕЛЬНО менять и
+/// эту строку (либо задавать `NEXUS_CONFIG_DIR` явно на тот же каталог). `NEXUS_CONFIG_DIR` — штатный
+/// способ переопределить локацию (нестандартный config-dir / контейнер / тест), указывая на каталог
+/// десктопа.
+fn egress_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("NEXUS_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    dirs::config_dir().map(|d| d.join("app.nexus.desktop"))
+}
+
+/// CORE-2a tail (AGENT-3e §5): RESTORE персистентного egress kill-switch. Грузит `egress.json` из
+/// app-config-dir (зеркало `AppState::apply_egress_state` десктопа) и применяет: `offline` → общий
+/// атомик политики; chat/embed/probe → per-feature opt-out. Нет файла/нет config-dir → local-first-
+/// дефолты (политика уже построена с offline=false + фичи ON). Логирует применённое (наблюдаемость).
+fn apply_persisted_egress(egress_offline: &Arc<AtomicBool>, policy: &Arc<EgressPolicy>) {
+    let Some(dir) = egress_config_dir() else {
+        tracing::info!(
+            "egress.json: OS config-dir не определён — kill-switch local-first (дефолты)"
+        );
+        return;
+    };
+    apply_egress_from_dir(&dir, egress_offline, policy);
+}
+
+/// Применить `egress.json` из КОНКРЕТНОГО каталога (разделено из [`apply_persisted_egress`] для тестов
+/// без зависимости от env/OS config-dir). offline → общий с политикой атомик; chat/embed/probe →
+/// per-feature opt-out. Нет файла/битый → local-first-дефолты (`net::persist::load`).
+fn apply_egress_from_dir(dir: &Path, egress_offline: &Arc<AtomicBool>, policy: &Arc<EgressPolicy>) {
+    let path = dir.join("egress.json");
+    let existed = path.exists();
+    let st = nexus_core::net::load_egress_state(&path);
+    // offline — общий с политикой атомик (политика читает его в check()).
+    egress_offline.store(st.offline, std::sync::atomic::Ordering::Relaxed);
+    policy.set_feature_enabled(EgressFeature::Chat, st.chat);
+    policy.set_feature_enabled(EgressFeature::Embed, st.embed);
+    policy.set_feature_enabled(EgressFeature::Probe, st.probe);
+    if existed {
+        tracing::info!(
+            path = %path.display(),
+            offline = st.offline,
+            chat = st.chat,
+            embed = st.embed,
+            probe = st.probe,
+            "egress.json восстановлен — kill-switch владельца применён (headless)"
+        );
+    } else {
+        tracing::info!(
+            path = %path.display(),
+            "egress.json отсутствует — kill-switch local-first (дефолты: online, фичи ON)"
+        );
+    }
+}
+
 /// Композиционный корень headless: повторяет минимум `open_vault` без Tauri/AppState.
 async fn run() -> Result<(), String> {
     let raw = vault_path_from_args()?;
@@ -98,15 +176,17 @@ async fn run() -> Result<(), String> {
         .map_err(|e| format!("открытие БД: {e}"))?;
 
     // Egress-граница (ADR-005-ext): ОДНА политика + ОДИН audit на процесс (как `AppState`). Kill-switch
-    // `offline` — собственный атомик (в десктопе шарится с UI; headless управления им пока нет).
-    // ВНИМАНИЕ (CORE-2a skeleton): persisted `egress.json` (offline + per-feature opt-out; десктоп грузит
-    // его в lib.rs через `net::persist::load`→apply) здесь НЕ восстанавливается — политика строится с
-    // offline=false и Chat/Embed/Probe ON. Скелет реального egress не делает (smoke ai=false; единственный
-    // возможный — probe_dim на СВОЙ allowlisted ai.embedding-хост). TODO ДО egress-способного agentd:
-    // подгрузить egress.json и применить offline+флаги, иначе headless-agentd проигнорирует kill-switch.
+    // `offline` — собственный атомик (в десктопе шарится с UI).
+    //
+    // CORE-2a tail (AGENT-3e §5): RESTORE персистентного `egress.json` (offline + per-feature opt-out).
+    // Десктоп грузит его в lib.rs (`net::load_egress_state`→`AppState::apply_egress_state`) из Tauri
+    // app_config_dir. Headless читает ТОТ ЖЕ файл из OS config-dir (зеркало десктопа), применяя offline +
+    // chat/embed/probe ДО любого эгресса — так headless-agentd ЧЕСТИТ kill-switch владельца (агентский
+    // Chat-эгресс ЖИВОЙ, его обязан гейтить kill-switch). Нет файла/битый → local-first-дефолты (fail-safe).
     let egress_offline = Arc::new(AtomicBool::new(false));
-    let egress_policy = Arc::new(EgressPolicy::new(egress_offline));
+    let egress_policy = Arc::new(EgressPolicy::new(egress_offline.clone()));
     let egress_audit = Arc::new(EgressAudit::default());
+    apply_persisted_egress(&egress_offline, &egress_policy);
     // P0-b: durable-сток egress-audit. БД уже открыта выше → подключаем сразу (в headless нет pre-vault
     // окна, как у десктопа). Весь реальный эгресс agentd durable-аудитится write-before-act.
     egress_audit.set_writer(db.writer().clone());
@@ -234,6 +314,42 @@ async fn run() -> Result<(), String> {
             episode_vectors.clone(),
             None,
         ));
+    // AGENT-3e (GO-LIVE актуатора, SAFE BY DEFAULT): хендлер строит ГЕЙТНУТЫЙ реестр инструментов-
+    // актуаторов ПО-ПРОГОННО — но ТОЛЬКО когда `ai.agent_actuator_enabled` ВКЛ (по умолчанию ВЫКЛ →
+    // стабы, реальный vault НЕ затрагивается из коробки). Зависимости гейта:
+    //  - canon_root = root (КАНОНИЗИРОВАН выше) — предусловие resolve_vault_path_for_write/apply;
+    //  - overwrite_threshold / blast_cap — из конфига (дефолты ядра, если не заданы);
+    //  - decision_source = PolicyDefault — HEADLESS auto-DENY: unattended agentd НИКОГДА не
+    //    само-одобряет Confirm (нет UI/контрол-плейна). Даже при флаге ВКЛ headless авто-применяет
+    //    лишь Auto-тир на autonomy=auto-прогоне; всякий Confirm-тир предлагается и тут же отклоняется.
+    // EventSink реестра — TracingEventSink (внутри хендлера): Proposal/Diff логируются (UI-стриминг — UI-1).
+    // FIXME(UI-1): связать EventSink.emit → on_event цикла / control-plane-стрим для real-time ревью
+    // предложений; сегодня headless только логирует, а PolicyDefault auto-DENY-отклоняет предложения
+    // (см. AgentRunHandler → actuator_registry, где TracingEventSink реально передаётся в гейт).
+    let actuator_enabled = local_cfg
+        .as_ref()
+        .map(|c| c.ai.agent_actuator_enabled)
+        .unwrap_or(false);
+    let overwrite_threshold = local_cfg
+        .as_ref()
+        .and_then(|c| c.ai.agent_overwrite_threshold)
+        .unwrap_or(nexus_core::actuator::OVERWRITE_THRESHOLD);
+    let blast_cap = local_cfg
+        .as_ref()
+        .and_then(|c| c.ai.agent_blast_radius_cap)
+        .unwrap_or(nexus_core::ai::AiConfig::DEFAULT_BLAST_RADIUS_CAP);
+    let decision_source: Arc<dyn nexus_core::actuator::DecisionSource> =
+        Arc::new(nexus_core::actuator::PolicyDefault);
+    if actuator_enabled {
+        tracing::warn!(
+            overwrite_threshold,
+            blast_cap,
+            "actuator GO-LIVE: файловые инструменты ВКЛ (через гейт + PolicyDefault auto-DENY) — \
+             реальный vault может изменяться на autonomy=auto-прогонах (Auto-тир)"
+        );
+    } else {
+        tracing::info!("actuator GO-LIVE ВЫКЛ (safe-default): прогон агента — только стабы");
+    }
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
         Arc::new(nexus_core::agent::AgentRunHandler::new(
@@ -242,6 +358,11 @@ async fn run() -> Result<(), String> {
             ai_client.clone(),
             agent_context_window,
             Some(agent_memory),
+            root.clone(),
+            actuator_enabled,
+            overwrite_threshold,
+            blast_cap,
+            decision_source,
         )),
     );
     let registry = Arc::new(registry);
@@ -298,6 +419,11 @@ async fn run() -> Result<(), String> {
 
     let smoke = std::env::var("NEXUS_AGENTD_SMOKE").is_ok_and(|v| v == "1");
     if smoke {
+        // AGENT-3e smoke: actuator GO-LIVE ЧЕРЕЗ ГЕЙТ (offline, без сети) — доказывает, что включённый
+        // флаг + autonomy=auto + Auto-тир note.create реально пишет в vault ИМЕННО через
+        // dispatch_action (ledger Executed), а PolicyDefault не препятствует Auto-тиру. Использует
+        // СВОЙ временный vault (не трогает целевой root) и фейк-провайдер (без модели/сети).
+        actuator_gate_smoke().await;
         // AGENT-1 smoke: цикл агента крутится end-to-end против СТАБ-провайдера (offline, без сети) и
         // безопасного реестра (echo) — доказывает execute→feed-back→Final без живой модели/актуатора.
         agent_loop_smoke().await;
@@ -626,6 +752,184 @@ async fn agent_loop_smoke() {
     );
 }
 
+/// AGENT-3e ФЕЙК-провайдер: ход 1 — ToolCalls([note.create]); ход 2 — Final. Без сети/модели —
+/// детерминированно скриптует один `note.create` (Auto-тир), доказывая живой путь tool→dispatch_action
+/// →apply offline. Совместно используется headless-smoke ([`actuator_gate_smoke`]) и CI-тестом
+/// ([`tests::live_actuator_gate_applies_via_gate`]) — единый источник проводки, без дублирования.
+struct CreateThenFinalProvider {
+    turns:
+        std::sync::Mutex<std::collections::VecDeque<nexus_core::ai::AiResult<ai::tools::ToolTurn>>>,
+}
+
+impl CreateThenFinalProvider {
+    /// Скрипт «создать `rel` с телом `content`, затем Final». Эмитит ОДИН note.create-tool_call.
+    /// `rel`/`content` — простые тестовые значения без JSON-спецсимволов (кавычек/бэкслэшей), поэтому
+    /// собираем args прямым `format!` — nexus-agentd намеренно БЕЗ `serde_json` (минимум зависимостей).
+    fn note_create(rel: &str, content: &str) -> Self {
+        use ai::tools::ToolTurn;
+        use nexus_core::agent::tool::ToolCall;
+        let args = format!(r#"{{"path":"{rel}","content":"{content}"}}"#);
+        Self {
+            turns: std::sync::Mutex::new(
+                vec![
+                    Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                        id: "n1".into(),
+                        name: "note.create".into(),
+                        arguments: args,
+                    }])),
+                    Ok(ToolTurn::Final("готово".into())),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolCapableProvider for CreateThenFinalProvider {
+    async fn stream_chat_tools(
+        &self,
+        _m: &[ai::ChatMessage],
+        _t: &[nexus_core::agent::tool::ToolSpec],
+        _o: &mut (dyn FnMut(String) + Send),
+        _c: &Arc<AtomicBool>,
+        _ctx: nexus_core::net::RunCtx,
+    ) -> nexus_core::ai::AiResult<ai::tools::ToolTurn> {
+        self.turns
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Ok(ai::tools::ToolTurn::Final("ok".into())))
+    }
+    fn model_id(&self) -> &str {
+        "actuator-gate-fake"
+    }
+}
+
+/// Результат прогона actuator-гейта в temp-vault: что записано на диск + сколько executed-строк ledger
+/// + терминальный статус прогона. Используется и smoke-, и тест-вызывателем для ассертов.
+struct ActuatorGateResult {
+    written: Option<String>,
+    executed: i64,
+    status: Option<String>,
+}
+
+/// AGENT-3e ЖИВОЙ путь актуатора ЧЕРЕЗ ГЕЙТ (offline, без сети/модели) — ЕДИНЫЙ движок для headless-
+/// smoke и CI-теста. Строит ВКЛЮЧЁННЫЙ [`AgentRunHandler`] (`actuator_enabled=true`,
+/// `decision_source=PolicyDefault`) над уже-открытым `db` с КАНОНИЗИРОВАННЫМ `canon_root` и фейк-
+/// провайдером, скриптующим `note.create` (Auto-тир). autonomy=auto → гейт авто-применяет Auto-тир
+/// напрямую: файл записан, ledger executed, classify_hash протянут. Возвращает [`ActuatorGateResult`]
+/// (вызыватель ассертит). Реальный vault пользователя НЕ трогаем — caller даёт временный root.
+async fn drive_actuator_gate_run(
+    canon_root: &Path,
+    db: &Database,
+    rel: &str,
+    content: &str,
+) -> ActuatorGateResult {
+    use nexus_core::agent::{enqueue_agent_run, run_store, AgentRunHandler, KIND_AGENT_RUN};
+    use nexus_core::net::EgressPolicy;
+    use nexus_core::scheduler::{Job, JobHandler};
+
+    let provider = Arc::new(CreateThenFinalProvider::note_create(rel, content));
+    let ai = Arc::new(AIClient {
+        chat: None,
+        chat_fast: None,
+        chat_util: None,
+        embedder: None,
+        agent_tools: Some(provider),
+        policy: Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false)))),
+    });
+    let handler = AgentRunHandler::new(
+        db.writer().clone(),
+        db.reader().clone(),
+        ai,
+        Some(32768),
+        None,
+        canon_root.to_path_buf(),
+        true, // actuator ВКЛ (go-live флаг)
+        nexus_core::actuator::OVERWRITE_THRESHOLD,
+        nexus_core::ai::AiConfig::DEFAULT_BLAST_RADIUS_CAP,
+        // PolicyDefault: НЕ спрашивается для Auto-тира в auto-прогоне (применяется напрямую под кэпом);
+        // подтверждает, что go-live-проводка применяет Auto-тир, а не блокирует его auto-DENY.
+        Arc::new(nexus_core::actuator::PolicyDefault),
+    );
+
+    let run_id = enqueue_agent_run(
+        db.writer(),
+        "создай заметку",
+        Some("actuator-gate-fake"),
+        Some("auto"),
+    )
+    .await
+    .expect("enqueue_agent_run");
+    let job = Job {
+        id: 1,
+        kind: KIND_AGENT_RUN.into(),
+        payload: run_id.to_string(),
+        state: "running".into(),
+        run_at: 0,
+        attempts: 0,
+        max_attempts: 3,
+        last_error: None,
+    };
+    handler.handle(&job).await.expect("actuator run");
+
+    let written = std::fs::read_to_string(canon_root.join(rel)).ok();
+    let executed: i64 = db
+        .reader()
+        .query(move |c| {
+            c.query_row(
+                "SELECT count(*) FROM agent_actions WHERE run_id=?1 AND state='executed'",
+                [run_id],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap_or(-1);
+    let status = run_store::get_run(db.reader(), run_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.status);
+    ActuatorGateResult {
+        written,
+        executed,
+        status,
+    }
+}
+
+/// AGENT-3e offline smoke: actuator GO-LIVE ЧЕРЕЗ ГЕЙТ. Открывает СВОЙ временный vault и гоняет
+/// [`drive_actuator_gate_run`] (флаг ВКЛ + autonomy=auto + `note.create`). Доказывает живую проводку
+/// tool→dispatch_action→apply БЕЗ модели/сети. Падение — паника (валит smoke): это акцептанс go-live.
+/// Целевой root НЕ трогаем (свой temp vault). CI-эквивалент — [`tests::live_actuator_gate_applies_via_gate`].
+async fn actuator_gate_smoke() {
+    let dir = std::env::temp_dir().join(format!("nexus-actuator-smoke-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("smoke: temp vault");
+    let canon_root = dir.canonicalize().expect("smoke: canonicalize vault");
+    let db = Database::open(canon_root.join(".nexus").join("nexus.db"))
+        .await
+        .expect("smoke: open db");
+
+    let res = drive_actuator_gate_run(&canon_root, &db, "Notes/Smoke.md", "создано гейтом").await;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        res.written.as_deref(),
+        Some("создано гейтом"),
+        "AGENT-3e smoke: note.create ДОЛЖНА быть записана ЧЕРЕЗ ГЕЙТ (флаг ВКЛ, autonomy=auto)"
+    );
+    assert_eq!(
+        res.executed, 1,
+        "AGENT-3e smoke: ровно одна executed apply-строка ledger (apply через dispatch_action)"
+    );
+    tracing::info!(
+        status = res.status.as_deref().unwrap_or("?"),
+        "nexus-agentd: AGENT-3e actuator smoke пройден (tool→dispatch_action→apply, ledger executed, offline)"
+    );
+}
+
 /// Реплика `vault::build_util_chat`: утилитарная мелкая модель из `ai.fast`, всегда без reasoning.
 /// `None` — секции нет / клиент не построился → вызывающий делает fallback на chat_fast.
 fn build_util_chat_min(
@@ -644,4 +948,154 @@ fn build_util_chat_min(
         .without_reasoning();
     tracing::info!(model = %model, url = %fast.url, "ai.fast (утилитарная модель) включена");
     Some(Arc::new(provider))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexus_core::net::{EgressDenied, EgressState};
+    use tempfile::TempDir;
+
+    /// Свежая политика + общий offline-атомик (как в `run()`).
+    fn fresh_policy() -> (Arc<AtomicBool>, Arc<EgressPolicy>) {
+        let offline = Arc::new(AtomicBool::new(false));
+        let policy = Arc::new(EgressPolicy::new(offline.clone()));
+        (offline, policy)
+    }
+
+    /// **AGENT-3e Fix-1 (HIGH — CI покрывает ЖИВОЙ write-путь актуатора).** Гоняет тот же движок, что
+    /// headless-smoke ([`drive_actuator_gate_run`]), но как `#[tokio::test]` — поэтому
+    /// `cargo test -p nexus-agentd` (CI через `--workspace`) теперь упражняет полную проводку
+    /// `tool → dispatch_action → apply` НА УРОВНЕ agentd, а не только за рантайм-флагом
+    /// `NEXUS_AGENTD_SMOKE=1`. Доказывает: ВКЛЮЧЁННЫЙ флаг актуатора + `autonomy=auto` + Auto-тир
+    /// `note.create` → файл реально записан в vault + ровно одна `executed` apply-строка ledger (apply
+    /// прошёл ЧЕРЕЗ ГЕЙТ — `dispatch_action`, не в обход) + classify_hash протянут (иначе drift-рубеж
+    /// отменил бы запись). Полностью ОФЛАЙН: фейк-провайдер ([`CreateThenFinalProvider`]) скриптует ходы
+    /// без модели/сети; vault — `TempDir` (целевой root пользователя не трогаем). Регрессия, ломающая
+    /// живой apply-путь, теперь ВАЛИТ CI (раньше прошла бы все гейты — это и был пробел go-live-ревью).
+    #[tokio::test]
+    async fn live_actuator_gate_applies_via_gate() {
+        let dir = TempDir::new().unwrap();
+        // canon_root КАНОНИЗИРОВАН — предусловие гейта/apply (на macOS /tmp → /private/tmp).
+        let canon_root = dir.path().canonicalize().unwrap();
+        let db = Database::open(canon_root.join(".nexus").join("nexus.db"))
+            .await
+            .unwrap();
+
+        let res =
+            drive_actuator_gate_run(&canon_root, &db, "Notes/Gate.md", "создано гейтом (CI)").await;
+
+        assert_eq!(
+            res.written.as_deref(),
+            Some("создано гейтом (CI)"),
+            "флаг ВКЛ + autonomy=auto + Auto-тир: note.create записана ЧЕРЕЗ ГЕЙТ (dispatch_action→apply)"
+        );
+        assert_eq!(
+            res.executed, 1,
+            "ровно одна executed apply-строка ledger (apply прошёл через гейт, classify_hash протянут)"
+        );
+        assert_eq!(
+            res.status.as_deref(),
+            Some("done"),
+            "прогон дошёл до терминала done после применённого действия"
+        );
+        // Vault внутри TempDir — дроп `dir` чистит за собой; никакого egress (фейк-провайдер).
+    }
+
+    /// **CORE-2a tail (AGENT-3e §5): persisted offline=ON ЧЕСТИТСЯ agentd.** Сохраняем egress.json с
+    /// offline=true, применяем — политика ДЕНАИТ публичный хост (Offline), но LAN/loopback живут.
+    #[test]
+    fn persisted_offline_is_honored() {
+        let dir = TempDir::new().unwrap();
+        nexus_core::net::save_egress_state(
+            &dir.path().join("egress.json"),
+            &EgressState {
+                offline: true,
+                chat: true,
+                embed: true,
+                probe: true,
+            },
+        )
+        .unwrap();
+
+        let (offline, policy) = fresh_policy();
+        apply_egress_from_dir(dir.path(), &offline, &policy);
+
+        assert!(
+            offline.load(std::sync::atomic::Ordering::Relaxed),
+            "offline применён"
+        );
+        // Публичный хост отрезан kill-switch'ем.
+        assert_eq!(
+            policy.check("api.example.com", EgressFeature::Chat),
+            Err(EgressDenied::Offline),
+            "offline=ON: публичный Chat-хост денайнут (kill-switch уважён)"
+        );
+        // LAN/loopback живут даже в офлайне (local-first).
+        assert!(
+            policy.check("127.0.0.1", EgressFeature::Chat).is_ok(),
+            "loopback живёт в офлайне"
+        );
+    }
+
+    /// Per-feature opt-out из egress.json ЧЕСТИТСЯ: chat=false → Chat-фича выключена даже к loopback.
+    #[test]
+    fn persisted_feature_optout_is_honored() {
+        let dir = TempDir::new().unwrap();
+        nexus_core::net::save_egress_state(
+            &dir.path().join("egress.json"),
+            &EgressState {
+                offline: false,
+                chat: false,
+                embed: true,
+                probe: true,
+            },
+        )
+        .unwrap();
+
+        let (offline, policy) = fresh_policy();
+        apply_egress_from_dir(dir.path(), &offline, &policy);
+
+        assert!(
+            !policy.is_feature_enabled(EgressFeature::Chat),
+            "chat opt-out применён"
+        );
+        assert_eq!(
+            policy.check("127.0.0.1", EgressFeature::Chat),
+            Err(EgressDenied::FeatureNotEnabled(EgressFeature::Chat)),
+            "chat=false: даже loopback Chat выключен"
+        );
+        assert!(
+            policy.check("127.0.0.1", EgressFeature::Embed).is_ok(),
+            "embed остался ON"
+        );
+    }
+
+    /// Нет файла → local-first-дефолты (online, фичи ON) — fail-safe, не валит старт.
+    #[test]
+    fn missing_egress_json_is_local_first_defaults() {
+        let dir = TempDir::new().unwrap(); // пуст, файла нет
+        let (offline, policy) = fresh_policy();
+        apply_egress_from_dir(dir.path(), &offline, &policy);
+
+        assert!(
+            !offline.load(std::sync::atomic::Ordering::Relaxed),
+            "online по умолчанию"
+        );
+        assert!(policy.is_feature_enabled(EgressFeature::Chat));
+        assert!(policy.is_feature_enabled(EgressFeature::Embed));
+        assert!(policy.is_feature_enabled(EgressFeature::Probe));
+    }
+
+    /// `NEXUS_CONFIG_DIR` переопределяет локацию (явный путь приоритетнее OS config-dir).
+    /// Env-тест изолирован (один тест трогает env; остальные не зависят от него).
+    #[test]
+    fn config_dir_env_override() {
+        std::env::set_var("NEXUS_CONFIG_DIR", "/tmp/nexus-test-cfg-xyz");
+        assert_eq!(
+            egress_config_dir(),
+            Some(PathBuf::from("/tmp/nexus-test-cfg-xyz"))
+        );
+        std::env::remove_var("NEXUS_CONFIG_DIR");
+    }
 }
