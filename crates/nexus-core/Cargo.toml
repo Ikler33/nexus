@@ -27,6 +27,9 @@ tokio = { workspace = true, features = ["time", "net", "fs"] }
 thiserror = { workspace = true }
 pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }
+# SKILL-3 (вендоринг): SHA-256 hash-pin сверки vendored SKILL.md против vendor.lock-манифеста
+# (манифест пинит upstream-файлы в SHA-256). Уже транзитивно в Cargo.lock (через tauri-codegen).
+sha2 = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 usearch = { workspace = true }

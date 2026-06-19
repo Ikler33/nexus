@@ -23,15 +23,35 @@
 //! или битом `capabilities` возвращает жёсткий [`SkillError`]. В [`discover_skills`] ошибка
 //! отдельного скилла НЕ роняет всю загрузку, но и НЕ глотается: попадает в
 //! [`SkillCatalog::errors`] (видима вызывающему).
+//!
+//! ## SKILL-3: вендоринг + trust/capability (Фаза C)
+//! [`discover_skills`] дополнительно обходит вендоренные bundle'ы (`<skills_dir>/vendor/<bundle>/
+//! <skill>/SKILL.md`) — на один уровень глубже стандартной раскладки, с ТОЙ ЖЕ path-scope-защитой.
+//! Каждый vendored-скилл ВАЛИДИРУЕТСЯ против `<bundle>/vendor.lock` (манифест, serde_json — НЕ
+//! serde_yaml): манифест присутствует+парсится, bundle-`license` непуст, sha256 SKILL.md == pin.
+//! Любой провал → жёсткий [`SkillError`] (в `errors`, скилл НЕ загружен). Типизированная capability-
+//! модель + trust-tier + Phase-C resolve — в [`capability`] (declared ЗАПРАШИВАЕТ, НЕ ГРАНТИТ;
+//! shell/web/host остаются ИНЕРТНЫ — структурно нет actuator-пути).
 
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::parser::split_frontmatter;
 
+pub mod capability;
+pub use capability::{
+    approval_default, forced_base, parse_capabilities as parse_typed_capabilities,
+    resolve_capabilities, ApprovalDefault, Capability, CapabilityResolution, RiskClass, RunPolicy,
+    TrustTier, VENDOR_DIR,
+};
+
 /// Стандартное имя файла скилла внутри каталога-скилла (`<skills_dir>/<skill>/SKILL.md`).
 pub const SKILL_FILE: &str = "SKILL.md";
+
+/// Имя манифеста вендоренного bundle'а (`<skills_dir>/vendor/<bundle>/vendor.lock`).
+pub const VENDOR_LOCK_FILE: &str = "vendor.lock";
 
 /// Разобранный скилл (один SKILL.md).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +67,13 @@ pub struct Skill {
     /// Объявленные capabilities (`capabilities:`/`allowed-tools:`) — ЗАХВАЧЕНЫ для trust-гейта
     /// SKILL-3. Здесь НЕ применяются (no enforcement). Пусто, если поле отсутствует.
     pub capabilities: Vec<String>,
+    /// SKILL-3: trust-tier, ВЫВЕДЕННЫЙ ИЗ `rel_path` (`vendor/<bundle>/…` → Vendor, иначе TrustedLocal).
+    /// **ADVISORY** в Фазе C: захвачен + сурфейсится, НЕ проведён в живой actuator-гейт.
+    pub tier: TrustTier,
+    /// SKILL-3: лицензия. Для Vendor-скилла — bundle-level `license` из `vendor.lock` (ОБЯЗАТЕЛЬНА,
+    /// иначе скилл не грузится). Для TrustedLocal — опциональный inline `license:` из frontmatter
+    /// (само-декларация; не обязательна). `None` — лицензия не объявлена.
+    pub license: Option<String>,
 }
 
 /// Ошибка загрузки/разбора скилла. Fail-closed: битый скилл — ошибка, не «тихо пропустить».
@@ -73,6 +100,16 @@ pub enum SkillError {
     /// Путь скилла резолвится ВНЕ skills_dir (traversal/симлинк наружу) — отклонён.
     #[error("скилл вне skills_dir заблокирован (traversal/симлинк)")]
     PathEscape,
+    /// SKILL-3: vendored-скилл без манифеста `vendor.lock` (или непарсящегося) — untrusted, не грузится.
+    #[error("vendored-скилл без валидного манифеста vendor.lock: {0}")]
+    MissingManifest(String),
+    /// SKILL-3: bundle-level `license` в манифесте пуст/отсутствует — для vendored обязателен.
+    #[error("у vendored-bundle отсутствует обязательная лицензия (vendor.lock.license)")]
+    MissingLicense,
+    /// SKILL-3: SKILL.md vendored-скилла НЕ совпал с pin-хэшем манифеста (tamper) ИЛИ записи для него
+    /// в `files` нет вовсе. Скилл НЕ грузится (целостность не подтверждена).
+    #[error("hash-pin vendored-скилла не сошёлся (tamper/нет записи): {0}")]
+    HashMismatch(String),
     /// Ошибка ввода-вывода при чтении скилла/каталога.
     #[error("io: {0}")]
     Io(String),
@@ -276,7 +313,12 @@ pub fn parse_skill(content: &str, rel_path: &str) -> Result<Skill, SkillError> {
 
     let description = scalar_field(fm, "description").ok_or(SkillError::MissingDescription)?;
 
-    let capabilities = parse_capabilities(fm)?;
+    let capabilities = parse_capabilities_field(fm)?;
+
+    // SKILL-3: tier выводится из пути (advisory). Inline `license:` — опциональная само-декларация
+    // для TrustedLocal (для Vendor лицензия ставится из vendor.lock в discover_skills, перетирая это).
+    let tier = TrustTier::from_rel_path(rel_path);
+    let license = scalar_field(fm, "license");
 
     Ok(Skill {
         name,
@@ -284,6 +326,8 @@ pub fn parse_skill(content: &str, rel_path: &str) -> Result<Skill, SkillError> {
         rel_path: rel_path.to_string(),
         body: body.to_string(),
         capabilities,
+        tier,
+        license,
     })
 }
 
@@ -344,13 +388,14 @@ fn validate_name(name: &str) -> Result<(), SkillError> {
 }
 
 /// Разбирает опциональное поле объявленных capabilities (`capabilities:` или `allowed-tools:` по
-/// стандарту SKILL.md) в `Vec<String>`. ЗАХВАТ для SKILL-3 (trust-гейт) — здесь НЕ применяется.
+/// стандарту SKILL.md) в `Vec<String>` СЫРЫХ токенов. ЗАХВАТ для SKILL-3; типизация — отдельно через
+/// [`capability::parse_capabilities`] (ре-экспорт `parse_typed_capabilities`).
 ///
 /// Тем же line-парсером, что `parser::frontmatter_aliases`/`frontmatter_tags` (без serde_yaml):
 /// инлайн `[a, b]`, блочный список `- a` / `- b`. Поля НЕТ → пустой `Vec` (Ok). Поле ЕСТЬ, но не
 /// разбирается как список строк (скаляр без списка / инлайн-объект `{…}` / пустые элементы) →
 /// жёсткий [`SkillError::BadCapabilities`] (fail-closed).
-fn parse_capabilities(fm: &str) -> Result<Vec<String>, SkillError> {
+fn parse_capabilities_field(fm: &str) -> Result<Vec<String>, SkillError> {
     let mut lines = fm.lines().peekable();
     while let Some(line) = lines.next() {
         // Только верхний уровень (как scalar_field): без ведущих пробелов/таба/`-`.
@@ -490,11 +535,18 @@ pub fn discover_skills(skills_dir: &Path) -> SkillCatalog {
         let name = entry.file_name().to_string_lossy().to_string();
 
         if meta.is_dir() {
-            // Стандарт: <skill>/SKILL.md. (Если запись — симлинк на каталог, is_dir()==false здесь,
-            // т.к. meta из symlink_metadata описывает сам симлинк → каталог-симлинк не обходим.)
-            let skill_md = path.join(SKILL_FILE);
-            if skill_md.is_file() {
-                candidates.push((format!("{name}/{SKILL_FILE}"), skill_md));
+            if name == VENDOR_DIR {
+                // SKILL-3: вендоренные скиллы лежат на уровень глубже — `vendor/<bundle>/<skill>/
+                // SKILL.md`. Спускаемся РОВНО эту форму (BOUNDED: bundle → skill, без рекурсии).
+                collect_vendor_candidates(&path, &mut candidates);
+            } else {
+                // Стандарт: <skill>/SKILL.md. (Если запись — симлинк на каталог, is_dir()==false
+                // здесь, т.к. meta из symlink_metadata описывает сам симлинк → каталог-симлинк не
+                // обходим.)
+                let skill_md = path.join(SKILL_FILE);
+                if skill_md.is_file() {
+                    candidates.push((format!("{name}/{SKILL_FILE}"), skill_md));
+                }
             }
         } else if meta.is_file() {
             // Плоская раскладка: <name>.md верхнего уровня (но не сам SKILL.md в корне — это
@@ -532,22 +584,203 @@ pub fn discover_skills(skills_dir: &Path) -> SkillCatalog {
             }
         };
 
-        match parse_skill(&content, &rel) {
-            Ok(skill) => {
-                // Single-def: дубликат имени — НЕ перезапись, а видимая ошибка (первый остаётся).
-                if catalog.skills.iter().any(|s| s.name == skill.name) {
-                    catalog
-                        .errors
-                        .push((rel, SkillError::DuplicateName(skill.name)));
-                } else {
-                    catalog.skills.push(skill);
+        let mut skill = match parse_skill(&content, &rel) {
+            Ok(s) => s,
+            Err(e) => {
+                catalog.errors.push((rel, e));
+                continue;
+            }
+        };
+
+        // SKILL-3: vendored-скилл (`vendor/<bundle>/…`) ОБЯЗАН пройти manifest+license+hash-pin.
+        // Любой провал → жёсткий SkillError (в errors), скилл НЕ грузится. TrustedLocal — пропуск.
+        if skill.tier == TrustTier::Vendor {
+            match validate_vendored(&root, &rel, &content) {
+                Ok(license) => skill.license = Some(license), // bundle-level license перетирает inline.
+                Err(e) => {
+                    catalog.errors.push((rel, e));
+                    continue;
                 }
             }
-            Err(e) => catalog.errors.push((rel, e)),
+        }
+
+        // Single-def: дубликат имени — НЕ перезапись, а видимая ошибка (первый остаётся).
+        if catalog.skills.iter().any(|s| s.name == skill.name) {
+            catalog
+                .errors
+                .push((rel, SkillError::DuplicateName(skill.name)));
+        } else {
+            catalog.skills.push(skill);
         }
     }
 
     catalog
+}
+
+/// SKILL-3: спускается в `vendor/<bundle>/<skill>/SKILL.md` (РОВНО эта форма — bundle, затем skill;
+/// BOUNDED, без рекурсии) и добавляет кандидатов с `rel_path` ОТНОСИТЕЛЬНО skills_dir (например
+/// `vendor/kepano/obsidian-markdown/SKILL.md`). Симлинки НЕ обходятся (та же защита, что верхний
+/// уровень: `symlink_metadata` + последующая canonicalize-проверка path-scope в основном цикле).
+/// Служебные файлы bundle'а (`vendor.lock`/`LICENSE`/`PROVENANCE.md`/`references/`) сюда не попадают:
+/// мы ищем только подкаталоги-скиллы с `SKILL.md`.
+/// Безопасен ли ОДИН компонент пути (имя bundle/skill-каталога) для конкатенации в `rel_path`:
+/// непустой, не `.`/`..`, без разделителей (`/`/`\`) и без NUL. `read_dir` и так не отдаёт `.`/`..`
+/// или имена с разделителями, но проверяем явно — чтобы rel_path был provably traversal-free в
+/// источнике, не полагаясь только на canonicalize-бэкстоп.
+fn is_safe_path_component(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
+fn collect_vendor_candidates(
+    vendor_dir: &Path,
+    candidates: &mut Vec<(String, std::path::PathBuf)>,
+) {
+    let Ok(bundles) = std::fs::read_dir(vendor_dir) else {
+        return; // нечитаемый vendor/ — просто нет вендоренных кандидатов (не паника).
+    };
+    for bundle in bundles.flatten() {
+        let bundle_path = bundle.path();
+        // symlink_metadata: bundle-каталог-симлинк не обходим (как верхний уровень).
+        let Ok(bmeta) = std::fs::symlink_metadata(&bundle_path) else {
+            continue;
+        };
+        if !bmeta.is_dir() {
+            continue; // bundle обязан быть реальным каталогом.
+        }
+        let bundle_name = bundle.file_name().to_string_lossy().to_string();
+        // Defense-in-depth: имя компонента из read_dir не может содержать разделитель/`.`/`..`, но
+        // rel_path ниже строится конкатенацией — гарантируем traversal-free В ИСТОЧНИКЕ (бэкстоп к
+        // canonicalize-проверке в discover_skills). Небезопасное имя → bundle пропускается.
+        if !is_safe_path_component(&bundle_name) {
+            continue;
+        }
+
+        let Ok(skills) = std::fs::read_dir(&bundle_path) else {
+            continue;
+        };
+        for skill_entry in skills.flatten() {
+            let skill_path = skill_entry.path();
+            let Ok(smeta) = std::fs::symlink_metadata(&skill_path) else {
+                continue;
+            };
+            if !smeta.is_dir() {
+                continue; // пропускаем vendor.lock/LICENSE/PROVENANCE.md (файлы) на этом уровне.
+            }
+            let skill_name = skill_entry.file_name().to_string_lossy().to_string();
+            if !is_safe_path_component(&skill_name) {
+                continue; // небезопасное имя скилл-каталога — не строим из него rel_path.
+            }
+            let skill_md = skill_path.join(SKILL_FILE);
+            if skill_md.is_file() {
+                candidates.push((
+                    format!("{VENDOR_DIR}/{bundle_name}/{skill_name}/{SKILL_FILE}"),
+                    skill_md,
+                ));
+            }
+            // Подкаталог без SKILL.md (например `references/`) — пропущен (не скилл).
+        }
+    }
+}
+
+/// Манифест вендоренного bundle'а (`<bundle>/vendor.lock`). Парсится serde_json (НЕ serde_yaml —
+/// архивирован). bundle-level `license`/`source`/`commit`; `files[].rel_path` — ОТНОСИТЕЛЬНО каталога
+/// bundle'а (`vendor/<bundle>/`); каждый файл пинит свой sha256.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct VendorManifest {
+    /// Лицензия bundle'а (для vendored ОБЯЗАТЕЛЬНА непустая). Применяется ко всем скиллам bundle'а.
+    #[serde(default)]
+    license: String,
+    /// Пин-список файлов bundle'а: `rel_path` (отн. каталога bundle'а) → sha256.
+    #[serde(default)]
+    files: Vec<VendorFilePin>,
+}
+
+/// Пин одного файла bundle'а: путь относительно каталога bundle'а + его SHA-256.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct VendorFilePin {
+    /// Путь файла ОТНОСИТЕЛЬНО каталога bundle'а (`obsidian-markdown/SKILL.md`).
+    rel_path: String,
+    /// Шестнадцатеричный SHA-256 файла (нижний регистр).
+    sha256: String,
+}
+
+/// SKILL-3: валидирует ОДИН vendored-скилл против манифеста его bundle'а. `skills_root` — каноничный
+/// корень skills; `rel` — `vendor/<bundle>/<skill>/SKILL.md` (отн. корня); `content` — УЖЕ прочитанный
+/// (канонизированный, path-scope-проверенный) текст SKILL.md.
+///
+/// Проверяет: (a) `<bundle>/vendor.lock` присутствует и парсится serde_json → иначе
+/// [`SkillError::MissingManifest`]; (b) bundle-`license` непуст → иначе [`SkillError::MissingLicense`];
+/// (c) в `files` ЕСТЬ запись по bundle-rel пути этого SKILL.md И её sha256 == sha256(content) → иначе
+/// [`SkillError::HashMismatch`] (tamper/нет записи). Всё ок → возвращает bundle-level `license`.
+///
+/// Никаких записей; читает только `vendor.lock`. Хэш считается по УЖЕ прочитанному `content` (тому же,
+/// что пойдёт в `Skill.body`-родитель) — без второго чтения с диска (нет TOCTOU между проверкой и
+/// загрузкой). Сравнение хэша — регистронезависимо по hex.
+fn validate_vendored(skills_root: &Path, rel: &str, content: &str) -> Result<String, SkillError> {
+    // Разбираем rel: `vendor/<bundle>/<skill>/SKILL.md` → bundle-имя + bundle-rel путь файла.
+    let parts: Vec<&str> = rel.split('/').collect();
+    // Ожидаем минимум [vendor, bundle, skill, SKILL.md]; первый компонент = VENDOR_DIR (tier гарантировал).
+    if parts.len() < 4 || parts[0] != VENDOR_DIR {
+        return Err(SkillError::MissingManifest(format!(
+            "неожиданная раскладка vendored-пути: {rel}"
+        )));
+    }
+    let bundle = parts[1];
+    // Путь файла ОТНОСИТЕЛЬНО каталога bundle'а (то, чем индексирован manifest.files): всё после
+    // `vendor/<bundle>/` → `<skill>/SKILL.md`.
+    let bundle_rel = parts[2..].join("/");
+
+    // Манифест: <skills_root>/vendor/<bundle>/vendor.lock.
+    let lock_path = skills_root
+        .join(VENDOR_DIR)
+        .join(bundle)
+        .join(VENDOR_LOCK_FILE);
+    let lock_raw = std::fs::read_to_string(&lock_path)
+        .map_err(|e| SkillError::MissingManifest(format!("{VENDOR_LOCK_FILE}: {e}")))?;
+    let manifest: VendorManifest = serde_json::from_str(&lock_raw)
+        .map_err(|e| SkillError::MissingManifest(format!("{VENDOR_LOCK_FILE} не парсится: {e}")))?;
+
+    // (b) bundle-level license ОБЯЗАТЕЛЬНА.
+    let license = manifest.license.trim().to_string();
+    if license.is_empty() {
+        return Err(SkillError::MissingLicense);
+    }
+
+    // (c) hash-pin: найти запись по bundle_rel + сверить sha256 с реальным content.
+    let pin = manifest
+        .files
+        .iter()
+        .find(|f| f.rel_path == bundle_rel)
+        .ok_or_else(|| {
+            SkillError::HashMismatch(format!("нет записи `{bundle_rel}` в {VENDOR_LOCK_FILE}"))
+        })?;
+    let actual = sha256_hex(content.as_bytes());
+    if !actual.eq_ignore_ascii_case(pin.sha256.trim()) {
+        return Err(SkillError::HashMismatch(format!(
+            "{bundle_rel}: ожидалось {}, фактически {actual}",
+            pin.sha256
+        )));
+    }
+
+    Ok(license)
+}
+
+/// SHA-256 в нижнем-регистровом hex (для сверки с vendor.lock-пинами).
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 /// Человекочитаемый путь для сообщений об ошибке (lossy, без падения на не-UTF-8).
@@ -566,7 +799,8 @@ mod tests {
 
     // ── parse_skill ────────────────────────────────────────────────────────────────────────────
 
-    /// Валидный SKILL.md (name+description+body) → Skill корректен.
+    /// Валидный SKILL.md (name+description+body) → Skill корректен. SKILL-3: tier выводится из пути
+    /// (top-level → TrustedLocal), license отсутствует (None).
     #[test]
     fn parse_valid_skill() {
         let s = parse_skill(VALID, "pdf-tools/SKILL.md").unwrap();
@@ -575,6 +809,23 @@ mod tests {
         assert_eq!(s.rel_path, "pdf-tools/SKILL.md");
         assert_eq!(s.body, "# PDF tools\n\nDo the thing.\n");
         assert!(s.capabilities.is_empty());
+        assert_eq!(s.tier, TrustTier::TrustedLocal, "top-level → TrustedLocal");
+        assert_eq!(s.license, None, "лицензия не объявлена inline");
+    }
+
+    /// SKILL-3: vendored-путь → tier=Vendor уже на этапе parse (FS-валидация — в discover_skills).
+    #[test]
+    fn parse_vendored_path_is_vendor_tier() {
+        let s = parse_skill(VALID, "vendor/kepano/x/SKILL.md").unwrap();
+        assert_eq!(s.tier, TrustTier::Vendor);
+    }
+
+    /// SKILL-3: inline `license:` в frontmatter (само-декларация TrustedLocal) — захватывается.
+    #[test]
+    fn parse_inline_license_captured() {
+        let content = "---\nname: x\ndescription: d\nlicense: Apache-2.0\n---\nbody\n";
+        let s = parse_skill(content, "x/SKILL.md").unwrap();
+        assert_eq!(s.license, Some("Apache-2.0".to_string()));
     }
 
     /// kepano-скилл: frontmatter ТОЛЬКО name+description, без metadata.nexus.* → грузится без проблем.
@@ -1069,6 +1320,8 @@ mod tests {
             rel_path: "evil/SKILL.md".into(),
             body: String::new(),
             capabilities: Vec::new(),
+            tier: TrustTier::TrustedLocal,
+            license: None,
         });
         let block = cat.catalog_block("⟦m⟧").unwrap();
         // Управляющие символы из description свёрнуты в пробелы — на одной строке.
@@ -1096,6 +1349,8 @@ mod tests {
                 rel_path: format!("skill-{i}/SKILL.md"),
                 body: String::new(),
                 capabilities: Vec::new(),
+                tier: TrustTier::TrustedLocal,
+                license: None,
             });
         }
         let block = cat.catalog_block("⟦m⟧").unwrap();
@@ -1218,5 +1473,390 @@ mod tests {
             resolve_skill_resource(&root, "a/SKILL.md", "nope.txt"),
             Err(SkillError::Io(_))
         ));
+    }
+
+    // ── SKILL-3: вендоринг discovery + manifest/license/hash валидация ───────────────────────────────
+
+    /// Считает sha256-hex содержимого (зеркало loader-side `sha256_hex`) — для синтез-фикстур.
+    fn sha256_of(content: &str) -> String {
+        sha256_hex(content.as_bytes())
+    }
+
+    /// Пишет минимальный валидный SKILL.md в `<root>/vendor/<bundle>/<skill>/SKILL.md` и возвращает
+    /// его содержимое (чтобы тест мог запинить корректный хэш).
+    fn write_vendored_skill(root: &Path, bundle: &str, skill: &str, name: &str) -> String {
+        let d = root.join(VENDOR_DIR).join(bundle).join(skill);
+        fs::create_dir_all(&d).unwrap();
+        let content =
+            format!("---\nname: {name}\ndescription: vendored {name}\n---\nBody of {name}.\n");
+        fs::write(d.join(SKILL_FILE), &content).unwrap();
+        content
+    }
+
+    /// Пишет vendor.lock-манифест для bundle'а с заданными license + (rel_path, sha256)-пинами.
+    fn write_manifest(root: &Path, bundle: &str, license: &str, files: &[(&str, &str)]) {
+        let files_json: Vec<String> = files
+            .iter()
+            .map(|(rp, sha)| format!("{{\"rel_path\":\"{rp}\",\"sha256\":\"{sha}\"}}"))
+            .collect();
+        let manifest = format!(
+            "{{\"bundle\":\"{bundle}\",\"source\":\"test\",\"commit\":\"deadbeef\",\
+             \"license\":\"{license}\",\"files\":[{}]}}",
+            files_json.join(",")
+        );
+        fs::write(
+            root.join(VENDOR_DIR).join(bundle).join(VENDOR_LOCK_FILE),
+            manifest,
+        )
+        .unwrap();
+    }
+
+    /// Fail-safe: vendor-корень детектится РЕГИСТРОЗАВИСИМО (lowercase `vendor`). Каталог `Vendor/`
+    /// (заглавная) НЕ распознаётся как vendor-корень → его вложенные скиллы НЕ обнаруживаются (обычный
+    /// верхнеуровневый скан ищет `Vendor/SKILL.md`, которого нет). Ключевое: НЕТ обхода валидации —
+    /// vendored-скилл под нестандартным регистром просто НЕ грузится (а не грузится как TrustedLocal
+    /// без hash-pin). Документирует «case-sensitive by design» из adversarial-ревью.
+    #[test]
+    fn discover_uppercase_vendor_dir_is_not_loaded_no_bypass() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Скилл под `Vendor/acme/tool/SKILL.md` (заглавная V), БЕЗ манифеста.
+        let d = root.join("Vendor").join("acme").join("tool");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join(SKILL_FILE),
+            "---\nname: sneaky\ndescription: tries to dodge vendor validation\n---\nBody.\n",
+        )
+        .unwrap();
+
+        let cat = discover_skills(root);
+        // НЕ загружен (вложенная раскладка под нераспознанным vendor-корнем не обнаруживается)…
+        assert!(
+            cat.get("sneaky").is_none(),
+            "vendored-скилл под `Vendor/` (заглавная) НЕ должен грузиться (нет обхода валидации)"
+        );
+        // …и не «протёк» как TrustedLocal без hash-pin: его попросту нет в каталоге.
+        assert!(
+            cat.skills().iter().all(|s| s.name != "sneaky"),
+            "нет скилла `sneaky` ни в каком tier"
+        );
+    }
+
+    /// Discovery находит вендоренный скилл (на уровень глубже): rel_path остаётся относительным
+    /// skills_dir; tier=Vendor; license из манифеста; чистая загрузка.
+    #[test]
+    fn discover_finds_vendored_skill_nested() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let content = write_vendored_skill(root, "acme", "tool", "vtool");
+        let sha = sha256_of(&content);
+        write_manifest(root, "acme", "MIT", &[("tool/SKILL.md", &sha)]);
+
+        let cat = discover_skills(root);
+        assert!(cat.errors().is_empty(), "чисто: {:?}", cat.errors());
+        let s = cat
+            .get("vtool")
+            .expect("вендоренный скилл найден на уровень глубже");
+        assert_eq!(
+            s.rel_path, "vendor/acme/tool/SKILL.md",
+            "rel отн. skills_dir"
+        );
+        assert_eq!(s.tier, TrustTier::Vendor);
+        assert_eq!(s.license, Some("MIT".to_string()), "license из vendor.lock");
+    }
+
+    /// Top-level И vendored скиллы соседствуют: оба грузятся (раскладка SKILL-1 не сломана).
+    #[test]
+    fn discover_top_level_and_vendored_coexist() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_skill(root, "local", "local", "trusted-local one");
+        let content = write_vendored_skill(root, "acme", "tool", "vtool");
+        write_manifest(
+            root,
+            "acme",
+            "MIT",
+            &[("tool/SKILL.md", &sha256_of(&content))],
+        );
+
+        let cat = discover_skills(root);
+        assert!(cat.errors().is_empty(), "{:?}", cat.errors());
+        assert_eq!(cat.len(), 2);
+        assert_eq!(cat.get("local").unwrap().tier, TrustTier::TrustedLocal);
+        assert_eq!(cat.get("vtool").unwrap().tier, TrustTier::Vendor);
+    }
+
+    /// Vendored-скилл БЕЗ vendor.lock → MissingManifest (видим в errors, НЕ загружен).
+    #[test]
+    fn discover_vendored_without_manifest_errors() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_vendored_skill(root, "acme", "tool", "vtool");
+        // намеренно НЕ пишем vendor.lock.
+
+        let cat = discover_skills(root);
+        assert!(cat.get("vtool").is_none(), "без манифеста — не загружен");
+        let err = cat
+            .errors()
+            .iter()
+            .find(|(rel, _)| rel == "vendor/acme/tool/SKILL.md");
+        assert!(
+            matches!(err.map(|(_, e)| e), Some(SkillError::MissingManifest(_))),
+            "ожидался MissingManifest, errors={:?}",
+            cat.errors()
+        );
+    }
+
+    /// Vendored-bundle с ПУСТОЙ license в манифесте → MissingLicense (не загружен).
+    #[test]
+    fn discover_vendored_missing_license_errors() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let content = write_vendored_skill(root, "acme", "tool", "vtool");
+        // license="" — обязательное поле пусто.
+        write_manifest(root, "acme", "", &[("tool/SKILL.md", &sha256_of(&content))]);
+
+        let cat = discover_skills(root);
+        assert!(cat.get("vtool").is_none());
+        let err = cat
+            .errors()
+            .iter()
+            .find(|(rel, _)| rel == "vendor/acme/tool/SKILL.md");
+        assert_eq!(
+            err.map(|(_, e)| e),
+            Some(&SkillError::MissingLicense),
+            "errors={:?}",
+            cat.errors()
+        );
+    }
+
+    /// Vendored SKILL.md с НЕсовпадающим pin-хэшем (tamper) → HashMismatch (не загружен).
+    #[test]
+    fn discover_vendored_hash_mismatch_errors() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_vendored_skill(root, "acme", "tool", "vtool");
+        // Пин на ЗАВЕДОМО неверный хэш (как будто файл подменили после пиннинга).
+        write_manifest(root, "acme", "MIT", &[("tool/SKILL.md", &"0".repeat(64))]);
+
+        let cat = discover_skills(root);
+        assert!(cat.get("vtool").is_none(), "tamper → не загружен");
+        let err = cat
+            .errors()
+            .iter()
+            .find(|(rel, _)| rel == "vendor/acme/tool/SKILL.md");
+        assert!(
+            matches!(err.map(|(_, e)| e), Some(SkillError::HashMismatch(_))),
+            "ожидался HashMismatch, errors={:?}",
+            cat.errors()
+        );
+    }
+
+    /// Vendored SKILL.md, для которого в `files` НЕТ записи (pin отсутствует) → HashMismatch.
+    #[test]
+    fn discover_vendored_pin_missing_errors() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_vendored_skill(root, "acme", "tool", "vtool");
+        // Манифест есть, license есть, но files[] не содержит записи для tool/SKILL.md.
+        write_manifest(root, "acme", "MIT", &[("other/SKILL.md", &"a".repeat(64))]);
+
+        let cat = discover_skills(root);
+        assert!(cat.get("vtool").is_none(), "нет пина → не загружен");
+        let err = cat
+            .errors()
+            .iter()
+            .find(|(rel, _)| rel == "vendor/acme/tool/SKILL.md");
+        assert!(
+            matches!(err.map(|(_, e)| e), Some(SkillError::HashMismatch(_))),
+            "ожидался HashMismatch (нет записи), errors={:?}",
+            cat.errors()
+        );
+    }
+
+    /// Off-bundle: vendored SKILL.md — симлинк на файл СНАРУЖИ skills_dir → path-scope бэкстоп ловит
+    /// PathEscape ДО manifest-валидации (наружный контент не грузится). Регрессия SKILL-1-защиты на
+    /// vendor-уровне.
+    #[cfg(unix)]
+    #[test]
+    fn discover_vendored_offbundle_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let outside = TempDir::new().unwrap();
+        let outside_skill = outside.path().join("payload.md");
+        fs::write(
+            &outside_skill,
+            "---\nname: payload\ndescription: outside\n---\nbody\n",
+        )
+        .unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Реальный vendor/<bundle>/<skill>/, но SKILL.md в нём — симлинк наружу.
+        let skill_dir = root.join(VENDOR_DIR).join("acme").join("tool");
+        fs::create_dir_all(&skill_dir).unwrap();
+        symlink(&outside_skill, skill_dir.join(SKILL_FILE)).unwrap();
+        write_manifest(root, "acme", "MIT", &[("tool/SKILL.md", &"f".repeat(64))]);
+
+        let cat = discover_skills(root);
+        assert!(cat.get("payload").is_none(), "наружный симлинк не загружен");
+        let escape = cat
+            .errors()
+            .iter()
+            .find(|(rel, _)| rel == "vendor/acme/tool/SKILL.md");
+        assert_eq!(
+            escape.map(|(_, e)| e),
+            Some(&SkillError::PathEscape),
+            "ожидался PathEscape (бэкстоп на vendor-уровне), errors={:?}",
+            cat.errors()
+        );
+    }
+
+    /// Симлинк-bundle-КАТАЛОГ наружу под vendor/ → не обходим (symlink_metadata не is_dir).
+    #[cfg(unix)]
+    #[test]
+    fn discover_vendored_symlinked_bundle_dir_skipped() {
+        use std::os::unix::fs::symlink;
+        let outside = TempDir::new().unwrap();
+        // Снаружи — целая bundle-раскладка с валидным манифестом (чтобы доказать: дело в симлинке).
+        let ob = outside.path().join("evilbundle");
+        fs::create_dir_all(ob.join("tool")).unwrap();
+        let content = "---\nname: evil\ndescription: outside\n---\nbody\n";
+        fs::write(ob.join("tool").join(SKILL_FILE), content).unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join(VENDOR_DIR)).unwrap();
+        symlink(&ob, root.join(VENDOR_DIR).join("evilbundle")).unwrap();
+
+        let cat = discover_skills(root);
+        assert!(
+            cat.get("evil").is_none(),
+            "симлинк-bundle-каталог наружу не обходится"
+        );
+    }
+
+    /// vendor.lock с битым JSON → MissingManifest (не серде-yaml; парс-ошибка видима, не загружен).
+    #[test]
+    fn discover_vendored_malformed_manifest_errors() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_vendored_skill(root, "acme", "tool", "vtool");
+        fs::write(
+            root.join(VENDOR_DIR).join("acme").join(VENDOR_LOCK_FILE),
+            "{ this is not valid json",
+        )
+        .unwrap();
+
+        let cat = discover_skills(root);
+        assert!(cat.get("vtool").is_none());
+        let err = cat
+            .errors()
+            .iter()
+            .find(|(rel, _)| rel == "vendor/acme/tool/SKILL.md");
+        assert!(
+            matches!(err.map(|(_, e)| e), Some(SkillError::MissingManifest(_))),
+            "битый JSON → MissingManifest, errors={:?}",
+            cat.errors()
+        );
+    }
+
+    /// vendor/<bundle>/references/ (подкаталог без SKILL.md) — пропущен, не кандидат.
+    #[test]
+    fn discover_vendored_references_dir_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let content = write_vendored_skill(root, "acme", "tool", "vtool");
+        // Sibling references/ внутри bundle'а (не скилл).
+        fs::create_dir_all(root.join(VENDOR_DIR).join("acme").join("references")).unwrap();
+        fs::write(
+            root.join(VENDOR_DIR)
+                .join("acme")
+                .join("references")
+                .join("X.md"),
+            "ref",
+        )
+        .unwrap();
+        write_manifest(
+            root,
+            "acme",
+            "MIT",
+            &[("tool/SKILL.md", &sha256_of(&content))],
+        );
+
+        let cat = discover_skills(root);
+        assert!(cat.errors().is_empty(), "{:?}", cat.errors());
+        assert_eq!(cat.len(), 1, "references/ не стал скиллом");
+    }
+
+    /// REGRESSION: trusted-local скилл (без манифеста) грузится как и в SKILL-1 (vendoring не сломал).
+    #[test]
+    fn discover_trusted_local_still_loads_without_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_skill(root, "local", "local", "no manifest needed");
+        let cat = discover_skills(root);
+        assert_eq!(cat.len(), 1);
+        let s = cat.get("local").unwrap();
+        assert_eq!(s.tier, TrustTier::TrustedLocal);
+        assert_eq!(s.license, None, "trusted-local не требует лицензии");
+    }
+
+    // ── SKILL-3: РЕАЛЬНЫЙ kepano-bundle на диске (offline, из репо) ──────────────────────────────────
+
+    /// Локализует `_skills/vendor/kepano` в корне репо относительно крейта (`CARGO_MANIFEST_DIR` =
+    /// crates/nexus-core → вверх на 2 = корень репо). `None`, если bundle не на месте (не валим тест,
+    /// но ассертим присутствие в самом тесте).
+    fn repo_kepano_root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../_skills/vendor/kepano")
+    }
+
+    /// РЕАЛЬНЫЙ kepano-bundle: указываем discovery на skills_dir, СОДЕРЖАЩИЙ `vendor/kepano/...`, и
+    /// проверяем, что ОБА скилла грузятся ЧИСТО: license=="MIT", tier==Vendor, caps ⊆
+    /// {VaultRead,VaultWrite} (нет inert-заметки), hash-pin сошёлся. Полностью offline (файлы в репо).
+    #[test]
+    fn discover_real_kepano_bundle_loads_clean() {
+        let kepano = repo_kepano_root();
+        assert!(
+            kepano.join(VENDOR_LOCK_FILE).is_file(),
+            "ожидался реальный bundle на диске: {kepano:?}"
+        );
+
+        // skills_dir = временный корень, в котором `vendor/kepano` — симлинк/копия? Нет: discovery
+        // ждёт `<skills_dir>/vendor/<bundle>/...`. Реальный bundle лежит как `_skills/vendor/kepano`,
+        // значит skills_dir = `_skills`. Берём его и фильтруем по нашим двум именам (в каталоге могут
+        // быть и другие top-level скиллы в будущем — мы проверяем именно kepano-пару).
+        let skills_dir = kepano
+            .parent() // .../vendor
+            .and_then(|p| p.parent()) // .../_skills
+            .expect("_skills root");
+        let cat = discover_skills(skills_dir);
+
+        for name in ["obsidian-markdown", "json-canvas"] {
+            let s = cat.get(name).unwrap_or_else(|| {
+                panic!("kepano-скилл `{name}` загружен, errors={:?}", cat.errors())
+            });
+            assert_eq!(s.tier, TrustTier::Vendor, "{name}: Vendor-tier");
+            assert_eq!(
+                s.license.as_deref(),
+                Some("MIT"),
+                "{name}: MIT из vendor.lock"
+            );
+            // caps ⊆ {VaultRead,VaultWrite}: реальные kepano-frontmatter без capabilities → пусто →
+            // resolve даёт пустой inert (нет заявленных опасных способностей).
+            let declared = parse_typed_capabilities(&s.capabilities);
+            let res = resolve_capabilities(&declared, s.tier, &RunPolicy::phase_c_vault());
+            assert!(
+                !res.has_inert(),
+                "{name}: нет inert-заметки (caps ⊆ vault): {:?}",
+                res.inert
+            );
+        }
+        // Никаких ошибок по kepano-скиллам (другие top-level записи нас не касаются).
+        for (rel, e) in cat.errors() {
+            assert!(
+                !rel.starts_with("vendor/kepano/"),
+                "kepano-скилл дал ошибку {rel}: {e:?}"
+            );
+        }
     }
 }
