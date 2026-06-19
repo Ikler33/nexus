@@ -102,6 +102,12 @@ pub fn content_hash(bytes: &[u8]) -> String {
 /// Канонизация пути для ЗАПИСИ: целевой файл может не существовать, поэтому канонизируем
 /// РОДИТЕЛЯ (он обязан существовать) и проверяем его принадлежность vault; имя добавляем
 /// после. Та же анти-traversal граница, что и [`resolve_vault_path`] (AC-SEC-1).
+///
+/// **Предусловие:** `root` ОБЯЗАН быть уже канонизирован (как делает `open_vault`) — проверка
+/// `parent_canon.starts_with(root)` сравнивает канон-родителя с `root`; НЕканонический `root`
+/// (симлинк/относительный) даст ложный reject легитимной записи ИЛИ ослабит symlink-границу.
+/// Это ВТОРОЙ рубеж к лексическому `actuator::classify` (AGENT-3c обязан писать ТОЛЬКО по
+/// возвращённому каноническому пути — лексический classify симлинк внутри vault наружу не видит).
 pub fn resolve_vault_path_for_write(root: &Path, rel: &Path) -> VaultResult<PathBuf> {
     if rel.is_absolute() || rel.has_root() {
         return Err(VaultError::PathEscape);

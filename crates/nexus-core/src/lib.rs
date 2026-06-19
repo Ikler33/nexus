@@ -10,6 +10,8 @@
 //! замкнутый набор (зависит только на уже-ядровые модули и друг на друга). Индексатор отвязан от Tauri —
 //! watcher-петля зовёт инъектируемые [`indexer::IndexerHooks`]; desktop строит их из `AppHandle::emit`.
 
+/// Слой актуатора (AGENT-3b): алгебра действий + PURE fail-closed classify + статус-машина + idempotency-ledger.
+pub mod actuator;
 /// Слой агента (AGENT-1): типизированная граница инструментов + событие-стримящий цикл + реестр стабов.
 pub mod agent;
 /// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
