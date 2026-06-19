@@ -36,6 +36,18 @@ use nexus_core::vector::VectorIndex;
 
 mod health;
 
+/// Сегмент каталога bundle-id, под которым ОБА kill-switch'а (egress.json И agent.json) живут в OS
+/// config-dir. ЕДИНЫЙ источник истины (AGENT-5): дублировался бы в каждом резолве config-dir, и при
+/// ребрендинге легко рассинхронизировать headless-чтение с десктоп-записью. Держим в ОДНОЙ константе —
+/// ребрендинг меняет одно место.
+///
+/// ⚠️ ОБЯЗАН СОВПАДАТЬ с Tauri `identifier` в `tauri.conf.json` (`app.nexus.desktop`): десктоп пишет
+/// `egress.json`/`agent.json` в `<OS config-dir>/<identifier>`, а headless читает их из
+/// `<OS config-dir>/NEXUS_BUNDLE_DIR`. Если identifier поменяется, а эта строка — нет, headless будет
+/// читать ДРУГОЙ файл, чем пишет десктоп → kill-switch'и владельца (offline / пауза агента) молча
+/// неэффективны. См. [`egress_config_dir`].
+const NEXUS_BUNDLE_DIR: &str = "app.nexus.desktop";
+
 /// Сколько тиков прокрутить в smoke-режиме перед выходом. Тик планировщика — `TICK_SECS` (5 с в ядре),
 /// поэтому ждём с запасом, чтобы воркер успел стартовать (crash-recovery) и хотя бы раз тикнуть.
 const SMOKE_TICKS_DEADLINE: Duration = Duration::from_secs(8);
@@ -99,22 +111,23 @@ fn vault_path_from_args() -> Result<PathBuf, String> {
 ///
 /// ## КОНТРАКТ (AGENT-3e Fix-4) — kill-switch должен читать ТОТ ЖЕ файл, что пишет десктоп
 /// Разрешённый каталог ОБЯЗАН совпадать с Tauri-десктопным `app_config_dir`. Десктоп пишет `egress.json`
-/// в `<OS config-dir>/<bundle identifier>` — а identifier берётся из `tauri.conf.json` (`app.nexus.desktop`).
-/// Здесь хардкод-сегмент `app.nexus.desktop` ДУБЛИРУЕТ этот identifier. ЕСЛИ identifier в конфиге
-/// десктопа изменится (ребрендинг/смена bundle id), а эта строка — нет, headless будет читать ДРУГОЙ
-/// `egress.json`, чем пишет десктоп: владелец жмёт «offline»/выключает фичу в UI, десктоп пишет в свой
-/// каталог, а agentd грузит local-first-дефолты из несуществующего/другого файла → **kill-switch молча
-/// неэффективен** (headless продолжит эгресс). Поэтому при смене bundle identifier ОБЯЗАТЕЛЬНО менять и
-/// эту строку (либо задавать `NEXUS_CONFIG_DIR` явно на тот же каталог). `NEXUS_CONFIG_DIR` — штатный
-/// способ переопределить локацию (нестандартный config-dir / контейнер / тест), указывая на каталог
-/// десктопа.
+/// (и `agent.json`) в `<OS config-dir>/<bundle identifier>` — а identifier берётся из `tauri.conf.json`
+/// (`app.nexus.desktop`). Здесь сегмент берётся из ЕДИНОЙ константы [`NEXUS_BUNDLE_DIR`] (де-дуп —
+/// AGENT-5), которая ОБЯЗАНА совпадать с тем identifier. ЕСЛИ identifier в конфиге десктопа изменится
+/// (ребрендинг/смена bundle id), а [`NEXUS_BUNDLE_DIR`] — нет, headless будет читать ДРУГОЙ файл, чем
+/// пишет десктоп: владелец жмёт «offline»/ставит агента на паузу в UI, десктоп пишет в свой каталог, а
+/// agentd грузит local-first-дефолты из несуществующего/другого файла → **kill-switch молча неэффективен**
+/// (headless продолжит эгресс/работу). Поэтому при смене bundle identifier ОБЯЗАТЕЛЬНО менять и
+/// [`NEXUS_BUNDLE_DIR`] (либо задавать `NEXUS_CONFIG_DIR` явно на тот же каталог). `NEXUS_CONFIG_DIR` —
+/// штатный способ переопределить локацию (нестандартный config-dir / контейнер / тест), указывая на
+/// каталог десктопа.
 fn egress_config_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("NEXUS_CONFIG_DIR") {
         if !dir.is_empty() {
             return Some(PathBuf::from(dir));
         }
     }
-    dirs::config_dir().map(|d| d.join("app.nexus.desktop"))
+    dirs::config_dir().map(|d| d.join(NEXUS_BUNDLE_DIR))
 }
 
 /// CORE-2a tail (AGENT-3e §5): RESTORE персистентного egress kill-switch. Грузит `egress.json` из
@@ -157,6 +170,67 @@ fn apply_egress_from_dir(dir: &Path, egress_offline: &Arc<AtomicBool>, policy: &
             path = %path.display(),
             "egress.json отсутствует — kill-switch local-first (дефолты: online, фичи ON)"
         );
+    }
+}
+
+/// KILL-SWITCH (AGENT-5): RESTORE персистентной паузы агента. Грузит `agent.json` из app-config-dir
+/// (ТОТ ЖЕ каталог, что egress.json — зеркало десктопа/[`egress_config_dir`]) и взводит общий атомик,
+/// если `paused=true`. Нет файла/нет config-dir → НЕ на паузе (агент работает из коробки). Логирует.
+fn apply_persisted_agent_pause(agent_paused: &Arc<AtomicBool>) {
+    let Some(dir) = egress_config_dir() else {
+        tracing::info!(
+            "agent.json: OS config-dir не определён — kill-switch агента local-first (не на паузе)"
+        );
+        return;
+    };
+    apply_agent_pause_from_dir(&dir, agent_paused);
+}
+
+/// Применить `agent.json` из КОНКРЕТНОГО каталога (разделено для тестов без env/OS config-dir). Нет
+/// файла/битый → дефолт (не на паузе). Зеркало [`apply_egress_from_dir`].
+fn apply_agent_pause_from_dir(dir: &Path, agent_paused: &Arc<AtomicBool>) {
+    let path = dir.join("agent.json");
+    let existed = path.exists();
+    let st = nexus_core::agent::load_control_state(&path);
+    agent_paused.store(st.paused, std::sync::atomic::Ordering::Relaxed);
+    if existed {
+        tracing::info!(
+            path = %path.display(),
+            paused = st.paused,
+            "agent.json восстановлен — kill-switch агента применён (headless)"
+        );
+    } else {
+        tracing::info!(
+            path = %path.display(),
+            "agent.json отсутствует — kill-switch агента local-first (не на паузе)"
+        );
+    }
+}
+
+/// KILL-SWITCH (AGENT-5) рантайм-вход (Unix): SIGUSR1 ТОГГЛИТ `agent_paused` (in-memory). Опциональный
+/// сигнальный триггер для headless-оператора (UI-кнопка/control-plane — UI-1). На не-Unix — no-op.
+fn spawn_pause_signal_toggle(agent_paused: Arc<AtomicBool>) {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1()) {
+            Ok(mut sig) => {
+                tokio::spawn(async move {
+                    while sig.recv().await.is_some() {
+                        let was =
+                            agent_paused.fetch_xor(true, std::sync::atomic::Ordering::Relaxed);
+                        tracing::warn!(
+                            paused = !was,
+                            "kill-switch агента ТОГГЛНУТ по SIGUSR1 (рантайм)"
+                        );
+                    }
+                });
+            }
+            Err(e) => tracing::warn!(error = %e, "SIGUSR1-тоггл паузы не подключён"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = agent_paused; // не-Unix: рантайм-сигнала нет (UI-1 даст кросс-платформенный вход)
     }
 }
 
@@ -350,6 +424,13 @@ async fn run() -> Result<(), String> {
     } else {
         tracing::info!("actuator GO-LIVE ВЫКЛ (safe-default): прогон агента — только стабы");
     }
+    // KILL-SWITCH (AGENT-5): process-global пауза агента. RESTORE персиста `agent.json` из app-config-dir
+    // (зеркало egress kill-switch) ДО регистрации хендлера — так headless ЧЕСТИТ паузу владельца с самого
+    // старта (прогоны остаются queued, цикл не идёт, актуатор не пишет). Нет файла/битый → НЕ на паузе
+    // (агент работает из коробки). Arc проброшен в хендлер; рантайм-триггер — через `pause_handle()`
+    // (control-plane/UI — UI-1; SIGUSR1-тоггл ниже как опциональный рантайм-вход).
+    let agent_paused = Arc::new(AtomicBool::new(false));
+    apply_persisted_agent_pause(&agent_paused);
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
         Arc::new(nexus_core::agent::AgentRunHandler::new(
@@ -363,9 +444,15 @@ async fn run() -> Result<(), String> {
             overwrite_threshold,
             blast_cap,
             decision_source,
+            agent_paused.clone(),
         )),
     );
     let registry = Arc::new(registry);
+
+    // KILL-SWITCH (AGENT-5) рантайм-вход: SIGUSR1 ТОГГЛИТ паузу (опциональный сигнальный триггер — UI
+    // кнопка/control-plane придут в UI-1). Чисто in-memory (персист `agent.json` пишет владелец/UI):
+    // оператор headless может на лету заморозить/разморозить агента без рестарта. Только Unix.
+    spawn_pause_signal_toggle(agent_paused.clone());
 
     // Crash-recovery НА УРОВНЕ ПРОГОНА (AGENT-2): прогоны, застрявшие в 'running' дольше TTL (приложение
     // упало во время прогона), возвращаются в 'queued' (их джобы — отдельный crash-recovery планировщика
@@ -726,6 +813,7 @@ async fn agent_loop_smoke() {
     registry.insert(Arc::new(EchoTool));
     let tk = WordTokenizer;
     let cancel = Arc::new(AtomicBool::new(false));
+    let agent_paused = Arc::new(AtomicBool::new(false));
     let mut tool_results = 0usize;
     let outcome = run_agent_loop(
         &provider,
@@ -735,6 +823,7 @@ async fn agent_loop_smoke() {
         &ContextBudget::from_context_window(Some(32768)),
         &tk,
         &cancel,
+        &agent_paused,
         RunCtx::NONE,
         &mut |e| {
             if matches!(e, AgentEvent::ToolResult { .. }) {
@@ -853,6 +942,8 @@ async fn drive_actuator_gate_run(
         // PolicyDefault: НЕ спрашивается для Auto-тира в auto-прогоне (применяется напрямую под кэпом);
         // подтверждает, что go-live-проводка применяет Auto-тир, а не блокирует его auto-DENY.
         Arc::new(nexus_core::actuator::PolicyDefault),
+        // KILL-SWITCH (AGENT-5): smoke/CI-путь — kill-switch НЕ взведён (проверяем go-live apply).
+        Arc::new(AtomicBool::new(false)),
     );
 
     let run_id = enqueue_agent_run(
@@ -1097,5 +1188,38 @@ mod tests {
             Some(PathBuf::from("/tmp/nexus-test-cfg-xyz"))
         );
         std::env::remove_var("NEXUS_CONFIG_DIR");
+    }
+
+    // ── AGENT-5: KILL-SWITCH персист (agent.json restore) ─────────────────────────────────────────
+
+    /// **persisted paused=ON ЧЕСТИТСЯ agentd.** Сохраняем agent.json с paused=true, применяем —
+    /// общий атомик kill-switch взведён (хендлер увидит паузу с самого старта).
+    #[test]
+    fn persisted_agent_pause_is_honored() {
+        let dir = TempDir::new().unwrap();
+        nexus_core::agent::save_control_state(
+            &dir.path().join("agent.json"),
+            &nexus_core::agent::AgentControlState { paused: true },
+        )
+        .unwrap();
+
+        let agent_paused = Arc::new(AtomicBool::new(false));
+        apply_agent_pause_from_dir(dir.path(), &agent_paused);
+        assert!(
+            agent_paused.load(std::sync::atomic::Ordering::Relaxed),
+            "persisted paused=true применён (kill-switch агента взведён)"
+        );
+    }
+
+    /// Нет agent.json (первый запуск) → НЕ на паузе (агент работает из коробки) — fail-safe старта.
+    #[test]
+    fn missing_agent_json_is_not_paused() {
+        let dir = TempDir::new().unwrap(); // пуст
+        let agent_paused = Arc::new(AtomicBool::new(false));
+        apply_agent_pause_from_dir(dir.path(), &agent_paused);
+        assert!(
+            !agent_paused.load(std::sync::atomic::Ordering::Relaxed),
+            "нет файла → агент НЕ на паузе (работает из коробки)"
+        );
     }
 }

@@ -52,9 +52,11 @@ pub use decision::{
     BatchDecision, ChannelDecision, DecisionSource, ItemDecision, PolicyDefault, ProposalBatch,
     ProposalItem,
 };
+#[cfg(any(test, feature = "test-util"))]
+pub use orchestrate::ManualClock;
 pub use orchestrate::{
-    dispatch_action, BlastRadius, CollectingSink, DispatchOutcome, DispatchPolicy, EventSink,
-    TracingEventSink,
+    dispatch_action, Clock, CollectingSink, DispatchOutcome, DispatchPolicy, EventSink,
+    MonotonicClock, TokenBucket, TracingEventSink, DEFAULT_REFILL_PER, DEFAULT_REFILL_TOKENS,
 };
 pub use tools::{
     GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
