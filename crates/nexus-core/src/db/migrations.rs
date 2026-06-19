@@ -146,6 +146,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/021_agent_runs.sql"),
         rebuild_fts: false, // durable запись прогонов агента (AGENT-2): статус-машина прогона, производных не трогает
     },
+    Migration {
+        version: 22,
+        name: "agent_actions",
+        sql: include_str!("migrations/022_agent_actions.sql"),
+        rebuild_fts: false, // idempotency-ledger актуатора (AGENT-3b): журнал действий, производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
