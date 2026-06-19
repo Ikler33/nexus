@@ -161,9 +161,11 @@ jobs:
           node-version: 22
       # Traceability + существование имён tests[] (#4а) + гейт #[ignore] (#4б) + синк версии (#7)
       # + egress-chokepoint (AC-EGR-1: голый reqwest-билдер вне net/ → красный CI)
+      # + tooluse-chokepoint (I-5/AGENT-1: OpenAiToolProvider вне ai/tools.rs+agent/+agentd → красный CI)
       # + висячие упоминания снятых решений (AC-Q-6: sqlite-vec/petgraph/wasmtime/currentFile).
       - run: node scripts/check-traceability.mjs
       - run: node scripts/check-ignored.mjs
       - run: node scripts/check-versions.mjs
       - run: node scripts/check-egress.mjs
+      - run: node scripts/check-tooluse.mjs
       - run: node scripts/check-dangling.mjs
