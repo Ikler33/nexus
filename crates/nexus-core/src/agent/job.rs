@@ -39,6 +39,7 @@ use crate::net::EgressAudit;
 use crate::scheduler::{self, Job, JobHandler};
 
 use super::event::AgentEvent;
+use super::memory::AgentMemory;
 use super::registry::ToolRegistry;
 use super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
 use super::runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
@@ -46,6 +47,12 @@ use super::stubs::{EchoTool, NoopTool};
 
 /// Kind джобы прогона агента (значение колонки `jobs.kind`).
 pub const KIND_AGENT_RUN: &str = "agent_run";
+
+/// Токен-бюджет ПОД ПАМЯТЬ в начальном контексте прогона (AGENT-MEM-1). Скромный кусок окна: память
+/// агента — это ФОН (факты/прошлые разговоры/эпизоды), а не основной материал прогона; основное окно
+/// оставляем под задачу + tool-результаты цикла. recall не превышает этот бюджет (дропает слои);
+/// весь начальный контекст потом всё равно проходит общий `ContextBudget::fit` цикла.
+const RECALL_BUDGET_TOKENS: usize = 1500;
 
 /// Системный преамбул цикла агента (AGENT-2): минимальная инструкция. Богаче (skills/политика
 /// автономности) — поздние срезы; здесь — каркас, доказывающий проводку прогона.
@@ -94,17 +101,23 @@ pub struct AgentRunHandler {
     audit: Arc<EgressAudit>,
     /// Контекстное окно модели (токены) — из конфига; `None` → консервативный дефолт ContextBudget.
     context_window: Option<usize>,
+    /// Память агента (AGENT-MEM-1): recall в начальный контекст + Add-only запись. `None` →
+    /// прогон стартует с «голым» контекстом (поведение AGENT-2, без регрессии). Композиционный
+    /// корень (agentd) собирает [`super::VaultAgentMemory`] из ридера/райтера/эмбеддера/индексов.
+    memory: Option<Arc<dyn AgentMemory>>,
 }
 
 impl AgentRunHandler {
     /// Собирает хендлер из ядровых зависимостей. `context_window` — окно модели агента из конфига
     /// (`ai.chat.context_window`), `None` → дефолт [`ContextBudget::from_context_window`].
+    /// `memory` — мост к памяти (`None` → прогон без recall, как AGENT-2: нет регрессии).
     pub fn new(
         writer: WriteActor,
         reader: ReadPool,
         ai: Arc<AIClient>,
         audit: Arc<EgressAudit>,
         context_window: Option<usize>,
+        memory: Option<Arc<dyn AgentMemory>>,
     ) -> Self {
         Self {
             writer,
@@ -112,6 +125,7 @@ impl AgentRunHandler {
             ai,
             audit,
             context_window,
+            memory,
         }
     }
 
@@ -160,11 +174,19 @@ impl AgentRunHandler {
             return Ok(());
         };
 
-        // 4. Входы цикла.
-        let messages = vec![
-            ChatMessage::system(AGENT_PREAMBLE),
-            ChatMessage::user(&run.task),
-        ];
+        // 4. Входы цикла. Память (AGENT-MEM-1) recall'ится по задаче и встаёт МЕЖДУ системным
+        //    преамбулом и задачей: [system преамбул] + [recall-блоки роли user] + [user задача].
+        //    recall — только чтение, никогда не ошибка (деградирует в пусто). Нет memory → пусто →
+        //    поведение AGENT-2 (голый контекст), без регрессии. recall сам держится в своём бюджете;
+        //    весь начальный контекст потом проходит общий ContextBudget::fit внутри цикла.
+        let recalled = match &self.memory {
+            Some(mem) => mem.recall(&run.task, RECALL_BUDGET_TOKENS).await,
+            None => Vec::new(),
+        };
+        let mut messages = Vec::with_capacity(recalled.len() + 2);
+        messages.push(ChatMessage::system(AGENT_PREAMBLE));
+        messages.extend(recalled);
+        messages.push(ChatMessage::user(&run.task));
         let bounds = LoopBounds::default();
         let budget = ContextBudget::from_context_window(self.context_window);
         let tk = QwenTokenizer::embedded();
@@ -386,6 +408,25 @@ mod tests {
             ai,
             audit,
             Some(32768),
+            None,
+        )
+    }
+
+    /// Хендлер с подключённой памятью (AGENT-MEM-1): доказывает, что recall попадает в начальный
+    /// контекст между system-преамбулом и задачей.
+    fn handler_with_memory(
+        db: &Database,
+        ai: Arc<AIClient>,
+        audit: Arc<EgressAudit>,
+        memory: Arc<dyn AgentMemory>,
+    ) -> AgentRunHandler {
+        AgentRunHandler::new(
+            db.writer().clone(),
+            db.reader().clone(),
+            ai,
+            audit,
+            Some(32768),
+            Some(memory),
         )
     }
 
@@ -614,6 +655,125 @@ mod tests {
             .get("http://blocked.example.com/z", EgressFeature::Probe)
             .await;
         assert_eq!(audit.entries().last().and_then(|e| e.run_id), None);
+    }
+
+    /// AGENT-MEM-1: с подключённой MockAgentMemory recall попадает в НАЧАЛЬНЫЙ контекст прогона —
+    /// провайдер на первом ходу видит сообщения `[system преамбул, recall-факт (user), задача
+    /// (user)]` именно в этом порядке. Доказывает проводку recall между system и task.
+    #[tokio::test]
+    async fn handler_injects_recall_between_system_and_task() {
+        use crate::agent::memory::MockAgentMemory;
+
+        let (_d, db) = open().await;
+        let audit = Arc::new(EgressAudit::default());
+
+        // Провайдер, ЗАХВАТЫВАЮЩИЙ messages первого хода, затем Final.
+        struct CapturingProvider {
+            seen: Mutex<Option<Vec<ChatMessage>>>,
+        }
+        #[async_trait]
+        impl ToolCapableProvider for CapturingProvider {
+            async fn stream_chat_tools(
+                &self,
+                messages: &[ChatMessage],
+                _t: &[ToolSpec],
+                _o: &mut (dyn FnMut(String) + Send),
+                _c: &Arc<AtomicBool>,
+            ) -> AiResult<ToolTurn> {
+                let mut slot = self.seen.lock().unwrap();
+                if slot.is_none() {
+                    *slot = Some(messages.to_vec());
+                }
+                Ok(ToolTurn::Final("итог".into()))
+            }
+            fn model_id(&self) -> &str {
+                "capturing"
+            }
+        }
+        let provider = Arc::new(CapturingProvider {
+            seen: Mutex::new(None),
+        });
+        let ai = ai_with_tools(Some(provider.clone()));
+
+        // Канонический recall: один факт (роль user — ДАННЫЕ, I-5).
+        let canned = vec![ChatMessage::user(
+            "⟦m⟧\nфакт #1\nпользователь любит Rust\n⟦m⟧",
+        )];
+        let mem: Arc<dyn AgentMemory> = Arc::new(MockAgentMemory::with_canned(canned));
+        let h = handler_with_memory(&db, ai, audit, mem);
+
+        let run_id = run_store::create_run(db.writer(), "почини сборку", None, Some("auto"))
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        let seen = provider
+            .seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("ход состоялся");
+        assert_eq!(seen.len(), 3, "system + recall + task: {seen:?}");
+        assert_eq!(seen[0].role, "system", "первым — системный преамбул");
+        assert_eq!(seen[1].role, "user", "вторым — recall (ДАННЫЕ роли user)");
+        assert!(
+            seen[1].content.contains("пользователь любит Rust"),
+            "recall-факт в начальном контексте: {}",
+            seen[1].content
+        );
+        assert_eq!(seen[2].role, "user", "последним — задача пользователя");
+        assert_eq!(seen[2].content, "почини сборку", "задача последней");
+    }
+
+    /// AGENT-MEM-1: БЕЗ памяти (memory=None) начальный контекст = `[system, task]` — поведение
+    /// AGENT-2 без регрессии (recall не вставляется).
+    #[tokio::test]
+    async fn handler_without_memory_keeps_agent2_context() {
+        let (_d, db) = open().await;
+        let audit = Arc::new(EgressAudit::default());
+        struct CapturingProvider {
+            seen: Mutex<Option<Vec<ChatMessage>>>,
+        }
+        #[async_trait]
+        impl ToolCapableProvider for CapturingProvider {
+            async fn stream_chat_tools(
+                &self,
+                messages: &[ChatMessage],
+                _t: &[ToolSpec],
+                _o: &mut (dyn FnMut(String) + Send),
+                _c: &Arc<AtomicBool>,
+            ) -> AiResult<ToolTurn> {
+                let mut slot = self.seen.lock().unwrap();
+                if slot.is_none() {
+                    *slot = Some(messages.to_vec());
+                }
+                Ok(ToolTurn::Final("ok".into()))
+            }
+            fn model_id(&self) -> &str {
+                "capturing"
+            }
+        }
+        let provider = Arc::new(CapturingProvider {
+            seen: Mutex::new(None),
+        });
+        let ai = ai_with_tools(Some(provider.clone()));
+        let h = handler(&db, ai, audit); // memory=None
+
+        let run_id = run_store::create_run(db.writer(), "задача", None, None)
+            .await
+            .unwrap();
+        h.handle(&job_for(run_id)).await.expect("джоба ok");
+
+        let seen = provider
+            .seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("ход состоялся");
+        assert_eq!(seen.len(), 2, "без памяти — только system + task: {seen:?}");
+        assert_eq!(seen[0].role, "system");
+        assert_eq!(seen[1].role, "user");
+        assert_eq!(seen[1].content, "задача");
     }
 
     /// enqueue_agent_run: создаёт queued-прогон И джобу KIND_AGENT_RUN с payload=run_id.

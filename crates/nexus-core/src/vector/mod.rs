@@ -184,6 +184,97 @@ impl VectorIndex {
     }
 }
 
+/// Имена sibling-файлов ВСЕХ векторных индексов vault (в `.nexus/`). Один источник, чтобы reconcile
+/// и открыватели не разъехались по строкам. Порядок: note-RAG, переписка (N4b), факты (MEM), эпизоды (EP).
+pub const VECTOR_INDEX_FILES: &[&str] = &[
+    "vectors.usearch",
+    "chat_vectors.usearch",
+    "memory_vectors.usearch",
+    "episode_vectors.usearch",
+];
+
+/// Гард совместимости on-disk индексов с активной embedding-моделью/размерностью (CORE-2a follow-up #2).
+///
+/// Десктоп делает это в `open_vault` (app-приватный `reconcile_embedding_model`): при первом включении
+/// RAG или смене модели/dim старые векторы несовместимы (другая семантика/размерность) → их надо
+/// сбросить, иначе запрос НОВОЙ моделью против СТАРОГО индекса даёт `DimMismatch` (или семантический
+/// мусор = ложная память). headless-agentd должен пройти ту же сверку ДО открытия индексов, иначе
+/// унаследует пред-существующий `.nexus/*.usearch` (записанный прошлым прогоном десктопа под другой
+/// моделью) и упадёт на первом search/upsert.
+///
+/// Логика (зеркало app, но СИММЕТРИЧНО по ВСЕМ четырём индексам — agentd читает память тем же
+/// эмбеддером): сверяет `settings.embedding.{model,dim}` с активными `(model, dim)`. Совпали →
+/// `false` (ничего не делаем). Иначе — на СМЕНЕ модели (prev_model задан) сносит ВСЕ файлы
+/// [`VECTOR_INDEX_FILES`] (их перезаполнит индексатор/бэкфилл новой моделью) и сбрасывает
+/// `chat_episodes.embed_model` (помечает эпизоды на переэмбеддинг); затем персистит новые
+/// `settings` и возвращает `true` (нужна (пере)индексация). На ПЕРВОМ включении (prev_model нет)
+/// файлов ещё нет — только пишем settings, `true`.
+///
+/// Возвращает `Ok(reindex_needed)`. Ошибки БД — `Err` (вызывающий деградирует: RAG/память off).
+pub async fn reconcile_embedding_model(
+    db: &crate::db::Database,
+    root: &Path,
+    model: &str,
+    dim: usize,
+) -> crate::db::DbResult<bool> {
+    use rusqlite::OptionalExtension;
+
+    let read_setting = |key: &'static str| {
+        let reader = db.reader().clone();
+        async move {
+            reader
+                .query(move |c| {
+                    c.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()
+                })
+                .await
+        }
+    };
+    let prev_model = read_setting("embedding.model").await?;
+    let prev_dim = read_setting("embedding.dim").await?;
+
+    if prev_model.as_deref() == Some(model) && prev_dim.as_deref() == Some(&dim.to_string()) {
+        return Ok(false); // та же модель/dim — инкрементально, индексы совместимы
+    }
+
+    if prev_model.is_some() {
+        // Модель/dim сменились → ВСЕ on-disk векторы несовместимы. Сносим файлы (перезаполнятся
+        // новой моделью индексатором/бэкфиллом). `chunks` НЕ трогаем здесь (note-RAG переиндексация —
+        // дело индексатора; agentd-skeleton его не гоняет, но дроп файла vectors.usearch достаточно,
+        // чтобы не словить DimMismatch). Помечаем эпизоды на переэмбеддинг (summary-текст цел).
+        for f in VECTOR_INDEX_FILES {
+            let _ = std::fs::remove_file(root.join(".nexus").join(f));
+        }
+        db.writer()
+            .call(|c| {
+                c.execute("UPDATE chat_episodes SET embed_model=NULL", [])
+                    .map(|_| ())
+            })
+            .await?;
+        tracing::info!(from = ?prev_model, to = %model, dim, "agentd: смена embedding-модели → сброс векторных индексов (CORE-2a #2)");
+    }
+
+    let (model_s, dim_s) = (model.to_string(), dim.to_string());
+    db.writer()
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO settings(key,value) VALUES('embedding.model',?1) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [model_s],
+            )?;
+            tx.execute(
+                "INSERT INTO settings(key,value) VALUES('embedding.dim',?1) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [dim_s],
+            )?;
+            Ok(())
+        })
+        .await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +345,68 @@ mod tests {
         assert_eq!(v2.len(), 1);
         assert!(v2.contains(7));
         assert_eq!(v2.search(&[0.0, 0.0, 0.0, 1.0], 1).unwrap()[0].chunk_id, 7);
+    }
+
+    /// CORE-2a #2: reconcile_embedding_model. Первое включение (нет settings) → true, persisted.
+    /// Та же модель/dim → false (no-op). Смена модели → сносит ВСЕ индекс-файлы + true; смена dim
+    /// (та же модель) → тоже сброс + true.
+    #[tokio::test]
+    async fn reconcile_resets_on_model_or_dim_change() {
+        use crate::db::Database;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".nexus")).unwrap();
+        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+
+        // Первое включение: settings пусты → reindex_needed=true, settings записаны.
+        assert!(
+            reconcile_embedding_model(&db, root, "bge-m3", 1024)
+                .await
+                .unwrap(),
+            "первое включение требует индексации"
+        );
+        // Та же модель/dim → false (совместимо, ничего не делаем).
+        assert!(
+            !reconcile_embedding_model(&db, root, "bge-m3", 1024)
+                .await
+                .unwrap(),
+            "та же модель/dim — no-op"
+        );
+
+        // Кладём stale файлы всех индексов.
+        for f in VECTOR_INDEX_FILES {
+            std::fs::write(root.join(".nexus").join(f), b"stale").unwrap();
+        }
+        // Смена МОДЕЛИ → сброс всех файлов + true.
+        assert!(
+            reconcile_embedding_model(&db, root, "other-model", 1024)
+                .await
+                .unwrap(),
+            "смена модели требует переиндексации"
+        );
+        for f in VECTOR_INDEX_FILES {
+            assert!(
+                !root.join(".nexus").join(f).exists(),
+                "stale {f} снесён при смене модели"
+            );
+        }
+
+        // Снова stale; смена DIM (та же модель) → тоже сброс + true.
+        for f in VECTOR_INDEX_FILES {
+            std::fs::write(root.join(".nexus").join(f), b"stale").unwrap();
+        }
+        assert!(
+            reconcile_embedding_model(&db, root, "other-model", 768)
+                .await
+                .unwrap(),
+            "смена dim требует переиндексации"
+        );
+        for f in VECTOR_INDEX_FILES {
+            assert!(
+                !root.join(".nexus").join(f).exists(),
+                "stale {f} снесён при смене dim"
+            );
+        }
     }
 }
