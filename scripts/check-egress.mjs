@@ -21,6 +21,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_ROOTS = [
   resolve(root, 'apps/desktop/src-tauri/src'),
   resolve(root, 'crates/nexus-core/src'),
+  // CORE-2a: headless agent-service. Должен конструировать НОЛЬ сырых HTTP-клиентов (использует
+  // только `GuardedClient` из ядра) — сканируем его, чтобы любой будущий raw-reqwest здесь поймал линт.
+  resolve(root, 'crates/nexus-agentd/src'),
 ];
 
 // Запрещённые конструкторы клиента (совпадение в КОДЕ; хвост строки после `//` отрезается,

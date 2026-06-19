@@ -1,0 +1,24 @@
+[package]
+name = "nexus-agentd"
+description = "Nexus headless agent-service (CORE-2a, topology A): минимальный бинарь поверх nexus-core, доказывающий, что ядро (БД/конфиг/AIClient/GuardedClient/индексатор/планировщик) работает БЕЗ Tauri-десктопа. Пока SKELETON — без agent-loop/tools/skills."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nexus-agentd"
+path = "src/main.rs"
+
+[dependencies]
+# Переиспользуемое ядро — единственная Nexus-зависимость (никаких apps/desktop/Tauri-связей).
+nexus-core = { path = "../nexus-core" }
+# Бинарю нужен полноценный async-рантайм + макрос #[tokio::main] + ctrl_c (signal) + bounded smoke (time).
+# Все фичи аддитивны к [workspace.dependencies] tokio и уже присутствуют в lockfile транзитивно
+# (rt-multi-thread/macros — tokio-macros; signal — signal-hook-registry/mio; time — base) → без скачивания.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# `#[async_trait]` для реализации ядрового `scheduler::JobHandler` в headless health-хендлере.
+# Уже в lockfile (workspace-зависимость ядра) — аддитивно, без скачивания.
+async-trait = { workspace = true }

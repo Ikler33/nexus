@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["apps/desktop/src-tauri", "crates/nexus-core"]
+members = ["apps/desktop/src-tauri", "crates/nexus-core", "crates/nexus-agentd"]
 
 [workspace.package]
 version = "0.0.0"
