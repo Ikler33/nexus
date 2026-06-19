@@ -882,3 +882,72 @@ async fn live_episode_summary_meets_gate() {
         "faithfulness ниже {MIN_EPISODE_FAITHFULNESS} — ретривал эпизодов НЕ разблокирован (ложная память)"
     );
 }
+
+/// P0-c live-кросс-чек токенайзера: ВСТРОЕННЫЙ `QwenTokenizer` обязан давать ровно те же счётчики,
+/// что `POST /tokenize` ЖИВОЙ задеплоенной модели (Qwen3.6-27B :8080). Если совпадает — встроенный
+/// ассет == развёрнутая модель (бюджет контекста точен). Те же golden-строки заморожены в офлайн-
+/// гейте `ai::tokenizer::tests` (тот в CI ловит регресс БЕЗ сети). HTTP идёт через `GuardedClient`
+/// (egress-chokepoint), без сырого reqwest.
+///
+/// Запуск: `NEXUS_CHAT_URL=http://192.168.0.31:8080 cargo test live_tokenizer_matches_server -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "live-токенайзер (P0-c): нужна задеплоенная модель с /tokenize (NEXUS_CHAT_URL / 192.168.0.31:8080)"]
+async fn live_tokenizer_matches_server() {
+    use crate::ai::QwenTokenizer;
+    use crate::chunker::Tokenizer;
+    use crate::net::{EgressFeature, GuardedClient};
+
+    let base =
+        std::env::var("NEXUS_CHAT_URL").unwrap_or_else(|_| "http://192.168.0.31:8080".into());
+    let url = format!("{}/tokenize", base.trim_end_matches('/'));
+    let client = GuardedClient::unchecked();
+    let tk = QwenTokenizer::embedded();
+
+    // Те же строки, что в офлайн-гейте (дублируем литералами — eval-крейт не видит pub(crate) тестов).
+    let golden: &[(&str, usize)] = &[
+        (
+            "The quick brown fox jumps over the lazy dog. Knowledge management is the second brain.",
+            17,
+        ),
+        (
+            "Векторный поиск по заметкам с переранжированием — это основа второго мозга на каждый день.",
+            24,
+        ),
+        (
+            "fn main() { let xs: Vec<i32> = (0..10).filter(|n| n % 2 == 0).collect(); println!(\"{:?}\", xs); }",
+            40,
+        ),
+        (
+            "Agent обходит vault и пишет файлы: создать заметку 'проект.md' с тегами #nexus #агент.",
+            27,
+        ),
+    ];
+
+    let mut mismatches = 0;
+    for (text, expected) in golden {
+        let body = serde_json::json!({ "content": text });
+        let resp = client
+            .post_json(&url, EgressFeature::Chat, &body)
+            .await
+            .expect("POST /tokenize");
+        let json: serde_json::Value = resp.json().await.expect("ответ /tokenize — JSON");
+        let live = json["tokens"].as_array().map(|a| a.len()).unwrap_or(0);
+        let embedded = tk.count(text);
+        eprintln!(
+            "P0-c токенайзер: embedded={embedded} live={live} golden={expected} | {text:?}\
+             {}",
+            if embedded == live && live == *expected {
+                "  OK"
+            } else {
+                "  MISMATCH"
+            }
+        );
+        if embedded != live || live != *expected {
+            mismatches += 1;
+        }
+    }
+    assert_eq!(
+        mismatches, 0,
+        "встроенный токенайзер ≠ живая модель (или ≠ golden) — ассет не совпадает с задеплоенной моделью"
+    );
+}

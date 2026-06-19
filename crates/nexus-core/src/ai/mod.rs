@@ -8,6 +8,7 @@
 mod chat;
 mod config;
 mod embedder;
+mod tokenizer;
 
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
 #[cfg(any(test, feature = "test-util"))]
 pub use embedder::MockEmbedder;
 pub use embedder::{default_prefixes, l2_normalize, EmbeddingProvider, OpenAiEmbedder};
+pub use tokenizer::{ContextBudget, HeuristicTokenizer, QwenTokenizer};
 
 use thiserror::Error;
 

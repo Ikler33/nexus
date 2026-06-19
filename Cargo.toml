@@ -39,6 +39,15 @@ getrandom = "0.2"
 # Лента новостей (NF-1, docs/specs/news-feed.md): низкоуровневый XML-токенизатор для RSS/Atom
 # (CDATA/энтити/неймспейсы руками ненадёжно); нормализация фидов — своя, мини-парсер-подход.
 quick-xml = "0.37"
+# Реальный BPE-токенайзер для оценки бюджета контекста LLM (P0-c): встроенный `tokenizer.json`
+# задеплоенной модели (Qwen3.6-27B). default-features=false + onig — БЕЗ http/hf-hub/rustls: ни
+# reqwest, ни hyper в дерево зависимостей не приходят (egress-chokepoint цел, AC-EGR-1; см.
+# `cargo tree -p nexus-core -i reqwest`). onig = канонический HF-regex (C-сборка через cc; C-тулчейн
+# уже нужен usearch/git2). Для чисто-Rust сборки можно заменить на features=["fancy-regex"] — счёт
+# байт-идентичен на golden (проверено в P0-c-ревью), onig оставлен как референс HF-паритета.
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+# Распаковка встроенного gz-ассета токенайзера (qwen3_tokenizer.json.gz, 3.3 МБ) один раз при старте.
+flate2 = "1"
 # dev-only
 tempfile = "3"
 

@@ -87,9 +87,11 @@ impl Indexer {
             let Ok(content) = tokio::fs::read_to_string(&abs).await else {
                 continue;
             };
-            for ch in
-                chunker::chunk_document(&content, &crate::chunker::WordTokenizer, rag.chunk_opts)
-            {
+            for ch in chunker::chunk_document(
+                &content,
+                &crate::ai::QwenTokenizer::embedded(),
+                rag.chunk_opts,
+            ) {
                 if seen.insert(ch.content.clone()) {
                     texts.push(ch.content);
                 }

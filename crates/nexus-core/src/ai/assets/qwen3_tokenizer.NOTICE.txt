@@ -1,0 +1,17 @@
+qwen3_tokenizer.json.gz
+=======================
+
+gzip-сжатый `tokenizer.json` модели Qwen/Qwen3.6-27B
+(https://huggingface.co/Qwen/Qwen3.6-27B), база развёрнутого
+unsloth/Qwen3.6-27B-MTP-GGUF. Вшит для оффлайн-подсчёта токенов при оценке
+бюджета контекста (P0-c, см. ../tokenizer.rs).
+
+Содержит ТОЛЬКО токенайзер (vocab + merges) — веса/код модели НЕ включены;
+используется исключительно для токенизации (подсчёта токенов).
+
+Лицензия: Apache License 2.0 (Qwen, © Alibaba Cloud).
+Крейт `tokenizers` (HuggingFace), которым он загружается: Apache-2.0 / MIT.
+
+Замена под другую модель: положить новый tokenizer.json, сжать
+`gzip -9 tokenizer.json > qwen3_tokenizer.json.gz`, обновить vocab/golden-числа
+в ../tokenizer.rs (либо без пересборки — через `ai.tokenizer_path` в конфиге).

@@ -21,6 +21,11 @@ pub struct AiConfig {
     /// (inline/судья): низкая латентность + разгрузка основной модели. Опционально — нет секции →
     /// fallback на основной chat без reasoning. Non-reasoning-модель → шлём обычный запрос.
     pub fast: Option<ChatConfig>,
+    /// Путь к `tokenizer.json` для оценки бюджета контекста (P0-c). `None` → встроенный токенайзер
+    /// задеплоенной модели (Qwen3.6-27B). Смена модели = положить новый файл + прописать этот путь,
+    /// без пересборки (см. `ai::QwenTokenizer`). Относительный путь резолвится вызывающим.
+    #[serde(default)]
+    pub tokenizer_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,6 +122,23 @@ mod tests {
             vec!["api.example.com".to_string(), "192.168.0.29".to_string()]
         );
         assert!(LocalConfig::default().egress_hosts().is_empty());
+    }
+
+    /// P0-c: `ai.tokenizer_path` парсится (смена модели токенайзера = файл+конфиг); по умолчанию None.
+    #[test]
+    fn parses_tokenizer_path() {
+        let cfg = LocalConfig::parse(r#"{"ai":{"tokenizer_path":"/vault/.nexus/tokenizer.json"}}"#)
+            .unwrap();
+        assert_eq!(
+            cfg.ai.tokenizer_path.as_deref(),
+            Some("/vault/.nexus/tokenizer.json")
+        );
+        // Нет ключа → None (встроенный токенайзер задеплоенной модели).
+        assert!(LocalConfig::parse(r#"{"ai":{}}"#)
+            .unwrap()
+            .ai
+            .tokenizer_path
+            .is_none());
     }
 
     #[test]

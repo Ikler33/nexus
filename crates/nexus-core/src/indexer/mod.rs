@@ -19,7 +19,7 @@ use rusqlite::{params, OptionalExtension};
 use tokio::sync::Semaphore;
 
 use crate::ai::EmbeddingProvider;
-use crate::chunker::{self, ChunkOptions, WordTokenizer};
+use crate::chunker::{self, ChunkOptions};
 use crate::db::{Database, DbError, DbResult, ReadPool, WriteActor};
 use crate::parser;
 use crate::vector::VectorIndex;
@@ -173,7 +173,9 @@ impl Indexer {
         let (parsed, chunks) = tokio::task::spawn_blocking(move || {
             let parsed = parser::parse(&content);
             let chunks = if do_chunk {
-                chunker::chunk_document(&content, &WordTokenizer, opts)
+                // P0-c: реальный BPE-токенайзер задеплоенной модели (кириллица считается верно,
+                // не словесная эвристика). Конструктор дёшев — декомпрессия/парсинг мемоизированы.
+                chunker::chunk_document(&content, &crate::ai::QwenTokenizer::embedded(), opts)
             } else {
                 Vec::new()
             };
