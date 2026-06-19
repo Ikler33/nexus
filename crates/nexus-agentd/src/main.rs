@@ -100,6 +100,9 @@ async fn run() -> Result<(), String> {
     let egress_offline = Arc::new(AtomicBool::new(false));
     let egress_policy = Arc::new(EgressPolicy::new(egress_offline));
     let egress_audit = Arc::new(EgressAudit::default());
+    // P0-b: durable-сток egress-audit. БД уже открыта выше → подключаем сразу (в headless нет pre-vault
+    // окна, как у десктопа). Весь реальный эгресс agentd durable-аудитится write-before-act.
+    egress_audit.set_writer(db.writer().clone());
 
     // Конфиг `.nexus/local.json` (один разбор, как кросс-план #8). Нет/битый → AI отключён (local-first).
     let local_cfg = load_local_config(&root).await;

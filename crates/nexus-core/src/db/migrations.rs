@@ -134,6 +134,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/019_chat_episodes.sql"),
         rebuild_fts: false, // эпизодическая память (EP): саммари сессий, заметочных производных не трогает
     },
+    Migration {
+        version: 20,
+        name: "egress_audit",
+        sql: include_str!("migrations/020_egress_audit.sql"),
+        rebuild_fts: false, // durable egress-журнал (P0-b): append-only журнал подотчётности, производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

@@ -33,6 +33,10 @@ pub async fn open_vault(
 
     let db = Database::open(root.join(".nexus").join("nexus.db")).await?;
 
+    // P0-b: подключаем durable-сток egress-audit ПОСЛЕ открытия БД (журнал строится в AppState ДО
+    // vault). С этого момента весь реальный эгресс (chat/embed/probe) durable-аудитится write-before-act.
+    state.egress_audit.set_writer(db.writer().clone());
+
     let info = VaultInfo {
         root: root.to_string_lossy().into_owned(),
         name: vault::vault_name(&root),
