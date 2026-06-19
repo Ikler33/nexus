@@ -40,7 +40,7 @@ const INVENTORY = {
 const DOC_DIRS = ['docs/architecture', 'docs/acceptance', 'docs/dev', 'docs/specs', 'docs/design'];
 const DOC_FILES = ['docs/BACKLOG.md'];
 const DOC_EXCLUDE = new Set(['docs/architecture/ARCHITECTURE-v1.0-backup.md']);
-const CODE_DIRS = ['apps/desktop/src', 'apps/desktop/src-tauri/src'];
+const CODE_DIRS = ['apps/desktop/src', 'apps/desktop/src-tauri/src', 'crates/nexus-core/src']; // CORE-1: ядро вынесено в крейт
 const CODE_EXT = /\.(rs|ts|tsx)$/;
 
 /** Убирает комментарии (// … и /* … *​/), чтобы код-скоуп ловил только «живые» упоминания. */

@@ -76,9 +76,20 @@ function rustTestModules(srcDir) {
   walk(srcDir, []);
   return set;
 }
-const RUST_SRC = resolve(root, 'apps/desktop/src-tauri/src');
+// CORE-1: модули db/parser/vector/plugin/vault/redact/chunker/net/ai (с их `mod tests`) переехали в
+// crates/nexus-core/src. traceability.json ссылается на их тест-модули (net::tests, vault::tests,
+// ai::chat::tests, …) — собираем имена тест-модулей из ОБОИХ деревьев. Имена модулей считаются
+// относительно каждого src-корня (как и до извлечения: `net::tests`, не `nexus_core::net::tests`),
+// поэтому существующие записи матрицы продолжают совпадать без правки.
+const RUST_SRCS = [
+  resolve(root, 'apps/desktop/src-tauri/src'),
+  resolve(root, 'crates/nexus-core/src'),
+];
 const FE_ROOT = resolve(root, 'apps/desktop');
-const rustMods = existsSync(RUST_SRC) ? rustTestModules(RUST_SRC) : new Set();
+const rustMods = new Set();
+for (const src of RUST_SRCS) {
+  if (existsSync(src)) for (const m of rustTestModules(src)) rustMods.add(m);
+}
 for (const [id, e] of Object.entries(acs)) {
   for (const raw of Array.isArray(e.tests) ? e.tests : []) {
     const ref = String(raw).trim();

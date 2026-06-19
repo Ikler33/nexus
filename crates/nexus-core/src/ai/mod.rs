@@ -18,8 +18,8 @@ pub use chat::{
     ChatMessage, ChatProvider, InlineMode, OpenAiChatProvider, WebQueryPlan,
 };
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
-#[cfg(test)]
-pub(crate) use embedder::MockEmbedder;
+#[cfg(any(test, feature = "test-util"))]
+pub use embedder::MockEmbedder;
 pub use embedder::{default_prefixes, l2_normalize, EmbeddingProvider, OpenAiEmbedder};
 
 use thiserror::Error;
@@ -55,8 +55,8 @@ mod api_base_tests {
 /// хост переопределяется `NEXUS_EMBED_URL`. Один помощник вместо хардкодов по тестам —
 /// при переезде сервера live-сьют переключается в одном месте (грабля 2026-06-11: три теста
 /// остались на стёртом 192.168.0.29 и молча падали бы по сети).
-#[cfg(test)]
-pub(crate) fn live_test_embedder() -> OpenAiEmbedder {
+#[cfg(any(test, feature = "test-util"))]
+pub fn live_test_embedder() -> OpenAiEmbedder {
     let url =
         std::env::var("NEXUS_EMBED_URL").unwrap_or_else(|_| "http://192.168.0.31:8083".into());
     OpenAiEmbedder::new(
@@ -70,8 +70,8 @@ pub(crate) fn live_test_embedder() -> OpenAiEmbedder {
 }
 
 /// Размерность прод-эмбеддера live-тестов (bge-m3) — для `VectorIndex::open` тех же тестов.
-#[cfg(test)]
-pub(crate) const LIVE_EMBED_DIM: usize = 1024;
+#[cfg(any(test, feature = "test-util"))]
+pub const LIVE_EMBED_DIM: usize = 1024;
 
 /// Ошибки AI-слоя.
 #[derive(Debug, Error)]

@@ -13,7 +13,15 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = resolve(root, 'apps/desktop/src-tauri/src');
+// CORE-1: `net/` (core_client_builder) и `plugin/` (is_private_host) переехали в crates/nexus-core/src.
+// Сканируем ОБА дерева, чтобы chokepoint-инвариант и единственность is_private_host продолжали
+// покрывать перемещённый код. Пути нормализуем ОТНОСИТЕЛЬНО каждого корня (а не общего root), чтобы
+// whitelist `net/` и маркер в `commands/plugin.rs` (остался в app) совпадали по тем же относительным
+// путям, что и до извлечения ядра.
+const SRC_ROOTS = [
+  resolve(root, 'apps/desktop/src-tauri/src'),
+  resolve(root, 'crates/nexus-core/src'),
+];
 
 // Запрещённые конструкторы клиента (совпадение в КОДЕ; хвост строки после `//` отрезается,
 // чтобы упоминания в комментариях/доках не давали ложных срабатываний).
@@ -70,19 +78,19 @@ if (selftest.violations.length !== 3 || selftest.privateHostDefs.length !== 2) {
 
 // ── Реальный скан дерева ──
 const files = [];
-const walk = (dir) => {
+const walk = (dir, srcRoot) => {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const full = resolve(dir, e.name);
-    if (e.isDirectory()) walk(full);
+    if (e.isDirectory()) walk(full, srcRoot);
     else if (e.name.endsWith('.rs')) {
       files.push({
-        path: full.slice(SRC.length + 1).split('\\').join('/'),
+        path: full.slice(srcRoot.length + 1).split('\\').join('/'),
         text: readFileSync(full, 'utf8'),
       });
     }
   }
 };
-walk(SRC);
+for (const srcRoot of SRC_ROOTS) walk(srcRoot, srcRoot);
 
 const { violations, privateHostDefs } = scan(files);
 const errors = [];

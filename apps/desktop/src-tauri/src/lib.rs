@@ -5,22 +5,22 @@
 //! `src/lib/tauri-api.ts` (контракт §4.1 ARCHITECTURE). По мере роста (срезы Ф0-2+)
 //! команды разъезжаются по модулю `commands/` (vault / search / graph / …).
 
-/// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
-pub mod ai;
+// Ядро (CORE-1): db/parser/vector/plugin/vault/redact/chunker/net/ai извлечены в крейт `nexus-core`.
+// Ре-экспортим под теми же именами, чтобы существующие `crate::net::…`, `crate::db::…`,
+// `crate::ai::…` и т.д. по всему приложению (commands, error.rs, indexer, …) резолвились без правки
+// call-site (low-churn-стратегия среза). Будущий headless agent-service использует `nexus_core::*`.
+pub use nexus_core::{ai, chunker, db, net, parser, plugin, redact, vault, vector};
+
 /// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
 pub mod board;
 /// Сессии чата в vault-БД («второй мозг» переписки, решение владельца 2026-06-12).
 pub mod chat_log;
-/// Markdown-чанкер для RAG (§6.1).
-pub mod chunker;
 /// Tauri IPC-команды.
 mod commands;
 /// «Поиск противоречий» (#vision): фоновый LLM-kind — пары-кандидаты → судья → таблица `contradictions`.
 pub mod contradictions;
 /// Локальный crash-reporter: panic-hook → scrubbed-лог в `~/.nexus/crashes/` (Ф4-14).
 pub mod crash;
-/// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
-pub mod db;
 /// «Дайджест изменений» (#35): первый LLM-kind планировщика (суммаризация недавних заметок).
 pub mod digest;
 /// Эпизодическая память (EP): саммари завершённых чат-сессий — третий слой памяти агента.
@@ -41,18 +41,10 @@ pub mod home;
 pub mod indexer;
 /// Персистентная память агента (MEM, спека `docs/specs/agent-memory.md`): слой явных фактов + инжекция.
 pub mod memory;
-/// Egress-граница ядра (ADR-005-ext): `GuardedClient` + политика + audit — единый chokepoint HTTP.
-pub mod net;
 /// Лента новостей (спека `docs/specs/news-feed.md`): NF-1 — парсеры фидов + keyword-фильтр.
 pub mod news;
-/// Markdown-парсер (frontmatter, ссылки, теги).
-pub mod parser;
-/// Plugin loader (минимум): manifest + совместимость версии API (без broker — Ф2).
-pub mod plugin;
 /// Реестр типов свойств (PROP-2, спека §7): `.nexus/property-types.json` + эвристика (Obsidian Properties).
 pub mod properties;
-/// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
-pub mod redact;
 /// LLM-объяснения связи пары заметок (AIP-10): кэш `relation_reasons`, переиспользует примитивы `contradictions`.
 pub mod relation_reasons;
 /// Планировщик фоновых задач (ADR-007): очередь `jobs` (слой данных — slice 1).
@@ -69,10 +61,6 @@ pub mod suggest;
 pub mod tagger;
 
 pub mod tags;
-/// Vault: ленивый листинг + канонизация путей (анти-traversal).
-pub mod vault;
-/// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.
-pub mod vector;
 /// Файловый watcher (debounce + ignore + нормализация по пути).
 pub mod watcher;
 pub mod websearch;

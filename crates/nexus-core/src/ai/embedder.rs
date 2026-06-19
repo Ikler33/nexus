@@ -179,12 +179,15 @@ impl EmbeddingProvider for OpenAiEmbedder {
 }
 
 /// Детерминированный мок-эмбеддер для тестов БЕЗ сервера (Ф1-4/5/6).
-#[cfg(test)]
-pub(crate) struct MockEmbedder {
+///
+/// Под `#[cfg(any(test, feature = "test-util"))]`: доступен и тестам самого ядра, и dev-тестам
+/// потребителей (nexus-desktop) через фичу `test-util` (CORE-1: общий тест-хелпер пережил разделение).
+#[cfg(any(test, feature = "test-util"))]
+pub struct MockEmbedder {
     pub dim: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn mock_vec(text: &str, dim: usize) -> Vec<f32> {
     let mut v = vec![0f32; dim];
     for (i, b) in text.bytes().enumerate() {
@@ -194,7 +197,7 @@ fn mock_vec(text: &str, dim: usize) -> Vec<f32> {
     v
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 #[async_trait]
 impl EmbeddingProvider for MockEmbedder {
     async fn embed_documents(&self, texts: &[&str]) -> AiResult<Vec<Vec<f32>>> {

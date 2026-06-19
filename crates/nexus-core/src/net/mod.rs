@@ -464,7 +464,8 @@ impl GuardedClient {
 
     /// Тест-фикстура: политика с дефолтами (фичи включены, офлайн выключен, allowlist пуст) —
     /// мок-серверы на loopback проходят как `is_private_host` без живого allowlist.
-    #[cfg(test)]
+    /// Под `#[cfg(any(test, feature = "test-util"))]` — доступна dev-тестам потребителя (CORE-1).
+    #[cfg(any(test, feature = "test-util"))]
     pub fn unchecked() -> Self {
         let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
         Self::new(policy, Arc::new(EgressAudit::default()), |b| b)

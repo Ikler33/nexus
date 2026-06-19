@@ -1,0 +1,36 @@
+[package]
+name = "nexus-core"
+description = "Nexus — переиспользуемое ядро (БД, парсер, вектор, плагины, vault, чанкер, egress-граница, AI). Извлечено из nexus-desktop (CORE-1) для будущего headless agent-service."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Тест-хелперы ядра (MockEmbedder, GuardedClient::unchecked, live_test_embedder/LIVE_EMBED_DIM),
+# которые до извлечения CORE-1 жили под `#[cfg(test)]` и шарились между тест-модулями ОДНОГО крейта.
+# После разделения тесты потребителя (nexus-desktop) их не видят (`#[cfg(test)]` per-крейт + был
+# `pub(crate)`). Фича `test-util` компилирует их как `pub` для dev-deps потребителя; в обычной
+# (не-тестовой) сборке ядра она ВЫКЛЮЧЕНА — фикстуры не попадают в прод-бинарь.
+[features]
+test-util = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { workspace = true }
+# Ядро напрямую использует tokio::time (sleep/timeout в ai/chat) и tokio::net (lookup_host в
+# net/resolve) — фичи time/net добавляются к базовым из [workspace.dependencies]
+# (rt-multi-thread/sync/macros). В app-сборке они и так включались транзитивно (reqwest), но
+# standalone-крейт обязан объявить то, что использует напрямую.
+tokio = { workspace = true, features = ["time", "net"] }
+thiserror = { workspace = true }
+pulldown-cmark = { workspace = true }
+blake3 = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+usearch = { workspace = true }
+getrandom = { workspace = true }
+# Атомарная запись заметок (vault::atomic_write): tmp-в-той-же-папке → fsync → rename. Рантайм-дека
+# (не только dev — как и в app Cargo.toml), плюс TempDir в тестах модулей.
+tempfile = { workspace = true }

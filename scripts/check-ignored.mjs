@@ -32,7 +32,13 @@ import { dirname, resolve } from 'node:path';
 const EXPECTED = 22;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = resolve(root, 'apps/desktop/src-tauri/src');
+// CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src
+// вместе с модулями. Считаем по ОБОИМ деревьям, чтобы суммарный счётчик (EXPECTED) не «потерял» их при
+// извлечении ядра (иначе тихая дыра в покрытии прошла бы как зелёный CI — ровно то, от чего этот гейт).
+const SRC_ROOTS = [
+  resolve(root, 'apps/desktop/src-tauri/src'),
+  resolve(root, 'crates/nexus-core/src'),
+];
 
 const hits = [];
 const walk = (dir) => {
@@ -48,7 +54,7 @@ const walk = (dir) => {
     }
   }
 };
-walk(SRC);
+for (const src of SRC_ROOTS) walk(src);
 
 console.log(`#[ignore]-тестов: ${hits.length} (ожидается ${EXPECTED})`);
 if (hits.length !== EXPECTED) {
