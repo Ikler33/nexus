@@ -14,7 +14,7 @@ type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 /// Это исключает `SQLITE_BUSY` между писателями (AC-Б7-1) и делает невозможной гонку
 /// двух write-транзакций. Клонируется дёшево (общий канал) для передачи в indexer и
 /// Tauri-команды.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WriteActor {
     tx: mpsc::UnboundedSender<Job>,
 }

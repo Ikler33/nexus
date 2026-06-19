@@ -242,33 +242,118 @@ pub struct EgressAuditEntry {
     pub bytes_out: Option<usize>,
     pub allowed: bool,
     pub denied_reason: Option<String>,
+    /// AgentRun correlation-id (SCAFFOLD, P0-b): связывает эгресс с прогоном агента. None для всех
+    /// текущих вызывающих (run-контекста ещё нет) — колонка+сеттер заложены под будущее threading.
+    pub run_id: Option<i64>,
 }
 
 /// Неотключаемый append-only журнал эгресса ядра (инвариант — как брокерский `AuditLog`):
 /// `record()` приватен для `net/`, публичны только чтения; чистить нельзя by design (AC-EGR-4).
+///
+/// ДВА слоя (P0-b):
+/// 1. **In-memory** `Mutex<Vec<..>>` — снимки `entries()`, pre-vault эгресс (БД ещё не открыта) и тесты.
+/// 2. **Durable** опциональный [`WriteActor`]-сток, выставляемый ПОСЛЕ конструирования через
+///    [`set_writer`](Self::set_writer) (журнал строится на старте приложения ДО открытия vault-БД).
+///    Когда сток есть, `record()` персистит запись append-only в `egress_audit` **ПЕРЕД возвратом**
+///    (write-before-act: `authorize` awaits `record()` до сокета). Pre-vault окно: сток ещё None →
+///    запись живёт только в памяти (durable-история начинается с момента `set_writer`).
 #[derive(Debug, Default)]
 pub struct EgressAudit {
-    /// `Mutex` — записи короткие и синхронные, журнал делится между провайдерами через `Arc`.
+    /// `Mutex` — записи короткие, журнал делится между провайдерами через `Arc`.
     entries: Mutex<Vec<EgressAuditEntry>>,
+    /// Durable-сток: `Some(WriteActor)` после `set_writer` (открытие vault). До него — pre-vault окно
+    /// (только in-memory). `Mutex` (а не `OnceLock`): десктоп может переоткрыть vault (новая БД) →
+    /// сток заменяем. `WriteActor` клонируется дёшево (общий канал).
+    writer: Mutex<Option<crate::db::WriteActor>>,
+    /// AgentRun correlation-id (SCAFFOLD): `record()` читает его в каждую запись. Остаётся None у всех
+    /// текущих вызывающих; сеттер заложен под будущее run-context threading (НЕ реализуется здесь).
+    run_id: Mutex<Option<i64>>,
 }
 
 impl EgressAudit {
+    /// Подключает durable-сток ПОСЛЕ конструирования (журнал строится на старте ДО открытия vault-БД).
+    /// Зовётся из composition-root: десктоп — в `open_vault` после `Database::open`; agentd — в main
+    /// после открытия БД. С этого момента `record()` персистит каждый эгресс в `egress_audit`.
+    pub fn set_writer(&self, writer: crate::db::WriteActor) {
+        if let Ok(mut w) = self.writer.lock() {
+            *w = Some(writer);
+        }
+    }
+
+    /// SCAFFOLD (P0-b): выставляет текущий AgentRun correlation-id, который `record()` пишет в каждую
+    /// запись. Все текущие вызывающие оставляют None — это задел под run-context threading агента.
+    pub fn set_run(&self, run_id: Option<i64>) {
+        if let Ok(mut r) = self.run_id.lock() {
+            *r = run_id;
+        }
+    }
+
     /// Единственная точка записи — зовётся ТОЛЬКО из [`GuardedClient`] (приватность = append-only).
-    fn record(
+    ///
+    /// **Write-before-act** (P0-b): (а) пушит запись в in-memory Vec, затем (б) если durable-сток есть —
+    /// персистит её append-only в `egress_audit` И ЖДЁТ коммита ПЕРЕД возвратом. `authorize` awaits
+    /// этот `record()` до отправки сокета → durable-строка существует ДО любого сетевого действия.
+    /// Сбой записи в БД НЕ роняет эгресс (best-effort durable; in-memory-слой и so хранит запись),
+    /// но логируется: durable-история — подотчётность, не gate на сам запрос.
+    async fn record(
         &self,
         feature: EgressFeature,
         host: String,
         bytes_out: Option<usize>,
         decision: &Result<(), EgressDenied>,
     ) {
+        let run_id = self.run_id.lock().map(|r| *r).unwrap_or(None);
+        let entry = EgressAuditEntry {
+            feature,
+            // Хост хранится РЕАЛЬНЫЙ: локальная БД vault — собственный аудит пользователя; Redacted —
+            // про утечку в Debug/логи, не про хранение на своём диске (см. 020_egress_audit.sql).
+            host: Redacted::new(host),
+            bytes_out,
+            allowed: decision.is_ok(),
+            denied_reason: decision.as_ref().err().map(|d| d.to_string()),
+            run_id,
+        };
+
+        // (а) In-memory — всегда (снимки/pre-vault/тесты).
         if let Ok(mut entries) = self.entries.lock() {
-            entries.push(EgressAuditEntry {
-                feature,
-                host: Redacted::new(host),
-                bytes_out,
-                allowed: decision.is_ok(),
-                denied_reason: decision.as_ref().err().map(|d| d.to_string()),
-            });
+            entries.push(entry.clone());
+        }
+
+        // (б) Durable — если сток подключён. Клонируем WriteActor под мьютексом и сразу отпускаем
+        //     лок (await под std::Mutex недопустим). Ждём коммит ПЕРЕД возвратом (write-before-act).
+        let writer = self.writer.lock().ok().and_then(|w| w.clone());
+        if let Some(writer) = writer {
+            let feature_str = entry.feature.to_string();
+            let host = entry.host.expose().clone();
+            let bytes_out = entry.bytes_out.map(|b| b as i64);
+            let allowed = entry.allowed;
+            let denied_reason = entry.denied_reason.clone();
+            let run_id = entry.run_id;
+            let created_at = crate::scheduler::now_secs();
+            let res = writer
+                .call(move |conn| {
+                    conn.execute(
+                        "INSERT INTO egress_audit \
+                         (feature, host, bytes_out, allowed, denied_reason, run_id, created_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            feature_str,
+                            host,
+                            bytes_out,
+                            allowed as i64,
+                            denied_reason,
+                            run_id,
+                            created_at,
+                        ],
+                    )
+                    .map(|_| ())
+                })
+                .await;
+            if let Err(e) = res {
+                // Best-effort: durable-сбой не роняет эгресс (in-memory-слой запись сохранил), но
+                // логируем без хоста (Redacted-инвариант: в логи реальный хост не утекает).
+                tracing::warn!(error = %e, "egress-audit: durable-запись не удалась (in-memory сохранён)");
+            }
         }
     }
 
@@ -410,19 +495,22 @@ impl GuardedClient {
             .and_then(|u| u.host_str().map(str::to_string));
         let Some(host) = host else {
             // URL без хоста: аудитим сырой url (redacted) с отказом и не уходим в сеть.
-            self.audit.record(
-                feature,
-                url.to_string(),
-                bytes_out,
-                &Err(EgressDenied::HostNotAllowed(Redacted::new(url.to_string()))),
-            );
+            self.audit
+                .record(
+                    feature,
+                    url.to_string(),
+                    bytes_out,
+                    &Err(EgressDenied::HostNotAllowed(Redacted::new(url.to_string()))),
+                )
+                .await;
             return Err(NetError::BadUrl);
         };
 
         // 1. Host-string-гейт (metadata/офлайн/opt-in/allowlist|приватность) — без сети.
         if let Err(denied) = self.policy.check(&host, feature) {
             self.audit
-                .record(feature, host, bytes_out, &Err(denied.clone()));
+                .record(feature, host, bytes_out, &Err(denied.clone()))
+                .await;
             return Err(NetError::from(denied));
         }
 
@@ -434,19 +522,23 @@ impl GuardedClient {
                 // Резолв упал — НЕ молчаливый allow: типизированный отказ + audit как denial.
                 let denied = EgressDenied::HostNotAllowed(Redacted::new(host.clone()));
                 self.audit
-                    .record(feature, host, bytes_out, &Err(denied.clone()));
+                    .record(feature, host, bytes_out, &Err(denied.clone()))
+                    .await;
                 return Err(NetError::from(denied));
             }
         };
         let ip_decision = check_resolved_ips(&ips, feature.denies_private());
         if let Err(denied) = ip_decision {
             self.audit
-                .record(feature, host, bytes_out, &Err(denied.clone()));
+                .record(feature, host, bytes_out, &Err(denied.clone()))
+                .await;
             return Err(NetError::from(denied));
         }
 
         // 3. Успех — ровно одна audit-запись.
-        self.audit.record(feature, host.clone(), bytes_out, &Ok(()));
+        self.audit
+            .record(feature, host.clone(), bytes_out, &Ok(()))
+            .await;
 
         // 4. ПИН: пересобираем клиент с `resolve_to_addrs` на первый проверенный IP (порт из URL).
         //    Анти-TOCTOU: коннект гарантированно идёт на проверенный адрес. redirect=none сохранён
@@ -964,5 +1056,242 @@ mod tests {
         assert!(matches!(res, Err(NetError::BadUrl)));
         assert_eq!(audit.len(), 1);
         assert!(!audit.entries()[0].allowed);
+    }
+
+    /// Открывает временную vault-БД (миграции применены, в т.ч. 020 egress_audit). `(Database, TempDir)`
+    /// в таком порядке: при выходе из scope сначала закрывается БД, потом удаляется каталог.
+    async fn temp_db() -> (crate::db::Database, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .expect("open db");
+        (db, dir)
+    }
+
+    /// Снимок durable-журнала: `(feature, host, allowed, denied_is_some, run_id)` в порядке вставки.
+    async fn durable_rows(
+        db: &crate::db::Database,
+    ) -> Vec<(String, String, bool, bool, Option<i64>)> {
+        db.reader()
+            .query(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT feature, host, allowed, denied_reason, run_id \
+                     FROM egress_audit ORDER BY id",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(2)? != 0,
+                            r.get::<_, Option<String>>(3)?.is_some(),
+                            r.get::<_, Option<i64>>(4)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// P0-b (durable persist): с подключённым writer `record()` персистит строку в `egress_audit` —
+    /// реальный host, decision, run_id=None (scaffold). Успех И отказ оба durable.
+    #[tokio::test]
+    async fn durable_record_persists_row_with_writer() {
+        let (db, _dir) = temp_db().await;
+        let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+
+        let audit = Arc::new(EgressAudit::default());
+        audit.set_writer(db.writer().clone());
+        let (policy, _) = policy_with_switch();
+        policy.set_allowlist(["api.example.com".to_string()]);
+        let client = GuardedClient::new(policy, audit.clone(), |b| b).unwrap();
+
+        // Успех на loopback.
+        client
+            .get(&format!("http://{addr}/v1/models"), EgressFeature::Probe)
+            .await
+            .expect("loopback разрешён");
+        server.join().unwrap();
+        // Отказ: публичный хост вне allowlist (api.example.com в allowlist → используем другой).
+        let denied = client
+            .get("http://blocked.example.com/x", EgressFeature::Probe)
+            .await;
+        assert!(matches!(denied, Err(NetError::Denied(_))));
+
+        let rows = durable_rows(&db).await;
+        assert_eq!(rows.len(), 2, "оба эгресса durable-персистнуты");
+        // Строка 1 — успех на реальном loopback-хосте (НЕ Redacted в БД).
+        assert_eq!(rows[0].0, "probe");
+        assert_eq!(
+            rows[0].1, "127.0.0.1",
+            "host хранится РЕАЛЬНЫЙ, не Redacted"
+        );
+        assert!(
+            rows[0].2 && !rows[0].3,
+            "успех: allowed=1, denied_reason=NULL"
+        );
+        assert_eq!(rows[0].4, None, "run_id scaffold: None");
+        // Строка 2 — отказ.
+        assert_eq!(rows[1].1, "blocked.example.com");
+        assert!(
+            !rows[1].2 && rows[1].3,
+            "отказ: allowed=0, denied_reason set"
+        );
+    }
+
+    /// P0-b (write-before-act ORDERING): durable denial-строка существует ДО возврата `authorize` —
+    /// т.е. ДО того, как мог бы уйти сокет. Гард-denied запрос (DNS-гард режет до коннекта) оставляет
+    /// durable-строку, причём listener-мок НЕ принимает соединение (0 коннектов). Так как `authorize`
+    /// awaits `record()` синхронно перед I/O, наличие строки сразу после await доказывает порядок.
+    #[tokio::test]
+    async fn durable_denial_row_exists_before_authorize_returns() {
+        let (db, _dir) = temp_db().await;
+        // Listener, который НЕ должен принять соединение (отказ — до сокета).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+
+        let audit = Arc::new(EgressAudit::default());
+        audit.set_writer(db.writer().clone());
+        let (policy, _) = policy_with_switch();
+        policy.set_allowlist(["chat.example.com".to_string()]); // host-гейт пропустит
+                                                                // DNS-гард: хост резолвится в metadata → denied ДО коннекта (P0-a).
+        let resolver = Arc::new(resolve::test_support::FixedResolver::new(vec![
+            "169.254.169.254".parse().unwrap(),
+        ]));
+        let client = GuardedClient::new(policy, audit.clone(), |b| b)
+            .unwrap()
+            .with_resolver(resolver);
+
+        let res = client
+            .post_json(
+                "http://chat.example.com/v1/chat/completions",
+                EgressFeature::Chat,
+                &serde_json::json!({"messages": []}),
+            )
+            .await;
+        assert!(
+            matches!(res, Err(NetError::Denied(EgressDenied::HostNotAllowed(_)))),
+            "rebind на metadata режется типизированно: {res:?}"
+        );
+        // 0 коннектов: гард отрезал ДО сокета.
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "denied-запрос не должен был коснуться сокета (write-before-act)"
+        );
+        // Durable-строка УЖЕ есть сразу после возврата authorize (record awaited перед любым I/O):
+        // строка существует, а сокета не было → запись произошла ДО (несуществующей) отправки.
+        let rows = durable_rows(&db).await;
+        assert_eq!(rows.len(), 1, "denial durable-персистнут write-before-act");
+        assert_eq!(rows[0].0, "chat");
+        assert!(!rows[0].2, "denial: allowed=0");
+        assert!(rows[0].3, "denial_reason set");
+    }
+
+    /// P0-b (pre-vault окно / тесты): БЕЗ writer'а `record()` всё равно работает — пишет только in-memory.
+    /// Это сценарий pre-vault эгресса (БД ещё не открыта) и всех тестов с `EgressAudit::default()`.
+    #[tokio::test]
+    async fn record_without_writer_is_in_memory_only() {
+        let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        let (client, audit) = guarded(policy_with_switch().0);
+        client
+            .get(&format!("http://{addr}/v1/models"), EgressFeature::Probe)
+            .await
+            .expect("loopback разрешён");
+        server.join().unwrap();
+        assert_eq!(audit.len(), 1, "in-memory работает без writer (pre-vault)");
+        assert!(audit.entries()[0].allowed);
+    }
+
+    /// P0-b (write-before-act ORDERING, SUCCESS-путь): durable success-строка (`allowed=1`) существует
+    /// ДО возврата `authorize` — т.е. ДО любого сокета/send. Зовём приватный `authorize` напрямую (НЕ
+    /// `get`), поэтому МЕЖДУ awaited `record()` и проверкой БД сетевого I/O нет вообще: наличие строки
+    /// сразу после `authorize().await` доказывает, что success-`record()` закоммичен ПЕРЕД отправкой.
+    /// Регрессия, делающая success-`record()` fire-and-forget (не awaited внутри authorize), валит тест.
+    /// Listener — принимающий loopback (mirror denial-теста), но на коннект мы НЕ полагаемся: `authorize`
+    /// возвращает только пин-клиент, send не делается, так что сокет остаётся нетронутым.
+    #[tokio::test]
+    async fn durable_success_row_exists_before_authorize_returns() {
+        let (db, _dir) = temp_db().await;
+        // Принимающий loopback-listener (как в success-кейсе durable_record_persists_*). На приём
+        // соединения тест НЕ полагается — он лишь даёт реальный адрес, резолвящийся в 127.0.0.1.
+        let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+
+        let audit = Arc::new(EgressAudit::default());
+        audit.set_writer(db.writer().clone());
+        let (policy, _) = policy_with_switch();
+        let client = GuardedClient::new(policy, audit.clone(), |b| b).unwrap();
+
+        // Вызываем ПРИВАТНЫЙ authorize напрямую: проходит host-гейт (loopback local-first) + DNS/SSRF-гард
+        // (127.0.0.1 резолвится в себя), затем success-`record()` AWAITED, затем строится пин-клиент.
+        // send НЕ делается → между коммитом записи и проверкой БД сетевого I/O нет.
+        let url = format!("http://{addr}/v1/models");
+        let authorized = client.authorize(&url, EgressFeature::Probe, None).await;
+        assert!(authorized.is_ok(), "loopback success-путь: {authorized:?}");
+
+        // Durable success-строка УЖЕ есть сразу после возврата authorize, ДО какого-либо send.
+        // Будь success-`record()` fire-and-forget — строки тут могло не быть (тест бы упал).
+        let rows = durable_rows(&db).await;
+        assert_eq!(
+            rows.len(),
+            1,
+            "success durable-персистнут write-before-act (ДО send)"
+        );
+        assert_eq!(rows[0].0, "probe");
+        assert_eq!(rows[0].1, "127.0.0.1", "host хранится РЕАЛЬНЫЙ");
+        assert!(
+            rows[0].2 && !rows[0].3,
+            "success: allowed=1, denied_reason=NULL"
+        );
+
+        // listener так и не принял соединение (send не вызывался) — закрываем его, дренируя поток.
+        drop(client);
+        drop(server);
+    }
+
+    /// P0-b (vault re-open writer swap): `record()` перечитывает writer ПЕР-вызов (под мьютексом), поэтому
+    /// после `set_writer(B)` записи идут ТОЛЬКО в B, а старая БД A остаётся со своей единственной строкой.
+    /// Доказывает атомарность подмены стока на переоткрытии vault и отсутствие stale-writer-в-старую-БД.
+    /// Эгресс — denied (host-гейт режет публичный хост вне allowlist) для простоты: durable-строка пишется
+    /// и на отказе (write-before-act), сеть не нужна.
+    #[tokio::test]
+    async fn writer_swap_on_vault_reopen_routes_to_new_db_only() {
+        let (db_a, _dir_a) = temp_db().await;
+        let (db_b, _dir_b) = temp_db().await;
+
+        let audit = Arc::new(EgressAudit::default());
+        let (policy, _) = policy_with_switch();
+        let client = GuardedClient::new(policy, audit.clone(), |b| b).unwrap();
+
+        // Сток = A. Один denied-эгресс → строка в A.
+        audit.set_writer(db_a.writer().clone());
+        let denied_a = client
+            .get("http://first.example.com/x", EgressFeature::Probe)
+            .await;
+        assert!(matches!(denied_a, Err(NetError::Denied(_))));
+
+        let rows_a1 = durable_rows(&db_a).await;
+        assert_eq!(rows_a1.len(), 1, "1-я строка в A");
+        assert_eq!(rows_a1[0].1, "first.example.com");
+        assert!(durable_rows(&db_b).await.is_empty(), "B ещё пуста");
+
+        // Переоткрытие vault: подменяем сток на B. Следующий эгресс должен попасть ТОЛЬКО в B.
+        audit.set_writer(db_b.writer().clone());
+        let denied_b = client
+            .get("http://second.example.com/y", EgressFeature::Probe)
+            .await;
+        assert!(matches!(denied_b, Err(NetError::Denied(_))));
+
+        // B содержит ровно 2-ю строку; A — по-прежнему только 1-ю (stale-writer в A не писал).
+        let rows_b = durable_rows(&db_b).await;
+        assert_eq!(rows_b.len(), 1, "2-я строка ТОЛЬКО в B");
+        assert_eq!(rows_b[0].1, "second.example.com");
+        let rows_a2 = durable_rows(&db_a).await;
+        assert_eq!(rows_a2.len(), 1, "A не изменилась после подмены стока");
+        assert_eq!(
+            rows_a2[0].1, "first.example.com",
+            "A хранит свою 1-ю строку"
+        );
     }
 }
