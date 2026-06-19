@@ -9,6 +9,8 @@ mod chat;
 mod config;
 mod embedder;
 mod tokenizer;
+/// Tool-capable chat-провайдер (AGENT-1, I-5): ОТДЕЛЬНЫЙ от `chat` тип — tools не протекают в chat-путь.
+pub mod tools;
 
 use std::sync::Arc;
 
@@ -16,8 +18,8 @@ pub use chat::{
     build_agent_memory_block, build_chat_messages, build_episode_block, build_inline_messages,
     build_memory_block, build_pinned_block, build_rag_messages, build_web_answer_messages,
     build_web_query_messages, fence_observation, injection_marker, parse_web_query_plan,
-    prepend_memory_block, ChatMessage, ChatProvider, InlineMode, OpenAiChatProvider, WebQueryPlan,
-    FENCE_MAX_BYTES,
+    prepend_memory_block, ChatMessage, ChatProvider, InlineMode, OpenAiChatProvider, ToolCallFn,
+    ToolCallMsg, WebQueryPlan, FENCE_MAX_BYTES,
 };
 pub use config::{AiConfig, ChatConfig, EmbeddingConfig, LocalConfig};
 #[cfg(any(test, feature = "test-util"))]
@@ -128,6 +130,10 @@ pub struct AIClient {
     /// `None` синхронно с `VaultContext::vectors` (оба есть или обоих нет). Cold: hot-swap нет —
     /// на нём висит фоновый индексатор, смена требует переоткрытия vault (#11b).
     pub embedder: Option<Arc<dyn EmbeddingProvider>>,
+    /// Tool-capable провайдер цикла агента (AGENT-1, I-5/ADR-005). **`None` на десктопе/сегодня** —
+    /// конструируется ТОЛЬКО в `nexus-agentd`. НЕ маршрутизируется через `chat`/`chat_fast`/`chat_util`
+    /// (те остаются `ChatProvider`, tool-free): отдельный канал, чтобы tool-calling не протекал в chat/web.
+    pub agent_tools: Option<Arc<dyn tools::ToolCapableProvider>>,
     /// Политика эгресса ядра — единый экземпляр приложения (см. `AppState::egress_policy`).
     pub policy: Arc<crate::net::EgressPolicy>,
 }

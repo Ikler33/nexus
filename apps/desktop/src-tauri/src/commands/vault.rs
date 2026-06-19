@@ -517,6 +517,8 @@ pub async fn open_vault(
             chat_fast,
             chat_util,
             embedder,
+            // AGENT-1 (I-5): tool-capable провайдер НЕ на десктопе — конструируется только в nexus-agentd.
+            agent_tools: None,
             policy: state.egress_policy.clone(),
         },
         widgets: Arc::new(widget_registry),

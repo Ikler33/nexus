@@ -13,11 +13,44 @@ use serde::{Deserialize, Serialize};
 use super::{AiError, AiResult};
 use crate::net::{EgressFeature, GuardedClient};
 
+/// Один tool_call в сообщении роли `assistant` (OpenAI wire-shape). AGENT-1: цикл дописывает
+/// `assistant{tool_calls}` ПЕРЕД tool-результатами, чтобы массив сообщений был строго спек-совместим
+/// (call↔result коррелируют по `id`). `arguments` — СЫРОЙ JSON-текст, как его вернула модель.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallMsg {
+    /// Идентификатор вызова (коррелирует с `tool_call_id` сообщения-результата).
+    pub id: String,
+    /// Тип вызова — у OpenAI всегда `"function"`. Поле `type` на проводе (rename).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Имя + сырые аргументы функции.
+    pub function: ToolCallFn,
+}
+
+/// Тело function-вызова в [`ToolCallMsg`] (OpenAI `function: {name, arguments}`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallFn {
+    pub name: String,
+    /// Аргументы как СЫРАЯ JSON-строка (не объект) — спека OpenAI.
+    pub arguments: String,
+}
+
 /// Сообщение чата (роль + текст). Сериализуется в тело запроса к модели.
+///
+/// Поля `tool_calls`/`tool_call_id` — для строгого OpenAI tool-протокола (AGENT-1). Оба
+/// `skip_serializing_if = "Option::is_none"` + `default`: обычные system/user/assistant сообщения
+/// сериализуются БАЙТ-в-БАЙТ как раньше (без новых ключей), что держит eval-гейты (faithfulness/RAG/
+/// эпизоды) и тесты `request_body_toggles_reasoning` / `parse_sse_delta` зелёными.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Запрошенные ассистентом вызовы инструментов (роль `assistant`). `None` для обычных сообщений.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_calls: Option<Vec<ToolCallMsg>>,
+    /// id вызова, на который отвечает сообщение роли `tool` (корреляция call↔result). `None` иначе.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_call_id: Option<String>,
 }
 
 impl ChatMessage {
@@ -25,18 +58,47 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: "user".into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: "assistant".into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// Сообщение роли `tool` — результат исполнения инструмента (AGENT-1). `tool_call_id` коррелирует
+    /// его с соответствующим `tool_calls[].id` предыдущего assistant-сообщения (строгая OpenAI-спека).
+    pub fn tool(call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(call_id.into()),
+        }
+    }
+
+    /// Сообщение роли `assistant` с ЗАПРОШЕННЫМИ вызовами инструментов (AGENT-1). Контент пуст
+    /// (модель попросила инструменты, а не дала текст); цикл дописывает его ПЕРЕД tool-результатами,
+    /// чтобы массив сообщений был строго спек-совместим (assistant{tool_calls} → tool{tool_call_id}).
+    pub fn assistant_tool_calls(calls: Vec<ToolCallMsg>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(calls),
+            tool_call_id: None,
         }
     }
 }
@@ -1674,5 +1736,75 @@ mod tests {
         assert_eq!(full, "Привет");
         assert_eq!(got, "Привет");
         let _ = server.join();
+    }
+
+    /// A (non-breakage proof): обычные system/user/assistant сообщения сериализуются БАЙТ-в-БАЙТ как
+    /// раньше — РОВНО ключи `role`+`content`, БЕЗ `tool_calls`/`tool_call_id` (они `skip_serializing_if`).
+    /// Это держит eval-гейты (faithfulness/RAG/эпизоды) и `request_body_*`/`parse_sse_delta` зелёными:
+    /// тело запроса к модели для уже-существующих сообщений не меняется ни на байт.
+    #[test]
+    fn plain_messages_serialize_without_new_tool_keys() {
+        for m in [
+            ChatMessage::system("инструкция"),
+            ChatMessage::user("вопрос"),
+            ChatMessage::assistant("ответ"),
+        ] {
+            let v = serde_json::to_value(&m).unwrap();
+            let obj = v.as_object().expect("сообщение — JSON-объект");
+            // Ровно два ключа: role + content. Никаких новых ключей у обычных сообщений.
+            assert_eq!(
+                obj.len(),
+                2,
+                "обычное сообщение сериализуется ровно в {{role, content}}: {v}"
+            );
+            assert!(obj.contains_key("role") && obj.contains_key("content"));
+            assert!(!obj.contains_key("tool_calls"), "нет ключа tool_calls");
+            assert!(!obj.contains_key("tool_call_id"), "нет ключа tool_call_id");
+        }
+        // Точная byte-форма (стабильный порядок serde для derive: поля в порядке объявления).
+        assert_eq!(
+            serde_json::to_string(&ChatMessage::user("hi")).unwrap(),
+            r#"{"role":"user","content":"hi"}"#
+        );
+    }
+
+    /// A: assistant{tool_calls} и tool{tool_call_id} сериализуются в строгую OpenAI-форму (поле `type`
+    /// через rename, сырые `arguments`-строки, корреляция по id). Десериализация — round-trip.
+    #[test]
+    fn tool_messages_serialize_in_openai_shape() {
+        let asst = ChatMessage::assistant_tool_calls(vec![ToolCallMsg {
+            id: "call_1".into(),
+            kind: "function".into(),
+            function: ToolCallFn {
+                name: "debug.echo".into(),
+                arguments: r#"{"text":"hi"}"#.into(),
+            },
+        }]);
+        let v = serde_json::to_value(&asst).unwrap();
+        assert_eq!(v["role"], "assistant");
+        assert_eq!(v["content"], "");
+        // OpenAI wire-shape: tool_calls[].type (rename из kind), function.name/arguments (сырая строка).
+        assert_eq!(v["tool_calls"][0]["id"], "call_1");
+        assert_eq!(v["tool_calls"][0]["type"], "function");
+        assert_eq!(v["tool_calls"][0]["function"]["name"], "debug.echo");
+        assert_eq!(
+            v["tool_calls"][0]["function"]["arguments"],
+            r#"{"text":"hi"}"#
+        );
+        // assistant{tool_calls} НЕ несёт tool_call_id (он только у роли tool).
+        assert!(v.as_object().unwrap().get("tool_call_id").is_none());
+
+        let tool = ChatMessage::tool("call_1", "результат");
+        let tv = serde_json::to_value(&tool).unwrap();
+        assert_eq!(tv["role"], "tool");
+        assert_eq!(tv["content"], "результат");
+        assert_eq!(tv["tool_call_id"], "call_1");
+        // tool-сообщение НЕ несёт tool_calls.
+        assert!(tv.as_object().unwrap().get("tool_calls").is_none());
+
+        // Round-trip: десериализуем обратно в строго равные значения.
+        let back: ChatMessage = serde_json::from_value(v).unwrap();
+        assert_eq!(back.tool_calls.as_ref().unwrap()[0].id, "call_1");
+        assert_eq!(back.tool_calls.as_ref().unwrap()[0].kind, "function");
     }
 }

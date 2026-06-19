@@ -15,6 +15,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nexus_core::ai::tools::{OpenAiToolProvider, ToolCapableProvider};
 use nexus_core::ai::{
     self, AIClient, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
     OpenAiEmbedder,
@@ -141,6 +142,14 @@ async fn run() -> Result<(), String> {
     }
     .or_else(|| chat_fast.clone());
 
+    // AGENT-1 (I-5): tool-capable провайдер из ТОГО ЖЕ GuardedClient::for_chat + EgressFeature::Chat,
+    // что и build_chat_min — но ОТДЕЛЬНЫЙ тип (OpenAiToolProvider), tools не протекают в chat-путь.
+    // Это единственное место в проекте (вне ядра/тестов), где он конструируется (десктоп держит None).
+    let agent_tools = match &local_cfg {
+        Some(cfg) => build_agent_tools_min(cfg, &egress_policy, &egress_audit),
+        None => None,
+    };
+
     // AIClient (тот же контейнер, что десктоп кладёт в VaultContext) — собран из ядровых провайдеров.
     // Здесь не потребляется логикой (skeleton), но доказывает, что headless собирает полный AI-слой.
     let ai_client = AIClient {
@@ -148,10 +157,12 @@ async fn run() -> Result<(), String> {
         chat_fast,
         chat_util,
         embedder: embedder.clone(),
+        agent_tools,
         policy: egress_policy.clone(),
     };
     let ai_ready = ai_client.chat.is_some();
     let embed_ready = ai_client.embedder.is_some();
+    let agent_ready = ai_client.agent_tools.is_some();
 
     // Индексатор-фундамент. Десктоп тут спавнит watcher с Tauri-хуками (прогресс/файл-изменён); headless
     // конструирует Indexer (с RAG если есть эмбеддер/индекс), доказывая, что тип строится без Tauri.
@@ -203,11 +214,15 @@ async fn run() -> Result<(), String> {
         name = %vault_name,
         ai = ai_ready,
         embed = embed_ready,
+        agent_tools = agent_ready,
         "nexus-agentd started"
     );
 
     let smoke = std::env::var("NEXUS_AGENTD_SMOKE").is_ok_and(|v| v == "1");
     if smoke {
+        // AGENT-1 smoke: цикл агента крутится end-to-end против СТАБ-провайдера (offline, без сети) и
+        // безопасного реестра (echo) — доказывает execute→feed-back→Final без живой модели/актуатора.
+        agent_loop_smoke().await;
         // Smoke: ставим одну health-джобу, ждём ограниченное время (даём воркеру тикнуть), стоп. Выход 0.
         nexus_core::scheduler::enqueue(
             db.writer(),
@@ -318,6 +333,105 @@ fn build_chat_min(
         .without_reasoning();
     tracing::info!(model = %model, "chat-провайдеры включены (reasoning + fast)");
     Some((Arc::new(normal), Arc::new(fast)))
+}
+
+/// AGENT-1 (I-5): tool-capable провайдер для цикла агента. Тот же `ai.chat`-хост/модель и тот же
+/// `GuardedClient::for_chat` + `EgressFeature::Chat`, что и `build_chat_min`, но ОТДЕЛЬНЫЙ тип
+/// `OpenAiToolProvider` (tools НЕ протекают в chat-путь). `None` — нет `ai.chat` / клиент не построился.
+fn build_agent_tools_min(
+    cfg: &LocalConfig,
+    policy: &Arc<EgressPolicy>,
+    audit: &Arc<EgressAudit>,
+) -> Option<Arc<dyn ToolCapableProvider>> {
+    let chat = cfg.ai.chat.as_ref()?;
+    let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone())
+        .map_err(|e| tracing::warn!(error = %e, "tool-провайдер агента не инициализирован"))
+        .ok()?;
+    let provider = OpenAiToolProvider::new(&guarded, EgressFeature::Chat, &chat.url, &model, None);
+    tracing::info!(model = %model, "tool-capable провайдер агента включён (AGENT-1)");
+    Some(Arc::new(provider))
+}
+
+/// AGENT-1 offline smoke: гоняет цикл агента против ФЕЙКОВОГО провайдера (без сети) и безопасного
+/// реестра (echo) — ToolCalls на ходу 1, Final на ходу 2. Доказывает, что headless умеет крутить цикл
+/// execute→feed-back→Final. Сети не касается (стаб-провайдер). Логирует исход; падение паникует smoke.
+async fn agent_loop_smoke() {
+    use nexus_core::agent::tool::{ToolCall, ToolSpec};
+    use nexus_core::agent::{
+        run_agent_loop, AgentEvent, EchoTool, LoopBounds, LoopOutcome, ToolRegistry,
+    };
+    use nexus_core::ai::tools::ToolTurn;
+    use nexus_core::ai::{ChatMessage, ContextBudget};
+    use nexus_core::chunker::WordTokenizer;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+
+    /// Стаб-провайдер: ToolCalls([echo]) → Final («ok»). Без сети.
+    struct SmokeProvider {
+        turns: Mutex<std::collections::VecDeque<nexus_core::ai::AiResult<ToolTurn>>>,
+    }
+    #[async_trait::async_trait]
+    impl ToolCapableProvider for SmokeProvider {
+        async fn stream_chat_tools(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[ToolSpec],
+            _on_token: &mut (dyn FnMut(String) + Send),
+            _cancel: &Arc<AtomicBool>,
+        ) -> nexus_core::ai::AiResult<ToolTurn> {
+            self.turns
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Ok(ToolTurn::Final("ok".into())))
+        }
+        fn model_id(&self) -> &str {
+            "smoke"
+        }
+    }
+
+    let provider = SmokeProvider {
+        turns: Mutex::new(
+            vec![
+                Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                    id: "s1".into(),
+                    name: "debug.echo".into(),
+                    arguments: r#"{"text":"agent-1 smoke"}"#.into(),
+                }])),
+                Ok(ToolTurn::Final("ok".into())),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    };
+    let mut registry = ToolRegistry::new();
+    registry.insert(Arc::new(EchoTool));
+    let tk = WordTokenizer;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut tool_results = 0usize;
+    let outcome = run_agent_loop(
+        &provider,
+        &registry,
+        vec![ChatMessage::user("smoke: вызови echo")],
+        LoopBounds::default(),
+        &ContextBudget::from_context_window(Some(32768)),
+        &tk,
+        &cancel,
+        &mut |e| {
+            if matches!(e, AgentEvent::ToolResult { .. }) {
+                tool_results += 1;
+            }
+        },
+    )
+    .await;
+    assert!(
+        matches!(outcome, LoopOutcome::Final(ref s) if s == "ok") && tool_results == 1,
+        "AGENT-1 smoke: цикл должен исполнить инструмент и финализировать (получено: {outcome:?}, tool_results={tool_results})"
+    );
+    tracing::info!(
+        "nexus-agentd: AGENT-1 smoke цикла агента пройден (execute→feed-back→Final, offline)"
+    );
 }
 
 /// Реплика `vault::build_util_chat`: утилитарная мелкая модель из `ai.fast`, всегда без reasoning.

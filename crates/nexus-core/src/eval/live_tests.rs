@@ -951,3 +951,102 @@ async fn live_tokenizer_matches_server() {
         "встроенный токенайзер ≠ живая модель (или ≠ golden) — ассет не совпадает с задеплоенной моделью"
     );
 }
+
+/// AGENT-1 live tool-call smoke (адверсариал-ревью C): прогоняет ПОЛНЫЙ `run_agent_loop` против ЖИВОЙ
+/// tool-capable модели (Qwen3.6-27B :8080). Доказывает РЕАЛЬНУЮ end-to-end форму протокола: модель
+/// эмитит tool_call → цикл исполняет `EchoTool` → скармливает обратно НОВОЙ строгой формой
+/// (assistant{tool_calls} → tool{tool_call_id}, Part A) → модель завершает Final. Если сервер ОТВЕРГ бы
+/// строгую форму, цикл не дошёл бы до Final — тест бы упал (это и есть проверка, что A корректна).
+///
+/// Запуск: `NEXUS_CHAT_URL=http://192.168.0.31:8080 NEXUS_CHAT_MODEL=qwen36-mtp.gguf \`
+/// `  cargo test live_tool_call_smoke -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "live-llm tool-call (AGENT-1): нужна tool-capable модель (NEXUS_CHAT_URL / 192.168.0.31:8080)"]
+async fn live_tool_call_smoke() {
+    use crate::agent::{
+        run_agent_loop, AgentEvent, EchoTool, LoopBounds, LoopOutcome, ToolRegistry,
+    };
+    use crate::ai::tools::OpenAiToolProvider;
+    use crate::ai::{ChatMessage, ContextBudget};
+    use crate::chunker::WordTokenizer;
+    use crate::net::{EgressFeature, GuardedClient};
+    use std::sync::atomic::AtomicBool;
+
+    let chat_url =
+        std::env::var("NEXUS_CHAT_URL").unwrap_or_else(|_| "http://192.168.0.31:8080".into());
+    let model = std::env::var("NEXUS_CHAT_MODEL").unwrap_or_else(|_| "qwen36-mtp.gguf".into());
+
+    // t=0 (детерминизм smoke), реальный tool-capable провайдер за GuardedClient (egress-граница).
+    let provider = OpenAiToolProvider::new(
+        &GuardedClient::unchecked(),
+        EgressFeature::Chat,
+        &chat_url,
+        &model,
+        Some(0.0),
+    );
+
+    let mut reg = ToolRegistry::new();
+    reg.insert(Arc::new(EchoTool));
+    let tk = WordTokenizer;
+    let budget = ContextBudget {
+        context_window: 32_768,
+        reserve_output: 1024,
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    // Явно просим вызвать echo — это вход модели в tool-цикл.
+    let messages = vec![
+        ChatMessage::system(
+            "Ты — ассистент с инструментами. Когда нужно вернуть точную строку, ОБЯЗАТЕЛЬНО вызови \
+             инструмент debug.echo с этой строкой; не печатай её сам. После результата инструмента дай \
+             короткий финальный ответ.",
+        ),
+        ChatMessage::user(
+            "Используя инструмент debug.echo, верни ровно строку «nexus-agent-1-live». Затем подтверди.",
+        ),
+    ];
+
+    let mut tool_calls = 0usize;
+    let mut tool_results = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    let outcome = run_agent_loop(
+        &provider,
+        &reg,
+        messages,
+        LoopBounds::default(),
+        &budget,
+        &tk,
+        &cancel,
+        &mut |e| match e {
+            AgentEvent::ToolCall { kind, args, .. } => {
+                tool_calls += 1;
+                eprintln!("  ToolCall: {kind} args={args}");
+            }
+            AgentEvent::ToolResult {
+                content, is_error, ..
+            } => {
+                tool_results += 1;
+                eprintln!("  ToolResult(is_error={is_error}): {content}");
+            }
+            AgentEvent::Error(m) => errors.push(m),
+            _ => {}
+        },
+    )
+    .await;
+
+    eprintln!(
+        "\n=== AGENT-1 live tool-call smoke (модель={model} @ {chat_url}) ===\n\
+         outcome={outcome:?}\n  tool_calls={tool_calls} tool_results={tool_results} errors={errors:?}"
+    );
+
+    // Строгая форма сообщений принята сервером (иначе не дошли бы до Final) + цикл реально вызвал echo.
+    assert!(
+        tool_calls >= 1,
+        "модель не вызвала ни одного инструмента — tool-протокол не сработал на живой модели"
+    );
+    assert!(
+        matches!(outcome, LoopOutcome::Final(_)),
+        "ожидали Final после feed-back в строгой форме (assistant{{tool_calls}}+tool); got {outcome:?} \
+         — если это Error, сервер :8080 мог отвергнуть строгую форму сообщений (значит Part A неверна)"
+    );
+}

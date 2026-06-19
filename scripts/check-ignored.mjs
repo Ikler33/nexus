@@ -33,7 +33,11 @@ import { dirname, resolve } from 'node:path';
 // модели Qwen3.6-27B на golden-строках; нужен живой сервер :8080; офлайн-гейт качества —
 // `ai::tokenizer::tests::embedded_matches_deployed_model_counts` (в CI на встроенном ассете, без сети);
 // запуск `NEXUS_CHAT_URL=… cargo test live_tokenizer_matches_server -- --ignored`).
-const EXPECTED = 23;
+// 23→24: + `live_tool_call_smoke` (AGENT-1 адверсариал-ревью C: ПОЛНЫЙ run_agent_loop против живой
+// tool-capable модели :8080 — модель эмитит tool_call → цикл исполняет EchoTool → feed-back в СТРОГОЙ
+// OpenAI-форме (assistant{tool_calls}+tool{tool_call_id}, Part A) → Final; валидирует реальную форму
+// протокола end-to-end; нужен живой LLM; запуск `NEXUS_CHAT_URL=… cargo test live_tool_call_smoke -- --ignored`).
+const EXPECTED = 24;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src

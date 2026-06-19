@@ -216,10 +216,13 @@ impl ContextBudget {
 
     /// Пер-сообщенческий оверхед обёртки ChatML (`<|im_start|>role\n … <|im_end|>\n`). Реально ~6–8
     /// токенов; берём 8 консервативно — бюджет должен скорее переоценить, чем переполнить окно.
-    const PER_MESSAGE_OVERHEAD: usize = 8;
+    /// `pub(crate)`: ЕДИНЫЙ источник константы — цикл агента (`agent::runner::count_used`) считает
+    /// `used` по той же формуле, не дублируя число (иначе оценки бюджета разъехались бы).
+    pub(crate) const PER_MESSAGE_OVERHEAD: usize = 8;
 
-    /// Стоимость одного сообщения: токены контента + пер-сообщенческий оверхед ChatML.
-    fn message_cost(tk: &dyn Tokenizer, m: &ChatMessage) -> usize {
+    /// Стоимость одного сообщения: токены контента + пер-сообщенческий оверхед ChatML. `pub(crate)`,
+    /// чтобы цикл агента считал `used` ровно той же формулой, что `fit` (одно место для cost-математики).
+    pub(crate) fn message_cost(tk: &dyn Tokenizer, m: &ChatMessage) -> usize {
         tk.count(&m.content) + Self::PER_MESSAGE_OVERHEAD
     }
 
@@ -464,10 +467,7 @@ mod tests {
             reserve_output: 20,
         }; // input_budget = 40
         let big_system = "очень длинная системная инструкция ".repeat(20); // заведомо > 40 токенов
-        let messages = vec![
-            ChatMessage::system(big_system),
-            ChatMessage::user("вопрос"),
-        ];
+        let messages = vec![ChatMessage::system(big_system), ChatMessage::user("вопрос")];
         let fitted = budget.fit(&tk, &messages);
         assert!(fitted.iter().any(|m| m.role == "system"), "system сохранён");
         let total: usize = fitted
