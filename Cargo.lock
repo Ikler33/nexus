@@ -2596,6 +2596,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
+name = "nexus-agentd"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "nexus-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nexus-core"
 version = "0.0.0"
 dependencies = [
@@ -4896,6 +4907,7 @@ dependencies = [
  "libc",
  "mio 1.2.1",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
