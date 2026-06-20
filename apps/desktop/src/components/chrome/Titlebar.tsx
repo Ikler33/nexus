@@ -5,6 +5,7 @@ import {
   HardDrive,
   Moon,
   Newspaper,
+  Palette,
   PanelRight,
   Scale,
   Search,
@@ -19,7 +20,12 @@ import { useUIStore } from '../../stores/ui';
 import { BrandMark } from './BrandMark';
 import styles from './Titlebar.module.css';
 
-/** Иконка темы (DP-4, цикл макета): sun → moon → sparkles → drive. */
+/**
+ * Иконка кнопки-цикла темы. Базовые 4 темы — характерные иконки (sun → moon →
+ * sparkles → drive); прочие 9 (paper/mocha/nord/… — QASR-0) дают общий
+ * Palette-знак (визуальный язык кнопки доработает QASR-shell). Fallback нужен,
+ * чтобы цикл по 13 темам никогда не оставлял кнопку пустой.
+ */
 function themeIcon(theme: Theme) {
   switch (theme) {
     case 'light':
@@ -30,6 +36,8 @@ function themeIcon(theme: Theme) {
       return <Sparkles size={16} aria-hidden />;
     case 'platinum':
       return <HardDrive size={16} aria-hidden />;
+    default:
+      return <Palette size={16} aria-hidden />;
   }
 }
 

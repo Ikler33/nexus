@@ -37,6 +37,12 @@ importers:
       '@fontsource-variable/source-serif-4':
         specifier: ^5.2.9
         version: 5.2.9
+      '@fontsource/cinzel':
+        specifier: 5.2.8
+        version: 5.2.8
+      '@fontsource/cormorant':
+        specifier: 5.2.8
+        version: 5.2.8
       '@fontsource/jetbrains-mono':
         specifier: ^5.2.8
         version: 5.2.8
@@ -534,6 +540,12 @@ packages:
 
   '@fontsource-variable/source-serif-4@5.2.9':
     resolution: {integrity: sha512-PPcxjLFk/fS0WHg79pDM2YNvz61kC+oYZ5cWZZyCS0DHpJncmuYOuiZAsvj4tDxlWPBEvxxcRLQQNmSaRbPkqw==}
+
+  '@fontsource/cinzel@5.2.8':
+    resolution: {integrity: sha512-B9WeF/jPlOJOrcXfX96cy4KfM+s1QcU2C9W2hE3azBOBzPvzFkNpBovT5JmhAeicE/s4HZWKF9LF5hmEcqlbsw==}
+
+  '@fontsource/cormorant@5.2.8':
+    resolution: {integrity: sha512-VNiQ1dy/Km7UynaX0K+gtLLLtH+46SEfcoYcEjQhcs7/pEYTF3GThNNciWruv3AnVvTTSDPbCK/0BLBhdgYGUg==}
 
   '@fontsource/jetbrains-mono@5.2.8':
     resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
@@ -3156,6 +3168,10 @@ snapshots:
   '@fontsource-variable/onest@5.2.11': {}
 
   '@fontsource-variable/source-serif-4@5.2.9': {}
+
+  '@fontsource/cinzel@5.2.8': {}
+
+  '@fontsource/cormorant@5.2.8': {}
 
   '@fontsource/jetbrains-mono@5.2.8': {}
 

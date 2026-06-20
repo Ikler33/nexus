@@ -1,18 +1,45 @@
 import { create } from 'zustand';
 
 /**
- * Оформление (дизайн-система Hermes): тема (light «old paper» / dark «warm clay» + премиум
- * Midnight Ink / Platinum Slate, handoff 2026-06-10), акцент (data-accent) и плотность (--row-h).
- * Применяется к `<html>` (токены в styles.css per-theme/accent), стартовые значения — из
- * localStorage (без вспышки, side-effect на импорте), смена — с 320ms кросс-фейдом и персистом.
+ * Оформление (дизайн-система Qasr): тема (data-theme — 15 тем) , акцент (data-accent)
+ * и плотность (--row-h). Применяется к `<html>` (токены в styles.css per-theme/accent),
+ * стартовые значения — из localStorage (без вспышки, side-effect на импорте), смена —
+ * с 320ms кросс-фейдом и персистом. Точные строки = data-theme-значения в styles.css.
  */
-export type Theme = 'light' | 'dark' | 'midnight' | 'platinum';
+export type Theme =
+  | 'light'
+  | 'dark'
+  | 'midnight'
+  | 'platinum'
+  | 'paper'
+  | 'mocha'
+  | 'nord'
+  | 'tokyo'
+  | 'rose'
+  | 'sepia'
+  | 'contrast'
+  | 'bronze'
+  | 'marble';
 export type Accent = 'amber' | 'teal' | 'sage' | 'clay';
 export type Density = 'comfortable' | 'compact' | 'auto';
 export type Chrome = 'standard' | 'minimal';
 export type EditorFont = 'sans' | 'serif' | 'mono';
 
-export const THEMES: readonly Theme[] = ['light', 'dark', 'midnight', 'platinum'];
+export const THEMES: readonly Theme[] = [
+  'light',
+  'dark',
+  'midnight',
+  'platinum',
+  'paper',
+  'mocha',
+  'nord',
+  'tokyo',
+  'rose',
+  'sepia',
+  'contrast',
+  'bronze',
+  'marble',
+];
 export const ACCENTS: readonly Accent[] = ['amber', 'teal', 'sage', 'clay'];
 
 const THEME_KEY = 'nexus-theme';

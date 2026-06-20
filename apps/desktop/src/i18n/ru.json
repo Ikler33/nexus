@@ -72,7 +72,16 @@
       "light": "Светлая",
       "dark": "Тёмная",
       "midnight": "Midnight",
-      "platinum": "Platinum"
+      "platinum": "Platinum",
+      "paper": "Манускрипт",
+      "mocha": "Mocha",
+      "nord": "Nord",
+      "tokyo": "Tokyo Night",
+      "rose": "Rosé Pine",
+      "sepia": "Сепия",
+      "contrast": "Контраст",
+      "bronze": "Бронза",
+      "marble": "Мрамор"
     },
     "aiLayout": "AI-панель",
     "aiLayoutOpts": {
