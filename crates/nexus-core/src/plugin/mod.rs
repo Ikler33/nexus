@@ -4,10 +4,12 @@
 //! в [`mod@permission`] (security-ядро брокера). Рантайм-брокер (порты/токены/audit/iframe) — Ф2-2.
 
 mod broker;
+mod manage;
 mod permission;
 pub use broker::{
     AuditEntry, AuditLog, BrokerError, CapToken, HostDispatch, PluginBroker, PluginSession,
 };
+pub use manage::{clear_settings, disabled_dirs, is_enabled, set_enabled};
 pub use permission::{blocks_cloud_metadata, is_private_host, ApiRequest, Denied, Permissions};
 
 use std::fmt;
@@ -200,6 +202,9 @@ pub struct PluginInfo {
     /// Чипы прав манифеста (DP-8): UI показывает уровни и строит consent-sheet.
     #[serde(default)]
     pub permissions: Vec<PermissionChip>,
+    /// Включён ли плагин (персист `plugins.<dir>.enabled`, дефолт ВКЛ). `scan_plugins` ставит `true`;
+    /// команда `list_plugins` гасит выключенные по [`disabled_dirs`]. Выключенный не открывает сессию.
+    pub enabled: bool,
 }
 
 /// Сканирует `plugins_dir` (`.nexus/plugins/*/manifest.json`) и возвращает статус каждого.
@@ -228,6 +233,7 @@ pub fn scan_plugins(plugins_dir: &Path) -> Vec<PluginInfo> {
                 compatible: false,
                 error: Some(format!("нет manifest.json: {e}")),
                 permissions: Vec::new(),
+                enabled: true,
             },
             Ok(json) => match parse_manifest(&json) {
                 Err(e) => PluginInfo {
@@ -238,6 +244,7 @@ pub fn scan_plugins(plugins_dir: &Path) -> Vec<PluginInfo> {
                     compatible: false,
                     error: Some(e.to_string()),
                     permissions: Vec::new(),
+                    enabled: true,
                 },
                 Ok(m) => {
                     let compat = check_compatibility(&m, CORE_API_VERSION);
@@ -249,6 +256,7 @@ pub fn scan_plugins(plugins_dir: &Path) -> Vec<PluginInfo> {
                         compatible: compat.is_ok(),
                         error: compat.err().map(|e| e.to_string()),
                         permissions: permission_chips(&m.permissions),
+                        enabled: true,
                     }
                 }
             },

@@ -14,14 +14,95 @@ use crate::state::AppState;
 use crate::vault;
 use crate::vector::VectorIndex;
 
-/// Список установленных плагинов vault (`.nexus/plugins/*`) с их статусом совместимости.
+/// Имя каталога плагина из IPC обязано быть РОВНО ОДНИМ нормальным компонентом пути (anti-traversal:
+/// `dir` приходит с фронта и используется в `join` + `move_to_trash`, который НЕ проверяет containment).
+/// Отвергаем пустое / разделители / `..` / `.` (последнее критично: `dir="."` → `move_to_trash`
+/// утащил бы в корзину ВЕСЬ каталог `plugins/`, т.к. его `file_name()` пропускает хвостовой `.`).
+fn valid_plugin_dir(dir: &str) -> bool {
+    if dir.contains('/') || dir.contains('\\') {
+        return false;
+    }
+    let mut comps = std::path::Path::new(dir).components();
+    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
+}
+
+/// Резолвит каталог плагина и подтверждает, что он РЕАЛЬНО внутри `.nexus/plugins` (canonicalize →
+/// containment). `valid_plugin_dir` проверяет лишь строку — этого мало против подменённой симссылки
+/// (`plugins/<dir>` → наружу): canonicalize раскрывает её, а проверка `starts_with` отвергает выход
+/// за пределы (defense-in-depth, ревью). Каталог обязан существовать (установленный плагин).
+fn resolve_plugin_dir(root: &Path, dir: &str) -> AppResult<std::path::PathBuf> {
+    let plugins_root = root.join(".nexus").join("plugins");
+    let plugins_canon = plugins_root
+        .canonicalize()
+        .map_err(|e| AppError::Msg(format!("каталог плагинов недоступен: {e}")))?;
+    let canon = plugins_root
+        .join(dir)
+        .canonicalize()
+        .map_err(|e| AppError::Msg(format!("плагин не найден: {e}")))?;
+    if !canon.starts_with(&plugins_canon) {
+        return Err(AppError::Msg("каталог плагина вне .nexus/plugins".into()));
+    }
+    Ok(canon)
+}
+
+/// Список установленных плагинов vault (`.nexus/plugins/*`) с их статусом совместимости и
+/// флагом `enabled` (персист `plugins.<dir>.enabled`, дефолт ВКЛ).
 #[tauri::command]
 pub async fn list_plugins(state: State<'_, AppState>) -> AppResult<Vec<PluginInfo>> {
-    let root = state.vault().await?.root.clone();
+    let (root, reader) = {
+        let ctx = state.vault().await?;
+        (ctx.root.clone(), ctx.db.reader().clone())
+    };
     let dir = root.join(".nexus").join("plugins");
-    tokio::task::spawn_blocking(move || plugin::scan_plugins(&dir))
+    let mut infos = tokio::task::spawn_blocking(move || plugin::scan_plugins(&dir))
         .await
-        .map_err(|e| AppError::Msg(e.to_string()))
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    let disabled = plugin::disabled_dirs(&reader).await?;
+    for info in &mut infos {
+        if disabled.contains(&info.dir) {
+            info.enabled = false;
+        }
+    }
+    Ok(infos)
+}
+
+/// Включает/выключает плагин (персист `plugins.<dir>.enabled`). Выключенный не открывает новую сессию
+/// (`plugin_open_session` отказывает); уже открытые сессии не трогаем (фронт закрывает при размонтаже).
+#[tauri::command]
+pub async fn set_plugin_enabled(
+    state: State<'_, AppState>,
+    dir: String,
+    on: bool,
+) -> AppResult<()> {
+    if !valid_plugin_dir(&dir) {
+        return Err(AppError::Msg("некорректный каталог плагина".into()));
+    }
+    let writer = state.vault().await?.db.writer().clone();
+    plugin::set_enabled(&writer, &dir, on).await?;
+    Ok(())
+}
+
+/// Удаляет плагин: каталог `.nexus/plugins/<dir>` → в корзину (`.nexus/.trash`, ОБРАТИМО — не hard rm,
+/// владелец: удаление через корзину) + очистка его настроек (переустановка стартует «чистой»).
+#[tauri::command]
+pub async fn remove_plugin(state: State<'_, AppState>, dir: String) -> AppResult<()> {
+    if !valid_plugin_dir(&dir) {
+        return Err(AppError::Msg("некорректный каталог плагина".into()));
+    }
+    let (root, writer) = {
+        let ctx = state.vault().await?;
+        (ctx.root.clone(), ctx.db.writer().clone())
+    };
+    // Канонизируем + подтверждаем containment (анти-симссылка) ПЕРЕД move_to_trash (он containment не
+    // проверяет). Канон-путь (реальный каталог) и отправляем в корзину.
+    let plugin_dir = resolve_plugin_dir(&root, &dir)?;
+    let root2 = root.clone();
+    tokio::task::spawn_blocking(move || vault::move_to_trash(&root2, &plugin_dir))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))?
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    plugin::clear_settings(&writer, &dir).await?;
+    Ok(())
 }
 
 /// Открывает сессию плагина (`.nexus/plugins/<dir>`): читает манифест, проверяет совместимость,
@@ -29,12 +110,21 @@ pub async fn list_plugins(state: State<'_, AppState>) -> AppResult<Vec<PluginInf
 /// передаёт токен с каждым `plugin_invoke`. Несовместимый/битый манифест → ошибка (не загружаем).
 #[tauri::command]
 pub async fn plugin_open_session(state: State<'_, AppState>, dir: String) -> AppResult<String> {
-    let root = state.vault().await?.root.clone();
-    let manifest_path = root
-        .join(".nexus")
-        .join("plugins")
-        .join(&dir)
-        .join("manifest.json");
+    if !valid_plugin_dir(&dir) {
+        return Err(AppError::Msg("некорректный каталог плагина".into()));
+    }
+    let (root, reader) = {
+        let ctx = state.vault().await?;
+        (ctx.root.clone(), ctx.db.reader().clone())
+    };
+    // Выключенный плагин не запускаем (enable/disable, дефолт ВКЛ).
+    if !plugin::is_enabled(&reader, &dir).await? {
+        return Err(AppError::Msg(format!("плагин выключен: {dir}")));
+    }
+    // Канонизируем + containment (анти-симссылка: иначе `plugins/<dir>` мог бы указывать наружу, и
+    // чтение manifest.json раскрыло бы произвольный JSON-файл — ревью).
+    let plugin_dir = resolve_plugin_dir(&root, &dir)?;
+    let manifest_path = plugin_dir.join("manifest.json");
     let json = tokio::fs::read_to_string(&manifest_path)
         .await
         .map_err(|e| AppError::Msg(format!("manifest: {e}")))?;
@@ -299,6 +389,54 @@ mod tests {
     use crate::plugin::{Permissions, PluginBroker};
     use std::net::IpAddr;
     use tempfile::TempDir;
+
+    /// Anti-traversal валидатора каталога плагина: принимаем только одиночный нормальный компонент.
+    /// КРИТИЧНО отвергаем `.` (иначе remove утащил бы весь `plugins/`), `..`, разделители, абсолютные.
+    #[test]
+    fn valid_plugin_dir_rejects_traversal() {
+        assert!(valid_plugin_dir("hello"));
+        assert!(valid_plugin_dir("my-plugin_2"));
+        for bad in [
+            "",
+            ".",
+            "..",
+            "/",
+            "/etc",
+            "a/b",
+            "../x",
+            "a/..",
+            "./x",
+            ".nexus/..",
+            "a/.",
+        ] {
+            assert!(!valid_plugin_dir(bad), "{bad:?} должен отвергаться");
+        }
+    }
+
+    /// resolve_plugin_dir: легитимный каталог резолвится внутрь plugins/; симссылка НАРУЖУ отвергается
+    /// (containment, анти-симссылка); несуществующий — ошибка.
+    #[test]
+    fn resolve_plugin_dir_confines_and_rejects_symlink_escape() {
+        let v = TempDir::new().unwrap();
+        let root = v.path().to_path_buf();
+        let plugins = root.join(".nexus").join("plugins");
+        std::fs::create_dir_all(plugins.join("good")).unwrap();
+        let ok = resolve_plugin_dir(&root, "good").unwrap();
+        assert!(ok.ends_with("good"));
+        assert!(resolve_plugin_dir(&root, "nope").is_err());
+
+        #[cfg(unix)]
+        {
+            let outside = TempDir::new().unwrap();
+            std::fs::create_dir_all(outside.path().join("secret")).unwrap();
+            std::os::unix::fs::symlink(outside.path().join("secret"), plugins.join("evil"))
+                .unwrap();
+            assert!(
+                resolve_plugin_dir(&root, "evil").is_err(),
+                "симссылка наружу должна отвергаться"
+            );
+        }
+    }
 
     /// SSRF-гард plugin-egress: приватные/metadata IP в резолве (вкл. IPv4-mapped) отклоняются;
     /// пустой резолв — отказ; публичные — проходят (находка аудита 2026-06).

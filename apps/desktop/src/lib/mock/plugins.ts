@@ -43,6 +43,10 @@ interface MockSession {
 const sessions = new Map<string, MockSession>();
 let seq = 0;
 
+/** Состояние управления (зеркало backend `plugins.<dir>.enabled` + remove-в-корзину). */
+const disabled = new Set<string>();
+const removed = new Set<string>();
+
 // ─── glob (сегментный, зеркало Rust `glob_match`: `**`=0..N сегментов, `*`=в пределах сегмента) ───
 
 function escapeRe(s: string): string {
@@ -86,13 +90,16 @@ function inScope(scope: string[], path: string): boolean {
 // ─── Контракт `tauriApi.plugins` (мок) ───────────────────────────────────────────────────────────
 
 export async function list(): Promise<PluginInfo[]> {
-  return Object.entries(MANIFESTS).map(([dir, m]) => ({
+  return Object.entries(MANIFESTS)
+    .filter(([dir]) => !removed.has(dir))
+    .map(([dir, m]) => ({
     dir,
     id: m.id,
     name: m.name,
     version: m.version,
     compatible: true,
     error: null,
+    enabled: !disabled.has(dir),
     // Чипы прав как у Rust `permission_chips` (DP-8): уровни safe/caution/sensitive.
     permissions: [
       { kind: 'vault:read', detail: m.read.join(', '), level: 'safe' as const },
@@ -106,9 +113,28 @@ export async function list(): Promise<PluginInfo[]> {
   }));
 }
 
+/** Тест-хелпер: сброс модульного состояния (изоляция тестов — без него remove/disable «протекали» бы). */
+export function __resetForTests(): void {
+  disabled.clear();
+  removed.clear();
+  sessions.clear();
+}
+
+export async function setEnabled(dir: string, on: boolean): Promise<void> {
+  if (on) disabled.delete(dir);
+  else disabled.add(dir);
+}
+
+export async function remove(dir: string): Promise<void> {
+  removed.add(dir);
+  disabled.delete(dir);
+}
+
 export async function openSession(dir: string): Promise<string> {
   const m = MANIFESTS[dir];
-  if (!m) throw new Error(`плагин '${dir}' не найден`);
+  if (!m || removed.has(dir)) throw new Error(`плагин '${dir}' не найден`);
+  // Зеркалит backend-гард: выключенный плагин не открывает сессию.
+  if (disabled.has(dir)) throw new Error(`плагин выключен: ${dir}`);
   const token = `mock-tok-${++seq}`;
   sessions.set(token, { read: m.read, write: m.write, ui: m.ui, ai: m.ai, net: m.net });
   return token;
