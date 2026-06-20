@@ -850,7 +850,16 @@
     "hintAccept": "Tab — accept",
     "hintReject": "Esc — dismiss",
     "errNoText": "Place the cursor after some text — nothing to continue",
-    "errNoSelection": "Select text for this action"
+    "errNoSelection": "Select text for this action",
+    "ai": {
+      "placeholder": "Ask AI or describe what to insert…",
+      "thinking": "Thinking…",
+      "insert": "Insert",
+      "retry": "Retry",
+      "cancel": "Cancel",
+      "empty": "Empty answer — try rephrasing",
+      "label": "AI insert"
+    }
   },
   "status": {
     "jobsTitle": "Background tasks: {{running}} running · {{pending}} queued · {{dead}} failed",
@@ -1195,7 +1204,8 @@
     "link": "Link",
     "callout": "Callout",
     "hr": "Divider",
-    "template": "From template…"
+    "template": "From template…",
+    "ai": "Ask AI…"
   },
   "tasks": {
     "title": "Tasks",

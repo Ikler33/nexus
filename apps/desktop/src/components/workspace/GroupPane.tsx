@@ -18,6 +18,7 @@ import { getActiveEditorView } from '../../lib/editor/activeView';
 import { relTime } from '../../lib/time';
 import { formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
+import { useInlineAIStore } from '../../stores/inlineAI';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -25,6 +26,7 @@ import { flush } from '../../stores/autosave';
 import { Editor } from '../editor/Editor';
 import { FileViewer } from '../editor/FileViewer';
 import { isViewable } from '../../lib/file-kind';
+import { InlineAIBar } from '../editor/InlineAIBar';
 import { InspectorRail } from '../editor/InspectorRail';
 import { MentionsBar } from '../editor/MentionsBar';
 import { TagSuggest } from '../editor/TagSuggest';
@@ -86,6 +88,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const reading = useUIStore((s) => s.reading);
   const openVersions = useUIStore((s) => s.openVersions);
   const openTagFilter = useUIStore((s) => s.openTagFilter); // TAGCLICK-1: клик по #tag в превью → фильтр сайдбара
+  // InlineAI prompt-box (⌘/): открыт ли он в ЭТОЙ группе (стор держит одну активную группу).
+  const aiOpenHere = useInlineAIStore((s) => s.openGroupId === groupId);
   const [dropTarget, setDropTarget] = useState(false);
   // EDIT-7: ссылка на скролл-контейнер пейна — в режиме чтения/превью оглавление скроллит к заголовку
   // по `data-outline-line` (CM6 в source-режиме скроллит сам). Реф своего пейна → корректно при сплитах.
@@ -114,9 +118,42 @@ export function GroupPane({ groupId }: { groupId: string }) {
     };
   }, [activePath, mode]);
 
+  // Закрываем InlineAI prompt-box при смене активной вкладки ИЛИ режима (source↔preview) группы (макет:
+  // aiOpen=false на смене вкладки; в превью нет живого CM6 — бар не нужен). getState — чтобы закрыть
+  // ТОЛЬКО бар этой группы (close() глобален).
+  useEffect(() => {
+    const s = useInlineAIStore.getState();
+    if (s.openGroupId === groupId) s.close();
+  }, [activePath, groupId, mode]);
+
   if (!group) return null;
   const active = group.activeTab ? buffers[group.activeTab] : null;
   const mdActive = active != null && !isViewable(active.path) && isMarkdown(active.path);
+
+  // InlineAI (⌘/): вставка сгенерированного текста БЛОКОМ в позицию курсора ТОГО редактора, из которого
+  // открыли бар (view захвачен в сторе на триггере — при сплитах не промахнёмся в чужой пейн, ревью-MAJOR).
+  // dispatch → updateListener → updateBufferDoc (без двойной записи). Нет живого view (закрыт/превью) →
+  // дописываем БЛОКОМ в конец буфера — это и есть поведение дизайна editor.jsx (вставка-в-курсор — наша
+  // адаптация под живой CM6). Закрываем prompt-box после вставки.
+  const insertAI = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed && active) {
+      const target = useInlineAIStore.getState().view;
+      const live = target && target.dom?.isConnected ? target : null;
+      if (live) {
+        const pos = live.state.selection.main.head;
+        const before = live.state.sliceDoc(Math.max(0, pos - 2), pos);
+        const lead = pos === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+        const insert = `${lead}${trimmed}\n`;
+        live.dispatch({ changes: { from: pos, insert }, selection: { anchor: pos + insert.length } });
+        live.focus();
+      } else {
+        const sep = active.doc && !active.doc.endsWith('\n') ? '\n' : '';
+        updateBufferDoc(active.path, `${active.doc}${sep}\n${trimmed}\n`);
+      }
+    }
+    useInlineAIStore.getState().close();
+  };
 
   // EDIT-7: переход к заголовку из оглавления. Превью/чтение — скролл к элементу `data-outline-line`
   // в СВОЁМ скролл-контейнере (надёжно при сплитах). Source — через активный CM6-редактор: курсор на
@@ -289,6 +326,15 @@ export function GroupPane({ groupId }: { groupId: string }) {
           {/* Editor-row (макет editor.jsx): контент слева + Inspector-rail справа. */}
           <div className={styles.editorRow}>
           <div className={styles.editorCol}>
+          {/* InlineAI prompt-box (⌘/ или /ai, макет editor.jsx): плавающая карточка над колонкой.
+              Заземление — текущая заметка (active.doc). Только source-режим (есть живой CM6 для вставки). */}
+          {mdActive && mode === 'source' && !reading && aiOpenHere && (
+            <InlineAIBar
+              note={active.doc}
+              onInsert={insertAI}
+              onClose={() => useInlineAIStore.getState().close()}
+            />
+          )}
           <div className={styles.scroll} ref={scrollRef}>
             {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ. */}
             {mdActive && !reading && (
@@ -357,6 +403,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
               <Editor
                 key={groupId}
                 path={active.path}
+                groupId={groupId}
                 initialDoc={active.doc}
                 onChange={(doc) => updateBufferDoc(active.path, doc)}
                 onSave={(doc) => {

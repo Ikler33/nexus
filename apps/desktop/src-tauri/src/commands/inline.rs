@@ -6,7 +6,9 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::ai::{build_inline_messages, injection_marker, InlineMode};
+use crate::ai::{
+    build_inline_messages, build_inline_prompt_messages, injection_marker, InlineMode,
+};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -41,11 +43,12 @@ pub enum InlineStreamEvent {
     Error { message: String },
 }
 
-/// Inline-генерация со стримингом в редактор (AC-IL-1). `mode` — `continue`/`rewrite`/`summarize`;
-/// `context` — текст заметки до курсора (для `continue`); `selection` — выделенный фрагмент (для
-/// `rewrite`/`summarize`, D4). Результат стримится в `channel`; отмена — `inline_cancel` (AC-IL-6/8).
-/// Ошибки настройки (нет vault/chat, пустой ввод, неизвестный режим) → `Err` (фронт покажет тихую
-/// inline-нотификацию у курсора, AC-IL-7); ошибки стрима → событие `Error`.
+/// Inline-генерация со стримингом в редактор (AC-IL-1). `mode` — `continue`/`rewrite`/`summarize`/
+/// `prompt`; `context` — текст заметки до курсора (`continue`) / вся заметка как контекст (`prompt`);
+/// `selection` — выделенный фрагмент (`rewrite`/`summarize`, D4); `prompt` — свободный запрос
+/// пользователя (⌘/ prompt-box, дизайн Qasr). Результат стримится в `channel`; отмена — `inline_cancel`
+/// (AC-IL-6/8). Ошибки настройки (нет vault/chat, пустой ввод, неизвестный режим) → `Err` (фронт покажет
+/// тихую inline-нотификацию, AC-IL-7); ошибки стрима → событие `Error`.
 #[tauri::command]
 pub async fn inline_complete(
     state: State<'_, AppState>,
@@ -53,24 +56,40 @@ pub async fn inline_complete(
     mode: String,
     context: String,
     selection: Option<String>,
+    prompt: Option<String>,
 ) -> AppResult<()> {
     let mode = InlineMode::parse(&mode)
         .ok_or_else(|| AppError::Msg(format!("неизвестный режим inline: {mode}")))?;
 
-    // Текст для обработки по режиму (D2): выделение для Rewrite/Summarize, текст до курсора для Continue.
-    // Капим под небольшой контекст утилитарной модели (4k): для continue важен хвост (у курсора),
-    // для выделения — начало.
-    let payload = if mode.needs_selection() {
-        let sel = selection.unwrap_or_default();
-        if sel.trim().is_empty() {
-            return Err("нет выделения для этого действия".into());
+    // Сообщения LLM по режиму (D2 — контекст = текущая заметка, без RAG). Капим под небольшой контекст
+    // утилитарной модели (4k): для continue/prompt важен хвост (у курсора), для выделения — начало.
+    let messages = match mode {
+        InlineMode::Prompt => {
+            // Свободный запрос пользователя (⌘/). Запрос обязателен; заметка-контекст опциональна.
+            let query = prompt.unwrap_or_default();
+            if query.trim().is_empty() {
+                return Err("пустой запрос для AI".into());
+            }
+            // Сам запрос капим, СОХРАНЯЯ начало (инструкцию), заметку-контекст — хвост (у курсора).
+            let query = cap_chars(query.trim().to_string(), true);
+            let note = cap_chars(context, false);
+            build_inline_prompt_messages(&query, &note, &injection_marker())
         }
-        cap_chars(sel, true)
-    } else {
-        if context.trim().is_empty() {
-            return Err("нет текста для продолжения".into());
+        _ => {
+            let payload = if mode.needs_selection() {
+                let sel = selection.unwrap_or_default();
+                if sel.trim().is_empty() {
+                    return Err("нет выделения для этого действия".into());
+                }
+                cap_chars(sel, true)
+            } else {
+                if context.trim().is_empty() {
+                    return Err("нет текста для продолжения".into());
+                }
+                cap_chars(context, false)
+            };
+            build_inline_messages(mode, &payload, &injection_marker())
         }
-        cap_chars(context, false)
     };
 
     // Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B :8084) — для inline низкая латентность.
@@ -82,8 +101,6 @@ pub async fn inline_complete(
     let Some(chat) = chat else {
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
     };
-
-    let messages = build_inline_messages(mode, &payload, &injection_marker());
 
     // Стрим в канал с отменой: begin_inline отменяет прошлый inline-стрим (один активный, AC-IL-8).
     // Помечаем интерактивную LLM-операцию (S5) — планировщик уступит фоновые LLM-джобы, пока идёт inline.

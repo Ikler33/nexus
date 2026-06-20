@@ -3,7 +3,9 @@ import type { EditorView } from '@codemirror/view';
 import i18n from '../../i18n/setup';
 import { dateStamp } from '../../lib/daily';
 import { TASK_MARKER } from '../../lib/editor/format';
+import { useInlineAIStore } from '../../stores/inlineAI';
 import { useUIStore } from '../../stores/ui';
+import { useWorkspaceStore } from '../../stores/workspace';
 
 /**
  * Slash-команды (EDIT-6): ввод `/` в начале строки (или после пробела) открывает попап быстрых
@@ -69,6 +71,13 @@ const openTemplatesApply: SlashApply = (view, from, to) => {
   useUIStore.getState().openTemplates();
 };
 
+/** `/ai`: убрать триггер и открыть InlineAI prompt-box (⌘/, дизайн Qasr), целясь вставкой в ЭТОТ view. */
+const openAiApply: SlashApply = (view, from, to) => {
+  view.dispatch({ changes: { from, to, insert: '' }, selection: { anchor: from } });
+  view.focus();
+  useInlineAIStore.getState().open(useWorkspaceStore.getState().activeGroupId, view);
+};
+
 /** Декларативный реестр (порядок = порядок в попапе при пустом запросе). */
 export const SLASH_ITEMS: SlashItem[] = [
   { id: 'h1', labelKey: 'slash.h1', apply: blockPrefix('# ') },
@@ -94,6 +103,8 @@ export const SLASH_ITEMS: SlashItem[] = [
   { id: 'callout', labelKey: 'slash.callout', apply: blockPrefix('> [!note] ') },
   { id: 'hr', labelKey: 'slash.hr', apply: blockPrefix('---') },
   { id: 'template', labelKey: 'slash.template', apply: openTemplatesApply },
+  // InlineAI prompt-box (⌘/): свободный AI-запрос → вставка (дизайн Qasr editor.jsx).
+  { id: 'ai', labelKey: 'slash.ai', apply: openAiApply },
 ];
 
 /**
