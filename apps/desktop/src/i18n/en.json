@@ -396,7 +396,12 @@
     "backlinks": "Backlinks",
     "related": "Related",
     "summary": "Summary",
-    "aiSoon": "Needs AI — coming soon. Content arrives with the inline AI slice."
+    "loading": "Loading…",
+    "error": "Failed to load",
+    "relatedEmpty": "No related notes",
+    "summaryLead": "Summary",
+    "summaryEmpty": "No summary (needs an AI model in Settings → AI)",
+    "refresh": "Refresh"
   },
   "embed": {
     "loading": "Loading embed…",

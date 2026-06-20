@@ -37,29 +37,34 @@ describe('InspectorRail (editor-chrome)', () => {
     expect(await screen.findByText('Linker')).toBeInTheDocument(); // BacklinksBar отработал
   });
 
-  it('related/summary — структура + заглушка, БЕЗ LLM-вызова', () => {
-    const relatedSpy = vi.spyOn(tauriApi.suggest, 'related');
+  it('«Похожие» грузит suggest.related, «Резюме» — suggest.noteSummary', async () => {
+    const relatedSpy = vi.spyOn(tauriApi.suggest, 'related').mockResolvedValue([]);
+    const summarySpy = vi.spyOn(tauriApi.suggest, 'noteSummary').mockResolvedValue(null);
     render(<InspectorRail doc={DOC} path="A.md" onJump={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Похожие' }));
-    expect(screen.getByText(/Нужен AI/)).toBeInTheDocument();
+    expect(await screen.findByText('Нет похожих заметок')).toBeInTheDocument();
+    expect(relatedSpy).toHaveBeenCalledWith('A.md', expect.any(Number));
     fireEvent.click(screen.getByRole('button', { name: 'Резюме' }));
-    expect(screen.getByText(/Нужен AI/)).toBeInTheDocument();
-    expect(relatedSpy).not.toHaveBeenCalled(); // НИ одного LLM/suggest-вызова на этом срезе
+    expect(await screen.findByText(/Нет резюме/)).toBeInTheDocument();
+    expect(summarySpy).toHaveBeenCalledWith(DOC);
   });
 
   it('повторный клик по активному тогглу сворачивает панель', () => {
+    vi.spyOn(tauriApi.suggest, 'noteSummary').mockResolvedValue(null);
     render(<InspectorRail doc={DOC} path="A.md" onJump={vi.fn()} />);
     const toggle = screen.getByRole('button', { name: 'Резюме' });
     fireEvent.click(toggle);
-    expect(screen.getByText(/Нужен AI/)).toBeInTheDocument();
-    fireEvent.click(toggle); // повторно → закрыть
-    expect(screen.queryByText(/Нужен AI/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Свернуть панель' })).toBeInTheDocument();
+    fireEvent.click(toggle); // повторно → закрыть (компонент размонтируется до резолва промиса)
+    expect(screen.queryByRole('button', { name: 'Свернуть панель' })).toBeNull();
   });
 
   it('кнопка-крестик сворачивает открытую панель', () => {
+    vi.spyOn(tauriApi.suggest, 'related').mockResolvedValue([]);
     render(<InspectorRail doc={DOC} path="A.md" onJump={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Похожие' }));
+    expect(screen.getByRole('button', { name: 'Свернуть панель' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Свернуть панель' }));
-    expect(screen.queryByText(/Нужен AI/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Свернуть панель' })).toBeNull();
   });
 });

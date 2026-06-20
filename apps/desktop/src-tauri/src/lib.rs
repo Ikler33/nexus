@@ -190,6 +190,7 @@ pub fn run() {
             commands::episode::episode_set_enabled,
             commands::inline::inline_complete,
             commands::inline::inline_cancel,
+            commands::note_summary::get_note_summary,
             commands::news::get_news,
             commands::news::news_mark_read,
             commands::news::news_to_note,

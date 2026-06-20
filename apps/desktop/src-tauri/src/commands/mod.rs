@@ -19,6 +19,7 @@ pub mod home;
 pub mod inline;
 pub mod memory;
 pub mod news;
+pub mod note_summary;
 pub mod plugin;
 pub mod properties;
 pub mod scheduler;
