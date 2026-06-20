@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Доки · Агент-прод план приземлён в репо (агент = сервис + коннектор)
+
+По итогам мультиагентного анализа конкурентов (hermes-agent/odysseus) + аудита полноты + Stage-2 design-спек: план разработки агента-как-сервиса теперь в репо как источник истины. Новое: **`docs/AGENT-PROD-PLAN.md`** (3-слойная модель base/agent-service/connector · роадмап PROD-v1→DEPLOY-2→owner-gated Фазы 2/3 · per-срез DoD с тестами/доками/ревью + **live-тест-слой агента против рига 24/7** · 6 P0-дыр · порт-backlog · деплой-автоматизация first-class), **`docs/THREAT_MODEL.md`** (P0-гейт, реализовано-vs-план размечено), **`docs/specs/agent-connect.md`** (ACP-совместимый протокол коннектора, decision-complete). `docs/BACKLOG.md` — раздел «Агент-прод». Подтверждено live: риг `192.168.0.31:8080` (Qwen3.6-27B-MTP, llama.cpp) отдаёт OpenAI tool-calling → агент-цикл работает на текущем железе, V100 не нужен.
+
 ### Плагины · Менеджер: включить/выключить + удалить (в корзину)
 
 Бэкенд-управление плагинами по макету `plugins.jsx`. **Включить/выключить** — персист `plugins.<dir>.enabled` в `settings` (паттерн `episodic.enabled`, дефолт ВКЛ для обратной совместимости); `list_plugins` обогащает `PluginInfo.enabled`, выключенный плагин **не открывает сессию** (`plugin_open_session` отказывает). **Удалить** — каталог `.nexus/plugins/<dir>` → в корзину (`.nexus/.trash`, ОБРАТИМО, реюз `vault::move_to_trash`, не hard rm) + очистка настроек. Anti-traversal: имя каталога из IPC валидируется (один компонент, без `..`/разделителей). **Аудит** — уже был (broker `AuditLog` + permission-chips манифеста). Команды `set_plugin_enabled`/`remove_plugin`; фронт — тоггл-switch + trash в `PluginsPanel` (выключенная карточка приглушена, launch заблокирован), мок зеркалит контракт. **Marketplace отложен** — требует публичного egress (owner-gated). Тесты: `plugin::manage` (Rust), мок-контракт enable/disable/remove (фронт). Превью-верификация: toggle гасит/включает + launch-disable, remove убирает карточку.

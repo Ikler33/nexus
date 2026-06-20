@@ -42,6 +42,31 @@
 > накопительные (on-this-day · профиль на edit_events · AI-2c live-гейт) · autonomy-safe полировка по
 > спросу (VIEW-2 agenda · VIEW-1 a11y · TODAY-1 хвосты · мелочи). Новые срезы — через роадмап-анализ.
 
+## 🤖 Агент-прод (эпик «агент как сервис») — план в `docs/AGENT-PROD-PLAN.md`
+
+> Решение (2026-06-20): **агент = отдельный сервис `nexus-agentd`, в приложение встраиваем коннектор** (не sandboxed-плагин). Фазы 0/1 готовы (CHANGELOG). Полный план/роадмап/DoD — `docs/AGENT-PROD-PLAN.md`; спеки — `docs/specs/agent-connect.md`, `docs/THREAT_MODEL.md`. Подтверждено live: риг `192.168.0.31:8080` (Qwen3.6-27B) отдаёт tool-calling → V100 не нужен.
+
+### 6 P0-дыр до «готового продукта» (что забывали)
+| # | Дыра | Статус | Триггер |
+|---|---|---|---|
+| 1 | 🔴 Авто-апдейтер (Tauri-updater off, нет подписанных релизов) | план | трек десктоп-релиза |
+| 2 | 🔴 **AGENT-CONNECT** протокол (коннектор не специфицирован) | spec готов → **след. срез P0a** | блокирует агент-сервис |
+| 3 | 🟡 Подписанные релизы / packaging (версия хардкод `0.0.0`) | план | Release-срез |
+| 4 | 🟡 THREAT_MODEL.md | ✅ `docs/THREAT_MODEL.md` (этот срез) | P0-гейт перед Фазой 3 |
+| 5 | 🟡 Install / first-run + user-доки (INSTALL/GETTING-STARTED/CONFIG) | план | v0.1.0-blocking доки |
+| 6 | 🔴 Container / VPS-деплой (`nexus deploy`) | план | DEPLOY-2 |
+
+### Порт от конкурентов (дескоупнут под local-first)
+| Что | Приор | Откуда |
+|---|---|---|
+| skill learning-loop (curator+usage) · session-search FTS5 · субагенты/делегирование | P0 | hermes |
+| MCP-клиент · cron NL-jobs · backup/restore · observability (health/JSON-logs) | P1 | hermes/odysseus |
+| multi-channel-шлюзы · email · deep-research · voice STT/TTS · cookbook hw-model-manager | post-1.0 | hermes/odysseus |
+
+### Owner-gated security (после PROD-v1)
+- 🔒 **Фаза 2 — sandbox**: rootless Podman `--network=none` + GuardedProxy (AF_UNIX) + control-plane + MCP-lite. Пререквизиты: durable plugin-audit + agent_proposals.
+- 🔒 **Фаза 3 — host-actuator**: shell/process/git ActionTargets в песочнице. Гейт: THREAT_MODEL принят + env-scrub реализован + `shell_enable` config.
+
 ## 🐞 Известные баги (к фазе ручного тестирования)
 
 | Баг | Что известно / диагностика | Статус |
