@@ -1409,8 +1409,11 @@ mod tests {
         assert!(!msgs[1].content.contains("Контекст"));
     }
 
-    /// Залипший сервер (принял коннект, прочитал запрос, не отвечает) → `stream_chat` рвётся по
-    /// idle-таймауту с ошибкой, а НЕ висит вечно (регресс: дайджест-джоба зависала и блокировала воркер).
+    /// Залипший сервер (принял коннект, прочитал запрос, не отвечает — НЕТ даже первого байта) →
+    /// `stream_chat` рвётся по таймауту с ошибкой, а НЕ висит вечно (регресс: дайджест-джоба зависала
+    /// и блокировала воркер). INFER-CFG: ответа/первого байта нет → срабатывает `first_token_timeout`
+    /// (НЕ idle — тот действует ПОСЛЕ первого байта); ставим его коротким, чтобы тест был
+    /// детерминирован кросс-платформенно (раньше полагался на закрытие сокета сервером — флейк на Windows).
     #[tokio::test]
     async fn stream_chat_times_out_on_hung_server() {
         use std::io::Read;
@@ -1420,7 +1423,7 @@ mod tests {
             if let Ok((mut sock, _)) = listener.accept() {
                 let mut buf = [0u8; 1024];
                 let _ = sock.read(&mut buf); // запрос прочитали и «зависли» — не отвечаем
-                std::thread::sleep(std::time::Duration::from_secs(1)); // дольше idle-таймаута теста
+                std::thread::sleep(std::time::Duration::from_secs(2)); // дольше таймаута теста
             }
         });
         let provider = OpenAiChatProvider::new(
@@ -1430,6 +1433,7 @@ mod tests {
             "gemma",
             Some(0.0),
         )
+        .with_first_token_timeout(std::time::Duration::from_millis(250))
         .with_idle_timeout(std::time::Duration::from_millis(250));
         let msgs = vec![ChatMessage::user("привет")];
         let mut sink = |_t: String| {};
