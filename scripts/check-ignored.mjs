@@ -42,7 +42,11 @@ import { dirname, resolve } from 'node:path';
 // (toolCall→final); валидирует коннектор end-to-end на живой модели; офлайн-гейт — 4 теста
 // `agent::connect::handler::tests::*` на фейк-провайдере; запуск `NEXUS_LIVE_CHAT=1 cargo test
 // live_connect_tool_loop_on_rig -- --ignored`).
-const EXPECTED = 25;
+// 25→26: + `live_actuator_create_and_undo_on_rig` (AGENT-CONNECT валидация: реальная модель :8080 создаёт
+// заметку через ГЕЙТ актуатора [autonomy=auto → Auto-тир apply] → файл на диске → undo_run восстанавливает;
+// полный стек вживую модель→tool-call→dispatch_action→apply→undo; нужна tool-capable модель; запуск
+// `NEXUS_LIVE_CHAT=1 cargo test live_actuator_create_and_undo_on_rig -- --ignored`).
+const EXPECTED = 26;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src
