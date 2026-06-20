@@ -41,6 +41,8 @@ interface UIState {
   boardOpen: boolean;
   /** Открыт ли утренний экран «Сегодня» (TODAY-1) — сводка дня вместо редактора. */
   todayOpen: boolean;
+  /** Открыта ли вкладка «Агент» (UI-1) — full-screen агентский воркспейс вместо редактора. */
+  agentOpen: boolean;
   /** Открыт ли HOME-дашборд (DP-1) — лендинг-вью вместо редактора (стартовая после vault). */
   homeOpen: boolean;
   /** Онбординг пройден (DP-7, персист): welcome ведёт сразу к открытию vault. */
@@ -126,6 +128,10 @@ interface UIState {
   toggleToday: () => void;
   /** Открыть «Сегодня» (activity-bar: клик = переход на вью, гасит home/news/board/chat). */
   openToday: () => void;
+  closeAgent: () => void;
+  toggleAgent: () => void;
+  /** Открыть «Агент» (activity-bar: клик = переход на вью, гасит home/news/board/today/chat). */
+  openAgent: () => void;
   toggleSidebar: () => void;
   closeHome: () => void;
   toggleHome: () => void;
@@ -179,6 +185,19 @@ const TRAP_OVERLAYS_CLOSED = {
   tweaksOpen: false, // ревью MEM-4: иначе trap-оверлей поверх открытых Настроек = два стэкнутых focus-trap
 } as const;
 
+/**
+ * Полноэкранные main-вьюхи взаимоисключаемы (home ↔ news ↔ board ↔ today ↔ agent; редактор — когда
+ * все закрыты). Спред этой константы в каждой open/toggle-ветке гасит остальные одним местом — иначе
+ * при добавлении новой вью (UI-1 «Агент») легко забыть один из переходов и две вью наложатся.
+ */
+const MAIN_VIEWS_CLOSED = {
+  homeOpen: false,
+  newsOpen: false,
+  boardOpen: false,
+  todayOpen: false,
+  agentOpen: false,
+} as const;
+
 /** Глобальное UI-состояние оболочки (Command Palette, граф, RAG-чат и пр.). */
 export const useUIStore = create<UIState>((set) => ({
   paletteOpen: false,
@@ -197,6 +216,7 @@ export const useUIStore = create<UIState>((set) => ({
   newsOpen: false,
   boardOpen: false,
   todayOpen: false,
+  agentOpen: false,
   // HOME — стартовый лендинг после открытия vault (макет: Home-вью по умолчанию).
   homeOpen: true,
   onboardingDone: readOnboarded(),
@@ -222,17 +242,16 @@ export const useUIStore = create<UIState>((set) => ({
   // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
   openChat: () => {
     logUi('chat:open');
-    set({ chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false, todayOpen: false });
+    set({ chatOpen: true, ...MAIN_VIEWS_CLOSED });
   },
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () =>
     set((s) => {
       logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
-      if (!s.chatOpen)
-        return { chatOpen: true, homeOpen: false, newsOpen: false, boardOpen: false, todayOpen: false };
-      // Панель уже «открыта», но скрыта за Home/News/Board/Today → клик возвращает её в поле зрения.
-      if (s.homeOpen || s.newsOpen || s.boardOpen || s.todayOpen)
-        return { homeOpen: false, newsOpen: false, boardOpen: false, todayOpen: false };
+      if (!s.chatOpen) return { chatOpen: true, ...MAIN_VIEWS_CLOSED };
+      // Панель уже «открыта», но скрыта за Home/News/Board/Today/Agent → клик возвращает её в поле зрения.
+      if (s.homeOpen || s.newsOpen || s.boardOpen || s.todayOpen || s.agentOpen)
+        return { ...MAIN_VIEWS_CLOSED };
       return { chatOpen: false };
     }),
   openPlugins: () => set({ pluginsOpen: true }),
@@ -319,43 +338,53 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('contradictions:toggle', s.contradictionsOpen ? 'close' : 'open');
       return { contradictionsOpen: !s.contradictionsOpen };
     }),
-  // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board ↔ today (редактор — когда все закрыты).
+  // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board ↔ today ↔ agent (редактор — когда все закрыты).
   closeNews: () => set({ newsOpen: false }),
-  toggleNews: () =>
-    set((s) => ({ newsOpen: !s.newsOpen, homeOpen: false, boardOpen: false, todayOpen: false })),
+  toggleNews: () => set((s) => ({ ...MAIN_VIEWS_CLOSED, newsOpen: !s.newsOpen })),
   openNews: () => {
     logUi('news:open');
-    set({ newsOpen: true, homeOpen: false, boardOpen: false, todayOpen: false });
+    set({ ...MAIN_VIEWS_CLOSED, newsOpen: true });
   },
   closeBoard: () => set({ boardOpen: false }),
   toggleBoard: () =>
     set((s) => {
       logUi('board:toggle', s.boardOpen ? 'close' : 'open');
-      return { boardOpen: !s.boardOpen, homeOpen: false, newsOpen: false, todayOpen: false };
+      return { ...MAIN_VIEWS_CLOSED, boardOpen: !s.boardOpen };
     }),
   openBoard: () => {
     logUi('board:open');
-    set({ boardOpen: true, homeOpen: false, newsOpen: false, todayOpen: false });
+    set({ ...MAIN_VIEWS_CLOSED, boardOpen: true });
   },
-  // «Сегодня» (TODAY-1) — полная main-вью, взаимоисключаема с home/news/board (как они меж собой).
+  // «Сегодня» (TODAY-1) — полная main-вью, взаимоисключаема с home/news/board/agent (как они меж собой).
   closeToday: () => set({ todayOpen: false }),
   toggleToday: () =>
     set((s) => {
       logUi('today:toggle', s.todayOpen ? 'close' : 'open');
-      return { todayOpen: !s.todayOpen, homeOpen: false, newsOpen: false, boardOpen: false };
+      return { ...MAIN_VIEWS_CLOSED, todayOpen: !s.todayOpen };
     }),
   openToday: () => {
     logUi('today:open');
-    set({ todayOpen: true, homeOpen: false, newsOpen: false, boardOpen: false });
+    set({ ...MAIN_VIEWS_CLOSED, todayOpen: true });
+  },
+  // «Агент» (UI-1) — полная main-вью, взаимоисключаема с home/news/board/today (как они меж собой).
+  closeAgent: () => set({ agentOpen: false }),
+  toggleAgent: () =>
+    set((s) => {
+      logUi('agent:toggle', s.agentOpen ? 'close' : 'open');
+      return { ...MAIN_VIEWS_CLOSED, agentOpen: !s.agentOpen };
+    }),
+  openAgent: () => {
+    logUi('agent:open');
+    set({ ...MAIN_VIEWS_CLOSED, agentOpen: true });
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () =>
     set((s) => {
       logUi('home:toggle', s.homeOpen ? 'close' : 'open');
-      return { homeOpen: !s.homeOpen, newsOpen: false, boardOpen: false, todayOpen: false };
+      return { ...MAIN_VIEWS_CLOSED, homeOpen: !s.homeOpen };
     }),
-  openHome: () => set({ homeOpen: true, newsOpen: false, boardOpen: false, todayOpen: false }),
+  openHome: () => set({ ...MAIN_VIEWS_CLOSED, homeOpen: true }),
   startOnboarding: () => set({ onboardingActive: true }),
   finishOnboarding: () => {
     try {

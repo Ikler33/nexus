@@ -480,6 +480,13 @@ export function registerCoreCommands(): Disposable {
       run: () => useUIStore.getState().toggleToday(),
     }),
     commands.register({
+      id: 'view.agent',
+      title: 'Agent',
+      titleKey: 'commands.view.agent',
+      source: 'core',
+      run: () => useUIStore.getState().toggleAgent(),
+    }),
+    commands.register({
       id: 'vault.rescan',
       title: 'Reindex vault',
       titleKey: 'commands.vault.rescan',

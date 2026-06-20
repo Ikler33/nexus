@@ -1,0 +1,133 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { AgentView } from './AgentView';
+import { tauriApi } from '../../lib/tauri-api';
+import { useAgentStore } from '../../stores/agent';
+import { useToastStore } from '../../stores/toast';
+import * as mockAgent from '../../lib/mock/agent';
+
+/** Сброс стора агента + мок-реестра прогонов между тестами (мок — память процесса). */
+function reset() {
+  useAgentStore.setState({
+    runId: null,
+    status: 'idle',
+    task: '',
+    autonomy: 'confirm',
+    model: 'qwen3:35b',
+    perms: { read: true, write: true, web: false },
+    assistantText: '',
+    steps: [],
+    context: null,
+    changeset: [],
+    approving: false,
+    report: null,
+    error: null,
+  });
+  useToastStore.setState({ toasts: [] });
+  mockAgent.__reset();
+}
+
+beforeEach(reset);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('AgentView (UI-1b — фронт вкладки Агента на контракте UI-1a)', () => {
+  it('пустое состояние: шапка, подсказка и композер до запуска', () => {
+    render(<AgentView />);
+    // Шапка (заголовок) + кнопка «Новая сессия».
+    expect(screen.getByText('Агент')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Новая сессия' })).toBeInTheDocument();
+    // Пустое состояние — подсказка «поручите задачу».
+    expect(screen.getByText('Поручите задачу агенту')).toBeInTheDocument();
+    // Композер виден и его поле доступно (прогон не идёт).
+    expect(screen.getByPlaceholderText('Поручите задачу агенту…')).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Запустить' })).toBeDisabled(); // пустой ввод
+  });
+
+  it('запуск через композер: мок-стрим наполняет ленту (ответ ассистента + шаг + changeset)', async () => {
+    render(<AgentView />);
+    const input = screen.getByPlaceholderText('Поручите задачу агенту…');
+    fireEvent.change(input, { target: { value: 'Разбери входящие' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    // Задача отрисована как сообщение пользователя.
+    expect(await screen.findByText('Разбери входящие')).toBeInTheDocument();
+
+    // assistantToken-дельты склеились в ответ ассистента.
+    await waitFor(() => expect(screen.getByText(/Принял задачу/)).toBeInTheDocument());
+
+    // toolCall → шаг ленты с kind инструмента (fs.read из мока).
+    await waitFor(() => expect(screen.getAllByText('fs.read').length).toBeGreaterThan(0));
+
+    // proposal → changeset с тремя файлами + заголовок «Изменения».
+    await waitFor(() => expect(screen.getByText('Изменения')).toBeInTheDocument());
+    expect(screen.getByText('RMS-B2B/Идея — кэш контекста.md')).toBeInTheDocument();
+  });
+
+  it('changeset apply/reject собирает decisions[] и шлёт agent_approve', async () => {
+    const approveSpy = vi.spyOn(tauriApi.agent, 'approve');
+    render(<AgentView />);
+    fireEvent.change(screen.getByPlaceholderText('Поручите задачу агенту…'), {
+      target: { value: 'задача' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    // Ждём появления changeset (proposal) и перехода в статус ожидания решения.
+    await waitFor(() => expect(screen.getByText('Изменения')).toBeInTheDocument());
+    await waitFor(() => expect(useAgentStore.getState().status).toBe('awaiting'));
+
+    // Per-file: применяем первый файл, отклоняем второй, третий оставляем нерешённым (→ reject на бэке).
+    // Кнопки перезапрашиваем после каждого клика — решённый файл сменил кнопки на бейдж (DOM-сдвиг).
+    // Per-file reject = «Отклонить изменение» (отличается от bulk «Отклонить» — иначе клик попал бы в bulk).
+    fireEvent.click(screen.getAllByRole('button', { name: 'Применить' })[0]); // файл 1 → applied
+    fireEvent.click(screen.getAllByRole('button', { name: 'Отклонить изменение' })[0]); // файл 2 → rejected
+
+    // Подтверждаем changeset → собранные decisions уходят в agent_approve.
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
+
+    await waitFor(() => expect(approveSpy).toHaveBeenCalledTimes(1));
+    const [runId, decisions] = approveSpy.mock.calls[0];
+    expect(runId).toBe(useAgentStore.getState().runId);
+    // decisions[] = по одному на адресуемый файл; approve=true только у применённого.
+    expect(decisions).toHaveLength(3);
+    const byApprove = decisions.map((d) => d.approve);
+    expect(byApprove.filter(Boolean)).toHaveLength(1); // ровно один applied
+    expect(byApprove.filter((a) => !a)).toHaveLength(2); // rejected + нерешённый (fail-closed)
+    // Каждое решение адресовано actionId из proposal (>= 0, не -1).
+    expect(decisions.every((d) => d.actionId >= 0)).toBe(true);
+  });
+
+  it('bulk «Применить все» помечает все файлы applied → все approve=true', async () => {
+    const approveSpy = vi.spyOn(tauriApi.agent, 'approve');
+    render(<AgentView />);
+    fireEvent.change(screen.getByPlaceholderText('Поручите задачу агенту…'), {
+      target: { value: 'задача' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+    await waitFor(() => expect(useAgentStore.getState().status).toBe('awaiting'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Применить все' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
+
+    await waitFor(() => expect(approveSpy).toHaveBeenCalledTimes(1));
+    const decisions = approveSpy.mock.calls[0][1];
+    expect(decisions.every((d) => d.approve)).toBe(true);
+  });
+
+  it('autonomy=auto: changeset показывает авто-бейдж, аппрув не требуется', async () => {
+    useAgentStore.setState({ autonomy: 'auto' });
+    render(<AgentView />);
+    fireEvent.change(screen.getByPlaceholderText('Поручите задачу агенту…'), {
+      target: { value: 'авто-задача' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    // Auto-режим: дифы идут без proposal — changeset наполняется, бейдж «Авто».
+    await waitFor(() => expect(screen.getByText('Изменения')).toBeInTheDocument());
+    expect(screen.getByText(/Авто · агент ревьюит сам/)).toBeInTheDocument();
+    // Нет кнопки «Подтвердить» (auto не ждёт аппрува).
+    expect(screen.queryByRole('button', { name: 'Подтвердить' })).not.toBeInTheDocument();
+  });
+});

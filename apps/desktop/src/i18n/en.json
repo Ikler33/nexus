@@ -462,6 +462,101 @@
     "searchPlaceholder": "Find a node…",
     "searchClear": "Clear search"
   },
+  "agent": {
+    "title": "Agent",
+    "session": "session",
+    "newSession": "New session",
+    "settings": "Agent settings",
+    "model": "Model",
+    "autonomy": "Autonomy",
+    "confirm": "Confirm steps",
+    "auto": "Auto",
+    "perms": "Vault permissions",
+    "read": "Read",
+    "write": "Write",
+    "web": "Web",
+    "sandbox": "Sandbox · actions reversible, history kept",
+    "context": "context",
+    "contextUsage": "Context usage",
+    "who": {
+      "task": "Session task",
+      "agent": "Agent"
+    },
+    "status": {
+      "running": "Working…",
+      "paused": "Paused",
+      "awaiting": "Waiting for your decision on changes",
+      "done": "Done",
+      "error": "Error",
+      "cancelled": "Cancelled"
+    },
+    "controls": {
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancel": "Stop",
+      "undo": "Undo changes"
+    },
+    "undone": "Reverted {{count}} action(s)",
+    "undoneNone": "Nothing to undo",
+    "composer": {
+      "placeholder": "Give the agent a task…",
+      "send": "Run",
+      "tip": "Nothing is written without your confirmation."
+    },
+    "empty": {
+      "title": "Give the agent a task",
+      "hint": "The agent will plan, call tools and propose changes — you confirm each one."
+    },
+    "steps": {
+      "toolCall": "tool call",
+      "running": "running",
+      "result": "result",
+      "resultError": "tool error"
+    },
+    "changeset": {
+      "title": "Changes",
+      "files": "{{count}} files ·",
+      "applyAll": "Apply all",
+      "reject": "Reject",
+      "apply": "Apply",
+      "rejectOne": "Reject change",
+      "new": "new",
+      "edit": "edit",
+      "applied": "applied",
+      "rejected": "rejected",
+      "autoBadge": "Auto · agent self-reviews",
+      "autoMark": "auto",
+      "confirmApprove": "Confirm",
+      "footAuto": "Auto mode · changes applied by the agent",
+      "footPending": "{{count}} pending · agent is waiting",
+      "footHandled": "All changes handled",
+      "applyToast": "All changes applied",
+      "rejectToast": "All changes rejected"
+    },
+    "dock": {
+      "plan": "Plan",
+      "graph": "Execution graph",
+      "report": "Report",
+      "close": "Close"
+    },
+    "plan": {
+      "demoNote": "Demo plan structure (plan events will arrive later)",
+      "empty": "The plan will appear as the run proceeds."
+    },
+    "graph": {
+      "demoNote": "Demo execution graph (research tasks)",
+      "title": "Execution graph",
+      "meta": "round 8 · 98 sources",
+      "center": "inbox triage",
+      "running": "writing report"
+    },
+    "report": {
+      "empty": "The report will appear when the run completes.",
+      "toNote": "To note",
+      "open": "Open",
+      "savedToast": "Saved to a note"
+    }
+  },
   "chat": {
     "title": "AI panel",
     "tabChat": "Chat",
@@ -1041,6 +1136,7 @@
     "view.news": "News feed",
     "view.board": "Board",
     "view.today": "Today",
+    "view.agent": "Agent",
     "view.home": "Home",
     "view.tasks": "Tasks",
     "view.inbox": "Inbox",
