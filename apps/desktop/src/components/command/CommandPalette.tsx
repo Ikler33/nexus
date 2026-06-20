@@ -343,7 +343,7 @@ export function CommandPalette() {
           </span>
           {/* DF-1: бренд-хинт справа (макет palette.jsx — marginLeft:auto + command-иконка). */}
           <span className={styles.footBrand}>
-            <CommandIcon size={11} aria-hidden /> Nexus
+            <CommandIcon size={11} aria-hidden /> {t('app.name')}
           </span>
         </div>
       </div>
