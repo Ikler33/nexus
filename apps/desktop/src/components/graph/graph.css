@@ -14,9 +14,17 @@
   --g-tag-l: 0.55;
   --g-tag-c: 0.12;
 }
+/* Тёмные темы (канон DARK_THEMES, синхрон со stores/theme.ts): теги-узлы светлее для контраста
+   на тёмном фоне. Раньше — только dark/midnight/platinum; новые тёмные темы Qasr давали тусклые теги. */
 :root[data-theme='dark'] .graph-view,
 :root[data-theme='midnight'] .graph-view,
-:root[data-theme='platinum'] .graph-view {
+:root[data-theme='platinum'] .graph-view,
+:root[data-theme='mocha'] .graph-view,
+:root[data-theme='nord'] .graph-view,
+:root[data-theme='tokyo'] .graph-view,
+:root[data-theme='rose'] .graph-view,
+:root[data-theme='contrast'] .graph-view,
+:root[data-theme='bronze'] .graph-view {
   --g-tag-l: 0.72;
 }
 
