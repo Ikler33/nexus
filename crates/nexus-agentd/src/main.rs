@@ -436,6 +436,25 @@ async fn run() -> Result<(), String> {
     // vault-корня (рекомендация `<vault>/.nexus/skills`). Не задан → None (агент без скиллов, без
     // регрессии). Скиллы — недоверенный внешний контент: они фенсятся в самом хендлере (I-5).
     let agent_skills = build_skill_context(local_cfg.as_ref(), &root);
+
+    // AF_UNIX-хостинг коннектора (P0b-2c), default-OFF (env NEXUS_AGENTD_CONNECT_SOCKET). Делает agentd
+    // ПОДКЛЮЧАЕМЫМ агент-сервисом (app↔agentd по протоколу). Тот же провайдер/память/актуатор-конфиг, что
+    // у AgentRunHandler — клонируем доли ДО передачи остального в хендлер ниже. AF_UNIX = локальный IPC
+    // (не сетевой egress); автономия коннектора = confirm (запись актуатора требует agent/approve).
+    #[cfg(unix)]
+    maybe_spawn_connect_server(
+        &db,
+        &ai_client,
+        &agent_memory,
+        &root,
+        actuator_enabled,
+        overwrite_threshold,
+        blast_cap,
+        agent_context_window,
+        &agent_skills,
+        &agent_paused,
+    );
+
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
         Arc::new(nexus_core::agent::AgentRunHandler::new(
@@ -684,6 +703,62 @@ fn build_skill_context(
         std::sync::Arc::new(catalog),
         canon,
     ))
+}
+
+/// AF_UNIX-хостинг коннектора (AGENT-CONNECT P0b-2c), **default-OFF**. Включается env-переменной
+/// `NEXUS_AGENTD_CONNECT_SOCKET=<путь>` → спавнит `serve_unix_at` поверх [`nexus_core::agent::ConnectDeps`]
+/// с ТЕМИ ЖЕ зависимостями, что и `AgentRunHandler` (провайдер `ai.agent_tools` / память / актуатор-конфиг
+/// / скиллы) — клонируем доли (Arc/Clone) ДО передачи остального в хендлер. Нет провайдера
+/// (`ai.agent_tools=None`) → НЕ стартуем (агенту нечем думать). Коннектор фиксирует автономию `confirm`
+/// (запись актуатора требует явного `agent/approve` по проводу — человек-в-петле). Unix-only.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn maybe_spawn_connect_server(
+    db: &Database,
+    ai_client: &Arc<AIClient>,
+    memory: &Arc<dyn nexus_core::agent::AgentMemory>,
+    canon_root: &Path,
+    actuator_enabled: bool,
+    overwrite_threshold: usize,
+    blast_cap: u32,
+    context_window: Option<usize>,
+    skills: &Option<nexus_core::agent::SkillContext>,
+    agent_paused: &Arc<AtomicBool>,
+) {
+    let socket = match std::env::var("NEXUS_AGENTD_CONNECT_SOCKET") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => return, // default-OFF: env не задан → коннектор не поднимаем
+    };
+    let Some(provider) = ai_client.agent_tools.clone() else {
+        tracing::warn!(
+            "agent-connect: NEXUS_AGENTD_CONNECT_SOCKET задан, но ai.agent_tools=None — \
+             коннектор НЕ поднят (нет tool-провайдера)"
+        );
+        return;
+    };
+    let deps = Arc::new(nexus_core::agent::ConnectDeps {
+        provider,
+        memory: Some(memory.clone()),
+        writer: db.writer().clone(),
+        reader: db.reader().clone(),
+        canon_root: canon_root.to_path_buf(),
+        actuator_enabled,
+        overwrite_threshold,
+        blast_cap,
+        context_window,
+        skills: skills.clone(),
+        agent_paused: agent_paused.clone(), // ТОТ ЖЕ kill-switch, что у AgentRunHandler (SIGUSR1/agent.json)
+    });
+    tracing::warn!(
+        socket = %socket,
+        actuator_enabled,
+        "agent-connect: AF_UNIX коннектор ВКЛ (default-OFF; задан NEXUS_AGENTD_CONNECT_SOCKET)"
+    );
+    tokio::spawn(async move {
+        if let Err(e) = nexus_core::agent::connect::serve_unix_at(&socket, deps).await {
+            tracing::error!(error = %e, "agent-connect: AF_UNIX сервер упал");
+        }
+    });
 }
 
 /// RAG + ПАМЯТЬ агента headless (AGENT-MEM-1): эмбеддер + note-RAG индекс + ТРИ индекса памяти

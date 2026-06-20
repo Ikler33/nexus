@@ -9,12 +9,14 @@
 //! `dispatch` отдаёт ОТВЕТ на запрос через `out`, переданный в вызов; но события прогона текут АСИНХРОННО
 //! (цикл живёт в `tokio::spawn`), поэтому хендлер держит СВОЙ `Arc<dyn Transport>` (тот же эндпоинт
 //! сервиса) и шлёт в него нотификации. [`AgentEventForwarder`] синхронен (требование цикла); транспорт
-//! асинхронен — мостим через unbounded-mpsc + drain-таск (sync `forward` → канал → `await out.send`).
+//! асинхронен — мостим через ОГРАНИЧЕННЫЙ mpsc + drain-таск (sync `forward`=try_send → канал → `await
+//! out.send`; кап не даёт памяти расти при мёртвом drain — анти-leak на отвале клиента).
 //!
 //! # Сессии и контроль
-//! Реестр `session_id → SessionHandle` (run_id + decision-sender + per-session `paused`/`cancel`).
-//! `agent/approve` кормит [`ChannelDecision`] (человек-в-петле, fail-closed reject_all при закрытии).
-//! `agent/control` — per-session пауза (как per-run kill-switch desktop). `agent/cancel` — кооперативно.
+//! Реестр `session_id → SessionHandle` (run_id + decision-sender + cancel). `agent/approve` кормит
+//! [`ChannelDecision`] (человек-в-петле, fail-closed reject_all при закрытии). `agent/control` — ГЛОБАЛЬНАЯ
+//! пауза демона (`agent_paused`, тот же kill-switch, что SIGUSR1/agent.json; single-owner). `agent/cancel`
+//! — кооперативно (per-run).
 //! `agent/undo` — [`actuator::undo_run`] по run_id (идемпотентно). Автономия прогонов — `confirm`
 //! (безопасно по умолчанию): запись актуатора требует ЯВНОГО `agent/approve`.
 
@@ -47,6 +49,12 @@ use super::{
 /// несколько (по одному на changeset-айтем), клиент аппрувит их по очереди.
 const DECISION_CAP: usize = 8;
 
+/// Глубина канала событий прогона (forwarder→drain→транспорт). БОЛЬШОЙ, но ОГРАНИЧЕННЫЙ (не unbounded):
+/// здоровый клиент дренирует быстрее, чем цикл эмитит, так что кап не достигается; но если клиент отвалился
+/// и drain встал, кап не даёт памяти расти бесконечно, пока прогон ещё крутится (forward — try_send, дроп
+/// при переполнении: события best-effort).
+const EVENT_CHANNEL_CAP: usize = 1024;
+
 /// Автономия прогонов коннектора. **`confirm` — SAFE BY DEFAULT**: даже Auto-тир актуатора ПРЕДЛАГАЕТ
 /// (Proposal), запись требует явного `agent/approve` (человек-в-петле). Протокол `agent/run` не несёт
 /// автономии — она фиксирована безопасной до отдельного решения (owner-gated повышение до `auto`).
@@ -76,18 +84,26 @@ pub struct ConnectDeps {
     pub context_window: Option<usize>,
     /// Контекст скиллов (SKILL-2); `None` → без меню/инструментов скиллов.
     pub skills: Option<SkillContext>,
+    /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** ТОТ ЖЕ `Arc`, что у headless `AgentRunHandler`
+    /// (agentd: персист `agent.json` + SIGUSR1). Прогоны коннектора честят его → SIGUSR1/agent.json/
+    /// `agent/control` останавливают ход мид-ран на границе И блокируют запись актуатора (чек-пойнт #3).
+    /// Single-owner-семантика: `agent/control(pause)` коннектора = ГЛОБАЛЬНАЯ пауза демона (один владелец,
+    /// один агент); per-session гранулярность — поздний multi-client срез.
+    pub agent_paused: Arc<AtomicBool>,
 }
 
-/// [`AgentEventForwarder`] → асинхронный [`Transport`]. Синхронный `forward` лишь кладёт событие в
-/// unbounded-канал (НИКОГДА не блокирует цикл); drain-таск маппит в `agent/event` и шлёт в транспорт.
+/// [`AgentEventForwarder`] → асинхронный [`Transport`]. Синхронный `forward` кладёт событие в ОГРАНИЧЕННЫЙ
+/// канал через `try_send` (НИКОГДА не блокирует цикл); drain-таск маппит в `agent/event` и шлёт в транспорт.
 struct TransportForwarder {
-    tx: mpsc::UnboundedSender<AgentEvent>,
+    tx: mpsc::Sender<AgentEvent>,
 }
 
 impl AgentEventForwarder for TransportForwarder {
     fn forward(&self, ev: &AgentEvent) {
-        // best-effort: drain-таск ушёл (клиент отвалился) → событие тихо роняем, цикл не страдает.
-        let _ = self.tx.send(ev.clone());
+        // try_send (НЕ блокирует цикл): канал полон (drain отстал/ушёл — клиент отвалился) ИЛИ закрыт →
+        // best-effort дроп. Так память не растёт безгранично при мёртвом drain (анти-leak), а здоровый
+        // клиент кап не достигает (drain быстрее эмиссии).
+        let _ = self.tx.try_send(ev.clone());
     }
 }
 
@@ -97,8 +113,6 @@ struct SessionHandle {
     run_id: i64,
     /// Sender в [`ChannelDecision`] прогона (кормится `agent/approve`).
     decisions: mpsc::Sender<BatchDecision>,
-    /// Per-session kill-switch (`agent/control`): пауза мид-ран на границе хода.
-    paused: Arc<AtomicBool>,
     /// Кооперативная отмена (`agent/cancel`).
     cancel: Arc<AtomicBool>,
 }
@@ -175,8 +189,8 @@ impl ConnectHandler for ConnectAgentHandler {
             }
         }
 
-        // Контроль + decision-источник (человек-в-петле, fail-closed) + регистрация сессии.
-        let paused = Arc::new(AtomicBool::new(false));
+        // Контроль + decision-источник (человек-в-петле, fail-closed) + регистрация сессии. Пауза —
+        // ГЛОБАЛЬНАЯ (`deps.agent_paused`, общая с kill-switch демона), НЕ per-session (single-owner).
         let cancel = Arc::new(AtomicBool::new(false));
         let (decision_source, decision_tx) = ChannelDecision::new(DECISION_CAP);
         let decision_source: Arc<dyn actuator::DecisionSource> = Arc::new(decision_source);
@@ -203,15 +217,14 @@ impl ConnectHandler for ConnectAgentHandler {
                 SessionHandle {
                     run_id,
                     decisions: decision_tx,
-                    paused: paused.clone(),
                     cancel: cancel.clone(),
                 },
             );
             run_id
         };
 
-        // Мост событий: sync forward → unbounded-канал → drain-таск → agent/event в транспорт.
-        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<AgentEvent>();
+        // Мост событий: sync forward → ОГРАНИЧЕННЫЙ канал → drain-таск → agent/event в транспорт.
+        let (ev_tx, mut ev_rx) = mpsc::channel::<AgentEvent>(EVENT_CHANNEL_CAP);
         let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(TransportForwarder { tx: ev_tx });
         let drain_out = self.out.clone();
         tokio::spawn(async move {
@@ -249,7 +262,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 decision_source,
                 &deps.writer,
                 &deps.reader,
-                &paused,
+                &deps.agent_paused, // ГЛОБАЛЬНЫЙ kill-switch (SIGUSR1/agent.json/agent.control)
                 &cancel,
                 forwarder,
             )
@@ -328,13 +341,12 @@ impl ConnectHandler for ConnectAgentHandler {
     }
 
     async fn agent_control(&self, p: ControlParams) {
-        let paused = {
-            let sessions = self.sessions.lock().await;
-            sessions.get(&p.session_id).map(|h| h.paused.clone())
-        };
-        if let Some(flag) = paused {
-            flag.store(p.pause, Ordering::Relaxed);
-        }
+        // ГЛОБАЛЬНАЯ пауза демона (single-owner): ставит ТОТ ЖЕ `agent_paused`, что и SIGUSR1/agent.json
+        // headless-AgentRunHandler. Цикл останавливается на границе хода; актуатор не пишет под паузой
+        // (чек-пойнт #3). session_id адресный, но эффект глобальный (один владелец, один агент) — per-session
+        // гранулярность отложена в multi-client срез. Логируем адресата.
+        tracing::info!(session = %p.session_id, pause = p.pause, "agent/control: глобальная пауза агента");
+        self.deps.agent_paused.store(p.pause, Ordering::Relaxed);
     }
 }
 
@@ -408,6 +420,7 @@ mod tests {
             blast_cap: 16,
             context_window: Some(32768),
             skills: None,
+            agent_paused: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -420,7 +433,7 @@ mod tests {
         });
     }
 
-    async fn recv_timeout(t: &super::super::ChannelTransport) -> RpcMessage {
+    async fn recv_timeout(t: &dyn super::super::Transport) -> RpcMessage {
         tokio::time::timeout(Duration::from_secs(5), t.recv())
             .await
             .expect("recv timeout")
@@ -634,6 +647,42 @@ mod tests {
         }
     }
 
+    /// `agent/control(pause)` ставит ГЛОБАЛЬНЫЙ `agent_paused` (тот же kill-switch, что SIGUSR1/agent.json
+    /// у headless-AgentRunHandler) — прогоны коннектора честят паузу демона.
+    #[tokio::test]
+    async fn agent_control_sets_global_pause() {
+        let (_c, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> =
+            Arc::new(FakeProvider::new(vec![Ok(ToolTurn::Final("x".into()))]));
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false);
+        let paused = deps.agent_paused.clone();
+        let handler = ConnectAgentHandler::new(deps, server);
+
+        assert!(!paused.load(Ordering::Relaxed));
+        handler
+            .agent_control(ControlParams {
+                session_id: "s".into(),
+                pause: true,
+            })
+            .await;
+        assert!(
+            paused.load(Ordering::Relaxed),
+            "control(pause=true) ставит глобальный agent_paused"
+        );
+        handler
+            .agent_control(ControlParams {
+                session_id: "s".into(),
+                pause: false,
+            })
+            .await;
+        assert!(
+            !paused.load(Ordering::Relaxed),
+            "control(pause=false) снимает паузу"
+        );
+    }
+
     /// Провайдер, чей первый ход ВИСИТ (sleep) — держит прогон активным детерминированно.
     struct SleepyProvider;
     #[async_trait]
@@ -699,6 +748,97 @@ mod tests {
             }
         }
         assert!(r3.is_ok(), "после finish session_id снова свободен: {r3:?}");
+    }
+
+    /// E2E поверх РЕАЛЬНОГО AF_UNIX-сокета (P0b-2c): `serve_unix_at` биндит сокет, клиент
+    /// `connect_unix` шлёт initialize → agent/run, видит ack{runId} + поток agent/event (toolCall→final)
+    /// по проводу. Доказывает, что agentd-хостинг коннектора по сокету работает end-to-end.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serve_unix_drives_run_over_socket() {
+        use crate::agent::connect::{connect_unix, serve_unix_at};
+
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                arguments: r#"{"text":"hi"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("готово".into())),
+        ]));
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false);
+
+        // Короткий путь сокета (лимит ~104 симв на macOS) в temp_dir, уникальный по PID.
+        let sock = std::env::temp_dir().join(format!("nexus-connect-{}.sock", std::process::id()));
+        let sock_for_server = sock.clone();
+        tokio::spawn(async move {
+            let _ = serve_unix_at(&sock_for_server, deps).await;
+        });
+
+        // Сервер биндит сокет асинхронно — ждём появления файла (поллинг до ~2 c).
+        let client = {
+            let mut c = None;
+            for _ in 0..40 {
+                if let Ok(t) = connect_unix(&sock).await {
+                    c = Some(t);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            c.expect("подключение к сокету")
+        };
+
+        client
+            .send(RpcMessage::request(
+                1,
+                "initialize",
+                json!({"supportedVersions": ["1.0"]}),
+            ))
+            .await
+            .unwrap();
+        match recv_timeout(&client).await {
+            RpcMessage::Response { id, result } => {
+                assert_eq!(id, json!(1));
+                assert_eq!(result.unwrap()["version"], "1.0");
+            }
+            other => panic!("ожидали Response, получили {other:?}"),
+        }
+
+        client
+            .send(RpcMessage::request(
+                2,
+                "agent/run",
+                json!({"sessionId": "s1", "prompt": "эхо по сокету"}),
+            ))
+            .await
+            .unwrap();
+
+        let mut run_id = String::new();
+        let mut got_toolcall = false;
+        let mut got_final = false;
+        for _ in 0..60 {
+            match recv_timeout(&client).await {
+                RpcMessage::Response { id, result } if id == json!(2) => {
+                    run_id = result.unwrap()["runId"].as_str().unwrap().to_string();
+                }
+                RpcMessage::Notification { method, params } if method == "agent/event" => {
+                    match params["type"].as_str().unwrap_or("") {
+                        "toolCall" => got_toolcall = true,
+                        "final" => {
+                            got_final = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = std::fs::remove_file(&sock);
+        assert!(!run_id.is_empty(), "ack с runId по сокету");
+        assert!(got_toolcall, "toolCall застримлен по сокету");
+        assert!(got_final, "final застримлен по сокету");
     }
 
     // ── LIVE: реальный риг (192.168.0.31:8080). Запуск: `NEXUS_LIVE_CHAT=1 cargo test -p nexus-core \

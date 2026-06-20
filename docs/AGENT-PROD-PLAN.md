@@ -23,11 +23,11 @@
 ## 2. Роадмап (ребейзнут — Фазы 0/1 готовы)
 
 ### PROD-v1 — агент как сервис (vault-only, безопасно, БЕЗ новой security-границы)
-1. **AGENT-CONNECT spec → код** (блокирующая зависимость) — протокол + транспорт. Спека: `docs/specs/agent-connect.md`.
-2. **agentd-демон**: скелет → реальный headless-демон (вынести bounded-loop), AGENT-CONNECT-сервер.
-3. **Connector-модуль** в app (транспорт in-process / WS).
+1. **AGENT-CONNECT spec → код** (блокирующая зависимость) — протокол + транспорт. Спека: `docs/specs/agent-connect.md`. ✅ **ЗАВЕРШЕНО (PR #370-373):** P0a протокол-фундамент (JSON-RPC 2.0 + `Transport`/`ChannelTransport` + `dispatch`/`ConnectHandler`) · P0b-1 wire-DTO унификация (`connect::wire`, единый контракт desktop↔agentd) · P0b-2a единая композиция `run_agent_session` (DRY, 3 копии→1) · P0b-2b `ConnectAgentHandler` (драйвит цикл, стримит `agent/event`, сессии/approve/cancel/undo, автономия `confirm`). **LIVE-проверен на риге** (`live_connect_tool_loop_on_rig`: Qwen3.6-27B вызвала инструмент через коннектор, 32.8 c).
+2. **agentd-демон**: скелет → реальный headless-демон (вынести bounded-loop), AGENT-CONNECT-сервер. ⏳ **СЛЕДУЮЩЕЕ:** agentd хостит `ConnectAgentHandler` по AF_UNIX (сетевой `Transport`, default-OFF за конфиг-флагом).
+3. **Connector-модуль** в app (транспорт in-process / WS). ⏳ after agentd-host.
 4. **`nexus deploy local`** + config-bootstrap + git-sync мост.
-5. **THREAT_MODEL.md** (P0-гейт, параллельно) — `docs/THREAT_MODEL.md`.
+5. **THREAT_MODEL.md** (P0-гейт, параллельно) — `docs/THREAT_MODEL.md`. ✅
 6. Параллельный трек десктопа: **Release & Auto-Updater** (распространение приложения).
 
 ### DEPLOY-2 — авто-деплой везде
