@@ -1,5 +1,6 @@
 //! Глобальное состояние приложения (Tauri managed state).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,6 +10,27 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::vector::VectorIndex;
+
+/// UI-1a: запись об активном прогоне агента в реестре [`AppState::agent_runs`]. Создаётся
+/// `agent_run`-командой ПЕРЕД спавном цикла; чистится при достижении терминала. Несёт ровно то, что
+/// нужно контрольным командам (`agent_approve`/`agent_pause`/`agent_resume`/`agent_cancel`):
+/// - `decisions` — sender UI-driven [`crate::commands::agent`]-DecisionSource (кормит Confirm-аппрув);
+/// - `paused` — per-run kill-switch (AGENT-5), проброшенный В цикл и в [`crate::actuator`]-гейт;
+/// - `cancel` — флаг кооперативной отмены (AGENT-5 `cancel`-граница цикла).
+///
+/// `decisions` — `tokio::mpsc::Sender<BatchDecision>` за `Arc` (тот же канал, что слушает DecisionSource
+/// внутри спавненного цикла). НЕ держим `JoinHandle`: цикл сам снимает себя из реестра по завершении, а
+/// отмена — кооперативная через `cancel` (abort гонял бы половину apply — не делаем).
+pub struct AgentRunEntry {
+    /// Канал решений по предложениям (Confirm-тир) — кормится `agent_approve`. `None` ⇒ актуатор
+    /// выключен (стабы): предложений не будет, decision-канал не нужен (агент не пишет в vault).
+    pub decisions: Option<tokio::sync::mpsc::Sender<nexus_core::actuator::BatchDecision>>,
+    /// Per-run пауза (AGENT-5 kill-switch): взвод/снятие через `agent_pause`/`agent_resume`. Проброшен
+    /// В `run_agent_loop` И в [`crate::actuator`]-гейт (под паузой — ни хода, ни записи).
+    pub paused: Arc<AtomicBool>,
+    /// Кооперативная отмена прогона (`agent_cancel`): цикл проверяет на КАЖДОЙ границе хода.
+    pub cancel: Arc<AtomicBool>,
+}
 
 /// Состояние приложения: текущий открытый vault (или его отсутствие).
 pub struct AppState {
@@ -41,6 +63,13 @@ pub struct AppState {
     /// Неотключаемый append-only журнал эгресса (E8, AC-EGR-4) — общий для всех guarded-клиентов,
     /// включая probe без открытого vault.
     pub egress_audit: Arc<crate::net::EgressAudit>,
+    /// UI-1a: реестр активных прогонов агента `run_id →` [`AgentRunEntry`]. `agent_run` регистрирует
+    /// запись ПЕРЕД спавном цикла; спавненный цикл снимает её при достижении терминала. Контрольные
+    /// команды (`agent_approve`/`agent_pause`/`agent_resume`/`agent_cancel`) адресуют прогон по `run_id`.
+    /// `Arc<Mutex<…>>` — `Arc` клонируется В спавненную задачу для дерегистрации (Tauri `State` не
+    /// переносим через границу `tokio::spawn`); `std::Mutex` — захват короткий и синхронный (вставка/
+    /// удаление/клон каналов), реальная работа (стрим/решения) идёт по клонированным каналам вне лока.
+    pub agent_runs: Arc<Mutex<HashMap<i64, AgentRunEntry>>>,
 }
 
 /// RAII-гард активной интерактивной LLM-операции: на `Drop` уменьшает счётчик (S5 backpressure).
@@ -66,6 +95,7 @@ impl AppState {
             egress_policy: Arc::new(crate::net::EgressPolicy::new(egress_offline.clone())),
             egress_offline,
             egress_audit: Arc::new(crate::net::EgressAudit::default()),
+            agent_runs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -170,6 +200,65 @@ impl AppState {
             }
         }
         token
+    }
+
+    // ── UI-1a: реестр активных прогонов агента ────────────────────────────────────────────────────
+
+    /// Регистрирует запись прогона `run_id` (вызывается `agent_run` ПЕРЕД спавном цикла). run_id —
+    /// свежий из `create_run`, поэтому коллизий не ждём; last-wins безопасен.
+    pub fn register_agent_run(&self, run_id: i64, entry: AgentRunEntry) {
+        if let Ok(mut g) = self.agent_runs.lock() {
+            g.insert(run_id, entry);
+        }
+    }
+
+    /// Снимает прогон `run_id` из реестра (вызывается спавненным циклом на терминале). Идемпотентно.
+    pub fn deregister_agent_run(&self, run_id: i64) {
+        if let Ok(mut g) = self.agent_runs.lock() {
+            g.remove(&run_id);
+        }
+    }
+
+    /// Клон `Arc` на реестр прогонов — для переноса В спавненную задачу `agent_run` (Tauri `State` не
+    /// `Send` через `tokio::spawn`): задача снимает прогон из реестра по завершении через этот хендл.
+    pub fn agent_runs_handle(&self) -> Arc<Mutex<HashMap<i64, AgentRunEntry>>> {
+        self.agent_runs.clone()
+    }
+
+    /// Клон sender'а решений прогона (для `agent_approve`). `None` — прогона нет в реестре / актуатор
+    /// выключен (нечего аппрувить — стабы в vault не пишут).
+    pub fn agent_decision_sender(
+        &self,
+        run_id: i64,
+    ) -> Option<tokio::sync::mpsc::Sender<nexus_core::actuator::BatchDecision>> {
+        self.agent_runs
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&run_id).and_then(|e| e.decisions.clone()))
+    }
+
+    /// Взводит/снимает паузу прогона `run_id` (AGENT-5 kill-switch). Возвращает `true`, если прогон
+    /// найден в реестре. Тот же `Arc<AtomicBool>` читает цикл И гейт актуатора (под паузой не пишет).
+    pub fn set_agent_paused(&self, run_id: i64, paused: bool) -> bool {
+        if let Ok(g) = self.agent_runs.lock() {
+            if let Some(e) = g.get(&run_id) {
+                e.paused.store(paused, Ordering::Relaxed);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Взводит флаг кооперативной отмены прогона `run_id` (`agent_cancel`). Возвращает `true`, если
+    /// прогон найден. Цикл проверяет флаг на каждой границе хода → терминал `cancelled`.
+    pub fn cancel_agent_run(&self, run_id: i64) -> bool {
+        if let Ok(g) = self.agent_runs.lock() {
+            if let Some(e) = g.get(&run_id) {
+                e.cancel.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
+        false
     }
 }
 
