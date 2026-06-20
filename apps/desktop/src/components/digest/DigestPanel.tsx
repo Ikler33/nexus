@@ -52,7 +52,9 @@ export function DigestPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <Newspaper size={16} aria-hidden />
+          <span className={styles.iconBox}>
+            <Newspaper size={16} aria-hidden />
+          </span>
           <span className={styles.title}>{t('digest.title')}</span>
           <span className={styles.spacer} />
           <button

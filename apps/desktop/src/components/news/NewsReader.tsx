@@ -178,6 +178,7 @@ export function NewsReader(props: {
             </>
           )}
         </div>
+        {sourceTitle && <div className={styles.readerKicker}>{sourceTitle}</div>}
         <h1 className={styles.readerTitle}>{item.titleRu}</h1>
 
         {summary === 'thinking' && (

@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Дизайн · QASR-views (2): CSS-полиш батч (7 вью к макету Qasr)
+
+Точечный полиш существующих вью под макет Qasr (только restyle, без новых фич/перестроек; питается токенами QASR-0). Основан на параллельном per-view дифф-анализе (13 вью; graph/ai-panel/sidebar уже совпали — не тронуты). **home**: `.greeting` → Cormorant headline 600 (превью-подтверждено: computed Cormorant/600/30px), heat-legend 3-частная раскладка. **news reader**: `.readerBar` sticky, `.readerTitle` Cormorant clamp(40–54px), новый mono-аптркейс `.readerKicker` (источник, акцент). **sync**: бордюр списка изменений, `.remote` dashed-box, единый `.syncStatus` с состояниями (success/warning/danger токены). **insights** (digest/goals/contradictions): `.iconBox` 34px у заголовка (3 модалки), унифицированный pill-`genBtn` 30px (goals — read-only, без кнопки). **worklists** (tasks/inbox): priority-бейджи с тинт-фоном (danger-soft/warning-mix/surface), inbox action-кнопки fade-in на hover/focus-within. **palette**: ширины 620/560px, паддинги input-row. **graph**: `flex:0 0 auto` для colorby/search. 15 файлов, 0 хардкод-цветов (только var(--…)/color-mix), test-all зелёный, 0 сломанных тестов.
+
 ### Дизайн · QASR-views (1): brand-completeness sweep + дискавери вью
 
 Старт фазы QASR-views. **Дискавери** (превью :1432, demo-vault): после QASR-0 (токены) + QASR-shell (бренд) приложение УЖЕ полностью рендерится в дизайне Qasr — титлбар «Qasr» + лого-крепость, кремовый сайдбар/activity-bar, Cormorant-заголовки («Доброе утро»), статусбар; вью питаются токенами → дальнейший QASR-views = per-view ПОЛИШ против макета, не пересборка. **Brand-completeness** (добиты пропуски бренда вне титульного среза): `index.html` `<title>` Nexus→Qasr (doc-title вебвью — QASR-shell менял только нативный заголовок окна); футер командной палитры `Nexus`→`t('app.name')`; demo-данные Home (`Nexus MVP`→`Qasr MVP`, путь проекта) — Qasr-приложение больше не показывает «Nexus»-проект в демо. Код-идентификатор `remarkNexus` оставлен (внутреннее имя, как crate-имена). Превью: shell + Home рендерятся как Qasr корректно.

@@ -13,7 +13,7 @@
 }
 
 .palette {
-  width: min(600px, 92vw);
+  width: min(620px, 92vw);
   max-height: 60vh;
   display: flex;
   flex-direction: column;
@@ -125,7 +125,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 16px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--color-border);
 }
 .inputRow > svg {
@@ -211,7 +211,11 @@
   align-items: center;
 }
 .spotlight .palette {
-  width: min(680px, 94vw);
+  width: min(560px, 92vw);
+}
+.spotlight .inputRow {
+  padding: 16px 18px;
+  border-bottom: none;
 }
 .spotlight .input {
   font-size: var(--text-xl);

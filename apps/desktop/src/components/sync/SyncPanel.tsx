@@ -272,8 +272,24 @@ function CommitResult({ outcome }: { outcome: CommitOutcome }) {
 function SyncResultView({ result }: { result: SyncResult }) {
   const { t } = useTranslation();
   if (result.status === 'up-to-date') return <p className={styles.muted}>↕ {t('git.upToDate')}</p>;
-  if (result.status === 'fast-forward') return <p className={styles.ok}>↓↑ {t('git.synced')}</p>;
+  if (result.status === 'fast-forward')
+    return (
+      <div className={`${styles.syncStatus} ${styles.syncStatusSynced}`}>
+        <span aria-hidden>↓↑</span>
+        <span className={styles.ssText}>{t('git.synced')}</span>
+      </div>
+    );
   if (result.status === 'merge-required')
-    return <p className={styles.warn}>⚠ {t('git.mergeRequired')}</p>;
-  return <p className={styles.errorMsg}>✋ {result.message}</p>;
+    return (
+      <div className={`${styles.syncStatus} ${styles.syncStatusConflict}`}>
+        <span aria-hidden>⚠</span>
+        <span className={styles.ssText}>{t('git.mergeRequired')}</span>
+      </div>
+    );
+  return (
+    <div className={`${styles.syncStatus} ${styles.syncStatusError}`}>
+      <span aria-hidden>✋</span>
+      <span className={styles.ssText}>{result.message}</span>
+    </div>
+  );
 }

@@ -29,6 +29,11 @@
   background: var(--color-bg-elevated);
   border-bottom: 1px solid var(--color-border);
 }
+/* Тулбар-контролы не сжимаются (макет graph.css): растягивает только spacer. */
+.graph-bar > .graph-colorby,
+.graph-bar > .graph-search {
+  flex: 0 0 auto;
+}
 .graph-spacer {
   flex: 1;
 }
