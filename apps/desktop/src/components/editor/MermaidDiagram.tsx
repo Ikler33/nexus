@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { renderMermaid, type MermaidTheme } from '../../lib/markdown/mermaid';
-import { useThemeStore } from '../../stores/theme';
+import { isDarkTheme, useThemeStore } from '../../stores/theme';
 import styles from './MarkdownPreview.module.css';
 
 /**
@@ -22,9 +22,10 @@ export function MermaidDiagram({ code }: { code: string }) {
   useEffect(() => {
     let alive = true;
     setState('loading');
-    // id mermaid'а — валидный для DOM/CSS (без `:` из useId). Тёмные темы приложения → mermaid 'dark'.
+    // id mermaid'а — валидный для DOM/CSS (без `:` из useId). ВСЕ тёмные темы (канон DARK_THEMES) →
+    // mermaid 'dark' (раньше — только dark/midnight, новые тёмные темы Qasr рендерили светлый mermaid).
     const id = `mmd-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-    const theme: MermaidTheme = appTheme === 'dark' || appTheme === 'midnight' ? 'dark' : 'default';
+    const theme: MermaidTheme = isDarkTheme(appTheme) ? 'dark' : 'default';
     void renderMermaid(code, id, theme)
       .then((s) => {
         if (alive) {

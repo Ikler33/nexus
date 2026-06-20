@@ -42,6 +42,28 @@ export const THEMES: readonly Theme[] = [
 ];
 export const ACCENTS: readonly Accent[] = ['amber', 'teal', 'sage', 'clay'];
 
+/**
+ * Тёмные темы (`color-scheme: dark` в tokens.css) — единый канон для компонентов, которым нужно
+ * знать светлота/тьму темы (MermaidDiagram → mermaid 'dark', graph-tag-lightness и т.п.). Светлые:
+ * light/paper/sepia/marble. Держать в синхроне с `:root[data-theme=…]{ color-scheme }` в styles.css.
+ */
+export const DARK_THEMES: ReadonlySet<Theme> = new Set<Theme>([
+  'dark',
+  'midnight',
+  'platinum',
+  'mocha',
+  'nord',
+  'tokyo',
+  'rose',
+  'contrast',
+  'bronze',
+]);
+
+/** Тёмная ли тема (по канону [`DARK_THEMES`]). */
+export function isDarkTheme(theme: Theme): boolean {
+  return DARK_THEMES.has(theme);
+}
+
 const THEME_KEY = 'nexus-theme';
 const ACCENT_KEY = 'nexus-accent';
 const DENSITY_KEY = 'nexus-density';
