@@ -98,6 +98,12 @@
   background: transparent;
   color: var(--color-text-faint);
   cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+.row:hover .actBtn,
+.row:focus-within .actBtn {
+  opacity: 1;
 }
 .actBtn:hover {
   color: var(--color-accent);

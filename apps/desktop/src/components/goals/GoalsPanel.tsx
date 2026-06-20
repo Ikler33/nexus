@@ -44,7 +44,9 @@ export function GoalsPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <Target size={16} aria-hidden />
+          <span className={styles.iconBox}>
+            <Target size={16} aria-hidden />
+          </span>
           <span className={styles.title}>{t('goals.title')}</span>
           <span className={styles.spacer} />
           <button

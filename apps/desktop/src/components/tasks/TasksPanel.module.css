@@ -234,12 +234,15 @@
 }
 .prio1 {
   color: var(--color-danger);
+  background: var(--color-danger-soft);
 }
 .prio2 {
   color: var(--color-warning);
+  background: color-mix(in oklch, var(--color-warning) 20%, transparent);
 }
 .prio3 {
   color: var(--color-text-faint);
+  background: var(--color-surface);
 }
 .fileHint {
   flex: 0 1 auto;

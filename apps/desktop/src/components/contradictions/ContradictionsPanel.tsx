@@ -58,7 +58,9 @@ export function ContradictionsPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <Scale size={16} aria-hidden />
+          <span className={styles.iconBox}>
+            <Scale size={16} aria-hidden />
+          </span>
           <span className={styles.title}>{t('contradictions.title')}</span>
           <span className={styles.spacer} />
           {enabled && (

@@ -34,6 +34,16 @@
   font-size: var(--text-sm);
   font-weight: 700;
 }
+.iconBox {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
 .spacer {
   flex: 1;
 }
