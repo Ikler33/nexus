@@ -37,7 +37,12 @@ import { dirname, resolve } from 'node:path';
 // tool-capable модели :8080 — модель эмитит tool_call → цикл исполняет EchoTool → feed-back в СТРОГОЙ
 // OpenAI-форме (assistant{tool_calls}+tool{tool_call_id}, Part A) → Final; валидирует реальную форму
 // протокола end-to-end; нужен живой LLM; запуск `NEXUS_CHAT_URL=… cargo test live_tool_call_smoke -- --ignored`).
-const EXPECTED = 24;
+// 24→25: + `live_connect_tool_loop_on_rig` (AGENT-CONNECT P0b-2b: ConnectAgentHandler драйвит реальную
+// tool-capable модель :8080 ЧЕРЕЗ протокол коннектора — agent/run → run_agent_session → agent/event-стрим
+// (toolCall→final); валидирует коннектор end-to-end на живой модели; офлайн-гейт — 4 теста
+// `agent::connect::handler::tests::*` на фейк-провайдере; запуск `NEXUS_LIVE_CHAT=1 cargo test
+// live_connect_tool_loop_on_rig -- --ignored`).
+const EXPECTED = 25;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src

@@ -1,0 +1,788 @@
+//! [`ConnectAgentHandler`] — реализация [`ConnectHandler`] поверх [`run_agent_session`] (P0b-2b).
+//!
+//! Замыкает коннектор: протокол (P0a framing/dispatch) + wire-DTO (P0b-1) + единая композиция
+//! (P0b-2a) → РАБОЧИЙ агент-сервис за [`Transport`]. Один хендлер обслуживает несколько сессий; каждый
+//! `agent/run` спавнит [`run_agent_session`] и стримит его события клиенту как `agent/event`-нотификации
+//! через [`event_notification`] (тот же wire-контракт, что у desktop UI-1b — без расхождения).
+//!
+//! # Транспорт + асинхронный мост
+//! `dispatch` отдаёт ОТВЕТ на запрос через `out`, переданный в вызов; но события прогона текут АСИНХРОННО
+//! (цикл живёт в `tokio::spawn`), поэтому хендлер держит СВОЙ `Arc<dyn Transport>` (тот же эндпоинт
+//! сервиса) и шлёт в него нотификации. [`AgentEventForwarder`] синхронен (требование цикла); транспорт
+//! асинхронен — мостим через unbounded-mpsc + drain-таск (sync `forward` → канал → `await out.send`).
+//!
+//! # Сессии и контроль
+//! Реестр `session_id → SessionHandle` (run_id + decision-sender + per-session `paused`/`cancel`).
+//! `agent/approve` кормит [`ChannelDecision`] (человек-в-петле, fail-closed reject_all при закрытии).
+//! `agent/control` — per-session пауза (как per-run kill-switch desktop). `agent/cancel` — кооперативно.
+//! `agent/undo` — [`actuator::undo_run`] по run_id (идемпотентно). Автономия прогонов — `confirm`
+//! (безопасно по умолчанию): запись актуатора требует ЯВНОГО `agent/approve`.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use tokio::sync::{mpsc, Mutex};
+
+use crate::actuator::{self, AuditSink, BatchDecision, ChannelDecision, ItemDecision};
+use crate::ai::tools::ToolCapableProvider;
+use crate::db::{ReadPool, WriteActor};
+
+use super::super::event::AgentEvent;
+use super::super::memory::AgentMemory;
+use super::super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
+use super::super::runner::{BudgetKind, LoopOutcome};
+use super::super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
+use super::super::skill_tools::SkillContext;
+use super::{
+    event_notification, negotiate_version, AgentRunParams, ApproveParams, CancelParams,
+    ConnectHandler, ControlParams, InitializeParams, InitializeResult, RpcError, Transport,
+    UndoParams, UndoResult,
+};
+
+/// Глубина decision-канала сессии (как desktop `DECISION_CHANNEL_CAP`): предложений в прогоне может быть
+/// несколько (по одному на changeset-айтем), клиент аппрувит их по очереди.
+const DECISION_CAP: usize = 8;
+
+/// Автономия прогонов коннектора. **`confirm` — SAFE BY DEFAULT**: даже Auto-тир актуатора ПРЕДЛАГАЕТ
+/// (Proposal), запись требует явного `agent/approve` (человек-в-петле). Протокол `agent/run` не несёт
+/// автономии — она фиксирована безопасной до отдельного решения (owner-gated повышение до `auto`).
+const CONNECT_AUTONOMY: &str = "confirm";
+
+/// Композиционные зависимости хендлера (общие на все сессии). Строит композиционный корень (agentd /
+/// desktop in-process). `provider` ОБЯЗАТЕЛЕН (без него коннектор не поднимают — в отличие от desktop,
+/// где провайдер опционален и прогон деградирует в error).
+pub struct ConnectDeps {
+    /// tool-capable LLM-провайдер прогонов (тот же `GuardedClient`/`EgressFeature::Chat`, что и chat).
+    pub provider: Arc<dyn ToolCapableProvider>,
+    /// Память агента (AGENT-MEM-1); `None` → прогоны без recall (без регрессии).
+    pub memory: Option<Arc<dyn AgentMemory>>,
+    /// Писатель/читатель БД vault (run_store, ledger актуатора).
+    pub writer: WriteActor,
+    /// Читатель БД vault.
+    pub reader: ReadPool,
+    /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие гейта/apply + база undo).
+    pub canon_root: PathBuf,
+    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT** (`false` → стабы echo/noop, vault не трогается).
+    pub actuator_enabled: bool,
+    /// Порог «крупной перезаписи» → Confirm-тир (эффект при `actuator_enabled`).
+    pub overwrite_threshold: usize,
+    /// Кэп blast-radius прогона (эффект при `actuator_enabled`).
+    pub blast_cap: u32,
+    /// Окно контекста модели (токены) из конфига; `None` → дефолт `ContextBudget`.
+    pub context_window: Option<usize>,
+    /// Контекст скиллов (SKILL-2); `None` → без меню/инструментов скиллов.
+    pub skills: Option<SkillContext>,
+}
+
+/// [`AgentEventForwarder`] → асинхронный [`Transport`]. Синхронный `forward` лишь кладёт событие в
+/// unbounded-канал (НИКОГДА не блокирует цикл); drain-таск маппит в `agent/event` и шлёт в транспорт.
+struct TransportForwarder {
+    tx: mpsc::UnboundedSender<AgentEvent>,
+}
+
+impl AgentEventForwarder for TransportForwarder {
+    fn forward(&self, ev: &AgentEvent) {
+        // best-effort: drain-таск ушёл (клиент отвалился) → событие тихо роняем, цикл не страдает.
+        let _ = self.tx.send(ev.clone());
+    }
+}
+
+/// Активная сессия: адрес её прогона + ручки контроля.
+struct SessionHandle {
+    /// `id` строки `agent_runs` этого прогона (для валидации approve/cancel/undo по `run_id`).
+    run_id: i64,
+    /// Sender в [`ChannelDecision`] прогона (кормится `agent/approve`).
+    decisions: mpsc::Sender<BatchDecision>,
+    /// Per-session kill-switch (`agent/control`): пауза мид-ран на границе хода.
+    paused: Arc<AtomicBool>,
+    /// Кооперативная отмена (`agent/cancel`).
+    cancel: Arc<AtomicBool>,
+}
+
+/// Агент-сервис за протоколом коннектора. Держит композиционные зависимости + исходящий транспорт (для
+/// `agent/event`-нотификаций) + реестр активных сессий.
+pub struct ConnectAgentHandler {
+    deps: Arc<ConnectDeps>,
+    out: Arc<dyn Transport>,
+    sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
+}
+
+impl ConnectAgentHandler {
+    /// Собирает хендлер из зависимостей + исходящего эндпоинта транспорта (тот же, на котором serve-loop
+    /// читает входящие — `dispatch` отвечает в него же).
+    pub fn new(deps: Arc<ConnectDeps>, out: Arc<dyn Transport>) -> Self {
+        Self {
+            deps,
+            out,
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+/// Маппинг исхода цикла → терминальный статус run_store (как desktop `finish_in_store`: single-spawn,
+/// пауза → error, т.к. у коннектора нет scheduler-requeue headless-пути).
+fn outcome_to_finish(outcome: &LoopOutcome) -> (&'static str, String) {
+    match outcome {
+        LoopOutcome::Final(s) => (STATUS_DONE, s.clone()),
+        LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Cancelled,
+            partial,
+        } => (
+            STATUS_CANCELLED,
+            format!("прогон отменён; частичный ответ: {partial}"),
+        ),
+        LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Paused,
+            partial,
+        } => (
+            STATUS_ERROR,
+            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
+        ),
+        LoopOutcome::BudgetExhausted { kind, partial } => (
+            STATUS_ERROR,
+            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
+        ),
+        LoopOutcome::Error(e) => (STATUS_ERROR, e.clone()),
+    }
+}
+
+#[async_trait]
+impl ConnectHandler for ConnectAgentHandler {
+    async fn initialize(&self, p: InitializeParams) -> Result<InitializeResult, RpcError> {
+        match negotiate_version(&p.supported_versions) {
+            Some(v) => Ok(InitializeResult {
+                version: v.to_string(),
+            }),
+            None => Err(RpcError::version_incompatible()),
+        }
+    }
+
+    async fn agent_run(&self, p: AgentRunParams) -> Result<Value, RpcError> {
+        // model_override: протокол его несёт, но коннектор P0b использует СВОЙ сконфигурированный
+        // провайдер (single-model embedded-кейс). Per-model выбор — забота композиционного корня (agentd
+        // строит провайдеры по моделям) — будущий срез. Логируем расхождение, не молчим.
+        if let Some(m) = p.model_override.as_deref() {
+            if m != self.deps.provider.model_id() {
+                tracing::debug!(
+                    requested = m,
+                    active = self.deps.provider.model_id(),
+                    "agent/run: model_override не применён (коннектор использует сконфигурированный провайдер)"
+                );
+            }
+        }
+
+        // Контроль + decision-источник (человек-в-петле, fail-closed) + регистрация сессии.
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (decision_source, decision_tx) = ChannelDecision::new(DECISION_CAP);
+        let decision_source: Arc<dyn actuator::DecisionSource> = Arc::new(decision_source);
+
+        // ОДИН активный прогон на session_id: реестр держим под локом ЧЕРЕЗ create_run (анти-TOCTOU —
+        // иначе два конкурентных agent/run на одну сессию создали бы две строки и перетёрли бы хендл,
+        // оставив один прогон неадресуемым для approve/cancel). Параллельные прогоны — РАЗНЫЕ session_id.
+        // Повторное использование session_id ПОСЛЕДОВАТЕЛЬНО (после finish сессия снята) — штатно.
+        let run_id = {
+            let mut sessions = self.sessions.lock().await;
+            if sessions.contains_key(&p.session_id) {
+                return Err(RpcError::invalid_params()); // сессия уже ведёт активный прогон
+            }
+            let run_id = run_store::create_run(
+                &self.deps.writer,
+                &p.prompt,
+                Some(self.deps.provider.model_id()),
+                Some(CONNECT_AUTONOMY),
+            )
+            .await
+            .map_err(|e| RpcError::internal(format!("create_run: {e}")))?;
+            sessions.insert(
+                p.session_id.clone(),
+                SessionHandle {
+                    run_id,
+                    decisions: decision_tx,
+                    paused: paused.clone(),
+                    cancel: cancel.clone(),
+                },
+            );
+            run_id
+        };
+
+        // Мост событий: sync forward → unbounded-канал → drain-таск → agent/event в транспорт.
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(TransportForwarder { tx: ev_tx });
+        let drain_out = self.out.clone();
+        tokio::spawn(async move {
+            while let Some(ev) = ev_rx.recv().await {
+                if let Some(msg) = event_notification(&ev) {
+                    if drain_out.send(msg).await.is_err() {
+                        break; // клиент ушёл — прекращаем стрим (цикл сам завершится по своим границам)
+                    }
+                }
+            }
+        });
+
+        // Прогон в фоне: ack (`runId`) уходит клиенту СРАЗУ, цикл стримит события асинхронно.
+        let deps = self.deps.clone();
+        let sessions = self.sessions.clone();
+        let session_id = p.session_id.clone();
+        let prompt = p.prompt;
+        tokio::spawn(async move {
+            let spec = SessionSpec {
+                run_id,
+                task: prompt,
+                autonomy: Some(CONNECT_AUTONOMY.to_string()),
+                actuator_enabled: deps.actuator_enabled,
+                overwrite_threshold: deps.overwrite_threshold,
+                blast_cap: deps.blast_cap,
+                context_window: deps.context_window,
+                canon_root: deps.canon_root.clone(),
+            };
+            let _ = run_store::mark_running(&deps.writer, run_id).await;
+            let outcome = run_agent_session(
+                &spec,
+                deps.provider.as_ref(),
+                deps.memory.as_deref(),
+                deps.skills.as_ref(),
+                decision_source,
+                &deps.writer,
+                &deps.reader,
+                &paused,
+                &cancel,
+                forwarder,
+            )
+            .await;
+            let (status, text) = outcome_to_finish(&outcome);
+            let _ = run_store::finish_run(&deps.writer, run_id, status, Some(&text)).await;
+            // Дерегистрируем сессию ТОЛЬКО если хендл всё ещё ЭТОТ прогон (guard по run_id) — defense in
+            // depth на случай, если сессию переиспользовали (новый прогон не должен быть снят нашим
+            // финишем). После снятия approve/cancel вернут «не активна» (идемпотентно).
+            let mut s = sessions.lock().await;
+            if s.get(&session_id).map(|h| h.run_id) == Some(run_id) {
+                s.remove(&session_id);
+            }
+        });
+
+        Ok(json!({ "runId": run_id.to_string() }))
+    }
+
+    async fn agent_undo(&self, p: UndoParams) -> Result<UndoResult, RpcError> {
+        let run_id: i64 = p.run_id.parse().map_err(|_| RpcError::invalid_params())?;
+        // ledger над тем же writer/reader, что и прогон — undo_run читает executed-строки прогона.
+        let ledger = AuditSink::new(self.deps.writer.clone(), self.deps.reader.clone());
+        let outcome = actuator::undo_run(run_id, &self.deps.canon_root, &ledger).await;
+        Ok(UndoResult {
+            restored: outcome.restored() as u32,
+        })
+    }
+
+    async fn agent_cancel(&self, p: CancelParams) -> Result<Value, RpcError> {
+        // Взводим cancel-флаг сессии, если адрес совпал. Неактивна/чужой run_id → idempotent no-op.
+        let cancel = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(&p.session_id)
+                .filter(|h| h.run_id.to_string() == p.run_id)
+                .map(|h| h.cancel.clone())
+        };
+        match cancel {
+            Some(flag) => {
+                flag.store(true, Ordering::Relaxed);
+                Ok(json!({ "cancelled": true }))
+            }
+            None => Ok(json!({ "cancelled": false })),
+        }
+    }
+
+    async fn agent_approve(&self, p: ApproveParams) {
+        // Клонируем sender и ОТПУСКАЕМ лок ДО await (не держим Mutex через сетевой/канальный await).
+        let tx = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(&p.session_id)
+                .filter(|h| h.run_id.to_string() == p.run_id)
+                .map(|h| h.decisions.clone())
+        };
+        let Some(tx) = tx else {
+            tracing::debug!(
+                session = %p.session_id,
+                run = %p.run_id,
+                "agent/approve: сессия не активна — игнор (idempotent)"
+            );
+            return;
+        };
+        let batch = BatchDecision::from_pairs(p.decisions.into_iter().map(|d| {
+            (
+                d.action_id,
+                if d.approved {
+                    ItemDecision::Approve
+                } else {
+                    ItemDecision::Reject
+                },
+            )
+        }));
+        // best-effort: канал закрыт (прогон завершился) → решение неактуально.
+        let _ = tx.send(batch).await;
+    }
+
+    async fn agent_control(&self, p: ControlParams) {
+        let paused = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(&p.session_id).map(|h| h.paused.clone())
+        };
+        if let Some(flag) = paused {
+            flag.store(p.pause, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::tool::{ToolCall, ToolSpec};
+    use crate::ai::tools::ToolTurn;
+    use crate::ai::{AiResult, ChatMessage};
+    use crate::db::Database;
+    use crate::net::RunCtx;
+    use std::collections::VecDeque;
+    use std::sync::Mutex as StdMutex;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    use super::super::{channel_pair, dispatch, RpcMessage};
+
+    /// Фейк tool-провайдер: скриптованная последовательность ходов (offline, как agent_loop_smoke).
+    struct FakeProvider {
+        turns: StdMutex<VecDeque<AiResult<ToolTurn>>>,
+    }
+    impl FakeProvider {
+        fn new(turns: Vec<AiResult<ToolTurn>>) -> Self {
+            Self {
+                turns: StdMutex::new(turns.into_iter().collect()),
+            }
+        }
+    }
+    #[async_trait]
+    impl ToolCapableProvider for FakeProvider {
+        async fn stream_chat_tools(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[ToolSpec],
+            _on_token: &mut (dyn FnMut(String) + Send),
+            _cancel: &Arc<AtomicBool>,
+            _ctx: RunCtx,
+        ) -> AiResult<ToolTurn> {
+            self.turns
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Ok(ToolTurn::Final("(no more turns)".into())))
+        }
+        fn model_id(&self) -> &str {
+            "fake"
+        }
+    }
+
+    async fn open_db() -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join("test.db")).await.unwrap();
+        (dir, db)
+    }
+
+    fn deps_with(
+        provider: Arc<dyn ToolCapableProvider>,
+        canon_root: PathBuf,
+        db: &Database,
+        actuator_enabled: bool,
+    ) -> Arc<ConnectDeps> {
+        Arc::new(ConnectDeps {
+            provider,
+            memory: None,
+            writer: db.writer().clone(),
+            reader: db.reader().clone(),
+            canon_root,
+            actuator_enabled,
+            overwrite_threshold: 64 * 1024,
+            blast_cap: 16,
+            context_window: Some(32768),
+            skills: None,
+        })
+    }
+
+    /// Поднимает serve-loop над server-эндпоинтом + возвращает client-эндпоинт для отправки запросов.
+    fn serve(handler: Arc<ConnectAgentHandler>, server: Arc<super::super::ChannelTransport>) {
+        tokio::spawn(async move {
+            while let Some(msg) = server.recv().await {
+                dispatch(handler.as_ref(), msg, server.as_ref()).await;
+            }
+        });
+    }
+
+    async fn recv_timeout(t: &super::super::ChannelTransport) -> RpcMessage {
+        tokio::time::timeout(Duration::from_secs(5), t.recv())
+            .await
+            .expect("recv timeout")
+            .expect("transport closed")
+    }
+
+    /// E2E offline: initialize → agent/run (echo-стаб) → клиент видит ack{runId} + поток agent/event
+    /// (toolCall → toolResult → final). Доказывает, что протокол ДРАЙВИТ реальный цикл и стримит wire-DTO.
+    #[tokio::test]
+    async fn connect_drives_run_end_to_end_offline() {
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                arguments: r#"{"text":"hi"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("готово".into())),
+        ]));
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false);
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        // initialize
+        client
+            .send(RpcMessage::request(
+                1,
+                "initialize",
+                json!({"supportedVersions": ["1.0"]}),
+            ))
+            .await
+            .unwrap();
+        match recv_timeout(&client).await {
+            RpcMessage::Response { id, result } => {
+                assert_eq!(id, json!(1));
+                assert_eq!(result.unwrap()["version"], "1.0");
+            }
+            other => panic!("ожидали Response на initialize, получили {other:?}"),
+        }
+
+        // agent/run
+        client
+            .send(RpcMessage::request(
+                2,
+                "agent/run",
+                json!({"sessionId": "s1", "prompt": "сделай эхо"}),
+            ))
+            .await
+            .unwrap();
+
+        let mut run_id = String::new();
+        let mut got_toolcall = false;
+        let mut got_final = false;
+        for _ in 0..60 {
+            match recv_timeout(&client).await {
+                RpcMessage::Response { id, result } if id == json!(2) => {
+                    run_id = result.unwrap()["runId"].as_str().unwrap().to_string();
+                }
+                RpcMessage::Notification { method, params } if method == "agent/event" => {
+                    match params["type"].as_str().unwrap_or("") {
+                        "toolCall" => got_toolcall = true,
+                        "final" => {
+                            got_final = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(!run_id.is_empty(), "ack с runId пришёл");
+        assert!(got_toolcall, "toolCall застримлен");
+        assert!(got_final, "final застримлен");
+    }
+
+    /// initialize с несовместимой версией → Response с ошибкой version_incompatible (-32001).
+    #[tokio::test]
+    async fn initialize_rejects_incompatible_version() {
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> =
+            Arc::new(FakeProvider::new(vec![Ok(ToolTurn::Final("x".into()))]));
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false);
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        client
+            .send(RpcMessage::request(
+                7,
+                "initialize",
+                json!({"supportedVersions": ["9.9"]}),
+            ))
+            .await
+            .unwrap();
+        match recv_timeout(&client).await {
+            RpcMessage::Response { id, result } => {
+                assert_eq!(id, json!(7));
+                let err = result.expect_err("ожидали ошибку версии");
+                assert_eq!(err.code, -32001);
+            }
+            other => panic!("ожидали Response, получили {other:?}"),
+        }
+    }
+
+    /// КЛЮЧЕВОЕ: человек-в-петле ЧЕРЕЗ ПРОВОД. Actuator ВКЛ + note.create → клиент получает `proposal`,
+    /// шлёт `agent/approve` (по actionId) → файл реально записан через гейт, прогон done. Доказывает, что
+    /// approve работает end-to-end по протоколу (offline-провайдер, реальный temp-vault).
+    #[tokio::test]
+    async fn approve_over_wire_applies_confirm_item() {
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (dir, db) = open_db().await;
+        let canon = dir.path().canonicalize().unwrap();
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "n1".into(),
+                name: "note.create".into(),
+                arguments: r#"{"path":"Notes/Wire.md","content":"создано по проводу"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("готово".into())),
+        ]));
+        let deps = deps_with(provider, canon.clone(), &db, true); // actuator ВКЛ (temp-vault)
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        client
+            .send(RpcMessage::request(
+                1,
+                "agent/run",
+                json!({"sessionId": "sx", "prompt": "создай заметку"}),
+            ))
+            .await
+            .unwrap();
+
+        let mut run_id = String::new();
+        let mut approved = false;
+        let mut got_final = false;
+        for _ in 0..80 {
+            match recv_timeout(&client).await {
+                RpcMessage::Response { id, result } if id == json!(1) => {
+                    run_id = result.unwrap()["runId"].as_str().unwrap().to_string();
+                }
+                RpcMessage::Notification { method, params } if method == "agent/event" => {
+                    match params["type"].as_str().unwrap_or("") {
+                        "proposal" if !approved => {
+                            let action_id =
+                                params["files"][0]["actionId"].as_i64().expect("actionId");
+                            client
+                                .send(RpcMessage::notification(
+                                    "agent/approve",
+                                    json!({
+                                        "sessionId": "sx",
+                                        "runId": run_id,
+                                        "decisions": [{"actionId": action_id, "approved": true}],
+                                    }),
+                                ))
+                                .await
+                                .unwrap();
+                            approved = true;
+                        }
+                        "final" => {
+                            got_final = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(approved, "proposal пришёл и мы отправили approve");
+        assert!(got_final, "прогон дошёл до final");
+        let written = std::fs::read_to_string(canon.join("Notes/Wire.md")).ok();
+        assert_eq!(
+            written.as_deref(),
+            Some("создано по проводу"),
+            "approve по проводу применил note.create через гейт"
+        );
+    }
+
+    /// cancel/approve по неизвестной сессии — идемпотентный no-op (не паникует, cancelled:false).
+    #[tokio::test]
+    async fn cancel_unknown_session_is_idempotent() {
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> =
+            Arc::new(FakeProvider::new(vec![Ok(ToolTurn::Final("x".into()))]));
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false);
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        client
+            .send(RpcMessage::request(
+                5,
+                "agent/cancel",
+                json!({"sessionId": "ghost", "runId": "999"}),
+            ))
+            .await
+            .unwrap();
+        match recv_timeout(&client).await {
+            RpcMessage::Response { id, result } => {
+                assert_eq!(id, json!(5));
+                assert_eq!(result.unwrap()["cancelled"], false);
+            }
+            other => panic!("ожидали Response, получили {other:?}"),
+        }
+    }
+
+    /// Провайдер, чей первый ход ВИСИТ (sleep) — держит прогон активным детерминированно.
+    struct SleepyProvider;
+    #[async_trait]
+    impl ToolCapableProvider for SleepyProvider {
+        async fn stream_chat_tools(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[ToolSpec],
+            _on_token: &mut (dyn FnMut(String) + Send),
+            _cancel: &Arc<AtomicBool>,
+            _ctx: RunCtx,
+        ) -> AiResult<ToolTurn> {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Ok(ToolTurn::Final("done".into()))
+        }
+        fn model_id(&self) -> &str {
+            "sleepy"
+        }
+    }
+
+    /// Один активный прогон на session_id: пока первый идёт (провайдер висит), второй `agent/run` на ту
+    /// же сессию ОТКЛОНЯЕТСЯ (invalid_params) — реестр не перетирается, прогон остаётся адресуемым.
+    #[tokio::test]
+    async fn second_run_same_session_rejected_while_active() {
+        let (_client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(SleepyProvider);
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false);
+        let handler = ConnectAgentHandler::new(deps, server.clone());
+
+        let p1 = AgentRunParams {
+            session_id: "dup".into(),
+            prompt: "первый".into(),
+            model_override: None,
+        };
+        let p2 = AgentRunParams {
+            session_id: "dup".into(),
+            prompt: "второй".into(),
+            model_override: None,
+        };
+        let r1 = handler.agent_run(p1).await;
+        assert!(r1.is_ok(), "первый прогон стартовал: {r1:?}");
+        let r2 = handler.agent_run(p2).await;
+        assert!(
+            matches!(r2, Err(ref e) if e.code == -32602),
+            "второй прогон на активную сессию отклонён invalid_params, получили {r2:?}"
+        );
+        // Ждём, пока первый завершится и снимет сессию (поллим до ~3 c — устойчиво к нагрузке CI),
+        // затем тот же session_id снова свободен для нового прогона.
+        let mut r3 = Err(RpcError::invalid_params());
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            r3 = handler
+                .agent_run(AgentRunParams {
+                    session_id: "dup".into(),
+                    prompt: "третий".into(),
+                    model_override: None,
+                })
+                .await;
+            if r3.is_ok() {
+                break;
+            }
+        }
+        assert!(r3.is_ok(), "после finish session_id снова свободен: {r3:?}");
+    }
+
+    // ── LIVE: реальный риг (192.168.0.31:8080). Запуск: `NEXUS_LIVE_CHAT=1 cargo test -p nexus-core \
+    //    --lib agent::connect::handler::tests::live -- --ignored --nocapture`. Гейт env-флагом + ignore-атрибутом ──
+
+    /// LIVE tool-loop на риге: реальный OpenAI-tool-провайдер (Qwen3.6-27B на llama.cpp) драйвит цикл
+    /// через коннектор; стабы echo/noop (actuator ВЫКЛ — vault не трогается). Ждём, что модель ВЫЗОВЕТ
+    /// инструмент (toolCall) и завершит ход (final). Доказывает реальный tool-calling end-to-end.
+    #[tokio::test]
+    #[ignore = "нужен живой chat-риг (NEXUS_LIVE_CHAT=1, NEXUS_LIVE_CHAT_URL, default 192.168.0.31:8080)"]
+    async fn live_connect_tool_loop_on_rig() {
+        use crate::ai::tools::OpenAiToolProvider;
+        use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+
+        if std::env::var("NEXUS_LIVE_CHAT").ok().as_deref() != Some("1") {
+            eprintln!("SKIP: NEXUS_LIVE_CHAT!=1");
+            return;
+        }
+        let url = std::env::var("NEXUS_LIVE_CHAT_URL")
+            .unwrap_or_else(|_| "http://192.168.0.31:8080".into());
+        let model = std::env::var("NEXUS_LIVE_CHAT_MODEL").unwrap_or_else(|_| "qwen".into());
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        let audit = Arc::new(EgressAudit::default());
+        let gc = GuardedClient::for_chat(policy, audit, Duration::from_secs(20)).unwrap();
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(OpenAiToolProvider::new(
+            &gc,
+            EgressFeature::Chat,
+            &url,
+            &model,
+            Some(0.2),
+        ));
+
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false); // actuator OFF (echo/noop)
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        client
+            .send(RpcMessage::request(
+                1,
+                "agent/run",
+                json!({
+                    "sessionId": "live",
+                    "prompt": "Вызови инструмент `echo` с аргументом text=\"привет с рига\", \
+                               затем дай короткий финальный ответ.",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        // Живой первый токен может занять до ~3 мин (cold-start). Длинный таймаут на ход.
+        let mut got_toolcall = false;
+        let mut got_final = false;
+        for _ in 0..200 {
+            let m = tokio::time::timeout(Duration::from_secs(200), client.recv())
+                .await
+                .expect("live recv timeout")
+                .expect("transport closed");
+            if let RpcMessage::Notification { method, params } = m {
+                if method == "agent/event" {
+                    match params["type"].as_str().unwrap_or("") {
+                        "toolCall" => {
+                            got_toolcall = true;
+                            eprintln!("LIVE toolCall: {}", params);
+                        }
+                        "assistantToken" => { /* стрим контента */ }
+                        "final" => {
+                            got_final = true;
+                            eprintln!("LIVE final: {}", params);
+                            break;
+                        }
+                        "error" => panic!("LIVE error: {params}"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert!(
+            got_toolcall,
+            "модель вызвала инструмент (real tool-calling)"
+        );
+        assert!(got_final, "прогон дошёл до final на живой модели");
+    }
+}
