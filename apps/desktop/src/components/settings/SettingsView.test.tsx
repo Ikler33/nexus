@@ -5,6 +5,7 @@ import { SettingsView } from './SettingsView';
 import { commands } from '../../lib/commands';
 import { registerCoreCommands } from '../../lib/commands-core';
 import { usePrefsStore } from '../../stores/prefs';
+import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 
 describe('SettingsView (кросс-план #11, оболочка раздела)', () => {
@@ -20,12 +21,37 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     expect(screen.getByRole('button', { name: /горячие|hotkeys/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /о программе|about/i })).toBeInTheDocument();
 
-    // Активна «Оформление» → видны контролы темы.
+    // Активна «Оформление» → видна подпись темы.
     expect(screen.getByText(/тема|theme/i)).toBeInTheDocument();
 
-    // Переключаемся на «О программе» → секция меняется в ui-сторе и видна версия/vault.
+    // Переключаемся на «О программе» → секция меняется в ui-сторе, видны имя приложения и версия.
     fireEvent.click(screen.getByRole('button', { name: /о программе|about/i }));
     expect(useUIStore.getState().settingsSection).toBe('about');
+    expect(screen.getByText(/версия|version/i)).toBeInTheDocument();
+  });
+
+  // Qasr-restructure: тема выбирается КАРТОЧКОЙ (сетка визуальных превью), а не сегмент-кнопкой.
+  // Сохранён смысл старого теста: клик по теме вызывает setTheme и обновляет theme-стор.
+  it('Appearance (Qasr): выбор темы карточкой меняет theme-стор', () => {
+    useThemeStore.getState().setTheme('light'); // нормализуем старт
+    useUIStore.setState({ settingsSection: 'appearance' });
+    render(<SettingsView />);
+
+    // Карточка «Тёмная» (dark) — кликабельна (aria-pressed-тоггл), вызывает setTheme('dark').
+    const darkCard = screen.getByRole('button', { name: /^(тёмная|dark)$/i });
+    expect(darkCard).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(darkCard);
+    expect(useThemeStore.getState().theme).toBe('dark');
+    expect(darkCard).toHaveAttribute('aria-pressed', 'true');
+
+    useThemeStore.getState().setTheme('light'); // вернуть дефолт (стор общий на сессию теста)
+  });
+
+  // Qasr-restructure: About — центрированная колонка (BrandMark + имя/версия/vault), не dl/dt/dd.
+  it('About (Qasr): показывает имя приложения и версию', () => {
+    useUIStore.setState({ settingsSection: 'about' });
+    render(<SettingsView />);
+    expect(screen.getByText(/^qasr$/i)).toBeInTheDocument(); // app.name
     expect(screen.getByText(/версия|version/i)).toBeInTheDocument();
   });
 
