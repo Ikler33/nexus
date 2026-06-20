@@ -14,6 +14,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 
+use super::event::AgentEvent;
+
+pub mod wire;
+pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamEvent};
+
 /// Версия протокола этой сборки. Клиент объявляет поддерживаемые в `initialize`; сервер выбирает.
 pub const PROTOCOL_VERSION: &str = "1.0";
 /// Поддерживаемые версии (по убыванию предпочтения).
@@ -414,10 +419,16 @@ pub fn acp_tool_kind(nexus_kind: &str) -> &'static str {
     }
 }
 
-// NB: маппинг `AgentEvent`→`agent/event`-уведомление = **P0b (EventSink-адаптер)**, НЕ P0a.
-// `AgentEvent` помечен `#[serde(tag="type")]`, но имеет newtype-варианты (`Final(String)`,
-// `AssistantToken(String)`) — внутреннее тегирование serde их сериализовать НЕ может (рантайм-ошибка),
-// поэтому нужен явный wire-DTO-маппинг (срез P0b), а не `to_value(ev)`.
+/// Оборачивает событие агента (`AgentEvent`) в `agent/event`-уведомление через wire-DTO
+/// ([`map_agent_event`]). `None` — событие ядра без wire-представления (`non_exhaustive`-задел) →
+/// не стримим. NB: маппим через DTO, а НЕ `to_value(AgentEvent)` — у ядра newtype-варианты
+/// (`Final(String)` и т.п.) несовместимы с serde-internal-tag (см. регрессию в [`wire`]).
+pub fn event_notification(ev: &AgentEvent) -> Option<RpcMessage> {
+    let wire = map_agent_event(ev)?;
+    // wire-DTO — struct-вариантный теговый enum, сериализуется штатно.
+    let params = serde_json::to_value(wire).ok()?;
+    Some(RpcMessage::notification("agent/event", params))
+}
 
 #[cfg(test)]
 mod tests {
@@ -523,11 +534,24 @@ mod tests {
     /// можно упростить P0b. Пока — фиксируем ловушку.
     #[test]
     fn agent_event_newtype_is_not_directly_serializable() {
-        use crate::agent::event::AgentEvent;
         assert!(
             serde_json::to_value(AgentEvent::Final("done".into())).is_err(),
-            "если стало Ok — serde-поведение изменилось, пересмотреть P0b EventSink"
+            "если стало Ok — serde-поведение изменилось, пересмотреть wire-DTO"
         );
+    }
+
+    #[test]
+    fn event_notification_wraps_via_wire_dto() {
+        // То, что ядро НЕ сериализует напрямую — через wire-DTO уходит штатно в agent/event.
+        let n = event_notification(&AgentEvent::Final("done".into())).unwrap();
+        match n {
+            RpcMessage::Notification { method, params } => {
+                assert_eq!(method, "agent/event");
+                assert_eq!(params["type"], "final");
+                assert_eq!(params["text"], "done");
+            }
+            _ => panic!("expected notification"),
+        }
     }
 
     // ── transport ──

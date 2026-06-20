@@ -31,7 +31,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
@@ -40,8 +40,8 @@ use nexus_core::actuator::{
     ItemDecision, NoteCreateTool, NoteEditTool, ProposalBatch, SetFrontmatterTool,
 };
 use nexus_core::agent::{
-    run_agent_loop, run_store, AgentEvent, AgentMemory, EchoTool, FileStatus, LoopBounds,
-    LoopOutcome, NoopTool, ToolRegistry, VaultAgentMemory, AGENT_PREAMBLE, RECALL_BUDGET_TOKENS,
+    run_agent_loop, run_store, AgentEvent, AgentMemory, EchoTool, LoopBounds, LoopOutcome,
+    NoopTool, ToolRegistry, VaultAgentMemory, AGENT_PREAMBLE, RECALL_BUDGET_TOKENS,
 };
 use nexus_core::ai::{ChatMessage, ContextBudget, QwenTokenizer};
 use nexus_core::net::RunCtx;
@@ -58,145 +58,11 @@ const DECISION_CHANNEL_CAP: usize = 8;
 
 // ── Контракт стрима «бэкенд → фронт» (UI-1b потребитель) ──────────────────────────────────────────
 
-/// Статус файла changeset'а для фронта — `"new"`|`"edit"` (зеркало [`FileStatus`]).
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AgentFileStatus {
-    /// Новая заметка (create).
-    New,
-    /// Правка существующей (overwrite/frontmatter).
-    Edit,
-}
-
-impl From<FileStatus> for AgentFileStatus {
-    fn from(s: FileStatus) -> Self {
-        match s {
-            FileStatus::New => AgentFileStatus::New,
-            FileStatus::Edit => AgentFileStatus::Edit,
-        }
-    }
-}
-
-/// Один файл предложения для фронта (поверхность аппрува). Зеркало [`nexus_core::agent::ProposedFile`].
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentProposedFile {
-    /// vault-rel путь цели.
-    pub path: String,
-    /// Добавлено строк (line-diff current → proposed).
-    pub add: u32,
-    /// Удалено строк.
-    pub del: u32,
-    /// new | edit.
-    pub status: AgentFileStatus,
-    /// `id` строки `agent_actions` (state=proposed) — адрес решения Approve/Reject (см. `agent_approve`).
-    pub action_id: i64,
-}
-
-/// Событие агент-стрима для фронта (дискриминировано по `type`, camelCase) — СТАБИЛЬНЫЙ JSON-контракт,
-/// который потребляет UI-1b. Зеркалит [`AgentEvent`] ядра (теговый serde-enum) 1:1 по вариантам, но это
-/// СВОЙ desktop-тип (контракт UI отвязан от внутреннего enum ядра; `non_exhaustive` ядра здесь
-/// проявляется обязательным `_`-рукавом в маппере).
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum AgentStreamEvent {
-    /// Дельта контента ассистента (стрим токенов модели).
-    AssistantToken { text: String },
-    /// Намерение вызвать инструмент ДО исполнения. `id` коррелирует с `toolResult`.
-    ToolCall {
-        id: String,
-        kind: String,
-        args: String,
-    },
-    /// Результат исполнения инструмента. `id` == `id` соответствующего `toolCall`. `isError` —
-    /// инструмент вернул ошибку (модель может восстановиться). serde `rename_all` контейнера НЕ
-    /// каскадирует в поля struct-вариантов enum — camelCase для составного имени задаём ЯВНО.
-    ToolResult {
-        id: String,
-        content: String,
-        #[serde(rename = "isError")]
-        is_error: bool,
-    },
-    /// Загрузка контекстного окна модели (токены): питает %-бар «used/window».
-    ContextUsage { used: usize, window: usize },
-    /// Changeset, ожидающий решения (Confirm-тир) ЛИБО уведомление перед авто-применением. К моменту
-    /// эмиссии каждый файл записан в ledger как `proposed` (его `actionId` адресует решение). `runId`
-    /// задаём ЯВНО (rename_all не каскадирует в struct-варианты enum) — фронт получает `runId`.
-    Proposal {
-        #[serde(rename = "runId")]
-        run_id: i64,
-        files: Vec<AgentProposedFile>,
-    },
-    /// Пер-файловый диф changeset'а (эмитится после Proposal, по одному на файл).
-    Diff {
-        path: String,
-        add: u32,
-        del: u32,
-        status: AgentFileStatus,
-    },
-    /// Финальный ответ агента (модель завершила ход без новых tool_call).
-    Final { text: String },
-    /// Терминальная ошибка хода (исчерпан бюджет инициации стрима / провайдер упал и т.п.).
-    Error { message: String },
-}
-
-/// Маппер `&AgentEvent` → [`AgentStreamEvent`] (контракт «бэкенд → фронт»). `Option` — событие ядра, не
-/// имеющее представления во фронте (сейчас все варианты маппятся; `None` — задел под будущие
-/// `non_exhaustive`-варианты ядра, которые фронт ещё не знает: их молча НЕ стримим, а не падаем).
-pub fn map_agent_event(ev: &AgentEvent) -> Option<AgentStreamEvent> {
-    Some(match ev {
-        AgentEvent::AssistantToken(text) => AgentStreamEvent::AssistantToken { text: text.clone() },
-        AgentEvent::ToolCall { id, kind, args } => AgentStreamEvent::ToolCall {
-            id: id.clone(),
-            kind: kind.clone(),
-            args: args.clone(),
-        },
-        AgentEvent::ToolResult {
-            id,
-            content,
-            is_error,
-        } => AgentStreamEvent::ToolResult {
-            id: id.clone(),
-            content: content.clone(),
-            is_error: *is_error,
-        },
-        AgentEvent::ContextUsage { used, window } => AgentStreamEvent::ContextUsage {
-            used: *used,
-            window: *window,
-        },
-        AgentEvent::Proposal { run_id, files } => AgentStreamEvent::Proposal {
-            run_id: *run_id,
-            files: files
-                .iter()
-                .map(|f| AgentProposedFile {
-                    path: f.path.clone(),
-                    add: f.add,
-                    del: f.del,
-                    status: f.status.into(),
-                    action_id: f.action_id,
-                })
-                .collect(),
-        },
-        AgentEvent::Diff {
-            path,
-            add,
-            del,
-            status,
-        } => AgentStreamEvent::Diff {
-            path: path.clone(),
-            add: *add,
-            del: *del,
-            status: (*status).into(),
-        },
-        AgentEvent::Final(text) => AgentStreamEvent::Final { text: text.clone() },
-        AgentEvent::Error(message) => AgentStreamEvent::Error {
-            message: message.clone(),
-        },
-        // `AgentEvent` помечен `#[non_exhaustive]`: будущий вариант ядра, который фронт ещё не знает,
-        // НЕ должен ронять компиляцию И не должен слаться неизвестным мусором — молча не стримим.
-        _ => return None,
-    })
-}
+// Wire-DTO событий агента + маппер вынесены в `nexus_core::agent::connect::wire` — ЕДИНЫЙ источник
+// истины контракта «бэкенд→клиент»: тот же тип использует agentd-коннектор для `agent/event`-
+// нотификаций (AGENT-CONNECT P0b), чтобы desktop (UI-1b) и сервис не разъехались по JSON-контракту.
+// Ре-экспорт сохраняет прежние имена → остальной desktop-код и тесты не меняются.
+pub use nexus_core::agent::connect::wire::{map_agent_event, AgentStreamEvent};
 
 // ── EventSink → Channel (FIXME(UI-1) РЕШЁН): стрим Proposal/Diff гейта актуатора во фронт ──────────
 
@@ -673,7 +539,6 @@ async fn load_local_config(root: &std::path::Path) -> Option<nexus_core::ai::Loc
 mod tests {
     use super::*;
     use nexus_core::agent::tool::{ToolCall, ToolSpec};
-    use nexus_core::agent::ProposedFile;
     use nexus_core::ai::tools::{ToolCapableProvider, ToolTurn};
     use nexus_core::ai::AiResult;
     use nexus_core::db::Database;
@@ -762,127 +627,11 @@ mod tests {
         v.get("type").and_then(|t| t.as_str()).unwrap_or("?")
     }
 
-    // ── 1. Маппинг From<&AgentEvent> → AgentStreamEvent: юнит на КАЖДЫЙ вариант ────────────────────
-
-    #[test]
-    fn map_assistant_token() {
-        let j = serde_json::to_value(
-            map_agent_event(&AgentEvent::AssistantToken("hi".into())).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(j["type"], "assistantToken");
-        assert_eq!(j["text"], "hi");
-    }
-
-    #[test]
-    fn map_tool_call() {
-        let j = serde_json::to_value(
-            map_agent_event(&AgentEvent::ToolCall {
-                id: "c1".into(),
-                kind: "note.create".into(),
-                args: r#"{"path":"A.md"}"#.into(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(j["type"], "toolCall");
-        assert_eq!(j["id"], "c1");
-        assert_eq!(j["kind"], "note.create");
-        assert_eq!(j["args"], r#"{"path":"A.md"}"#);
-    }
-
-    #[test]
-    fn map_tool_result() {
-        let j = serde_json::to_value(
-            map_agent_event(&AgentEvent::ToolResult {
-                id: "c1".into(),
-                content: "done".into(),
-                is_error: true,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(j["type"], "toolResult");
-        assert_eq!(j["id"], "c1");
-        assert_eq!(j["content"], "done");
-        assert_eq!(j["isError"], true);
-    }
-
-    #[test]
-    fn map_context_usage() {
-        let j = serde_json::to_value(
-            map_agent_event(&AgentEvent::ContextUsage {
-                used: 12,
-                window: 4096,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(j["type"], "contextUsage");
-        assert_eq!(j["used"], 12);
-        assert_eq!(j["window"], 4096);
-    }
-
-    #[test]
-    fn map_proposal() {
-        let j = serde_json::to_value(
-            map_agent_event(&AgentEvent::Proposal {
-                run_id: 7,
-                files: vec![ProposedFile {
-                    path: "N.md".into(),
-                    add: 3,
-                    del: 1,
-                    status: FileStatus::Edit,
-                    action_id: 42,
-                }],
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(j["type"], "proposal");
-        assert_eq!(j["runId"], 7);
-        let f = &j["files"][0];
-        assert_eq!(f["path"], "N.md");
-        assert_eq!(f["add"], 3);
-        assert_eq!(f["del"], 1);
-        assert_eq!(f["status"], "edit");
-        assert_eq!(f["actionId"], 42);
-    }
-
-    #[test]
-    fn map_diff() {
-        let j = serde_json::to_value(
-            map_agent_event(&AgentEvent::Diff {
-                path: "New.md".into(),
-                add: 5,
-                del: 0,
-                status: FileStatus::New,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(j["type"], "diff");
-        assert_eq!(j["path"], "New.md");
-        assert_eq!(j["add"], 5);
-        assert_eq!(j["del"], 0);
-        assert_eq!(j["status"], "new");
-    }
-
-    #[test]
-    fn map_final() {
-        let j = serde_json::to_value(map_agent_event(&AgentEvent::Final("итог".into())).unwrap())
-            .unwrap();
-        assert_eq!(j["type"], "final");
-        assert_eq!(j["text"], "итог");
-    }
-
-    #[test]
-    fn map_error() {
-        let j = serde_json::to_value(map_agent_event(&AgentEvent::Error("боом".into())).unwrap())
-            .unwrap();
-        assert_eq!(j["type"], "error");
-        assert_eq!(j["message"], "боом");
-    }
+    // ── 1. Маппинг From<&AgentEvent> → AgentStreamEvent ───────────────────────────────────────────
+    // Юниты на КАЖДЫЙ вариант DTO + roundtrip живут у ЕДИНОГО источника контракта
+    // (`nexus_core::agent::connect::wire`), чтобы desktop и agentd не разъехались. Здесь — только
+    // desktop-специфика: drive_run/approve гонят РЕАЛЬНЫЙ EventSink→Channel поверх re-export'нутого
+    // `map_agent_event`, что заодно доказывает, что путь маппинга из desktop работает end-to-end.
 
     // ── 2. Смоук: drive_run против фейк-провайдера (стабы) → Channel получает ToolCall/Result/Final ─
 

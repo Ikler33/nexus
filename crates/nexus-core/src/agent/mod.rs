@@ -38,7 +38,8 @@ pub mod stubs;
 pub mod tool;
 
 pub use connect::{
-    acp_tool_kind, channel_pair, dispatch, negotiate_version, ChannelTransport, ConnectHandler,
+    acp_tool_kind, channel_pair, dispatch, event_notification, map_agent_event, negotiate_version,
+    AgentFileStatus, AgentProposedFile, AgentStreamEvent, ChannelTransport, ConnectHandler,
     RpcError, RpcMessage, Transport, PROTOCOL_VERSION,
 };
 pub use control::{load_control_state, save_control_state, AgentControlState};
