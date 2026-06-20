@@ -438,20 +438,26 @@ impl GuardedClient {
         self
     }
 
-    /// Профиль chat-стрима: общего таймаута нет (стрим долгий, idle-таймаут — у провайдера),
-    /// connect-timeout страхует от зависшего коннекта (как было в `OpenAiChatProvider::new`).
-    pub fn for_chat(policy: Arc<EgressPolicy>, audit: Arc<EgressAudit>) -> Result<Self, NetError> {
-        Self::new(policy, audit, |b| {
-            b.connect_timeout(Duration::from_secs(15))
-        })
+    /// Профиль chat-стрима: общего таймаута нет (стрим долгий, first-token/idle-таймауты — у
+    /// провайдера), `connect_timeout` страхует от зависшего коннекта. INFER-CFG: длительность
+    /// принимается параметром (из `ChatConfig::connect_timeout()`, дефолт 30 с — безопаснее для
+    /// cold-start V100, ок на LAN) — раньше был хардкод 15 с.
+    pub fn for_chat(
+        policy: Arc<EgressPolicy>,
+        audit: Arc<EgressAudit>,
+        connect_timeout: Duration,
+    ) -> Result<Self, NetError> {
+        Self::new(policy, audit, move |b| b.connect_timeout(connect_timeout))
     }
 
-    /// Профиль эмбеддинга: общий таймаут 60 с (батчи бывают тяжёлые).
+    /// Профиль эмбеддинга: общий таймаут (батчи бывают тяжёлые). INFER-CFG: длительность принимается
+    /// параметром (из `EmbeddingConfig::timeout()`, дефолт 60 с) — раньше был хардкод 60 с.
     pub fn for_embedding(
         policy: Arc<EgressPolicy>,
         audit: Arc<EgressAudit>,
+        timeout: Duration,
     ) -> Result<Self, NetError> {
-        Self::new(policy, audit, |b| b.timeout(Duration::from_secs(60)))
+        Self::new(policy, audit, move |b| b.timeout(timeout))
     }
 
     /// Профиль probe (проба размерности / «Проверить связь»): короткий таймаут вызывающего.
