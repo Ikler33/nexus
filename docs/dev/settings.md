@@ -86,3 +86,48 @@ SettingsView/AiSection
 - **Фронт** (`SettingsView.test.tsx`): рендер формы (2 эндпоинта), «Проверить связь» → бейдж «Доступен»,
   «Сохранить» → подтверждение; пустой URL → «Недоступен», смена embedding → требование перезапуска.
   Вне Tauri бэкенд проксируется в `lib/mock/settings.ts` (in-memory happy-path).
+
+## Инференс через конфиг (INFER-CFG) — смена движка = смена `local.json`
+
+Слой инференса **engine-agnostic**: переход llama.cpp → 1Cat-vLLM (Qwen3.6-27B-AWQ на V100) → любой
+OpenAI-совместимый сервер — это правка `.nexus/local.json`, без кода. Все таймауты/сэмплинг — опц. поля
+с дефолтами (`ChatConfig`/`EmbeddingConfig`-геттеры в `nexus-core/src/ai/config.rs`); zero-config работает
+как раньше, только с безопасными дефолтами.
+
+**Cold-start V100.** Первый запрос к крупной модели на V100 компилирует ядра 1–3 мин. Поэтому таймаут
+расщеплён: `first_token_timeout_secs` (дефолт **300**) действует на инициацию + чанки **до первого байта**
+(переживает прогрев), затем `idle_timeout_secs` (дефолт **90**) — на разрывы между чанками в steady-state.
+`connect_timeout_secs` (дефолт 30) — у guarded-клиента; embedding-`timeout_secs` (дефолт 60). Контекст-окно
+НЕ хардкодится (`context_window`; при отсутствии — консервативные 32K с warn, никогда 256K по умолчанию).
+
+**Поля `ai.chat`/`ai.fast`** (`ChatConfig`): `url`, `model`, `context_window`, `first_token_timeout_secs`,
+`idle_timeout_secs`, `connect_timeout_secs`, `retry_attempts`, `temperature`, `reserve_output_tokens`.
+**Поля `ai.embedding`**: `url`, `model`, `dim`, `timeout_secs`. **`ai.tokenizer_path`** — токенайзер для
+бюджета контекста (при отсутствии — встроенный Qwen3.6-27B). Применение: headless `nexus-agentd` и desktop
+(`build_chat`/`build_util_chat`) берут весь профиль; хот-апплай настроек (`set_ai_config`) — из сохранённого
+`ai.chat` сразу, кастомные стрим-таймауты иначе вступают при переоткрытии vault.
+
+**Пример свапа на целевой сервер** (плейсхолдер `<vllm-host>`):
+
+```jsonc
+{
+  "ai": {
+    "chat": {
+      "url": "http://<vllm-host>:8000",
+      "model": "qwen3.6-27b-awq-mtp",   // --served-model-name
+      "context_window": 262144,          // 256K (на 16GB-картах поставить меньше)
+      "first_token_timeout_secs": 300,   // cold-start V100 1–3 мин
+      "idle_timeout_secs": 90,
+      "connect_timeout_secs": 30,
+      "retry_attempts": 3,
+      "temperature": 0.3
+    },
+    "embedding": { "url": "http://<embed-host>:8001", "model": "bge-m3", "dim": 1024, "timeout_secs": 120 },
+    "tokenizer_path": "/vault/.nexus/tokenizer.json"  // опц.: токенайзер целевой модели
+  }
+}
+```
+
+Запуск целевого сервера (1Cat-vLLM): `--enable-auto-tool-choice --tool-call-parser qwen3_coder`
+(OpenAI tool-calling, совместимо с провайдером Nexus). Известный риск MTP-коллапса — пинить релиз `0.0.3`
+или MTP-off (см. память `project_target_llm_server_1cat_vllm`).

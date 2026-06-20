@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use nexus_core::ai::tools::{OpenAiToolProvider, ToolCapableProvider};
 use nexus_core::ai::{
-    self, AIClient, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
+    self, AIClient, ChatConfig, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
     OpenAiEmbedder,
 };
 use nexus_core::db::Database;
@@ -723,7 +723,7 @@ async fn build_rag_min(
         }
     };
 
-    let guarded = GuardedClient::for_embedding(policy.clone(), audit.clone())
+    let guarded = GuardedClient::for_embedding(policy.clone(), audit.clone(), emb.timeout())
         .map_err(|e| tracing::warn!(error = %e, "эмбеддер не инициализирован — RAG off"))
         .ok()?;
     let embedder = OpenAiEmbedder::new(
@@ -767,6 +767,14 @@ async fn build_rag_min(
     })
 }
 
+/// INFER-CFG: применяет к chat-провайдеру таймауты/retry из `ChatConfig` (first_token/idle/retry).
+/// Температуру задаёт уже `new(..., Some(c.temperature()))`. Connect-таймаут — у guarded-клиента.
+fn apply_chat_cfg(p: OpenAiChatProvider, c: &ChatConfig) -> OpenAiChatProvider {
+    p.with_first_token_timeout(c.first_token_timeout())
+        .with_idle_timeout(c.idle_timeout())
+        .with_retry_attempts(c.retry_attempts())
+}
+
 /// Реплика `vault::build_chat`: пара провайдеров `(reasoning, fast)` из `ai.chat`. Доступность сервера
 /// здесь не проверяем (выяснится при первом стриме) — как в app.
 fn build_chat_min(
@@ -776,12 +784,31 @@ fn build_chat_min(
 ) -> Option<(Arc<dyn ChatProvider>, Arc<dyn ChatProvider>)> {
     let chat = cfg.ai.chat.as_ref()?;
     let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
-    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone())
+    // INFER-CFG: connect-таймаут и температура/таймауты стрима/retry из конфига (дефолты при отсутствии).
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), chat.connect_timeout())
         .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
         .ok()?;
-    let normal = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &chat.url, &model, None);
-    let fast = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &chat.url, &model, None)
-        .without_reasoning();
+    let normal = apply_chat_cfg(
+        OpenAiChatProvider::new(
+            &guarded,
+            EgressFeature::Chat,
+            &chat.url,
+            &model,
+            Some(chat.temperature()),
+        ),
+        chat,
+    );
+    let fast = apply_chat_cfg(
+        OpenAiChatProvider::new(
+            &guarded,
+            EgressFeature::Chat,
+            &chat.url,
+            &model,
+            Some(chat.temperature()),
+        ),
+        chat,
+    )
+    .without_reasoning();
     tracing::info!(model = %model, "chat-провайдеры включены (reasoning + fast)");
     Some((Arc::new(normal), Arc::new(fast)))
 }
@@ -796,10 +823,20 @@ fn build_agent_tools_min(
 ) -> Option<Arc<dyn ToolCapableProvider>> {
     let chat = cfg.ai.chat.as_ref()?;
     let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
-    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone())
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), chat.connect_timeout())
         .map_err(|e| tracing::warn!(error = %e, "tool-провайдер агента не инициализирован"))
         .ok()?;
-    let provider = OpenAiToolProvider::new(&guarded, EgressFeature::Chat, &chat.url, &model, None);
+    // INFER-CFG: температура + cold-start-таймауты стрима из конфига (у tool-провайдера нет retry —
+    // повторами ходов заведует сам цикл агента). Connect-таймаут — у guarded-клиента выше.
+    let provider = OpenAiToolProvider::new(
+        &guarded,
+        EgressFeature::Chat,
+        &chat.url,
+        &model,
+        Some(chat.temperature()),
+    )
+    .with_first_token_timeout(chat.first_token_timeout())
+    .with_idle_timeout(chat.idle_timeout());
     tracing::info!(model = %model, "tool-capable провайдер агента включён (AGENT-1)");
     Some(Arc::new(provider))
 }
@@ -1081,13 +1118,22 @@ fn build_util_chat_min(
 ) -> Option<Arc<dyn ChatProvider>> {
     let fast = cfg.ai.fast.as_ref()?;
     let model = fast.model.clone().unwrap_or_else(|| "fast".to_string());
-    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone())
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), fast.connect_timeout())
         .map_err(
             |e| tracing::warn!(error = %e, "ai.fast: провайдер не создан — fallback на chat_fast"),
         )
         .ok()?;
-    let provider = OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &fast.url, &model, None)
-        .without_reasoning();
+    let provider = apply_chat_cfg(
+        OpenAiChatProvider::new(
+            &guarded,
+            EgressFeature::Chat,
+            &fast.url,
+            &model,
+            Some(fast.temperature()),
+        ),
+        fast,
+    )
+    .without_reasoning();
     tracing::info!(model = %model, url = %fast.url, "ai.fast (утилитарная модель) включена");
     Some(Arc::new(provider))
 }

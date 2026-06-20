@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::ai::{AiError, ChatProvider, LocalConfig, OpenAiChatProvider};
+use crate::ai::{AiError, ChatConfig, ChatProvider, LocalConfig, OpenAiChatProvider};
 use crate::error::{AppError, AppResult};
 use crate::net::{EgressFeature, GuardedClient, NetError, RunCtx};
 use crate::state::AppState;
@@ -158,22 +158,46 @@ pub async fn set_ai_config(
     if let Ok(cfg) = LocalConfig::parse(&pretty) {
         state.egress_policy.set_allowlist(cfg.egress_hosts());
     }
+    // INFER-CFG: connect-таймаут хот-пересобранных клиентов берём из СОХРАНЁННОГО конфига (EndpointDto
+    // из UI не несёт таймаутов). Дефолт 30с; кастомный `ai.chat.connect_timeout_secs` применится сразу,
+    // не дожидаясь переоткрытия vault.
+    let saved_cfg = LocalConfig::parse(&pretty).ok();
+    let saved_chat = saved_cfg.as_ref().and_then(|cf| cf.ai.chat.clone());
+    let chat_connect_timeout = saved_chat
+        .as_ref()
+        .map(ChatConfig::connect_timeout)
+        .unwrap_or_else(|| Duration::from_secs(ChatConfig::DEFAULT_CONNECT_TIMEOUT_SECS));
+    // Температура и таймауты стрима/retry хот-провайдеров — из сохранённого `ai.chat` (или дефолты).
+    // Все хот-провайдеры бьют по chat-серверу, поэтому единый профиль `saved_chat` корректен.
+    let chat_temperature = saved_chat.as_ref().map(ChatConfig::temperature);
+    let apply_chat_cfg = |p: OpenAiChatProvider| -> OpenAiChatProvider {
+        match saved_chat.as_ref() {
+            Some(c) => p
+                .with_first_token_timeout(c.first_token_timeout())
+                .with_idle_timeout(c.idle_timeout())
+                .with_retry_attempts(c.retry_attempts()),
+            None => p,
+        }
+    };
 
     // Горячее применение chat (stateless per-request → безопасно): пересобираем УЖЕ-guarded клиент
     // от того же policy/audit (AC-EGR-13). Embedding — через перезапуск (cold, на нём индексатор).
     let chat_provider: Option<Arc<dyn ChatProvider>> = match &chat {
         Some(c) => {
             let model = c.model.clone().unwrap_or_else(|| "chat".to_string());
-            let guarded =
-                GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
-                    .map_err(AiError::from)?;
-            Some(Arc::new(OpenAiChatProvider::new(
+            let guarded = GuardedClient::for_chat(
+                state.egress_policy.clone(),
+                state.egress_audit.clone(),
+                chat_connect_timeout,
+            )
+            .map_err(AiError::from)?;
+            Some(Arc::new(apply_chat_cfg(OpenAiChatProvider::new(
                 &guarded,
                 EgressFeature::Chat,
                 &c.url,
                 &model,
-                None,
-            )))
+                chat_temperature,
+            ))))
         }
         None => None,
     };
@@ -194,14 +218,23 @@ pub async fn set_ai_config(
                 .and_then(|f| f.model.clone())
                 .or_else(|| chat.as_ref().and_then(|c| c.model.clone()))
                 .unwrap_or_else(|| "chat".to_string());
-            let guarded =
-                GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
-                    .map_err(AiError::from)?;
+            let guarded = GuardedClient::for_chat(
+                state.egress_policy.clone(),
+                state.egress_audit.clone(),
+                chat_connect_timeout,
+            )
+            .map_err(AiError::from)?;
             // R2 как в open_vault (`build_util_chat`): примитивам CoT не нужен, а на ai.fast может
             // жить reasoning-модель (баг 2026-06-11: gemma12 думала ~40 с над 6-словной сводкой R1).
             Some(Arc::new(
-                OpenAiChatProvider::new(&guarded, EgressFeature::Chat, url, &model, None)
-                    .without_reasoning(),
+                apply_chat_cfg(OpenAiChatProvider::new(
+                    &guarded,
+                    EgressFeature::Chat,
+                    url,
+                    &model,
+                    chat_temperature,
+                ))
+                .without_reasoning(),
             ))
         }
         None => None,
@@ -211,14 +244,23 @@ pub async fn set_ai_config(
     let chat_fast_provider: Option<Arc<dyn ChatProvider>> = match &chat {
         Some(c) => {
             let model = c.model.clone().unwrap_or_else(|| "chat".to_string());
-            let guarded =
-                GuardedClient::for_chat(state.egress_policy.clone(), state.egress_audit.clone())
-                    .map_err(AiError::from)?;
+            let guarded = GuardedClient::for_chat(
+                state.egress_policy.clone(),
+                state.egress_audit.clone(),
+                chat_connect_timeout,
+            )
+            .map_err(AiError::from)?;
             // Хот-апплай #153 забыл R2: после сохранения настроек дайджест становился «думающим»
             // до переоткрытия vault. Теперь зеркалит `build_chat`.
             Some(Arc::new(
-                OpenAiChatProvider::new(&guarded, EgressFeature::Chat, &c.url, &model, None)
-                    .without_reasoning(),
+                apply_chat_cfg(OpenAiChatProvider::new(
+                    &guarded,
+                    EgressFeature::Chat,
+                    &c.url,
+                    &model,
+                    chat_temperature,
+                ))
+                .without_reasoning(),
             ))
         }
         None => None,

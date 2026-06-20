@@ -135,10 +135,19 @@ pub trait ChatProvider: Send + Sync {
     fn model_id(&self) -> &str;
 }
 
-/// Idle-таймаут стрима модели: если сервер не прислал НИ БАЙТА за это время (залип / отдал битый ответ)
-/// — рвём запрос с ошибкой, чтобы чат/джоба не висели вечно (а фоновая джоба не блокировала весь воркер).
-/// Каждый пришедший чанк сбрасывает таймер — легитимный долгий стрим не обрывается.
+/// Idle-таймаут стрима модели ПОСЛЕ первого байта (steady-state): если сервер не прислал чанк за это
+/// время (залип / отдал битый ответ) — рвём запрос с ошибкой, чтобы чат/джоба не висели вечно (а
+/// фоновая джоба не блокировала весь воркер). Каждый пришедший чанк сбрасывает таймер — легитимный
+/// долгий стрим не обрывается. INFER-CFG: дефолт; конфигурируется `ChatConfig::idle_timeout()`.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Таймаут ПЕРВОГО токена (INFER-CFG, cold-start-aware): применяется к ИНИЦИАЦИИ стрима И ко всем
+/// `resp.chunk()` ДО первого полученного байта. Крупная модель на холодном GPU (V100: компиляция
+/// CUDA-ядер 1–3 мин на первом запросе) отдаёт 200+headers быстро, но первый `data:`-чанк задержан —
+/// 90-секундный idle убил бы прогрев. Этот таймаут (дефолт 300 с) его переживает; ПОСЛЕ первого байта
+/// действует уже [`STREAM_IDLE_TIMEOUT`] (детект зависшего steady-state). Конфигурируется
+/// `ChatConfig::first_token_timeout()`.
+const STREAM_FIRST_TOKEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Политика ретрая ИНИЦИАЦИИ запроса к модели (P0-d, ADR-009): мигающий локальный LLM не должен ронять
 /// весь вызов на транзиентном сбое коннекта/статуса. Ретраится ТОЛЬКО установка стрима (post + проверка
@@ -165,6 +174,13 @@ impl RetryPolicy {
             base: std::time::Duration::from_millis(300),
             cap: std::time::Duration::from_secs(2),
         }
+    }
+
+    /// INFER-CFG: переопределяет число попыток (из `ChatConfig::retry_attempts()`), сохраняя base/cap.
+    /// `<1` нормализуется в 1 (хотя бы одна попытка — иначе запрос не отправится вообще).
+    fn with_attempts(mut self, attempts: u32) -> Self {
+        self.max_attempts = attempts.max(1);
+        self
     }
 
     /// Задержка backoff ПЕРЕД попыткой с индексом `attempt` (0 = первая, без паузы). `base*2^(attempt-1)`,
@@ -290,7 +306,10 @@ pub struct OpenAiChatProvider {
     endpoint: String,
     model: String,
     temperature: f32,
-    /// Idle-таймаут стрима (по умолчанию [`STREAM_IDLE_TIMEOUT`]); короче — в тестах.
+    /// Таймаут ПЕРВОГО токена (INFER-CFG): инициация стрима + чанки ДО первого байта (переживает
+    /// cold-start). По умолчанию [`STREAM_FIRST_TOKEN_TIMEOUT`]; конфигурируется из `ChatConfig`.
+    first_token_timeout: std::time::Duration,
+    /// Idle-таймаут стрима ПОСЛЕ первого байта (по умолчанию [`STREAM_IDLE_TIMEOUT`]); короче — в тестах.
     idle_timeout: std::time::Duration,
     /// Политика ретрая ИНИЦИАЦИИ запроса (P0-d): post + проверка статуса ДО первого чанка. По
     /// умолчанию [`RetryPolicy::chat_default`]; в тестах — крошечные константы (быстрый backoff).
@@ -317,6 +336,7 @@ impl OpenAiChatProvider {
             endpoint: format!("{}/v1/chat/completions", crate::ai::api_base(base_url)),
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
+            first_token_timeout: STREAM_FIRST_TOKEN_TIMEOUT,
             idle_timeout: STREAM_IDLE_TIMEOUT,
             retry: RetryPolicy::chat_default(),
             enable_thinking: true,
@@ -327,6 +347,25 @@ impl OpenAiChatProvider {
     /// сервер/модель, но в запрос идёт `chat_template_kwargs.enable_thinking=false` → нет CoT-паузы.
     pub fn without_reasoning(mut self) -> Self {
         self.enable_thinking = false;
+        self
+    }
+
+    /// INFER-CFG: таймаут первого токена (cold-start). Из `ChatConfig::first_token_timeout()`.
+    pub fn with_first_token_timeout(mut self, d: std::time::Duration) -> Self {
+        self.first_token_timeout = d;
+        self
+    }
+
+    /// INFER-CFG: idle-таймаут стрима после первого байта. Из `ChatConfig::idle_timeout()`. Также
+    /// используется тестами для быстрого обрыва залипшего сервера.
+    pub fn with_idle_timeout(mut self, d: std::time::Duration) -> Self {
+        self.idle_timeout = d;
+        self
+    }
+
+    /// INFER-CFG: число попыток инициации запроса (P0-d). Из `ChatConfig::retry_attempts()`.
+    pub fn with_retry_attempts(mut self, attempts: u32) -> Self {
+        self.retry = self.retry.with_attempts(attempts);
         self
     }
 
@@ -344,13 +383,6 @@ impl OpenAiChatProvider {
             body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
         }
         body
-    }
-
-    /// Тест-хелпер: короткий idle-таймаут, чтобы проверять обрыв залипшего сервера быстро.
-    #[cfg(test)]
-    fn with_idle_timeout(mut self, d: std::time::Duration) -> Self {
-        self.idle_timeout = d;
-        self
     }
 
     /// Тест-хелпер: переопределить политику ретрая (крошечный backoff в офлайн-тестах).
@@ -392,8 +424,9 @@ impl ChatProvider for OpenAiChatProvider {
             let send_fut = self
                 .client
                 .post_json(&self.endpoint, self.feature, &body, RunCtx::NONE);
-            // Idle-таймаут на саму инициацию: залипший на коннекте сервер → транзиентная ошибка (ретраибл).
-            match tokio::time::timeout(self.idle_timeout, send_fut).await {
+            // INFER-CFG: инициация = ДО первого байта → first_token_timeout (переживает cold-start
+            // V100, 1–3 мин компиляции ядер). Залипший на коннекте сервер → транзиентная (ретраибл).
+            match tokio::time::timeout(self.first_token_timeout, send_fut).await {
                 Err(_) => AttemptOutcome::Retryable(AiError::Http(
                     "таймаут ответа модели (сервер не отвечает)".into(),
                 )),
@@ -433,12 +466,28 @@ impl ChatProvider for OpenAiChatProvider {
             }
         };
         let mut buf: Vec<u8> = Vec::new();
-        // Idle-таймаут на КАЖДЫЙ чанк: залип сервер (нет данных) → рвём, а не висим вечно.
-        while let Some(chunk) = tokio::time::timeout(self.idle_timeout, resp.chunk())
-            .await
-            .map_err(|_| AiError::Http("таймаут стрима модели (нет данных)".into()))?
-            .map_err(|e| AiError::Http(e.to_string()))?
-        {
+        // INFER-CFG cold-start стейт-машина: ДО первого полученного байта таймаут чанка =
+        // first_token_timeout (200+headers пришли, но первый `data:`-чанк задержан компиляцией ядер
+        // V100); ПОСЛЕ первого байта → idle_timeout (детект зависшего steady-state стрима). Каждый
+        // байт сбрасывает таймер; легитимный долгий стрим не обрывается.
+        let mut got_first_byte = false;
+        loop {
+            let chunk_timeout = if got_first_byte {
+                self.idle_timeout
+            } else {
+                self.first_token_timeout
+            };
+            let Some(chunk) = tokio::time::timeout(chunk_timeout, resp.chunk())
+                .await
+                .map_err(|_| AiError::Http("таймаут стрима модели (нет данных)".into()))?
+                .map_err(|e| AiError::Http(e.to_string()))?
+            else {
+                break;
+            };
+            // Первый НЕПУСТОЙ чанк переключает таймаут на idle (steady-state).
+            if !chunk.is_empty() {
+                got_first_byte = true;
+            }
             if cancel.load(Ordering::Relaxed) {
                 log_done(&reasoning, &full);
                 return Ok(full);
@@ -1360,8 +1409,11 @@ mod tests {
         assert!(!msgs[1].content.contains("Контекст"));
     }
 
-    /// Залипший сервер (принял коннект, прочитал запрос, не отвечает) → `stream_chat` рвётся по
-    /// idle-таймауту с ошибкой, а НЕ висит вечно (регресс: дайджест-джоба зависала и блокировала воркер).
+    /// Залипший сервер (принял коннект, прочитал запрос, не отвечает — НЕТ даже первого байта) →
+    /// `stream_chat` рвётся по таймауту с ошибкой, а НЕ висит вечно (регресс: дайджест-джоба зависала
+    /// и блокировала воркер). INFER-CFG: ответа/первого байта нет → срабатывает `first_token_timeout`
+    /// (НЕ idle — тот действует ПОСЛЕ первого байта); ставим его коротким, чтобы тест был
+    /// детерминирован кросс-платформенно (раньше полагался на закрытие сокета сервером — флейк на Windows).
     #[tokio::test]
     async fn stream_chat_times_out_on_hung_server() {
         use std::io::Read;
@@ -1371,7 +1423,7 @@ mod tests {
             if let Ok((mut sock, _)) = listener.accept() {
                 let mut buf = [0u8; 1024];
                 let _ = sock.read(&mut buf); // запрос прочитали и «зависли» — не отвечаем
-                std::thread::sleep(std::time::Duration::from_secs(1)); // дольше idle-таймаута теста
+                std::thread::sleep(std::time::Duration::from_secs(2)); // дольше таймаута теста
             }
         });
         let provider = OpenAiChatProvider::new(
@@ -1381,6 +1433,7 @@ mod tests {
             "gemma",
             Some(0.0),
         )
+        .with_first_token_timeout(std::time::Duration::from_millis(250))
         .with_idle_timeout(std::time::Duration::from_millis(250));
         let msgs = vec![ChatMessage::user("привет")];
         let mut sink = |_t: String| {};

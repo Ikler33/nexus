@@ -26,8 +26,14 @@ use super::{AiError, AiResult};
 use crate::agent::tool::{ToolCall, ToolSpec};
 use crate::net::{EgressFeature, GuardedClient, RunCtx};
 
-/// Idle-таймаут стрима (зеркалит `chat.rs`): нет байта за это время → рвём (не виснем вечно).
+/// Idle-таймаут стрима ПОСЛЕ первого байта (зеркалит `chat.rs`): нет чанка за это время → рвём (не
+/// виснем вечно). INFER-CFG: дефолт; конфигурируется `ChatConfig::idle_timeout()`.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Таймаут ПЕРВОГО токена (зеркалит `chat.rs`, INFER-CFG cold-start): инициация стрима + чанки ДО
+/// первого полученного байта (переживает 1–3-минутный cold-start V100). ПОСЛЕ первого байта действует
+/// [`STREAM_IDLE_TIMEOUT`]. Конфигурируется `ChatConfig::first_token_timeout()`.
+const STREAM_FIRST_TOKEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Исход одного хода tool-capable модели: либо она запросила инструменты, либо дала финальный ответ.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +76,9 @@ pub struct OpenAiToolProvider {
     endpoint: String,
     model: String,
     temperature: f32,
+    /// Таймаут ПЕРВОГО токена (INFER-CFG cold-start): инициация + чанки ДО первого байта.
+    first_token_timeout: std::time::Duration,
+    /// Idle-таймаут стрима ПОСЛЕ первого байта.
     idle_timeout: std::time::Duration,
 }
 
@@ -88,6 +97,7 @@ impl OpenAiToolProvider {
             endpoint: format!("{}/v1/chat/completions", crate::ai::api_base(base_url)),
             model: model.to_string(),
             temperature: temperature.unwrap_or(0.3),
+            first_token_timeout: STREAM_FIRST_TOKEN_TIMEOUT,
             idle_timeout: STREAM_IDLE_TIMEOUT,
         }
     }
@@ -109,9 +119,15 @@ impl OpenAiToolProvider {
         body
     }
 
-    /// Тест-хелпер: короткий idle-таймаут (быстрый обрыв залипшего сервера в офлайн-тестах).
-    #[cfg(test)]
-    fn with_idle_timeout(mut self, d: std::time::Duration) -> Self {
+    /// INFER-CFG: таймаут первого токена (cold-start). Из `ChatConfig::first_token_timeout()`.
+    pub fn with_first_token_timeout(mut self, d: std::time::Duration) -> Self {
+        self.first_token_timeout = d;
+        self
+    }
+
+    /// INFER-CFG: idle-таймаут стрима после первого байта. Из `ChatConfig::idle_timeout()`. Также
+    /// тест-хелпер (быстрый обрыв залипшего сервера в офлайн-тестах).
+    pub fn with_idle_timeout(mut self, d: std::time::Duration) -> Self {
         self.idle_timeout = d;
         self
     }
@@ -146,7 +162,8 @@ impl ToolCapableProvider for OpenAiToolProvider {
         let send_fut = self
             .client
             .post_json(&self.endpoint, self.feature, &body, ctx);
-        let resp = match tokio::time::timeout(self.idle_timeout, send_fut).await {
+        // INFER-CFG: инициация = ДО первого байта → first_token_timeout (переживает cold-start V100).
+        let resp = match tokio::time::timeout(self.first_token_timeout, send_fut).await {
             Err(_) => {
                 return Err(AiError::Http(
                     "таймаут ответа модели (сервер не отвечает)".into(),
@@ -163,12 +180,27 @@ impl ToolCapableProvider for OpenAiToolProvider {
         let mut acc = ToolCallsAcc::default();
         let mut content = String::new();
         let mut buf: Vec<u8> = Vec::new();
-        // Idle-таймаут на КАЖДЫЙ чанк (как chat.rs): залип сервер → рвём, а не висим.
-        while let Some(chunk) = tokio::time::timeout(self.idle_timeout, resp.chunk())
-            .await
-            .map_err(|_| AiError::Http("таймаут стрима модели (нет данных)".into()))?
-            .map_err(|e| AiError::Http(e.to_string()))?
-        {
+        // INFER-CFG cold-start стейт-машина (зеркалит chat.rs): ДО первого полученного байта таймаут
+        // чанка = first_token_timeout (cold-start V100 задерживает первый `data:`-чанк на 1–3 мин),
+        // ПОСЛЕ первого байта → idle_timeout (детект зависшего steady-state стрима).
+        let mut got_first_byte = false;
+        loop {
+            let chunk_timeout = if got_first_byte {
+                self.idle_timeout
+            } else {
+                self.first_token_timeout
+            };
+            let Some(chunk) = tokio::time::timeout(chunk_timeout, resp.chunk())
+                .await
+                .map_err(|_| AiError::Http("таймаут стрима модели (нет данных)".into()))?
+                .map_err(|e| AiError::Http(e.to_string()))?
+            else {
+                break;
+            };
+            // Первый НЕПУСТОЙ чанк переключает таймаут на idle (steady-state).
+            if !chunk.is_empty() {
+                got_first_byte = true;
+            }
             if cancel.load(Ordering::Relaxed) {
                 // Отмена посреди стрима: ДРОПАЕМ партиал, НЕ исполняем (контракт edge-кейса).
                 return Err(AiError::Http("запрос отменён".into()));

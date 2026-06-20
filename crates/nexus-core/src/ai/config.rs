@@ -1,6 +1,8 @@
 //! Локальный конфиг vault (`.nexus/local.json`, в .gitignore — ADR-002): эндпоинты/модели
 //! chat и embedding. Ключи здесь НЕ в git; `*.url` валидируются анти-SSRF позже (§11).
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use super::{AiError, AiResult};
@@ -73,6 +75,88 @@ pub struct ChatConfig {
     pub model: Option<String>,
     #[serde(default)]
     pub context_window: Option<usize>,
+
+    // --- INFER-CFG: движок-агностичные таймауты/параметры стрима (все Option, serde-default;
+    // отсутствие → встроенный дефолт-геттер → zero-config работает как раньше, но с лучшими
+    // дефолтами под cold-start V100). Смена llama.cpp → vLLM (Qwen3.6-27B-AWQ на V100) = только
+    // эти поля, без кода. См. `docs/dev/chat.md` (профиль свапа).
+    /// Таймаут ПЕРВОГО токена (сек): применяется к инициации стрима И ко всем чанкам ДО первого
+    /// полученного байта. Переживает cold-start (V100 компилирует ядра 1–3 мин на первом запросе).
+    /// `None` → [`ChatConfig::DEFAULT_FIRST_TOKEN_TIMEOUT_SECS`] (300 с).
+    #[serde(default)]
+    pub first_token_timeout_secs: Option<u64>,
+    /// Idle-таймаут стрима ПОСЛЕ первого байта (сек): детект зависшего стрима в steady-state.
+    /// `None` → [`ChatConfig::DEFAULT_IDLE_TIMEOUT_SECS`] (90 с).
+    #[serde(default)]
+    pub idle_timeout_secs: Option<u64>,
+    /// Connect-таймаут TCP-коннекта (сек) у guarded-клиента. `None` →
+    /// [`ChatConfig::DEFAULT_CONNECT_TIMEOUT_SECS`] (30 с — безопаснее для V100, ок на LAN).
+    #[serde(default)]
+    pub connect_timeout_secs: Option<u64>,
+    /// Число попыток ИНИЦИАЦИИ запроса (включая первую). `None` →
+    /// [`ChatConfig::DEFAULT_RETRY_ATTEMPTS`] (3).
+    #[serde(default)]
+    pub retry_attempts: Option<u32>,
+    /// Температура сэмплинга. `None` → [`ChatConfig::DEFAULT_TEMPERATURE`] (0.3).
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Сколько токенов резервировать под ОТВЕТ модели (вычитается из окна при сборке контекста).
+    /// `None` → [`crate::ai::ContextBudget::DEFAULT_RESERVE_OUTPUT`] (1024).
+    #[serde(default)]
+    pub reserve_output_tokens: Option<usize>,
+}
+
+impl ChatConfig {
+    /// Дефолт таймаута первого токена (сек) — переживает cold-start крупных моделей на V100.
+    pub const DEFAULT_FIRST_TOKEN_TIMEOUT_SECS: u64 = 300;
+    /// Дефолт idle-таймаута стрима после первого байта (сек).
+    pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 90;
+    /// Дефолт connect-таймаута (сек).
+    pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
+    /// Дефолт числа попыток инициации запроса.
+    pub const DEFAULT_RETRY_ATTEMPTS: u32 = 3;
+    /// Дефолт температуры сэмплинга.
+    pub const DEFAULT_TEMPERATURE: f32 = 0.3;
+
+    /// Таймаут первого токена (инициация + чанки ДО первого байта) с дефолтом.
+    pub fn first_token_timeout(&self) -> Duration {
+        Duration::from_secs(
+            self.first_token_timeout_secs
+                .unwrap_or(Self::DEFAULT_FIRST_TOKEN_TIMEOUT_SECS),
+        )
+    }
+
+    /// Idle-таймаут стрима после первого байта с дефолтом.
+    pub fn idle_timeout(&self) -> Duration {
+        Duration::from_secs(
+            self.idle_timeout_secs
+                .unwrap_or(Self::DEFAULT_IDLE_TIMEOUT_SECS),
+        )
+    }
+
+    /// Connect-таймаут с дефолтом (для `GuardedClient::for_chat`).
+    pub fn connect_timeout(&self) -> Duration {
+        Duration::from_secs(
+            self.connect_timeout_secs
+                .unwrap_or(Self::DEFAULT_CONNECT_TIMEOUT_SECS),
+        )
+    }
+
+    /// Число попыток инициации запроса с дефолтом.
+    pub fn retry_attempts(&self) -> u32 {
+        self.retry_attempts.unwrap_or(Self::DEFAULT_RETRY_ATTEMPTS)
+    }
+
+    /// Температура сэмплинга с дефолтом.
+    pub fn temperature(&self) -> f32 {
+        self.temperature.unwrap_or(Self::DEFAULT_TEMPERATURE)
+    }
+
+    /// Резерв токенов под ответ с дефолтом ([`crate::ai::ContextBudget::DEFAULT_RESERVE_OUTPUT`]).
+    pub fn reserve_output_tokens(&self) -> usize {
+        self.reserve_output_tokens
+            .unwrap_or(crate::ai::ContextBudget::DEFAULT_RESERVE_OUTPUT)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +167,20 @@ pub struct EmbeddingConfig {
     /// Размерность; если не задана — берётся из ответа модели при первом эмбеддинге.
     #[serde(default)]
     pub dim: Option<usize>,
+    /// INFER-CFG: общий таймаут эмбеддинг-запроса (сек) у guarded-клиента (батчи бывают тяжёлые;
+    /// V100-профиль ставит больше). `None` → [`EmbeddingConfig::DEFAULT_TIMEOUT_SECS`] (60 с).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+impl EmbeddingConfig {
+    /// Дефолт таймаута эмбеддинг-запроса (сек).
+    pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
+    /// Таймаут эмбеддинг-запроса с дефолтом (для `GuardedClient::for_embedding`).
+    pub fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs.unwrap_or(Self::DEFAULT_TIMEOUT_SECS))
+    }
 }
 
 impl LocalConfig {
@@ -219,6 +317,42 @@ mod tests {
             on.ai.agent_skills_dir.as_deref(),
             Some("/vault/.nexus/skills")
         );
+    }
+
+    /// INFER-CFG: новые поля инференса. Zero-config → дефолты через геттеры (обратная совместимость);
+    /// явные значения парсятся. Дефолты: first_token 300с (cold-start V100), idle 90с, connect 30с,
+    /// retry 3, temperature 0.3, embedding-timeout 60с.
+    #[test]
+    fn infer_cfg_timeouts_defaults_and_overrides() {
+        // Zero-config: chat-секция без новых полей → геттеры дают дефолты.
+        let zc = LocalConfig::parse(r#"{"ai":{"chat":{"url":"http://h:8080"}}}"#).unwrap();
+        let c = zc.ai.chat.unwrap();
+        assert_eq!(c.first_token_timeout(), Duration::from_secs(300));
+        assert_eq!(c.idle_timeout(), Duration::from_secs(90));
+        assert_eq!(c.connect_timeout(), Duration::from_secs(30));
+        assert_eq!(c.retry_attempts(), 3);
+        assert!((c.temperature() - 0.3).abs() < f32::EPSILON);
+        // Embedding zero-config → дефолтный таймаут.
+        let ze = LocalConfig::parse(r#"{"ai":{"embedding":{"url":"http://h:8081"}}}"#).unwrap();
+        assert_eq!(ze.ai.embedding.unwrap().timeout(), Duration::from_secs(60));
+
+        // Явные значения (целевой 1Cat-vLLM/V100 профиль) — уважаются геттерами.
+        let oc = LocalConfig::parse(
+            r#"{"ai":{"chat":{"url":"http://h:8000","model":"qwen3.6-27b-awq-mtp","context_window":262144,
+                 "first_token_timeout_secs":240,"idle_timeout_secs":120,"connect_timeout_secs":45,
+                 "retry_attempts":1,"temperature":0.7,"reserve_output_tokens":2048},
+                 "embedding":{"url":"http://h:8001","timeout_secs":180}}}"#,
+        )
+        .unwrap();
+        let c = oc.ai.chat.unwrap();
+        assert_eq!(c.first_token_timeout(), Duration::from_secs(240));
+        assert_eq!(c.idle_timeout(), Duration::from_secs(120));
+        assert_eq!(c.connect_timeout(), Duration::from_secs(45));
+        assert_eq!(c.retry_attempts(), 1);
+        assert!((c.temperature() - 0.7).abs() < f32::EPSILON);
+        assert_eq!(c.reserve_output_tokens(), 2048);
+        assert_eq!(c.context_window, Some(262144));
+        assert_eq!(oc.ai.embedding.unwrap().timeout(), Duration::from_secs(180));
     }
 
     #[test]

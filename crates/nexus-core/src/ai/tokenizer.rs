@@ -201,11 +201,33 @@ impl ContextBudget {
     /// Резерв под ответ по умолчанию (примерно один развёрнутый ответ модели).
     pub const DEFAULT_RESERVE_OUTPUT: usize = 1024;
 
-    /// Бюджет из контекстного окна модели; если окно не задано в конфиге — консервативный дефолт 8k.
+    /// Консервативный дефолт контекстного окна (токены), если `context_window` не задан в конфиге
+    /// (INFER-CFG). Безопасный ПОЛ для всех развёрнутых/целевых моделей (текущий llama.cpp = 32K).
+    /// Старый дефолт был 8192 — он голодил RAG/память на 32K/256K-моделях. 256K НЕ хардкодим — для
+    /// больших окон значение задаётся явно в `.nexus/local.json` (`ai.chat.context_window`).
+    pub const DEFAULT_CONTEXT_WINDOW: usize = 32768;
+
+    /// Бюджет из контекстного окна модели; если окно не задано в конфиге — консервативный дефолт
+    /// [`Self::DEFAULT_CONTEXT_WINDOW`] (32K) с предупреждением в лог. Резерв под ответ — дефолтный
+    /// ([`Self::DEFAULT_RESERVE_OUTPUT`]); конфигурируемый резерв — через [`Self::with_reserve`].
     pub fn from_context_window(context_window: Option<usize>) -> Self {
+        Self::with_reserve(context_window, Self::DEFAULT_RESERVE_OUTPUT)
+    }
+
+    /// Как [`Self::from_context_window`], но с ЯВНЫМ резервом под ответ (INFER-CFG:
+    /// `ChatConfig::reserve_output_tokens()`). `None` окно → дефолт 32K + `warn!`.
+    pub fn with_reserve(context_window: Option<usize>, reserve_output: usize) -> Self {
+        let context_window = context_window.unwrap_or_else(|| {
+            tracing::warn!(
+                default_window = Self::DEFAULT_CONTEXT_WINDOW,
+                "context_window не задан в .nexus/local.json (ai.chat.context_window); беру \
+                 консервативные 32K — для 256K-моделей (напр. Qwen3.6-27B на vLLM) задай явно"
+            );
+            Self::DEFAULT_CONTEXT_WINDOW
+        });
         Self {
-            context_window: context_window.unwrap_or(8192),
-            reserve_output: Self::DEFAULT_RESERVE_OUTPUT,
+            context_window,
+            reserve_output,
         }
     }
 
@@ -481,20 +503,39 @@ mod tests {
         );
     }
 
-    /// `from_context_window`: None → консервативный дефолт, Some → ровно из конфига.
+    /// `from_context_window`: None → консервативный дефолт (INFER-CFG: 32K, не 8192), Some → ровно
+    /// из конфига; 256K-окно уважается; with_reserve прокидывает конфигурируемый резерв.
     #[test]
     fn budget_reads_window_from_config() {
         assert_eq!(
             ContextBudget::from_context_window(Some(32768)).context_window,
             32768
         );
+        // INFER-CFG: дефолт окна поднят 8192 → 32768 (безопасный пол; голод RAG на больших моделях).
         assert_eq!(
             ContextBudget::from_context_window(None).context_window,
-            8192
+            32768
+        );
+        assert_eq!(
+            ContextBudget::from_context_window(None).context_window,
+            ContextBudget::DEFAULT_CONTEXT_WINDOW
+        );
+        // 256K-модель (Qwen3.6-27B на vLLM): значение из конфига уважается (256K не хардкодим).
+        assert_eq!(
+            ContextBudget::from_context_window(Some(262144)).context_window,
+            262144
         );
         assert_eq!(
             ContextBudget::from_context_window(Some(100)).input_budget(),
             100usize.saturating_sub(ContextBudget::DEFAULT_RESERVE_OUTPUT)
+        );
+        // with_reserve: явный резерв уважается (None окно → дефолт 32K, warn не валит).
+        let b = ContextBudget::with_reserve(None, 4096);
+        assert_eq!(b.context_window, ContextBudget::DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(b.reserve_output, 4096);
+        assert_eq!(
+            ContextBudget::with_reserve(Some(262144), 2048).input_budget(),
+            262144 - 2048
         );
     }
 
