@@ -1,0 +1,109 @@
+/* Inspector-rail (макет editor.jsx): правый rail + сворачиваемая панель активной секции. */
+.row {
+  display: flex;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.rail {
+  flex: 0 0 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 10px 0;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-chrome);
+}
+
+.railBtn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.railBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.railBtn.on {
+  background: var(--color-selected);
+  color: var(--color-accent);
+}
+
+.panel {
+  flex: 0 0 288px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-chrome-2);
+  animation: insp-in 0.2s var(--ease-standard);
+}
+
+@keyframes insp-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 14px 9px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.close {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-faint);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.close:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.body {
+  flex: 1;
+  overflow: auto;
+  padding: 2px 8px 16px;
+}
+
+.placeholder {
+  padding: 16px 12px;
+  margin: 0;
+  color: var(--color-text-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}

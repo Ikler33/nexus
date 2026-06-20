@@ -1,0 +1,102 @@
+/* AppendLine (макет editor.jsx): quick-add внизу превью — global-search-инпут + [[ автокомплит-поп-ап. */
+.wrap {
+  position: relative;
+  margin-top: var(--space-5);
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 99px;
+  color: var(--color-text-muted);
+  box-shadow: var(--elevation-1);
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.field:hover {
+  border-color: var(--color-border-strong);
+}
+
+.field:focus-within {
+  border-color: var(--color-accent-rim);
+  box-shadow: var(--elevation-1), 0 0 0 3px var(--color-accent-soft);
+}
+
+.icon {
+  flex: 0 0 auto;
+  color: var(--color-text-faint);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.input::placeholder {
+  color: var(--color-text-faint);
+}
+
+/* [[ автокомплит-поп-ап (как wl-pop макета). */
+.pop {
+  position: absolute;
+  z-index: 60;
+  top: 38px;
+  left: var(--space-3);
+  min-width: 230px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-2);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+.item.sel,
+.item:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.itemIco {
+  flex: 0 0 auto;
+  color: var(--color-link);
+}
+
+.itemName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

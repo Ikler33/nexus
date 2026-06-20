@@ -359,6 +359,12 @@
     },
     "source": "Source",
     "preview": "Preview",
+    "back": "Back",
+    "forward": "Forward",
+    "append": {
+      "placeholder": "New line…  [[ — link",
+      "label": "Append a line"
+    },
     "newTab": "New note in tab",
     "metaWords_one": "{{count}} word",
     "metaWords_other": "{{count}} words",
@@ -381,6 +387,16 @@
     "title": "Unlinked mentions",
     "count_one": "{{count, number}} unlinked mention",
     "count_other": "{{count, number}} unlinked mentions"
+  },
+  "inspector": {
+    "title": "Note inspector",
+    "panel": "Inspector panel",
+    "collapse": "Collapse panel",
+    "outline": "Outline",
+    "backlinks": "Backlinks",
+    "related": "Related",
+    "summary": "Summary",
+    "aiSoon": "Needs AI — coming soon. Content arrives with the inline AI slice."
   },
   "embed": {
     "loading": "Loading embed…",

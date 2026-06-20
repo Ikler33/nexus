@@ -365,6 +365,12 @@
     },
     "source": "Исходник",
     "preview": "Просмотр",
+    "back": "Назад",
+    "forward": "Вперёд",
+    "append": {
+      "placeholder": "Новая строка…  [[ — ссылка",
+      "label": "Дописать строку"
+    },
     "newTab": "Новая заметка во вкладке",
     "metaWords_one": "{{count}} слово",
     "metaWords_few": "{{count}} слова",
@@ -392,6 +398,16 @@
     "count_one": "{{count, number}} упоминание без ссылки",
     "count_few": "{{count, number}} упоминания без ссылки",
     "count_many": "{{count, number}} упоминаний без ссылки"
+  },
+  "inspector": {
+    "title": "Инспектор заметки",
+    "panel": "Панель инспектора",
+    "collapse": "Свернуть панель",
+    "outline": "Оглавление",
+    "backlinks": "Связи",
+    "related": "Похожие",
+    "summary": "Резюме",
+    "aiSoon": "Нужен AI — скоро. Контент появится с AI-срезом."
   },
   "embed": {
     "loading": "Загрузка вставки…",
