@@ -38,7 +38,9 @@ pub mod tool;
 
 pub use control::{load_control_state, save_control_state, AgentControlState};
 pub use event::{AgentEvent, FileStatus, ProposedFile};
-pub use job::{enqueue_agent_run, AgentRunHandler, KIND_AGENT_RUN};
+pub use job::{
+    enqueue_agent_run, AgentRunHandler, AGENT_PREAMBLE, KIND_AGENT_RUN, RECALL_BUDGET_TOKENS,
+};
 pub use memory::{AgentMemory, VaultAgentMemory};
 pub use registry::{ToolRegistry, ToolResult};
 pub use run_store::{requeue_stale_running, AgentRun};

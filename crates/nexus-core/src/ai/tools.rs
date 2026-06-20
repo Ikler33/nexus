@@ -428,6 +428,42 @@ fn parse_tool_sse_line(line: &str) -> ToolSseEvent {
     }
 }
 
+/// AGENT-1 (I-5): ЕДИНЫЙ строитель tool-capable провайдера цикла агента из `ai.chat`-секции конфига.
+///
+/// Тот же `ai.chat`-хост/модель и тот же `GuardedClient::for_chat` + [`EgressFeature::Chat`], что и
+/// chat-провайдер, но ОТДЕЛЬНЫЙ тип [`OpenAiToolProvider`] (tools НЕ протекают в chat-путь, I-5).
+/// `None` — нет `ai.chat` / guarded-клиент не построился (агент без живой модели — деградирует чисто).
+///
+/// ЖИВЁТ ЗДЕСЬ (дом типа, whitelisted `check-tooluse`), чтобы tool-провайдер конструировался ВНУТРИ
+/// границы I-5: вызыватели (desktop `commands/agent.rs` — где `OpenAiToolProvider` запрещён линтом)
+/// получают уже-собранный `Arc<dyn ToolCapableProvider>`, не упоминая концретный тип. Зеркало
+/// `nexus-agentd::build_agent_tools_min` (там копия — agentd намеренно self-contained); desktop же
+/// зовёт ЭТОТ общий строитель (reuse, не дубль).
+pub fn build_agent_tool_provider(
+    cfg: &super::LocalConfig,
+    policy: &Arc<crate::net::EgressPolicy>,
+    audit: &Arc<crate::net::EgressAudit>,
+) -> Option<Arc<dyn ToolCapableProvider>> {
+    let chat = cfg.ai.chat.as_ref()?;
+    let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
+    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), chat.connect_timeout())
+        .map_err(|e| tracing::warn!(error = %e, "tool-провайдер агента не инициализирован"))
+        .ok()?;
+    // INFER-CFG: температура + cold-start-таймауты стрима из конфига (у tool-провайдера нет retry —
+    // повторами ходов заведует сам цикл агента). Connect-таймаут — у guarded-клиента выше.
+    let provider = OpenAiToolProvider::new(
+        &guarded,
+        EgressFeature::Chat,
+        &chat.url,
+        &model,
+        Some(chat.temperature()),
+    )
+    .with_first_token_timeout(chat.first_token_timeout())
+    .with_idle_timeout(chat.idle_timeout());
+    tracing::info!(model = %model, "tool-capable провайдер агента включён (AGENT-1)");
+    Some(Arc::new(provider))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,6 +682,30 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["type"], "function");
         assert_eq!(arr[0]["function"]["name"], "debug.echo");
+    }
+
+    /// UI-1a: общий строитель `build_agent_tool_provider` — `ai.chat` задан → Some(провайдер с тем же
+    /// model_id); секции нет → None (агент без живой модели, деградирует чисто). Сети не касается
+    /// (клиент не шлёт запрос при конструкции).
+    #[test]
+    fn build_agent_tool_provider_some_when_chat_configured() {
+        use std::sync::atomic::AtomicBool;
+        let policy = std::sync::Arc::new(crate::net::EgressPolicy::new(std::sync::Arc::new(
+            AtomicBool::new(false),
+        )));
+        let audit = std::sync::Arc::new(crate::net::EgressAudit::default());
+
+        let cfg = crate::ai::LocalConfig::parse(
+            r#"{"ai":{"chat":{"url":"http://127.0.0.1:9","model":"qwen-tool"}}}"#,
+        )
+        .unwrap();
+        let provider =
+            super::build_agent_tool_provider(&cfg, &policy, &audit).expect("ai.chat → провайдер");
+        assert_eq!(provider.model_id(), "qwen-tool");
+
+        // Нет ai.chat → None.
+        let empty = crate::ai::LocalConfig::parse("{}").unwrap();
+        assert!(super::build_agent_tool_provider(&empty, &policy, &audit).is_none());
     }
 
     /// Отмена посреди стрима → дроп партиала, БЕЗ исполнения (через залипший сервер + взведённый cancel).
