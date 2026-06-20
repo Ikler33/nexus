@@ -16,7 +16,7 @@ const H = 3600;
 const DAY = 86_400;
 
 const goals: GoalEntry[] = [
-  { path: 'Projects/Nexus.md', title: 'Nexus MVP', progress: 72 },
+  { path: 'Projects/Qasr.md', title: 'Qasr MVP', progress: 72 },
   { path: 'Projects/Agents.md', title: 'Архитектура агентов', progress: 45 },
   { path: 'Projects/Eval.md', title: 'Eval-харнесс', progress: 88 },
 ];
@@ -87,7 +87,7 @@ const widgets: Record<string, Widget> = {
   context_drift: {
     key: 'context_drift',
     content:
-      'Заявленный фокус — Nexus MVP, но последние десять правок уходят в инфраструктуру: eval-харнесс, серверные конфиги, перенос дизайна. Цель «Архитектура агентов» не получала записей шесть дней — если это осознанная пауза, зафиксируйте её; иначе фокус размывается.',
+      'Заявленный фокус — Qasr MVP, но последние десять правок уходят в инфраструктуру: eval-харнесс, серверные конфиги, перенос дизайна. Цель «Архитектура агентов» не получала записей шесть дней — если это осознанная пауза, зафиксируйте её; иначе фокус размывается.',
     generatedAt: NOW - 3 * H,
     sourceHash: 1,
     status: 'ready',
