@@ -16,7 +16,9 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::event::AgentEvent;
 
+pub mod handler;
 pub mod wire;
+pub use handler::{ConnectAgentHandler, ConnectDeps};
 pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamEvent};
 
 /// Версия протокола этой сборки. Клиент объявляет поддерживаемые в `initialize`; сервер выбирает.
