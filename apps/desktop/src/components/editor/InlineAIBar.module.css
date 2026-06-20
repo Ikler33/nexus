@@ -1,0 +1,158 @@
+/* InlineAI prompt-box (⌘/) — порт макета Qasr `app.css .inline-ai`. Плавающая карточка над колонкой
+   редактора (.editorCol — position:relative); top меньше макетного (92px), т.к. в нашем каркасе таб-стрип
+   вне колонки. */
+.inlineAi {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  width: min(620px, calc(100% - 48px));
+  background: var(--color-bg-elevated);
+  border: 1px solid color-mix(in oklch, var(--color-ai) 38%, var(--color-border-strong));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  padding: 12px 13px;
+  animation: m-pop var(--dur-2, 220ms) var(--ease-spring, ease);
+}
+
+.iaBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.iaGlyph {
+  flex: 0 0 auto;
+  color: var(--color-ai);
+  display: inline-flex;
+}
+.iaInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+}
+.iaQ {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.closeBtn {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.closeBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.iaStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 2px 2px;
+  color: var(--color-ai);
+  font-size: var(--text-sm);
+}
+.iaErr {
+  composes: iaStatus;
+  color: var(--color-danger, #c0392b);
+}
+
+.iaOut {
+  margin-top: 10px;
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.iaCaret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  background: var(--color-ai);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  border-radius: 1px;
+  animation: blink 1s steps(2) infinite;
+}
+
+.iaActions {
+  display: flex;
+  gap: 7px;
+  margin-top: 11px;
+}
+.iaAct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.iaAct:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.primary {
+  composes: iaAct;
+  background: var(--color-ai);
+  border-color: transparent;
+  color: #fff;
+}
+.primary:hover {
+  filter: brightness(1.06);
+  background: var(--color-ai);
+  color: #fff;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inlineAi {
+    animation: none;
+  }
+  .iaCaret {
+    animation: none;
+  }
+}

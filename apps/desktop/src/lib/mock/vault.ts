@@ -537,6 +537,7 @@ export function contradictionsSetEnabled(on: boolean): Promise<void> {
 export function streamInline(
   mode: InlineMode,
   onEvent: (event: InlineStreamEvent) => void,
+  prompt?: string,
 ): () => void {
   let cancelled = false;
   const text =
@@ -544,7 +545,10 @@ export function streamInline(
       ? 'Кратко: основная мысль фрагмента.'
       : mode === 'rewrite'
         ? 'Переписанный, более ясный вариант фрагмента.'
-        : ' и продолжается естественно дальше.';
+        : mode === 'prompt'
+          ? // Зеркалит бэкенд: свободный запрос → сгенерированный текст для вставки (упоминает запрос).
+            `Ответ на запрос «${(prompt ?? '').trim() || 'без запроса'}» на основе ваших заметок.`
+          : ' и продолжается естественно дальше.';
   void (async () => {
     for (const tok of text.split(/(\s+)/)) {
       if (cancelled) return;

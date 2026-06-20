@@ -605,8 +605,8 @@ export type InlineStreamEvent =
   | { type: 'done'; full: string }
   | { type: 'error'; message: string };
 
-/** Режим inline-генерации (зеркалит Rust `ai::InlineMode`). */
-export type InlineMode = 'continue' | 'rewrite' | 'summarize';
+/** Режим inline-генерации (зеркалит Rust `ai::InlineMode`). `prompt` — свободный запрос (⌘/ prompt-box). */
+export type InlineMode = 'continue' | 'rewrite' | 'summarize' | 'prompt';
 
 /** AI-эндпоинт настроек (зеркалит Rust `settings::EndpointDto`). `model` опционален. */
 export interface AiEndpoint {
@@ -1266,20 +1266,23 @@ export const tauriApi = {
   inline: {
     /**
      * Inline-генерация в редакторе (IL-1/2): стрим результата в `onEvent` (`token`… → `done`|`error`).
-     * `mode` — `continue`/`rewrite`/`summarize`; `context` — текст до курсора; `selection` — выделение
-     * (для rewrite/summarize). Возвращает функцию отмены (взводит `inline_cancel`). Вне Tauri — мок.
+     * `mode` — `continue`/`rewrite`/`summarize`/`prompt`; `context` — текст до курсора (или вся заметка
+     * как контекст для `prompt`); `selection` — выделение (rewrite/summarize); `prompt` — свободный
+     * запрос пользователя (⌘/ prompt-box). Возвращает функцию отмены (взводит `inline_cancel`). Вне
+     * Tauri — мок.
      */
     complete: (
       mode: InlineMode,
       context: string,
       selection: string | undefined,
       onEvent: (event: InlineStreamEvent) => void,
+      prompt?: string,
     ): (() => void) => {
-      if (!isTauri()) return mockVault.streamInline(mode, onEvent);
+      if (!isTauri()) return mockVault.streamInline(mode, onEvent, prompt);
       const channel = new Channel<InlineStreamEvent>();
       channel.onmessage = onEvent;
-      invoke<void>('inline_complete', { mode, context, selection, channel }).catch((e: unknown) =>
-        onEvent({ type: 'error', message: String(e) }),
+      invoke<void>('inline_complete', { mode, context, selection, prompt, channel }).catch(
+        (e: unknown) => onEvent({ type: 'error', message: String(e) }),
       );
       return () => {
         void invoke<void>('inline_cancel');

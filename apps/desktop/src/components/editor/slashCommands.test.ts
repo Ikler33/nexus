@@ -3,7 +3,9 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isTaskLine } from '../../lib/editor/format';
+import { useInlineAIStore } from '../../stores/inlineAI';
 import { useUIStore } from '../../stores/ui';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { SLASH_ITEMS, slashSource } from './slashCommands';
 
 /** Прогон CompletionSource на тексте с курсором в конце (если pos не задан). */
@@ -112,5 +114,13 @@ describe('slashSource (EDIT-6) — вставки apply', () => {
     const out = applyItem('template', '/tmpl');
     expect(out).toBe(''); // триггер удалён
     expect(useUIStore.getState().templatesOpen).toBe(true);
+  });
+
+  it('«/ai» убирает триггер и открывает InlineAI prompt-box в активной группе', () => {
+    useInlineAIStore.setState({ openGroupId: null });
+    useWorkspaceStore.setState({ activeGroupId: 'g-test' });
+    const out = applyItem('ai', '/ai');
+    expect(out).toBe(''); // триггер удалён
+    expect(useInlineAIStore.getState().openGroupId).toBe('g-test');
   });
 });

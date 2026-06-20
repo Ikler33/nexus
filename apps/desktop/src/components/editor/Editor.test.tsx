@@ -9,11 +9,11 @@ const buf = (path: string, doc: string): Buffer => ({ path, doc, dirty: false, b
 
 describe('Editor (Ф0-5, контракт CM6↔React)', () => {
   it('рендерит документ и заменяет его при смене файла (без пересоздания)', async () => {
-    const { rerender } = render(<Editor path="A.md" initialDoc="Alpha content here" />);
+    const { rerender } = render(<Editor groupId="g" path="A.md" initialDoc="Alpha content here" />);
     const host = screen.getByTestId('editor');
     await waitFor(() => expect(host.textContent).toContain('Alpha'));
 
-    rerender(<Editor path="B.md" initialDoc="Bravo content here" />);
+    rerender(<Editor groupId="g" path="B.md" initialDoc="Bravo content here" />);
     await waitFor(() => expect(host.textContent).toContain('Bravo'));
     expect(host.textContent).not.toContain('Alpha');
   });
@@ -21,7 +21,7 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
   it('сообщает об изменениях документа через onChange', async () => {
     let captured = '';
     render(
-      <Editor path="A.md" initialDoc="start" onChange={(d) => { captured = d; }} />,
+      <Editor groupId="g" path="A.md" initialDoc="start" onChange={(d) => { captured = d; }} />,
     );
     await waitFor(() => expect(screen.getByTestId('editor').textContent).toContain('start'));
     // onChange зовётся только при правках; стартовая загрузка не считается изменением.
@@ -31,11 +31,11 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
   it('смена файла не считается правкой (регресс: externalSync, нет ложного dirty)', async () => {
     let changes = 0;
     const { rerender } = render(
-      <Editor path="A.md" initialDoc="aaa" onChange={() => { changes += 1; }} />,
+      <Editor groupId="g" path="A.md" initialDoc="aaa" onChange={() => { changes += 1; }} />,
     );
     const host = screen.getByTestId('editor');
     await waitFor(() => expect(host.textContent).toContain('aaa'));
-    rerender(<Editor path="B.md" initialDoc="bbb" onChange={() => { changes += 1; }} />);
+    rerender(<Editor groupId="g" path="B.md" initialDoc="bbb" onChange={() => { changes += 1; }} />);
     await waitFor(() => expect(host.textContent).toContain('bbb'));
     expect(changes).toBe(0);
   });
@@ -43,13 +43,13 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
   it('внешнее изменение того же файла синкается в редактор без ложного dirty (Ф1-9 accept / watcher)', async () => {
     let changes = 0;
     const { rerender } = render(
-      <Editor path="A.md" initialDoc="hello" onChange={() => { changes += 1; }} />,
+      <Editor groupId="g" path="A.md" initialDoc="hello" onChange={() => { changes += 1; }} />,
     );
     const host = screen.getByTestId('editor');
     await waitFor(() => expect(host.textContent).toContain('hello'));
 
     // Тот же path, новый doc (как accept дописал [[wikilink]]) → отражается, onChange НЕ зовётся.
-    rerender(<Editor path="A.md" initialDoc="hello [[B]]" onChange={() => { changes += 1; }} />);
+    rerender(<Editor groupId="g" path="A.md" initialDoc="hello [[B]]" onChange={() => { changes += 1; }} />);
     await waitFor(() => expect(host.textContent).toContain('[[B]]'));
     expect(changes).toBe(0);
   });
@@ -60,7 +60,7 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
     useWorkspaceStore.setState({
       buffers: { 'A.md': buf('A.md', 'Alpha content here'), 'B.md': buf('B.md', 'Bravo content here') },
     });
-    const { rerender } = render(<Editor path="A.md" initialDoc="Alpha content here" />);
+    const { rerender } = render(<Editor groupId="g" path="A.md" initialDoc="Alpha content here" />);
     const host = screen.getByTestId('editor');
     await waitFor(() => expect(host.textContent).toContain('Alpha'));
 
@@ -70,11 +70,11 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
     view!.dispatch({ selection: { anchor: 7 } });
 
     // Уходим в B.md (сохранит курсор A=7), затем возвращаемся в A.md (восстановит).
-    rerender(<Editor path="B.md" initialDoc="Bravo content here" />);
+    rerender(<Editor groupId="g" path="B.md" initialDoc="Bravo content here" />);
     await waitFor(() => expect(host.textContent).toContain('Bravo'));
     expect(useWorkspaceStore.getState().buffers['A.md'].cursor).toBe(7);
 
-    rerender(<Editor path="A.md" initialDoc="Alpha content here" />);
+    rerender(<Editor groupId="g" path="A.md" initialDoc="Alpha content here" />);
     await waitFor(() => expect(host.textContent).toContain('Alpha'));
     expect(getActiveEditorView()!.state.selection.main.head).toBe(7);
   });
@@ -84,15 +84,15 @@ describe('Editor (Ф0-5, контракт CM6↔React)', () => {
     useWorkspaceStore.setState({
       buffers: { 'A.md': buf('A.md', 'long original text'), 'B.md': buf('B.md', 'other') },
     });
-    const { rerender } = render(<Editor path="A.md" initialDoc="long original text" />);
+    const { rerender } = render(<Editor groupId="g" path="A.md" initialDoc="long original text" />);
     const host = screen.getByTestId('editor');
     await waitFor(() => expect(host.textContent).toContain('long'));
     getActiveEditorView()!.dispatch({ selection: { anchor: 15 } }); // ближе к концу
 
-    rerender(<Editor path="B.md" initialDoc="other" />);
+    rerender(<Editor groupId="g" path="B.md" initialDoc="other" />);
     await waitFor(() => expect(host.textContent).toContain('other'));
     // Возврат к укороченной версии A.md (len 3) — курсор клампится в пределы, без краша.
-    rerender(<Editor path="A.md" initialDoc="abc" />);
+    rerender(<Editor groupId="g" path="A.md" initialDoc="abc" />);
     await waitFor(() => expect(host.textContent).toContain('abc'));
     expect(getActiveEditorView()!.state.selection.main.head).toBe(3);
   });

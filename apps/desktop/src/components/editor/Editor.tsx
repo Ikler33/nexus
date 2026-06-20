@@ -7,6 +7,7 @@ import { EditorView, keymap } from '@codemirror/view';
 import { clearActiveEditorView, setActiveEditorView } from '../../lib/editor/activeView';
 import type { NoteRef } from '../../lib/tauri-api';
 import { useInlineStore } from '../../stores/inline';
+import { useInlineAIStore } from '../../stores/inlineAI';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { nexusExtensions } from './extensions';
 import { imagePaste } from '../../lib/editor/imagePaste';
@@ -20,6 +21,8 @@ const externalSync = Annotation.define<boolean>();
 export interface EditorProps {
   /** Идентичность буфера: смена `path` → перезагрузка документа через dispatch. */
   path: string;
+  /** Группа-владелец (для InlineAI ⌘/: открыть prompt-box именно в этой группе). */
+  groupId: string;
   initialDoc: string;
   onChange?: (doc: string) => void;
   onSave?: (doc: string) => void;
@@ -40,6 +43,7 @@ export interface EditorProps {
  */
 export function Editor({
   path,
+  groupId,
   initialDoc,
   onChange,
   onSave,
@@ -80,6 +84,22 @@ export function Editor({
         preventDefault: true,
         run: (view) => {
           useInlineStore.getState().runInline(view, 'continue');
+          return true;
+        },
+      },
+    ]);
+
+    // InlineAI prompt-box (⌘/, дизайн Qasr): свободный AI-запрос → вставка. Перехватываем В РЕДАКТОРЕ
+    // (preventDefault → глобальный useKeymap НЕ откроет шпаргалку: она остаётся на ⌘/ вне редактора +
+    // в палитре). Mod-/ ВЫРЕЗАН из defaultKeymap (toggleComment) ниже — конфликта внутри CM нет.
+    // groupId константен на жизнь инстанса (Editor с `key={groupId}`), безопасно захватить в замыкании.
+    const inlineAiTrigger = keymap.of([
+      {
+        key: 'Mod-/',
+        preventDefault: true,
+        run: (view) => {
+          // Целимся вставкой в ЭТОТ view (а не глобально активный — важно при сплитах).
+          useInlineAIStore.getState().open(groupId, view);
           return true;
         },
       },
@@ -141,6 +161,7 @@ export function Editor({
           keymap.of(searchKeymap.filter((b) => b.key !== 'Mod-d' && b.key !== 'Mod-Shift-l')),
           saveKey,
           inlineTrigger,
+          inlineAiTrigger,
           ghostField,
           inlineKeymap({ onResolve: () => useInlineStore.getState().cancelInline() }),
           inlineToolbar,
