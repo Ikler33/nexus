@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import * as plugins from './plugins';
 
 describe('mock capability-брокер (превью)', () => {
+  beforeEach(() => plugins.__resetForTests()); // изоляция: disable/remove не «протекают» между тестами
+
+
   it('list возвращает совместимый демо-плагин', async () => {
     const list = await plugins.list();
     expect(list.some((p) => p.dir === 'hello' && p.compatible)).toBe(true);
@@ -59,5 +62,27 @@ describe('mock capability-брокер (превью)', () => {
     await expect(plugins.invoke(token, 'net.fetch', 'https://evil.example.com/x')).rejects.toThrow(
       /allowlist/,
     );
+  });
+
+  // ── Управление (enable/disable/remove) — зеркало backend-контракта ──
+
+  it('setEnabled выключает: list.enabled=false, openSession отказывает; включение восстанавливает', async () => {
+    await plugins.setEnabled('hello', false);
+    const off = await plugins.list();
+    expect(off.find((p) => p.dir === 'hello')?.enabled).toBe(false);
+    await expect(plugins.openSession('hello')).rejects.toThrow(/выключен/);
+
+    await plugins.setEnabled('hello', true); // восстановить для остальных тестов
+    const on = await plugins.list();
+    expect(on.find((p) => p.dir === 'hello')?.enabled).toBe(true);
+    await expect(plugins.openSession('hello')).resolves.toMatch(/^mock-tok-/);
+  });
+
+  // ПОСЛЕДНИЙ тест: remove «sticky» в рамках модуля (нет un-remove) — ставим в конце, чтобы не влиять.
+  it('remove убирает плагин из list и блокирует openSession', async () => {
+    await plugins.remove('hello');
+    const list = await plugins.list();
+    expect(list.some((p) => p.dir === 'hello')).toBe(false);
+    await expect(plugins.openSession('hello')).rejects.toThrow();
   });
 });

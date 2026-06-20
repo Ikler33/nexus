@@ -1,0 +1,126 @@
+//! Управление установленными плагинами (включён/выключен) — персист в `settings` (как
+//! `episodic.enabled`). Дефолт ВКЛЮЧЁН: строки нет → плагин активен (обратная совместимость с уже
+//! установленными). Ключ — `plugins.<dir>.enabled` ("1"/"0"). Удаление плагина — на стороне команды
+//! (move_to_trash + [`clear_settings`]).
+
+use std::collections::HashSet;
+
+use rusqlite::OptionalExtension;
+
+use crate::db::{DbResult, ReadPool, WriteActor};
+
+/// Ключ настройки «включён» для плагина в каталоге `dir`.
+fn enabled_key(dir: &str) -> String {
+    format!("plugins.{dir}.enabled")
+}
+
+/// Персист тоггла «включён» плагина. "1"/"0", upsert (как `episode::set_enabled`).
+pub async fn set_enabled(writer: &WriteActor, dir: &str, on: bool) -> DbResult<()> {
+    let key = enabled_key(dir);
+    let v = if on { "1" } else { "0" };
+    writer
+        .call(move |c| {
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES(?1,?2) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                rusqlite::params![key, v],
+            )
+            .map(|_| ())
+        })
+        .await
+}
+
+/// Множество ВЫКЛЮЧЕННЫХ плагинов (каталоги, у которых `plugins.<dir>.enabled='0'`). Дефолт —
+/// включён (ключа нет → не в множестве). Для обогащения `list_plugins`.
+pub async fn disabled_dirs(reader: &ReadPool) -> DbResult<HashSet<String>> {
+    reader
+        .query(|c| {
+            let mut stmt = c.prepare(
+                "SELECT key FROM settings WHERE key LIKE 'plugins.%.enabled' AND value='0'",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut set = HashSet::new();
+            for k in rows {
+                let k = k?;
+                if let Some(dir) = k
+                    .strip_prefix("plugins.")
+                    .and_then(|s| s.strip_suffix(".enabled"))
+                {
+                    set.insert(dir.to_string());
+                }
+            }
+            Ok(set)
+        })
+        .await
+}
+
+/// Включён ли плагин `dir` (дефолт да — ключа нет / значение не "0"). Гард для `plugin_open_session`.
+pub async fn is_enabled(reader: &ReadPool, dir: &str) -> DbResult<bool> {
+    let key = enabled_key(dir);
+    let v: Option<String> = reader
+        .query(move |c| {
+            c.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()
+        })
+        .await?;
+    Ok(v.as_deref() != Some("0"))
+}
+
+/// Удаляет настройки плагина (при remove): переустановка стартует «чистой» (включена по дефолту).
+pub async fn clear_settings(writer: &WriteActor, dir: &str) -> DbResult<()> {
+    let key = enabled_key(dir);
+    writer
+        .call(move |c| {
+            c.execute("DELETE FROM settings WHERE key=?1", [key])
+                .map(|_| ())
+        })
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use tempfile::TempDir;
+
+    async fn db() -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        (dir, db)
+    }
+
+    #[tokio::test]
+    async fn enabled_defaults_true_and_persists_toggle() {
+        let (_d, db) = db().await;
+        // Дефолт — включён (строки нет).
+        assert!(is_enabled(db.reader(), "demo").await.unwrap());
+        assert!(disabled_dirs(db.reader()).await.unwrap().is_empty());
+
+        // Выключаем → is_enabled=false, в множестве disabled.
+        set_enabled(db.writer(), "demo", false).await.unwrap();
+        assert!(!is_enabled(db.reader(), "demo").await.unwrap());
+        assert_eq!(
+            disabled_dirs(db.reader()).await.unwrap(),
+            HashSet::from(["demo".to_string()])
+        );
+
+        // Включаем обратно → снова true, не в множестве.
+        set_enabled(db.writer(), "demo", true).await.unwrap();
+        assert!(is_enabled(db.reader(), "demo").await.unwrap());
+        assert!(disabled_dirs(db.reader()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_settings_resets_to_default() {
+        let (_d, db) = db().await;
+        set_enabled(db.writer(), "demo", false).await.unwrap();
+        assert!(!is_enabled(db.reader(), "demo").await.unwrap());
+        clear_settings(db.writer(), "demo").await.unwrap();
+        // После очистки — дефолт (включён).
+        assert!(is_enabled(db.reader(), "demo").await.unwrap());
+    }
+}

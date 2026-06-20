@@ -245,6 +245,8 @@ pub fn run() {
             commands::settings::set_ai_config,
             commands::settings::test_ai_connection,
             commands::plugin::list_plugins,
+            commands::plugin::set_plugin_enabled,
+            commands::plugin::remove_plugin,
             commands::plugin::plugin_open_session,
             commands::plugin::plugin_invoke,
             commands::plugin::plugin_close_session,

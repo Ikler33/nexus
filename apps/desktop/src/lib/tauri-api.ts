@@ -88,6 +88,8 @@ export interface PluginInfo {
   error: string | null;
   /** Сводка прав манифеста — чипы и consent-sheet (DP-8). */
   permissions: PermissionChip[];
+  /** Включён ли плагин (персист `plugins.<dir>.enabled`, дефолт ВКЛ). Выключенный не открывает сессию. */
+  enabled: boolean;
 }
 
 /** git-sync: статус файла (зеркалит Rust `git::StatusEntry`/`ChangeKind`). */
@@ -1296,9 +1298,19 @@ export const tauriApi = {
   },
 
   plugins: {
-    /** Установленные плагины vault (`.nexus/plugins/*`) со статусом совместимости (Ф0-13/Ф2). */
+    /** Установленные плагины vault (`.nexus/plugins/*`) со статусом совместимости + `enabled` (Ф0-13/Ф2). */
     list: (): Promise<PluginInfo[]> =>
       isTauri() ? invoke<PluginInfo[]>('list_plugins') : mockPlugins.list(),
+
+    /** Включить/выключить плагин (персист). Выключенный не открывает новую сессию. Вне Tauri — мок. */
+    setEnabled: (dir: string, on: boolean): Promise<void> =>
+      isTauri()
+        ? invoke<void>('set_plugin_enabled', { dir, on })
+        : mockPlugins.setEnabled(dir, on),
+
+    /** Удалить плагин: каталог → в корзину (.nexus/.trash, обратимо) + очистка настроек. Вне Tauri — мок. */
+    remove: (dir: string): Promise<void> =>
+      isTauri() ? invoke<void>('remove_plugin', { dir }) : mockPlugins.remove(dir),
 
     /**
      * Открывает сессию плагина (`.nexus/plugins/<dir>`) → **capability-токен** (§7.9). Токен живёт

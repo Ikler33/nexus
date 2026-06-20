@@ -342,6 +342,73 @@
   cursor: default;
 }
 
+/* Выключенный плагин — приглушённая карточка (контент, не контролы). */
+.cardOff .cardBody,
+.cardOff .glyph {
+  opacity: 0.5;
+}
+
+/* Тоггл вкл/выкл (switch) — компактный, акцентный во включённом. */
+.toggle {
+  display: inline-flex;
+  cursor: pointer;
+}
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggleTrack {
+  display: inline-block;
+  width: 34px;
+  height: 19px;
+  border-radius: 99px;
+  background: var(--color-border-strong);
+  position: relative;
+  transition: background var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.toggleTrack::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.toggle input:checked + .toggleTrack {
+  background: var(--color-accent);
+}
+.toggle input:checked + .toggleTrack::after {
+  transform: translateX(15px);
+}
+.toggle input:focus-visible + .toggleTrack {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Удаление (в корзину) — деструктивная иконка-кнопка. */
+.remove {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--dur-1, 130ms) var(--ease-out, ease);
+}
+.remove:hover {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: var(--color-danger-soft, transparent);
+}
+
 /* ── running sandbox (iframe) ── */
 .sandbox {
   flex: 1;

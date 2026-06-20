@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Clock, Puzzle, Shield, ShieldCheck, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Clock,
+  Puzzle,
+  Shield,
+  ShieldCheck,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { type PluginCall, demoPluginSrcdoc, mountPlugin } from '../../lib/plugin-host';
@@ -116,6 +125,28 @@ export function PluginsPanel() {
     persistConsent(next);
   };
 
+  const refresh = () =>
+    void tauriApi.plugins
+      .list()
+      .then(setPlugins)
+      .catch(() => setPlugins([]));
+
+  // Включить/выключить плагин (персист на бэке) → обновить список. Выключение запущенного — гасим песочницу.
+  const toggleEnabled = (p: PluginInfo) => {
+    void tauriApi.plugins.setEnabled(p.dir, !p.enabled).then(() => {
+      if (p.enabled && running?.dir === p.dir) setRunning(null);
+      refresh();
+    });
+  };
+
+  // Удалить плагин (в корзину .nexus/.trash, обратимо). Если запущен — закрыть песочницу.
+  const removePlugin = (p: PluginInfo) => {
+    void tauriApi.plugins.remove(p.dir).then(() => {
+      if (running?.dir === p.dir) setRunning(null);
+      refresh();
+    });
+  };
+
   // Двоеточие в kind конфликтует с nsSeparator i18next → ключи через подчёркивание.
   const permKey = (kind: string) => kind.replace(':', '_');
 
@@ -215,7 +246,10 @@ export function PluginsPanel() {
                   <p className={styles.auditEmpty}>{t('plugins.empty')}</p>
                 )}
                 {plugins.map((p) => (
-                  <div key={p.dir} className={styles.card}>
+                  <div
+                    key={p.dir}
+                    className={`${styles.card} ${p.enabled ? '' : styles.cardOff}`}
+                  >
                     <span className={styles.glyph} aria-hidden>
                       <Puzzle size={22} />
                     </span>
@@ -251,13 +285,35 @@ export function PluginsPanel() {
                       )}
                     </div>
                     <div className={styles.side}>
+                      <label
+                        className={styles.toggle}
+                        title={p.enabled ? t('plugins.disable') : t('plugins.enable')}
+                      >
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          checked={p.enabled}
+                          onChange={() => toggleEnabled(p)}
+                          aria-label={p.enabled ? t('plugins.disable') : t('plugins.enable')}
+                        />
+                        <span className={styles.toggleTrack} aria-hidden />
+                      </label>
                       <button
                         type="button"
                         className={styles.launch}
-                        disabled={!p.compatible}
+                        disabled={!p.compatible || !p.enabled}
                         onClick={() => launch(p)}
                       >
                         {t('plugins.launch')}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.remove}
+                        onClick={() => removePlugin(p)}
+                        title={t('plugins.remove')}
+                        aria-label={t('plugins.remove')}
+                      >
+                        <Trash2 size={14} aria-hidden />
                       </button>
                     </div>
                   </div>

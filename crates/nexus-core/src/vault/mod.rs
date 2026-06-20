@@ -172,6 +172,10 @@ pub fn atomic_write_io(abs: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// (CURATE-1). `.nexus` игнорируется вотчером → перенос не порождает индексных событий на копию в
 /// корзине. rename в пределах одной ФС (корзина внутри vault) — атомарен и сохраняет содержимое;
 /// удаление обратимо (файл лежит в корзине). Системная корзина ОС — позже (owner-gated).
+///
+/// ПРЕДУСЛОВИЕ (вызывающий обязан гарантировать): `abs` РЕЗОЛВНУТ и подтверждён ВНУТРИ `root`
+/// (containment + анти-симссылка) — функция этого НЕ проверяет (rename действует на сам путь). Для
+/// недоверенного ввода резолвить заранее (напр. `commands::plugin::resolve_plugin_dir`).
 pub fn move_to_trash(root: &Path, abs: &Path) -> VaultResult<()> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let basename = abs
