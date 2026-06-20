@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Puzzle, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Clock, Puzzle, Shield, ShieldCheck, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { type PluginCall, demoPluginSrcdoc, mountPlugin } from '../../lib/plugin-host';
@@ -11,7 +11,8 @@ interface AuditRow extends PluginCall {
   id: number;
 }
 
-type Tab = 'installed' | 'sandbox';
+/** Нав-вкладки менеджера (макет plugins.jsx): установленные + журнал доступа. */
+type Nav = 'installed' | 'audit';
 
 /** Персист consent-решений (DP-8): dir → разрешено. Отзыв — сброс записи. */
 const CONSENT_KEY = 'nexus.plugin.consent.v1';
@@ -42,10 +43,14 @@ function needsConsent(p: PluginInfo): boolean {
 }
 
 /**
- * Менеджер плагинов (DP-8, макет `plugins.jsx`): вкладка «Установленные» — карточки с
- * **чипами прав по уровням риска** (safe/caution/sensitive) и запуском в песочнице через
- * **consent-sheet** (для не-safe прав; решение персистится и отзывается); вкладка
- * «Песочница» — demo-плагин в sandbox-iframe + журнал брокер-вызовов (Ф2).
+ * Менеджер плагинов (QASR-views, макет `plugins.jsx`): левый нав-столбец (220px) с вкладками
+ * «Установленные» / «Журнал доступа» + privacy-нота. Карточка плагина — 3-частная: glyph (44×44) +
+ * тело (имя/версия/sandbox-бейдж/описание/perm-чипы по уровням риска) + side-действие «Запустить»
+ * (песочница через consent-sheet для не-safe прав; решение персистится и отзывается). Запуск
+ * монтирует demo-плагин в sandbox-iframe (Ф2); журнал брокер-вызовов — отдельная нав-вкладка.
+ *
+ * Бэкенд плагинов даёт только list/open/close/invoke — enable/disable/remove/marketplace отсутствуют,
+ * поэтому соответствующих контролов в UI нет (это feature-work, не дизайн-слой).
  */
 export function PluginsPanel() {
   const { t } = useTranslation();
@@ -53,7 +58,9 @@ export function PluginsPanel() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const nextId = useRef(0);
   const [calls, setCalls] = useState<AuditRow[]>([]);
-  const [tab, setTab] = useState<Tab>('installed');
+  const [nav, setNav] = useState<Nav>('installed');
+  // Запущенный в песочнице плагин (его iframe смонтирован). null — список карточек.
+  const [running, setRunning] = useState<PluginInfo | null>(null);
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [consent, setConsent] = useState<Record<string, boolean>>(readConsent);
   const [sheet, setSheet] = useState<PluginInfo | null>(null);
@@ -65,9 +72,9 @@ export function PluginsPanel() {
       .catch(() => setPlugins([]));
   }, []);
 
-  // Песочница монтируется только на своей вкладке (и после consent'а).
+  // Песочница монтируется только когда плагин запущен (и после consent'а).
   useEffect(() => {
-    if (tab !== 'sandbox') return;
+    if (!running) return;
     const iframe = iframeRef.current;
     if (!iframe) return;
     let disposed = false;
@@ -84,14 +91,14 @@ export function PluginsPanel() {
       disposed = true;
       handle?.dispose();
     };
-  }, [tab]);
+  }, [running]);
 
   const launch = (p: PluginInfo) => {
     if (needsConsent(p) && !consent[p.dir]) {
       setSheet(p);
       return;
     }
-    setTab('sandbox');
+    setRunning(p);
   };
 
   const allow = (p: PluginInfo) => {
@@ -99,7 +106,7 @@ export function PluginsPanel() {
     setConsent(next);
     persistConsent(next);
     setSheet(null);
-    setTab('sandbox');
+    setRunning(p);
   };
 
   const revoke = (p: PluginInfo) => {
@@ -132,28 +139,12 @@ export function PluginsPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.header}>
-          <Puzzle size={17} aria-hidden />
-          <span className={styles.title}>{t('plugins.title')}</span>
-          <span className={styles.badge}>{t('plugins.sandbox')}</span>
-          <div className={styles.tabs} role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'installed'}
-              className={`${styles.tabBtn} ${tab === 'installed' ? styles.tabOn : ''}`}
-              onClick={() => setTab('installed')}
-            >
-              {t('plugins.installed')}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'sandbox'}
-              className={`${styles.tabBtn} ${tab === 'sandbox' ? styles.tabOn : ''}`}
-              onClick={() => setTab('sandbox')}
-            >
-              {t('plugins.sandboxTab')}
-            </button>
+          <span className={styles.headIc} aria-hidden>
+            <Puzzle size={19} />
+          </span>
+          <div className={styles.headTt}>
+            <div className={styles.title}>{t('plugins.title')}</div>
+            <div className={styles.subtitle}>{t('plugins.subtitle')}</div>
           </div>
           <button
             className={styles.close}
@@ -165,64 +156,118 @@ export function PluginsPanel() {
           </button>
         </header>
 
-        {tab === 'installed' && (
-          <div className={styles.cards}>
-            <p className={styles.privacyNote}>{t('plugins.privacyNote')}</p>
-            {plugins.length === 0 && <p className={styles.auditEmpty}>{t('plugins.empty')}</p>}
-            {plugins.map((p) => (
-              <div key={p.dir} className={styles.card}>
-                <Puzzle size={20} className={styles.glyph} aria-hidden />
-                <div className={styles.cardBody}>
-                  <div className={styles.nameLine}>
-                    <strong>{p.name ?? p.dir}</strong>
-                    {p.version && <span className={styles.ver}>v{p.version}</span>}
-                    {!p.compatible && (
-                      <span className={styles.incompat}>
-                        <AlertTriangle size={11} aria-hidden />
-                        {t('plugins.incompatible')}
-                      </span>
-                    )}
-                  </div>
-                  {p.error && <div className={styles.cardErr}>{p.error}</div>}
-                  <div className={styles.perms}>{p.permissions.map(chip)}</div>
-                  {consent[p.dir] && (
-                    <div className={styles.consentLine}>
-                      <ShieldCheck size={12} aria-hidden />
-                      {t('plugins.consentGiven')}
+        <nav className={styles.nav} aria-label={t('plugins.title')}>
+          <button
+            type="button"
+            className={`${styles.navItem} ${nav === 'installed' ? styles.navActive : ''}`}
+            aria-current={nav === 'installed'}
+            onClick={() => setNav('installed')}
+          >
+            <Puzzle size={16} aria-hidden />
+            {t('plugins.installed')}
+            <span className={styles.cnt}>{plugins.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`${styles.navItem} ${nav === 'audit' ? styles.navActive : ''}`}
+            aria-current={nav === 'audit'}
+            onClick={() => setNav('audit')}
+          >
+            <Clock size={16} aria-hidden />
+            {t('plugins.auditTab')}
+          </button>
+          <div className={styles.navNote}>
+            <Shield size={15} className={styles.navNoteIc} aria-hidden />
+            {t('plugins.privacyNote')}
+          </div>
+        </nav>
+
+        <main className={styles.main}>
+          {nav === 'installed' &&
+            (running ? (
+              <div className={styles.sandbox}>
+                <div className={styles.sandboxBar}>
+                  <button
+                    type="button"
+                    className={styles.back}
+                    onClick={() => setRunning(null)}
+                  >
+                    <ArrowLeft size={14} aria-hidden />
+                    {t('plugins.back')}
+                  </button>
+                  <span className={styles.sandboxName}>{running.name ?? running.dir}</span>
+                  <span className={styles.sandboxTag} title={t('plugins.sandbox')}>
+                    <Shield size={10} aria-hidden />
+                    {t('plugins.sandbox')}
+                  </span>
+                </div>
+                <iframe
+                  ref={iframeRef}
+                  className={styles.frame}
+                  title={running.name ?? running.dir}
+                  sandbox="allow-scripts"
+                  srcDoc={demoPluginSrcdoc()}
+                />
+              </div>
+            ) : (
+              <div className={styles.cards}>
+                {plugins.length === 0 && (
+                  <p className={styles.auditEmpty}>{t('plugins.empty')}</p>
+                )}
+                {plugins.map((p) => (
+                  <div key={p.dir} className={styles.card}>
+                    <span className={styles.glyph} aria-hidden>
+                      <Puzzle size={22} />
+                    </span>
+                    <div className={styles.cardBody}>
+                      <div className={styles.nameLine}>
+                        <strong>{p.name ?? p.dir}</strong>
+                        {p.version && <span className={styles.ver}>v{p.version}</span>}
+                        <span className={styles.sandboxBadge} title={t('plugins.sandbox')}>
+                          <Shield size={10} aria-hidden />
+                          {t('plugins.sandbox')}
+                        </span>
+                        {!p.compatible && (
+                          <span className={styles.incompat}>
+                            <AlertTriangle size={11} aria-hidden />
+                            {t('plugins.incompatible')}
+                          </span>
+                        )}
+                      </div>
+                      {p.error && <div className={styles.cardErr}>{p.error}</div>}
+                      <div className={styles.perms}>{p.permissions.map(chip)}</div>
+                      {consent[p.dir] && (
+                        <div className={styles.consentLine}>
+                          <ShieldCheck size={12} aria-hidden />
+                          {t('plugins.consentGiven')}
+                          <button
+                            type="button"
+                            className={styles.revoke}
+                            onClick={() => revoke(p)}
+                          >
+                            {t('plugins.revoke')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className={styles.side}>
                       <button
                         type="button"
-                        className={styles.revoke}
-                        onClick={() => revoke(p)}
+                        className={styles.launch}
+                        disabled={!p.compatible}
+                        onClick={() => launch(p)}
                       >
-                        {t('plugins.revoke')}
+                        {t('plugins.launch')}
                       </button>
                     </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className={styles.launch}
-                  disabled={!p.compatible}
-                  onClick={() => launch(p)}
-                >
-                  {t('plugins.launch')}
-                </button>
+                  </div>
+                ))}
               </div>
             ))}
-          </div>
-        )}
 
-        {tab === 'sandbox' && (
-          <div className={styles.body}>
-            <iframe
-              ref={iframeRef}
-              className={styles.frame}
-              title={t('plugins.title')}
-              sandbox="allow-scripts"
-              srcDoc={demoPluginSrcdoc()}
-            />
-            <aside className={styles.audit} aria-label={t('plugins.auditTitle')}>
-              <h2 className={styles.auditHead}>{t('plugins.auditTitle')}</h2>
+          {nav === 'audit' && (
+            <div className={styles.audit} aria-label={t('plugins.auditTitle')}>
+              <p className={styles.auditSub}>{t('plugins.auditSub')}</p>
               {calls.length === 0 ? (
                 <p className={styles.auditEmpty}>{t('plugins.auditEmpty')}</p>
               ) : (
@@ -238,9 +283,9 @@ export function PluginsPanel() {
                   ))}
                 </ul>
               )}
-            </aside>
-          </div>
-        )}
+            </div>
+          )}
+        </main>
 
         {sheet && (
           <div className={styles.consentScrim} role="presentation" onClick={() => setSheet(null)}>
