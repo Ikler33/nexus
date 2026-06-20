@@ -18,7 +18,8 @@ import { remarkFrontmatter } from '../../lib/markdown/remarkFrontmatter';
 import { remarkHighlight } from '../../lib/markdown/remarkHighlight';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
-import { tauriApi } from '../../lib/tauri-api';
+import { tauriApi, type NoteRef } from '../../lib/tauri-api';
+import { AppendLine } from './AppendLine';
 import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
@@ -143,6 +144,8 @@ export function MarkdownPreview({
   onOpenTag,
   onToggleTask,
   notePath,
+  onAppendLine,
+  fetchNotes,
 }: {
   source: string;
   onOpenLink: (target: string) => void;
@@ -155,6 +158,11 @@ export function MarkdownPreview({
   /** Путь ЭТОЙ заметки — заносится в предки гард-цикла транклюзии (`![[self]]` ловится). Не задан
    *  (доска/peek) — гард работает по глубине и по предкам вложенных вставок, без само-вставки корня. */
   notePath?: string;
+  /** AppendLine (макет): дописать строку в конец заметки через буфер. Задан ТОЛЬКО для top-level
+   *  превью редактора (GroupPane) — у вложенных embed/peek/доски не задан → quick-add не рисуется. */
+  onAppendLine?: (line: string) => void;
+  /** Заметки по подстроке для `[[…` автокомплита AppendLine (тот же источник, что у CM6). */
+  fetchNotes?: (query: string) => Promise<NoteRef[]>;
 }) {
   // Транклюзия: добавляем свой путь в множество предков (гард-цикл A→B→A). Мемо — стабильная
   // идентичность Set'а, иначе вложенный NoteEmbed перефетчивал бы на каждый ре-рендер родителя.
@@ -401,6 +409,10 @@ export function MarkdownPreview({
         >
           {source}
         </ReactMarkdown>
+        {/* AppendLine — только у top-level превью редактора (onAppendLine задан); embed/peek/доска не передают. */}
+        {onAppendLine && fetchNotes && (
+          <AppendLine onAppend={onAppendLine} fetchNotes={fetchNotes} />
+        )}
       </div>
     </EmbedContext.Provider>
   );

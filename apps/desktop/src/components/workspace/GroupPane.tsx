@@ -1,10 +1,22 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { BookOpen, Clock, Columns2, FileText, History, PenLine, Plus, X } from 'lucide-react';
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Columns2,
+  FileText,
+  History,
+  PenLine,
+  Plus,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { EditorView } from '@codemirror/view';
 import { toggleTaskAtLine } from '../../lib/editor/format';
 import { getActiveEditorView } from '../../lib/editor/activeView';
 import { relTime } from '../../lib/time';
+import { formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
@@ -13,9 +25,8 @@ import { flush } from '../../stores/autosave';
 import { Editor } from '../editor/Editor';
 import { FileViewer } from '../editor/FileViewer';
 import { isViewable } from '../../lib/file-kind';
-import { BacklinksBar } from '../editor/BacklinksBar';
+import { InspectorRail } from '../editor/InspectorRail';
 import { MentionsBar } from '../editor/MentionsBar';
-import { OutlineBar } from '../editor/OutlineBar';
 import { TagSuggest } from '../editor/TagSuggest';
 import styles from './GroupPane.module.css';
 
@@ -65,6 +76,12 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const keepMine = useWorkspaceStore((s) => s.keepMine);
   const openLink = useWorkspaceStore((s) => s.openLink);
   const openFile = useWorkspaceStore((s) => s.openFile);
+  // NAV-3: история навигации back/forward — ЛОГИКА уже в сторе (navBack/navForward, ⌘[ / ⌘]);
+  // здесь только кнопки таб-стрипа + disabled-state по границам истории (макет editor.jsx tab-nav).
+  const navBack = useWorkspaceStore((s) => s.navBack);
+  const navForward = useWorkspaceStore((s) => s.navForward);
+  const canBack = useWorkspaceStore((s) => s.navIndex > 0);
+  const canForward = useWorkspaceStore((s) => s.navIndex < s.navHistory.length - 1);
   const createNote = useVaultStore((s) => s.createNote);
   const reading = useUIStore((s) => s.reading);
   const openVersions = useUIStore((s) => s.openVersions);
@@ -152,6 +169,28 @@ export function GroupPane({ groupId }: { groupId: string }) {
       aria-label={`Группа редактора ${groupId}`}
     >
       <div className={styles.tabbar}>
+        {/* NAV-3: back/forward — слева от вкладок (макет editor.jsx tab-nav); привязка к
+            существующим navBack/navForward стора, disabled на границах истории. */}
+        <div className={styles.tabNav}>
+          <button
+            className={styles.navBtn}
+            disabled={!canBack}
+            onClick={() => void navBack()}
+            title={`${t('editor.back')}  ${formatCombo('mod+[')}`}
+            aria-label={t('editor.back')}
+          >
+            <ChevronLeft size={14} aria-hidden />
+          </button>
+          <button
+            className={styles.navBtn}
+            disabled={!canForward}
+            onClick={() => void navForward()}
+            title={`${t('editor.forward')}  ${formatCombo('mod+]')}`}
+            aria-label={t('editor.forward')}
+          >
+            <ChevronRight size={14} aria-hidden />
+          </button>
+        </div>
         <div className={styles.tabs} role="tablist">
           {group.tabs.map((path) => {
             const dirty = Boolean(buffers[path]?.dirty);
@@ -247,6 +286,9 @@ export function GroupPane({ groupId }: { groupId: string }) {
               </div>
             </div>
           )}
+          {/* Editor-row (макет editor.jsx): контент слева + Inspector-rail справа. */}
+          <div className={styles.editorRow}>
+          <div className={styles.editorCol}>
           <div className={styles.scroll} ref={scrollRef}>
             {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ. */}
             {mdActive && !reading && (
@@ -298,6 +340,17 @@ export function GroupPane({ groupId }: { groupId: string }) {
                     const next = toggleTaskAtLine(active.doc, line);
                     if (next != null) updateBufferDoc(active.path, next);
                   }}
+                  // AppendLine (макет): дописать строку в конец через буфер — НЕ новый бэкенд, обычная
+                  // правка (updateBufferDoc → dirty → автосейв). В режиме чтения не показываем (это правка).
+                  onAppendLine={
+                    reading
+                      ? undefined
+                      : (line) => {
+                          const sep = active.doc && !active.doc.endsWith('\n') ? '\n' : '';
+                          updateBufferDoc(active.path, `${active.doc}${sep}${line}\n`);
+                        }
+                  }
+                  fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
                 />
               </Suspense>
             ) : (
@@ -317,9 +370,6 @@ export function GroupPane({ groupId }: { groupId: string }) {
               />
             )}
           </div>
-          {/* EDIT-7: оглавление — в любом режиме (полезно особенно при чтении); скрыто, если заголовков нет. */}
-          {mdActive && <OutlineBar doc={active.doc} onJump={jumpToHeading} />}
-          {!isViewable(active.path) && !reading && <BacklinksBar path={active.path} />}
           {/* UNLINK-1: незалинкованные упоминания заголовка — скрыты, если их нет. */}
           {!isViewable(active.path) && !reading && <MentionsBar path={active.path} />}
           {/* AI-2c: авто-тег (closed-vocab) — по клику; пишет инлайн-теги в тело. `key`=путь обязателен:
@@ -328,6 +378,14 @@ export function GroupPane({ groupId }: { groupId: string }) {
           {!isViewable(active.path) && !reading && (
             <TagSuggest key={active.path} path={active.path} doc={active.doc} />
           )}
+          </div>
+          {/* Inspector-rail (макет editor.jsx): outline/backlinks — существующие OutlineBar/BacklinksBar;
+              related/summary — структура + заглушка (контент в отдельном AI-срезе). Скрыт в режиме чтения
+              и для бинарей (картинка/PDF — нет outline/backlinks). */}
+          {mdActive && !reading && (
+            <InspectorRail doc={active.doc} path={active.path} onJump={jumpToHeading} />
+          )}
+          </div>
         </>
       ) : (
         <p className={styles.empty}>{t('editor.emptyGroup')}</p>
