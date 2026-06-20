@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Агент · AGENT-CONNECT P0a — протокол-фундамент коннектора (agent=service)
+
+Первый срез эпика «агент как сервис» (план: `docs/AGENT-PROD-PLAN.md`, спека: `docs/specs/agent-connect.md`). Новый модуль `nexus-core::agent::connect` — транспорт-агностичный JSON-RPC 2.0 слой коннектора app↔`nexus-agentd`: framing (`RpcMessage`/`RpcEnvelope` request/notification/response, классификация по `method`/`id`), подключаемый `Transport`-трейт + in-process `ChannelTransport` (tokio-mpsc дуплекс), `dispatch` метод→`ConnectHandler` (initialize/agent.run/undo/cancel + approve/control-notifications), version-negotiate, **sanitized-ошибки** (`internal()` не утекает detail клиенту — T3/THREAT_MODEL), ACP-tool-kind маппинг. Чистая граница без LLM. 12 unit-тестов (framing round-trip, version, error-sanitize, transport дуплекс, dispatch req/notification/unknown/bad-params/incompatible-version). **Отложено в P0b** (EventSink-адаптер): маппинг `AgentEvent`→`agent/event` (newtype-варианты несовместимы с serde-internal-tag → нужен явный wire-DTO) + привязка к `run_agent_loop` + **live tool-loop на риг** (tool-calling рига подтверждён пробой 2026-06-20).
+
 ### Доки · Агент-прод план приземлён в репо (агент = сервис + коннектор)
 
 По итогам мультиагентного анализа конкурентов (hermes-agent/odysseus) + аудита полноты + Stage-2 design-спек: план разработки агента-как-сервиса теперь в репо как источник истины. Новое: **`docs/AGENT-PROD-PLAN.md`** (3-слойная модель base/agent-service/connector · роадмап PROD-v1→DEPLOY-2→owner-gated Фазы 2/3 · per-срез DoD с тестами/доками/ревью + **live-тест-слой агента против рига 24/7** · 6 P0-дыр · порт-backlog · деплой-автоматизация first-class), **`docs/THREAT_MODEL.md`** (P0-гейт, реализовано-vs-план размечено), **`docs/specs/agent-connect.md`** (ACP-совместимый протокол коннектора, decision-complete). `docs/BACKLOG.md` — раздел «Агент-прод». Подтверждено live: риг `192.168.0.31:8080` (Qwen3.6-27B-MTP, llama.cpp) отдаёт OpenAI tool-calling → агент-цикл работает на текущем железе, V100 не нужен.

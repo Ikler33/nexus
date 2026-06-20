@@ -25,6 +25,7 @@
 //! от chat-провайдера тип (I-5/ADR-005): tools не протекают в chat/web путь. Стережёт grep-линт
 //! `scripts/check-tooluse.mjs`.
 
+pub mod connect;
 pub mod control;
 pub mod event;
 pub mod job;
@@ -36,6 +37,10 @@ pub mod skill_tools;
 pub mod stubs;
 pub mod tool;
 
+pub use connect::{
+    acp_tool_kind, channel_pair, dispatch, negotiate_version, ChannelTransport, ConnectHandler,
+    RpcError, RpcMessage, Transport, PROTOCOL_VERSION,
+};
 pub use control::{load_control_state, save_control_state, AgentControlState};
 pub use event::{AgentEvent, FileStatus, ProposedFile};
 pub use job::{
