@@ -29,6 +29,9 @@ const SRC_ROOTS = [
   // CORE-2a: headless agent-service. Должен конструировать НОЛЬ сырых HTTP-клиентов (использует
   // только `GuardedClient` из ядра) — сканируем его, чтобы любой будущий raw-reqwest здесь поймал линт.
   resolve(root, 'crates/nexus-agentd/src'),
+  // PROD-v1: deploy-CLI. Сейчас сетевого egress НЕТ (только локальный AF_UNIX). Сканируем заранее, чтобы
+  // будущие сетевые фичи (DEPLOY-2 VPS-деплой) шли только через `GuardedClient`, а не raw-reqwest.
+  resolve(root, 'crates/nexus-cli/src'),
 ];
 
 // Запрещённые конструкторы клиента (совпадение в КОДЕ; хвост строки после `//` отрезается,
