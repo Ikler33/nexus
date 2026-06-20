@@ -13,9 +13,14 @@
 }
 
 .modal {
-  display: flex;
-  width: min(760px, 94vw);
-  height: min(560px, 86vh);
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'head head'
+    'nav main';
+  width: min(840px, 94vw);
+  height: min(620px, 88vh);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
@@ -23,23 +28,41 @@
   overflow: hidden;
 }
 
+/* шапка модалки (grid-area head, span обе колонки) */
+.head {
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-chrome);
+}
+.headIcon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+.headTitle {
+  flex: 1;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
 .nav {
-  flex: 0 0 200px;
+  grid-area: nav;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3) var(--space-2);
-  background: var(--color-surface);
+  gap: 1px;
+  padding: var(--space-3);
+  background: var(--color-chrome);
   border-right: 1px solid var(--color-border);
   overflow-y: auto;
-}
-.navTitle {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-text-faint);
-  padding: var(--space-1) var(--space-2) var(--space-2);
 }
 .navItem {
   display: flex;
@@ -68,36 +91,50 @@
 }
 
 .content {
-  position: relative;
-  flex: 1;
+  grid-area: main;
   min-width: 0;
   overflow-y: auto;
-  padding: var(--space-5) var(--space-5) var(--space-6);
+  padding: var(--space-5) var(--space-6) var(--space-6);
 }
 .close {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
   display: inline-grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-faint);
   cursor: pointer;
+  transition: all var(--motion-fast);
 }
 .close:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.h2 {
-  margin: 0 0 var(--space-4);
-  font-size: var(--text-lg);
-  font-weight: 700;
+/* заголовок секции + подзаголовок (макет: .set-sec-title / .set-sec-sub) */
+.secHead {
+  margin-bottom: var(--space-5);
+}
+.secTitle {
+  margin: 0 0 4px;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--color-text);
+}
+.secSub {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+/* вложенный под-заголовок (Сеть/Веб внутри AI) — отбивка от предыдущего блока */
+.secHeadNested {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
 }
 
 /* строка-настройка: подпись слева, контрол справа */
@@ -105,13 +142,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-3) 0;
+  gap: var(--space-4);
+  padding: 13px 0;
   border-bottom: 1px solid var(--color-border);
 }
+/* строка с контролом на всю ширину под подписью (theme picker) */
+.groupStack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+}
 .label {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  color: var(--color-text);
 }
 /* строка-настройка с описанием: подпись + поясняющий текст слева */
 .rowText {
@@ -125,6 +168,77 @@
   font-size: var(--text-xs);
   color: var(--color-text-faint);
   line-height: 1.4;
+}
+
+/* выбор темы — сетка карточек с визуальным превью палитры */
+.themeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 9px;
+}
+.themeCard {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--motion-fast);
+}
+.themeCard:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+}
+.themeCardOn {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+.themeSwatch {
+  position: relative;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  border: 1px solid oklch(0.5 0 0 / 0.15);
+  overflow: hidden;
+}
+.themeSwatchLine {
+  position: absolute;
+  left: 9px;
+  top: 11px;
+  width: 42%;
+  height: 5px;
+  border-radius: 3px;
+  opacity: 0.85;
+}
+.themeSwatch::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 21px;
+  width: 28%;
+  height: 5px;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.4;
+}
+.themeSwatchDot {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.themeLabel {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .seg {
@@ -156,9 +270,9 @@
   gap: var(--space-2);
 }
 .swatch {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
   border: 2px solid transparent;
   cursor: pointer;
   padding: 0;
@@ -169,32 +283,35 @@
 }
 .swatchOn {
   border-color: var(--color-text);
-  box-shadow: 0 0 0 2px var(--color-bg-elevated);
+  box-shadow: 0 0 0 1px var(--color-text);
 }
 
 .about {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: var(--space-2) var(--space-4);
-  margin: 0;
-  font-size: var(--text-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: var(--space-6) 0;
 }
-.about dt {
+.aboutName {
+  font-family: var(--font-headline);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.aboutVer {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
-.about dd {
-  margin: 0;
-  color: var(--color-text);
-  overflow-wrap: anywhere;
-}
-.mono {
-  font-family: var(--font-mono);
+.aboutMeta {
+  max-width: 90%;
   font-size: var(--text-xs);
-}
-
-.stub {
   color: var(--color-text-faint);
-  font-size: var(--text-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 /* секция «AI / Модели» */
@@ -204,21 +321,48 @@
   color: var(--color-text-muted);
   line-height: 1.5;
 }
-.endpoint {
-  padding: var(--space-3) 0 var(--space-4);
-  border-top: 1px solid var(--color-border);
+
+/* карточка эндпоинта модели (макет: .set-model-card) */
+.modelCard {
+  margin-bottom: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
-.subhead {
-  margin: var(--space-2) 0 2px;
-  font-size: var(--text-sm);
-  font-weight: 700;
+.modelHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.modelHeadIcon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--color-ai);
+}
+.modelHeadText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.modelTitle {
+  font-size: var(--text-md);
+  font-weight: 600;
   color: var(--color-text);
 }
-.desc {
-  margin: 0 0 var(--space-3);
+.modelDesc {
   font-size: var(--text-xs);
   color: var(--color-text-faint);
-  line-height: 1.5;
+  line-height: 1.45;
+}
+/* поля внутри карточки — колонка (label над input), на всю ширину */
+.modelCard .field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  margin-bottom: 11px;
 }
 .field {
   display: grid;
@@ -236,6 +380,10 @@
 
 .field span {
   font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.modelCard .field span {
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
 .field input {
@@ -259,8 +407,31 @@
 .testRow {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
+  margin-top: 2px;
+}
+/* кнопка проверки связи (макет: .set-test, 32px) */
+.testBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.testBtn:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.testBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .ghostBtn {
   border: 1px solid var(--color-border-strong);
@@ -283,15 +454,16 @@
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  gap: 6px;
+  margin-left: 11px;
+  font-size: var(--text-sm);
+  color: var(--color-ai);
 }
 .badgeOk {
-  color: oklch(0.62 0.13 150);
+  color: var(--color-success);
 }
 .badgeFail {
-  color: oklch(0.6 0.18 25);
+  color: var(--color-danger);
 }
 .spin {
   animation: settings-spin 0.8s linear infinite;
@@ -330,11 +502,11 @@
 }
 .okText {
   font-size: var(--text-sm);
-  color: oklch(0.62 0.13 150);
+  color: var(--color-success);
 }
 .warnText {
   font-size: var(--text-sm);
-  color: oklch(0.6 0.1 75);
+  color: var(--color-warning);
 }
 
 /* секция «Горячие клавиши» */
@@ -352,7 +524,7 @@
   border-bottom: 1px solid var(--color-border);
 }
 .hkName {
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   color: var(--color-text);
   min-width: 0;
   overflow: hidden;
@@ -378,8 +550,8 @@
   padding: 3px 8px;
 }
 .hkConflict {
-  color: oklch(0.6 0.18 25);
-  border-color: oklch(0.6 0.18 25 / 0.6);
+  color: var(--color-danger);
+  border-color: color-mix(in oklch, var(--color-danger) 60%, transparent);
 }
 .hkCapturing {
   font-size: var(--text-xs);

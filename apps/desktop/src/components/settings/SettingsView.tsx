@@ -10,10 +10,13 @@ import {
   Palette,
   Pencil,
   RotateCcw,
+  Settings as SettingsIcon,
+  Sparkles,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { BrandMark } from '../chrome/BrandMark';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
@@ -23,7 +26,7 @@ import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useEpisodeStore } from '../../stores/episode';
 import { usePrefsStore } from '../../stores/prefs';
 import { ACCENTS, THEMES, useThemeStore } from '../../stores/theme';
-import type { Accent } from '../../stores/theme';
+import type { Accent, Theme } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import type { SettingsSection } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
@@ -35,6 +38,38 @@ const ACCENT_PREVIEW: Record<Accent, string> = {
   teal: 'oklch(0.6 0.08 205)',
   sage: 'oklch(0.6 0.07 158)',
   clay: 'oklch(0.58 0.11 28)',
+};
+
+/**
+ * Превью-цвета свотча темы (bg/text/accent) — зеркало data-theme в styles.css.
+ * Карточка темы рисует мини-превью реальной палитры без переключения темы документа.
+ */
+const THEME_PREVIEW: Record<Theme, { bg: string; text: string; accent: string }> = {
+  light: { bg: '#ECE6DA', text: '#211D17', accent: '#C45B33' },
+  dark: { bg: '#16140F', text: '#EDE7DA', accent: '#D86E44' },
+  midnight: {
+    bg: 'oklch(0.165 0.014 264)',
+    text: 'oklch(0.925 0.010 264)',
+    accent: 'oklch(0.84 0.072 88)',
+  },
+  platinum: {
+    bg: 'oklch(0.205 0.008 250)',
+    text: 'oklch(0.945 0.005 250)',
+    accent: 'oklch(0.82 0.020 248)',
+  },
+  paper: {
+    bg: 'oklch(0.977 0.0035 75)',
+    text: 'oklch(0.225 0.006 75)',
+    accent: 'oklch(0.255 0.007 75)',
+  },
+  mocha: { bg: '#1e1e2e', text: '#cdd6f4', accent: '#cba6f7' },
+  nord: { bg: '#2e3440', text: '#eceff4', accent: '#88c0d0' },
+  tokyo: { bg: '#1a1b26', text: '#c0caf5', accent: '#7aa2f7' },
+  rose: { bg: '#191724', text: '#e0def4', accent: '#ebbcba' },
+  sepia: { bg: '#f4ecd8', text: '#433422', accent: '#8a5a2b' },
+  contrast: { bg: '#000000', text: '#ffffff', accent: '#4cc2ff' },
+  bronze: { bg: '#13120e', text: '#ece4d2', accent: '#c9a35e' },
+  marble: { bg: '#ece4d2', text: '#2a2418', accent: '#9a5a28' },
 };
 
 const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
@@ -70,8 +105,17 @@ export function SettingsView() {
         aria-label={t('settings.title')}
         onClick={(e) => e.stopPropagation()}
       >
+        <header className={styles.head}>
+          <span className={styles.headIcon} aria-hidden>
+            <SettingsIcon size={17} />
+          </span>
+          <div className={styles.headTitle}>{t('settings.title')}</div>
+          <button type="button" className={styles.close} onClick={close} aria-label={t('git.close')}>
+            <X size={16} aria-hidden />
+          </button>
+        </header>
+
         <nav className={styles.nav} aria-label={t('settings.title')}>
-          <div className={styles.navTitle}>{t('settings.title')}</div>
           {SECTIONS.map((s) => (
             <button
               key={s.id}
@@ -87,9 +131,6 @@ export function SettingsView() {
         </nav>
 
         <div className={styles.content}>
-          <button type="button" className={styles.close} onClick={close} aria-label={t('git.close')}>
-            <X size={16} aria-hidden />
-          </button>
           {section === 'general' && <GeneralSection />}
           {section === 'editor' && <EditorSection />}
           {section === 'appearance' && <AppearanceSection />}
@@ -99,6 +140,16 @@ export function SettingsView() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Заголовок секции + подзаголовок (макет Qasr: .set-sec-title над .set-sec-sub). */
+function SectionHeader({ title, sub, nested }: { title: string; sub?: string; nested?: boolean }) {
+  return (
+    <header className={`${styles.secHead} ${nested ? styles.secHeadNested : ''}`}>
+      <h2 className={styles.secTitle}>{title}</h2>
+      {sub && <p className={styles.secSub}>{sub}</p>}
+    </header>
   );
 }
 
@@ -115,7 +166,7 @@ function GeneralSection() {
   const setRagSources = usePrefsStore((s) => s.setRagSources);
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.general')}</h2>
+      <SectionHeader title={t('settings.general')} />
       <section className={styles.group}>
         <span className={styles.label}>{t('settings.gen.language')}</span>
         <div className={styles.seg}>
@@ -204,7 +255,7 @@ function EditorSection() {
   const setReadable = usePrefsStore((s) => s.setReadableLineWidth);
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.editor')}</h2>
+      <SectionHeader title={t('settings.editor')} />
       <section className={styles.group}>
         <div className={styles.rowText}>
           <span className={styles.label}>{t('settings.ed.readableWidth')}</span>
@@ -248,20 +299,32 @@ function AppearanceSection() {
 
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.appearance')}</h2>
-      <section className={styles.group}>
+      <SectionHeader title={t('settings.appearance')} />
+      <section className={`${styles.group} ${styles.groupStack}`}>
         <span className={styles.label}>{t('tweaks.theme')}</span>
-        <div className={styles.seg}>
-          {THEMES.map((th) => (
-            <button
-              key={th}
-              type="button"
-              className={`${styles.segBtn} ${theme === th ? styles.on : ''}`}
-              onClick={() => setTheme(th)}
-            >
-              {t(`tweaks.themes.${th}`)}
-            </button>
-          ))}
+        <div className={styles.themeGrid}>
+          {THEMES.map((th) => {
+            const p = THEME_PREVIEW[th];
+            return (
+              <button
+                key={th}
+                type="button"
+                className={`${styles.themeCard} ${theme === th ? styles.themeCardOn : ''}`}
+                onClick={() => setTheme(th)}
+                aria-pressed={theme === th}
+              >
+                <span
+                  className={styles.themeSwatch}
+                  style={{ background: p.bg, color: p.text }}
+                  aria-hidden
+                >
+                  <i className={styles.themeSwatchLine} style={{ background: p.text }} />
+                  <b className={styles.themeSwatchDot} style={{ background: p.accent }} />
+                </span>
+                <span className={styles.themeLabel}>{t(`tweaks.themes.${th}`)}</span>
+              </button>
+            );
+          })}
         </div>
       </section>
       <section className={styles.group}>
@@ -359,17 +422,16 @@ function AboutSection() {
   }, []);
 
   return (
-    <>
-      <h2 className={styles.h2}>{t('settings.about')}</h2>
-      <dl className={styles.about}>
-        <dt>{t('settings.app')}</dt>
-        <dd>{t('app.name')}</dd>
-        <dt>{t('settings.version')}</dt>
-        <dd className={styles.mono}>{version}</dd>
-        <dt>{t('settings.vault')}</dt>
-        <dd className={styles.mono}>{vaultRoot ?? t('settings.noVault')}</dd>
-      </dl>
-    </>
+    <div className={styles.about}>
+      <BrandMark size={56} />
+      <div className={styles.aboutName}>{t('app.name')}</div>
+      <div className={styles.aboutVer}>
+        {t('settings.version')} {version}
+      </div>
+      <div className={styles.aboutMeta}>
+        {t('settings.vault')}: {vaultRoot ?? t('settings.noVault')}
+      </div>
+    </div>
   );
 }
 
@@ -470,10 +532,10 @@ function AiSection() {
 
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.ai')}</h2>
-      <p className={styles.hint}>{t('settings.aiSec.intro')}</p>
+      <SectionHeader title={t('settings.ai')} sub={t('settings.aiSec.intro')} />
 
       <Endpoint
+        icon={Sparkles}
         title={t('settings.aiSec.chatTitle')}
         desc={t('settings.aiSec.chatDesc')}
         url={chatUrl}
@@ -484,6 +546,7 @@ function AiSection() {
         onTest={() => void runTest(chatUrl, setChatTest)}
       />
       <Endpoint
+        icon={Cpu}
         title={t('settings.aiSec.embTitle')}
         desc={t('settings.aiSec.embDesc')}
         url={embUrl}
@@ -494,6 +557,7 @@ function AiSection() {
         onTest={() => void runTest(embUrl, setEmbTest)}
       />
       <Endpoint
+        icon={Cpu}
         title={t('settings.aiSec.fastTitle')}
         desc={t('settings.aiSec.fastDesc')}
         url={fastUrl}
@@ -677,8 +741,7 @@ function WebSearchBlock() {
 
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.web.title')}</h2>
-      <p className={styles.hint}>{t('settings.web.intro')}</p>
+      <SectionHeader title={t('settings.web.title')} sub={t('settings.web.intro')} nested />
       <section className={styles.group}>
         <label className={`${styles.field} ${styles.fieldWide}`}>
           <span>{t('settings.web.url')}</span>
@@ -748,8 +811,7 @@ function EgressBlock() {
 
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.egress.title')}</h2>
-      <p className={styles.hint}>{t('settings.egress.intro')}</p>
+      <SectionHeader title={t('settings.egress.title')} sub={t('settings.egress.intro')} nested />
       <EgressRow
         label={t('settings.egress.offline')}
         desc={t('settings.egress.offlineDesc')}
@@ -812,6 +874,7 @@ function EgressRow(props: {
 }
 
 function Endpoint(props: {
+  icon: typeof Cpu;
   title: string;
   desc: string;
   url: string;
@@ -822,10 +885,16 @@ function Endpoint(props: {
   onTest: () => void;
 }) {
   const { t } = useTranslation();
+  const Ico = props.icon;
   return (
-    <section className={styles.endpoint}>
-      <h3 className={styles.subhead}>{props.title}</h3>
-      <p className={styles.desc}>{props.desc}</p>
+    <section className={styles.modelCard}>
+      <div className={styles.modelHead}>
+        <Ico size={16} className={styles.modelHeadIcon} aria-hidden />
+        <div className={styles.modelHeadText}>
+          <span className={styles.modelTitle}>{props.title}</span>
+          <span className={styles.modelDesc}>{props.desc}</span>
+        </div>
+      </div>
       <label className={styles.field}>
         <span>{t('settings.aiSec.url')}</span>
         <input
@@ -853,7 +922,7 @@ function Endpoint(props: {
       <div className={styles.testRow}>
         <button
           type="button"
-          className={styles.ghostBtn}
+          className={styles.testBtn}
           onClick={props.onTest}
           disabled={props.test.status === 'testing'}
         >
@@ -935,8 +1004,7 @@ function HotkeysSection() {
 
   return (
     <>
-      <h2 className={styles.h2}>{t('settings.hotkeys')}</h2>
-      <p className={styles.hint}>{t('settings.hk.intro')}</p>
+      <SectionHeader title={t('settings.hotkeys')} sub={t('settings.hk.intro')} />
       <ul className={styles.hkList}>
         {list.map((c) => {
           const key = commands.effectiveKey(c.id);
