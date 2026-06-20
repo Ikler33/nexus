@@ -363,7 +363,7 @@ function AboutSection() {
       <h2 className={styles.h2}>{t('settings.about')}</h2>
       <dl className={styles.about}>
         <dt>{t('settings.app')}</dt>
-        <dd>Nexus</dd>
+        <dd>{t('app.name')}</dd>
         <dt>{t('settings.version')}</dt>
         <dd className={styles.mono}>{version}</dd>
         <dt>{t('settings.vault')}</dt>
