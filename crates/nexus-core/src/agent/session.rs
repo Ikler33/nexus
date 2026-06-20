@@ -436,4 +436,104 @@ mod tests {
             "read_skill_resource должен быть зарегистрирован: {tools:?}"
         );
     }
+
+    /// LIVE: реальная модель на риге создаёт заметку ЧЕРЕЗ ГЕЙТ актуатора (autonomy=auto → Auto-тир
+    /// применяется без аппрува), файл РЕАЛЬНО записан в temp-vault, затем `undo_run` его удаляет
+    /// (восстановление). Доказывает ПОЛНЫЙ стек вживую: модель → tool-call note.create → `dispatch_action`
+    /// гейт → apply на диск → undo. Запуск:
+    /// `NEXUS_LIVE_CHAT=1 cargo test -p nexus-core --lib agent::session::tests::live_actuator -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "live actuator (нужна tool-capable модель: NEXUS_LIVE_CHAT=1, NEXUS_LIVE_CHAT_URL default 192.168.0.31:8080)"]
+    async fn live_actuator_create_and_undo_on_rig() {
+        use crate::actuator::AuditSink;
+        use crate::agent::run_store;
+        use crate::ai::tools::OpenAiToolProvider;
+        use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+        use std::time::Duration;
+
+        if std::env::var("NEXUS_LIVE_CHAT").ok().as_deref() != Some("1") {
+            eprintln!("SKIP: NEXUS_LIVE_CHAT!=1");
+            return;
+        }
+        let url = std::env::var("NEXUS_LIVE_CHAT_URL")
+            .unwrap_or_else(|_| "http://192.168.0.31:8080".into());
+        let model =
+            std::env::var("NEXUS_LIVE_CHAT_MODEL").unwrap_or_else(|_| "qwen36-mtp.gguf".into());
+
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let db = Database::open(canon.join("nexus.db")).await.unwrap();
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        let audit = Arc::new(EgressAudit::default());
+        let gc = GuardedClient::for_chat(policy, audit, Duration::from_secs(20)).unwrap();
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(OpenAiToolProvider::new(
+            &gc,
+            EgressFeature::Chat,
+            &url,
+            &model,
+            Some(0.2),
+        ));
+
+        let rel = "Notes/AgentLiveTest.md";
+        let run_id = run_store::create_run(
+            db.writer(),
+            "live actuator",
+            Some(provider.model_id()),
+            Some("auto"),
+        )
+        .await
+        .unwrap();
+        let spec = SessionSpec {
+            run_id,
+            task: format!(
+                "Создай заметку по пути {rel} с содержимым 'привет от агента' — используй инструмент \
+                 создания заметки note.create (аргументы path и content). Затем дай короткий финальный ответ."
+            ),
+            autonomy: Some("auto".into()),
+            actuator_enabled: true,
+            overwrite_threshold: 64 * 1024,
+            blast_cap: 16,
+            context_window: Some(32768),
+            canon_root: canon.clone(),
+        };
+        let fwd = Arc::new(CollectingForwarder::default());
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let outcome = run_agent_session(
+            &spec,
+            provider.as_ref(),
+            None,
+            None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+        )
+        .await;
+        eprintln!("LIVE outcome: {outcome:?}");
+        for e in fwd.events.lock().unwrap().iter() {
+            eprintln!("  ev: {e:?}");
+        }
+
+        let path = canon.join(rel);
+        assert!(
+            path.exists(),
+            "модель должна была создать заметку через гейт (autonomy=auto): {}",
+            path.display()
+        );
+        eprintln!(
+            "LIVE created note: {:?}",
+            std::fs::read_to_string(&path).unwrap()
+        );
+
+        // Undo восстанавливает (файл был создан → undo удаляет).
+        let ledger = AuditSink::new(db.writer().clone(), db.reader().clone());
+        let undo = crate::actuator::undo_run(run_id, &canon, &ledger).await;
+        eprintln!("LIVE undo restored={}", undo.restored());
+        assert!(undo.restored() >= 1, "undo должен откатить >=1 действие");
+        assert!(!path.exists(), "undo должен удалить созданную заметку");
+    }
 }
