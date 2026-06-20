@@ -533,6 +533,19 @@ export function contradictionsSetEnabled(on: boolean): Promise<void> {
   return Promise.resolve();
 }
 
+/** Мок краткого резюме заметки (Inspector «Резюме») — зеркалит контракт `get_note_summary`:
+ *  пустой текст → null, иначе короткая сводка. Небольшая задержка имитирует LLM. */
+export function noteSummary(text: string): Promise<string | null> {
+  if (!text.trim()) return Promise.resolve(null);
+  const words = text.trim().split(/\s+/).length;
+  return new Promise((r) =>
+    setTimeout(
+      () => r(`Краткое содержание заметки (≈${words} слов): основная мысль и ключевые разделы.`),
+      400,
+    ),
+  );
+}
+
 /** Симуляция inline-стрима (IL-2) для превью/тестов: несколько токенов по режиму → done. */
 export function streamInline(
   mode: InlineMode,

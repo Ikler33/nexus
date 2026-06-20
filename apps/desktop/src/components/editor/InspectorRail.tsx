@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Link2, List, ScrollText, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { BacklinksBar } from './BacklinksBar';
+import { NoteSummary } from './NoteSummary';
 import { OutlineBar } from './OutlineBar';
+import { RelatedNotes } from './RelatedNotes';
 import styles from './InspectorRail.module.css';
 
 /** Секции инспектора (макет editor.jsx): оглавление / связи / похожие / резюме. */
@@ -10,10 +12,8 @@ type Section = 'outline' | 'backlinks' | 'related' | 'summary';
 
 /**
  * Inspector-rail (макет editor.jsx): правый вертикальный rail с 4 тогглами + сворачиваемая панель,
- * рендерящая активную секцию. Переиспользует существующие OutlineBar/BacklinksBar (не переписывает).
- *
- * `related`/`summary` — НА ЭТОМ СРЕЗЕ только СТРУКТУРА + честная заглушка «нужен AI / скоро»: контент
- * (похожие заметки, авто-резюме) — отдельный InlineAI-срез, БЕЗ LLM-вызова здесь.
+ * рендерящая активную секцию. Переиспользует OutlineBar/BacklinksBar; `related` — `RelatedNotes`
+ * (семантически близкие, get_related_notes), `summary` — `NoteSummary` (LLM-резюме текущего текста).
  *
  * Клик по активному тогглу сворачивает панель (как в макете onToggle: p === k ? null : k).
  */
@@ -55,10 +55,8 @@ export function InspectorRail({
           <div className={styles.body}>
             {active === 'outline' && <OutlineBar doc={doc} onJump={onJump} />}
             {active === 'backlinks' && <BacklinksBar path={path} />}
-            {(active === 'related' || active === 'summary') && (
-              // related/summary: СТРУКТУРА + заглушка, БЕЗ LLM-вызова (контент — отдельный InlineAI-срез).
-              <p className={styles.placeholder}>{t('inspector.aiSoon')}</p>
-            )}
+            {active === 'related' && <RelatedNotes path={path} />}
+            {active === 'summary' && <NoteSummary doc={doc} path={path} />}
           </div>
         </aside>
       )}

@@ -107,3 +107,86 @@
   font-size: var(--text-sm);
   line-height: 1.5;
 }
+
+/* «Похожие» — порт макета app.css .insp-body .bl-item/.bl-title/.bl-ctx. */
+.relList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.relItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color var(--motion-fast);
+}
+.relItem:hover {
+  background: var(--color-surface-hover);
+}
+.relTitle {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-link);
+}
+.relMeta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* «Резюме» — порт макета app.css .insp-summary/.sum-lead/.sum-body + кнопка обновления. */
+.summary {
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+.sumHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.sumLead {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.sumRefresh {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--motion-fast);
+}
+.sumRefresh:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.sumRefresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sumBody {
+  margin: 0;
+}

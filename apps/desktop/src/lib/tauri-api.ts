@@ -921,6 +921,11 @@ export const tauriApi = {
         ? invoke<LinkSuggestion[]>('get_related_notes', { path, limit })
         : mockVault.getRelatedNotes(path, limit),
 
+    /** Inspector «Резюме»: краткое LLM-резюме текущего текста заметки (one-shot, не-стрим). `null` =
+     *  нет утилитарной модели / пустой текст / пустой ответ → фронт показывает заглушку. Вне Tauri — мок. */
+    noteSummary: (text: string): Promise<string | null> =>
+      isTauri() ? invoke<string | null>('get_note_summary', { text }) : mockVault.noteSummary(text),
+
     /** AIP-10: короткое LLM-объяснение связи пары заметок (вместо сырого сниппета; кэш на бэке).
      *  Пустая строка = нет утилитарной модели / ошибка / нет контента → фронт показывает сниппет.
      *  Вне Tauri — '' (естественный фолбэк на сниппет). */
