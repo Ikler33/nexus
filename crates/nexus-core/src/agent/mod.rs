@@ -33,6 +33,7 @@ pub mod memory;
 pub mod registry;
 pub mod run_store;
 pub mod runner;
+pub mod session;
 pub mod skill_tools;
 pub mod stubs;
 pub mod tool;
@@ -51,6 +52,7 @@ pub use memory::{AgentMemory, VaultAgentMemory};
 pub use registry::{ToolRegistry, ToolResult};
 pub use run_store::{requeue_stale_running, AgentRun};
 pub use runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
+pub use session::{run_agent_session, AgentEventForwarder, SessionSpec};
 pub use skill_tools::{
     ActivateSkillTool, ReadSkillResourceTool, SkillContext, ACTIVATE_SKILL_TOOL,
     READ_SKILL_RESOURCE_TOOL,
