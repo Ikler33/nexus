@@ -21,6 +21,12 @@ pub mod wire;
 pub use handler::{ConnectAgentHandler, ConnectDeps};
 pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamEvent};
 
+// AF_UNIX-хостинг коннектора (P0b-2c) — Unix-only (на Windows `tokio::net::Unix*` отсутствует).
+#[cfg(unix)]
+pub mod afunix;
+#[cfg(unix)]
+pub use afunix::{connect_unix, serve_unix, serve_unix_at, AfUnixTransport};
+
 /// Версия протокола этой сборки. Клиент объявляет поддерживаемые в `initialize`; сервер выбирает.
 pub const PROTOCOL_VERSION: &str = "1.0";
 /// Поддерживаемые версии (по убыванию предпочтения).
