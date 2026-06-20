@@ -41,6 +41,10 @@ import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
 const GraphView = lazy(() => import('./components/graph/GraphView'));
+// Вкладка Агента (UI-1) — отдельный воркспейс, грузится лениво (открывается по нав-кнопке/команде).
+const AgentView = lazy(() =>
+  import('./components/agent/AgentView').then((m) => ({ default: m.AgentView })),
+);
 const PluginsPanel = lazy(() =>
   import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
 );
@@ -80,6 +84,7 @@ export function App() {
   const homeOpen = useUIStore((s) => s.homeOpen);
   const boardOpen = useUIStore((s) => s.boardOpen);
   const todayOpen = useUIStore((s) => s.todayOpen);
+  const agentOpen = useUIStore((s) => s.agentOpen);
   const onboardingActive = useUIStore((s) => s.onboardingActive);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -236,7 +241,8 @@ export function App() {
 
   // DP-12 (макет): расположение AI-панели — side / bottom / overlay; панель живёт только
   // в workspace-вью (Home/News — без неё, как `view === "workspace"` макета).
-  const aiVisible = chatOpen && !reading && !homeOpen && !newsOpen && !boardOpen && !todayOpen;
+  const aiVisible =
+    chatOpen && !reading && !homeOpen && !newsOpen && !boardOpen && !todayOpen && !agentOpen;
   const aiSide = aiVisible && aiLayout === 'side';
   const aiBottom = aiVisible && aiLayout === 'bottom';
   const aiOverlay = aiVisible && aiLayout === 'overlay';
@@ -264,7 +270,11 @@ export function App() {
             </aside>
           )}
           <main className={styles.main}>
-            {todayOpen ? (
+            {agentOpen ? (
+              <Suspense fallback={null}>
+                <AgentView />
+              </Suspense>
+            ) : todayOpen ? (
               <TodayView />
             ) : homeOpen ? (
               <HomeView />

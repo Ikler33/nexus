@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import {
+  Bot,
   CalendarCheck,
   FileText,
   GitBranch,
@@ -26,6 +27,7 @@ export function ActivityBar() {
   const newsOpen = useUIStore((s) => s.newsOpen);
   const boardOpen = useUIStore((s) => s.boardOpen);
   const todayOpen = useUIStore((s) => s.todayOpen);
+  const agentOpen = useUIStore((s) => s.agentOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const graphOpen = useUIStore((s) => s.graphOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
@@ -34,6 +36,7 @@ export function ActivityBar() {
   const openToday = useUIStore((s) => s.openToday);
   const openNews = useUIStore((s) => s.openNews);
   const openBoard = useUIStore((s) => s.openBoard);
+  const openAgent = useUIStore((s) => s.openAgent);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const toggleGraph = useUIStore((s) => s.toggleGraph);
   const toggleTasks = useUIStore((s) => s.toggleTasks);
@@ -76,11 +79,12 @@ export function ActivityBar() {
           openBoard,
           boardOpen,
         )}
+        {btn(<Bot size={19} aria-hidden />, t('commands.view.agent'), openAgent, agentOpen)}
         {btn(
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),
           toggleSidebar,
-          !homeOpen && !newsOpen && !boardOpen && !todayOpen && sidebarOpen,
+          !homeOpen && !newsOpen && !boardOpen && !todayOpen && !agentOpen && sidebarOpen,
         )}
         {btn(
           <Share2 size={19} aria-hidden />,

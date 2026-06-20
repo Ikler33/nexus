@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import * as mockAgent from './mock/agent';
 import * as mockBoard from './mock/board';
 import * as mockProps from './mock/properties';
 import * as mockEgress from './mock/egress';
@@ -548,6 +549,54 @@ export type ChatStreamEvent =
   | { type: 'reasoningSummary'; text: string }
   | { type: 'done'; full: string }
   | { type: 'error'; message: string; deniedKind?: EgressDeniedKind };
+
+// ── Агент (UI-1) — зеркало Rust `commands::agent` ─────────────────────────────────────────────────
+
+/** Уровень автономии прогона (вход `agent_run`, зеркало Rust `normalize_autonomy`): `confirm` — Confirm-тир
+ *  ждёт аппрува человека; `auto` — Auto-тир применяется под blast-radius-кэпом без аппрува. */
+export type AgentAutonomy = 'confirm' | 'auto';
+
+/** Статус файла changeset'а (зеркало Rust `AgentFileStatus`): `new` — новая заметка; `edit` — правка. */
+export type AgentFileStatus = 'new' | 'edit';
+
+/** Один предложенный файл (поверхность аппрува; зеркало Rust `AgentProposedFile`). `actionId` —
+ *  адрес решения Approve/Reject (id строки `agent_actions`, передаётся в `agent_approve`). */
+export interface AgentProposedFile {
+  /** vault-rel путь цели. */
+  path: string;
+  /** Добавлено строк (line-diff current → proposed). */
+  add: number;
+  /** Удалено строк. */
+  del: number;
+  status: AgentFileStatus;
+  /** id строки ledger (state=proposed) — адрес решения в `agent_approve`. */
+  actionId: number;
+}
+
+/**
+ * Событие агент-стрима (зеркалит Rust `commands::agent::AgentStreamEvent`, тег `type`, camelCase) —
+ * СТАБИЛЬНЫЙ контракт UI-1a. Реалтайм-поток: `assistantToken` (дельты модели), `toolCall`/`toolResult`
+ * (вызов инструмента ДО/ПОСЛЕ, корреляция по `id`), `contextUsage` (загрузка окна → %-бар),
+ * `proposal` (changeset, ждёт решения — каждый файл уже `proposed` в ledger) + `diff` (по файлу),
+ * `final` (итог хода), `error` (терминальная ошибка хода).
+ */
+export type AgentStreamEvent =
+  | { type: 'assistantToken'; text: string }
+  | { type: 'toolCall'; id: string; kind: string; args: string }
+  | { type: 'toolResult'; id: string; content: string; isError: boolean }
+  | { type: 'contextUsage'; used: number; window: number }
+  | { type: 'proposal'; runId: number; files: AgentProposedFile[] }
+  | { type: 'diff'; path: string; add: number; del: number; status: AgentFileStatus }
+  | { type: 'final'; text: string }
+  | { type: 'error'; message: string };
+
+/** Решение по одному предложенному действию (вход `agent_approve`, зеркало Rust `ApprovalDecision`). */
+export interface AgentApprovalDecision {
+  /** id строки ledger (из `AgentStreamEvent.proposal.files[].actionId`). */
+  actionId: number;
+  /** Одобрить (apply) или отклонить (диск не трогаем). */
+  approve: boolean;
+}
 
 /** Событие inline-стрима редактора (зеркалит Rust `commands::inline::InlineStreamEvent`). Без `sources`
  * — inline не делает RAG-ретрив (D2). Порядок: много `token` → `done` (или `error`). */
@@ -1437,6 +1486,49 @@ export const tauriApi = {
   },
 
   /** Эпизодическая память (EP-3): панель эпизодов + обратимость + тоггл. Вне Tauri — in-memory мок. */
+  /**
+   * Агент (UI-1): запуск/контроль прогона + стрим событий. `run` создаёт `Channel<AgentStreamEvent>`,
+   * подвешивает `onEvent` на `channel.onmessage` (как `chat.streamRag`), зовёт `agent_run` и резолвится
+   * `run_id`. Вне Tauri — мок-стрим (`./mock/agent`), ЗЕРКАЛЯЩИЙ контракт (те же формы/порядок событий).
+   */
+  agent: {
+    /**
+     * Запускает прогон: стримит события в `onEvent`, возвращает Promise<run_id>. Стрим асинхронный —
+     * run_id приходит сразу, события докапываются по ходу. Ошибку `agent_run` (нет vault и т.п.)
+     * прокидываем в `onEvent` как `error`-событие И реджектим Promise (стор покажет ошибку).
+     */
+    run: (
+      task: string,
+      autonomy: AgentAutonomy,
+      onEvent: (event: AgentStreamEvent) => void,
+    ): Promise<number> => {
+      if (!isTauri()) return mockAgent.run(task, autonomy, onEvent);
+      const channel = new Channel<AgentStreamEvent>();
+      channel.onmessage = onEvent;
+      return invoke<number>('agent_run', { task, autonomy, channel }).catch((e: unknown) => {
+        onEvent({ type: 'error', message: String(e) });
+        throw e;
+      });
+    },
+    /** Кормит UI-DecisionSource прогона решениями (Confirm-тир аппрув/реджект). */
+    approve: (runId: number, decisions: AgentApprovalDecision[]): Promise<void> =>
+      isTauri()
+        ? invoke<void>('agent_approve', { runId, decisions })
+        : mockAgent.approve(runId, decisions),
+    /** Пауза прогона (AGENT-5 kill-switch). */
+    pause: (runId: number): Promise<void> =>
+      isTauri() ? invoke<void>('agent_pause', { runId }) : mockAgent.pause(runId),
+    /** Снять паузу прогона. */
+    resume: (runId: number): Promise<void> =>
+      isTauri() ? invoke<void>('agent_resume', { runId }) : mockAgent.resume(runId),
+    /** Кооперативно отменить прогон. */
+    cancel: (runId: number): Promise<void> =>
+      isTauri() ? invoke<void>('agent_cancel', { runId }) : mockAgent.cancel(runId),
+    /** Откат применённых действий прогона (AGENT-4) → число откаченных. */
+    undo: (runId: number): Promise<number> =>
+      isTauri() ? invoke<number>('agent_undo', { runId }) : mockAgent.undo(runId),
+  },
+
   episode: {
     /** Все эпизоды для панели (обратная хронология, со скрытыми). */
     list: (): Promise<EpisodeRow[]> =>
