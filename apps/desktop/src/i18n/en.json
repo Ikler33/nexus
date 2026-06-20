@@ -879,6 +879,13 @@
     "allOurs": "All local",
     "allTheirs": "All from disk",
     "resolveAllFirst": "Resolve all conflicts first",
+    "subtitle": "This note changed here and on disk. Pick a version for each file.",
+    "localEdits": "local edits",
+    "remoteEdits": "disk edits",
+    "conflictsHeading": "Conflicts",
+    "chooseHeading": "Choose",
+    "cancel": "Cancel",
+    "navAria": "Conflict navigator",
     "side": {
       "ours": "Local",
       "theirs": "From disk",
