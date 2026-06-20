@@ -1,9 +1,18 @@
 /* ============================================================
-   Nexus — Motion-слой (порт `docs/design/handoff/motion.css`):
+   Nexus — Motion-слой (порт дизайн-системы Qasr `qasr-design/motion.css`):
    пружинные easing'и, шкала длительностей, общие keyframes и
    «думающий» бренд-знак. Подключается ПОСЛЕ styles.css.
-   Компонентные entrance-анимации живут в их *.module.css
-   (keyframes в модулях локальны) — здесь только глобальное.
+
+   ВАЖНО (CSS-modules): дизайн таргетит ГЛОБАЛЬНЫЕ классы (.tb-btn, .msg,
+   .tab, .editor-doc, .sg-card, .src-card, .cmd-*, .news, .agentv, …), но
+   приложение использует CSS-modules (хешированные классы). Поэтому здесь
+   ПРИМЕНЯЕМ правила ТОЛЬКО к реально существующим глобальным классам:
+   `.brand-thinking`/`.bt-*`/`.mt-label`/`.msg-thinking` (бренд-знак, BrandThinking.tsx)
+   и `.graph-view`/`.gt-chip` (глобальный graph.css, GraphView.tsx).
+   Модульные entrance-анимации живут в их *.module.css (вью-срезы QASR-views
+   подключат остальной motion-«характер» в своих модулях). keyframes ниже —
+   переиспользуемые примитивы (m-rise/pop/fade/slide/tabin/collapse), на
+   которые ссылаются и глобальные правила здесь, и будущие модульные.
    ============================================================ */
 
 :root {
@@ -14,6 +23,35 @@
   --dur-2: 220ms;
   --dur-3: 320ms;
   --dur-4: 440ms;
+}
+
+/* ── общие keyframes (переиспользуемые примитивы дизайн-системы) ──────────── */
+@keyframes m-rise  { from { opacity: 0; transform: translateY(9px); }  to { opacity: 1; transform: none; } }
+@keyframes m-pop   { from { opacity: 0; transform: scale(0.965); }      to { opacity: 1; transform: none; } }
+@keyframes m-fade  { from { opacity: 0; }                               to { opacity: 1; } }
+@keyframes m-slide { from { opacity: 0; transform: translateX(10px); }  to { opacity: 1; transform: none; } }
+@keyframes m-tabin { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes m-collapse {
+  from { opacity: 1; transform: none; max-height: 200px; }
+  to   { opacity: 0; transform: translateX(12px); max-height: 0; margin: 0; padding-top: 0; padding-bottom: 0; }
+}
+
+/* ── tactile-press — только глобальный .gt-chip (тег-чип графа) ───────────── */
+.gt-chip {
+  transition: transform var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.gt-chip:active { transform: scale(0.94); }
+
+/* ── content-entrance — только глобальный .graph-view (граф) ──────────────── */
+.graph-view { animation: m-pop var(--dur-3) var(--ease-spring); }
+
+/* ── leaving-helper (JS-применяемый класс при accept/dismiss) ─────────────── */
+.m-leave { animation: m-collapse var(--dur-3) var(--ease-out) forwards; overflow: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-view { animation: none !important; }
 }
 
 /* ── «Думающий» бренд-знак: пульсирующее созвездие (AI-операции) ── */

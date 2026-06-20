@@ -1,7 +1,7 @@
 /* ============================================================
-   Nexus — Design Tokens (дизайн-система «Hermes», см. docs/dev/design.md
-   и docs/design/handoff/). Тёплый крем (light «old paper») · тёплый уголь
-   (dark «warm clay») · Onest + JetBrains Mono + Source Serif 4.
+   Nexus — Design Tokens  (дизайн-система Qasr, см. docs/dev/design.md
+   и ~/Documents/Claude/qasr-design). Тёплый крем (light) · тёплый уголь
+   (dark) · Onest + JetBrains Mono · editorial display Cormorant/Cinzel.
    Терракота/янтарь акцент · sage/amber статусы · WCAG AA.
    Семантические имена токенов стабильны; per-theme меняются только значения.
    Темы — через data-theme, акцент — через data-accent (см. stores/theme.ts).
@@ -13,6 +13,10 @@
   --font-editor: var(--font-ui);
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
   --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  /* editorial display face — высококонтрастный Garamond, ТОЛЬКО на крупных размерах (>=24px) */
+  --font-headline: 'Cormorant', 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  /* display/wordmark font — переопределяется антик-темами (Cinzel) */
+  --font-display: var(--font-ui);
 
   /* ---- Модульная шкала типографики ---- */
   --text-xs: 11px;
@@ -23,14 +27,19 @@
   --text-xl: 20px;
   --text-2xl: 26px;
 
+  /* ---- editorial display scale — сильный контраст к спокойному телу UI ---- */
+  --display-sm: 24px;
+  --display-md: 32px;
+  --display-lg: 46px;
+
   --leading-tight: 1.3;
   --leading-normal: 1.55;
 
   /* ---- Типографика редактора (переопределяется через tweaks) ---- */
   --editor-font: var(--font-editor);
   --editor-size: 16px;
-  --editor-leading: 1.7;
-  --editor-measure: 760px;
+  --editor-leading: 1.75;
+  --editor-measure: 700px;
 
   /* ---- Сетка отступов 4px ---- */
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
@@ -40,9 +49,9 @@
   --density: 1;
   --row-h: 28px;
 
-  /* геометрия */
-  --radius-sm: 7px;
-  --radius-md: 10px;
+  /* два радиуса — 8px контролы · 14px карточки и панели */
+  --radius-sm: 8px;
+  --radius-md: 8px;
   --radius-lg: 14px;
 
   --chrome: 1;
@@ -62,46 +71,46 @@
 :root[data-accent='sage']  { --acc-l: 0.56;  --acc-c: 0.07;  --acc-h: 158; --acc-lh: 0.61;  }
 :root[data-accent='clay']  { --acc-l: 0.55;  --acc-c: 0.11;  --acc-h: 28;  --acc-lh: 0.60;  }
 
-/* ===================== LIGHT (тёплый крем — основная) ===================== */
+/* ===================== LIGHT (SA warm cream — основная) ===================== */
 :root, :root[data-theme='light'] {
   color-scheme: light;
 
   /* old-paper / пергамент — желтее и мягче, чем clay тёмной темы */
-  --ui-hue: 85;
+  --ui-hue: 70;
 
-  --color-bg: oklch(0.966 0.013 var(--ui-hue));            /* холст редактора — тёплая бумага */
-  --color-chrome: oklch(0.910 0.018 var(--ui-hue));        /* хром окна — тёплая рамка */
-  --color-chrome-2: oklch(0.884 0.021 var(--ui-hue));      /* акценты/разделители хрома */
-  --color-bg-elevated: oklch(0.996 0.005 var(--ui-hue));   /* меню, поповеры, карточки */
-  --color-surface: oklch(0.933 0.015 var(--ui-hue));       /* инпуты, утопленные чипы */
-  --color-surface-hover: oklch(0.893 0.020 var(--ui-hue)); /* hover */
-  --color-selected: oklch(0.875 0.018 80);                 /* выделение — единый тёплый taupe */
-  --color-selected-hover: oklch(0.855 0.021 80);
+  --color-bg: #ECE6DA;            /* signature Paper */
+  --color-chrome: #E4DDCE;
+  --color-chrome-2: #DBD2C0;
+  --color-bg-elevated: #FBF8F1;
+  --color-surface: #F4F0E8;
+  --color-surface-hover: #E6DECF;
+  --color-selected: #DDD3BE;      /* warm taupe, one unified selection */
+  --color-selected-hover: #D3C8B0;
 
-  --color-text: oklch(0.30 0.014 var(--ui-hue));
-  --color-text-muted: oklch(0.47 0.015 var(--ui-hue));
-  --color-text-faint: oklch(0.62 0.013 var(--ui-hue));
+  --color-text: #211D17;          /* ink */
+  --color-text-muted: #6B6358;
+  --color-text-faint: #9A9082;
 
-  --color-border: oklch(0.86 0.014 var(--ui-hue) / calc(0.6 + 0.4 * var(--chrome)));
-  --color-border-strong: oklch(0.80 0.017 var(--ui-hue));
+  --color-border: oklch(0.86 0.016 80 / calc(0.55 + 0.45 * var(--chrome)));
+  --color-border-strong: #C9BFAC;
 
-  --color-accent: oklch(var(--acc-l) var(--acc-c) var(--acc-h));
-  --color-accent-hover: oklch(var(--acc-lh) var(--acc-c) var(--acc-h));
-  --color-accent-soft: oklch(0.93 calc(var(--acc-c) * 0.30) var(--acc-h));
-  --color-accent-rim: oklch(0.84 calc(var(--acc-c) * 0.6) var(--acc-h));
+  --color-accent: #C45B33;        /* Ember — the one signature */
+  --color-accent-hover: #D86E44;
+  --color-accent-soft: rgba(196,91,51,0.12);
+  --color-accent-rim: rgba(196,91,51,0.40);
   --color-on-accent: #ffffff;
 
-  --color-ai: oklch(0.56 0.066 205);          /* teal — спокойный info-слой */
-  --color-ai-soft: oklch(0.93 0.025 205);
-  --color-link: oklch(0.52 0.075 222);        /* wikilinks — глубокий teal-blue */
-  --color-link-soft: oklch(0.52 0.075 222 / 0.12);
-  --color-tag: oklch(0.55 0.07 158);          /* sage */
-  --color-tag-soft: oklch(0.93 0.03 158);
+  --color-ai: #3E6A8C;            /* slate — the cool whisper (info) */
+  --color-ai-soft: rgba(62,106,140,0.12);
+  --color-link: #3E6A8C;          /* wikilinks — slate */
+  --color-link-soft: rgba(62,106,140,0.12);
+  --color-tag: #5E7B53;           /* sage */
+  --color-tag-soft: rgba(94,123,83,0.12);
 
-  --color-success: oklch(0.55 0.072 156);
-  --color-warning: oklch(0.66 0.13 72);
-  --color-danger: oklch(0.585 0.15 33);
-  --color-danger-soft: oklch(0.94 0.04 33);
+  --color-success: #5E7B53;       /* sage */
+  --color-warning: #B8862F;       /* amber */
+  --color-danger: #B14A39;        /* clay */
+  --color-danger-soft: rgba(177,74,57,0.12);
 
   --elevation-1: 0 1px 2px rgba(60,48,32,0.05), 0 2px 8px rgba(60,48,32,0.05);
   --elevation-2: 0 8px 28px rgba(48,38,24,0.14), 0 1px 3px rgba(48,38,24,0.10);
@@ -109,46 +118,46 @@
   --tab-shadow: 0 1px 2px rgba(60,44,24,0.10), 0 4px 12px -6px rgba(60,44,24,0.18);
 
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent-rim);
-  --selection: oklch(var(--acc-l) var(--acc-c) var(--acc-h) / 0.18);
+  --selection: rgba(196,91,51,0.18);
 }
 
-/* ===================== DARK (тёплый уголь — warm clay) ===================== */
+/* ===================== DARK (warm charcoal — from SA terminal) ===================== */
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --color-bg: oklch(0.205 0.010 var(--ui-hue));
-  --color-chrome: oklch(0.232 0.012 var(--ui-hue));
-  --color-chrome-2: oklch(0.258 0.013 var(--ui-hue));
-  --color-bg-elevated: oklch(0.258 0.013 var(--ui-hue));
-  --color-surface: oklch(0.262 0.013 var(--ui-hue));
-  --color-surface-hover: oklch(0.300 0.015 var(--ui-hue));
-  --color-selected: oklch(0.32 0.022 var(--acc-h));        /* выделение — clay-тон hue логотипа */
-  --color-selected-hover: oklch(0.355 0.028 var(--acc-h));
+  --color-bg: #16140F;            /* signature Ink */
+  --color-chrome: #1C190F;
+  --color-chrome-2: #131109;
+  --color-bg-elevated: #262219;
+  --color-surface: #1E1B14;
+  --color-surface-hover: #2A2518;
+  --color-selected: #332B1B;       /* warm ember-tinted selection */
+  --color-selected-hover: #3E3522;
 
-  --color-text: oklch(0.905 0.012 var(--ui-hue));
-  --color-text-muted: oklch(0.705 0.014 var(--ui-hue));
-  --color-text-faint: oklch(0.525 0.013 var(--ui-hue));
+  --color-text: #EDE7DA;
+  --color-text-muted: #A39A88;
+  --color-text-faint: #6E6655;
 
-  --color-border: oklch(0.36 0.010 var(--ui-hue) / calc(0.5 + 0.5 * var(--chrome)));
-  --color-border-strong: oklch(0.44 0.012 var(--ui-hue));
+  --color-border: oklch(0.34 0.012 70 / calc(0.5 + 0.5 * var(--chrome)));
+  --color-border-strong: #46402F;
 
-  --color-accent: oklch(calc(var(--acc-l) + 0.10) var(--acc-c) var(--acc-h));
-  --color-accent-hover: oklch(calc(var(--acc-lh) + 0.10) var(--acc-c) var(--acc-h));
-  --color-accent-soft: oklch(calc(var(--acc-l) - 0.20) calc(var(--acc-c) * 0.7) var(--acc-h) / 0.32);
-  --color-accent-rim: oklch(calc(var(--acc-l) + 0.02) calc(var(--acc-c) * 0.8) var(--acc-h) / 0.55);
-  --color-on-accent: #211C15;
+  --color-accent: #D86E44;         /* Ember, brightened for dark */
+  --color-accent-hover: #E5825A;
+  --color-accent-soft: rgba(216,110,68,0.16);
+  --color-accent-rim: rgba(216,110,68,0.50);
+  --color-on-accent: #16140F;
 
-  --color-ai: oklch(0.72 0.072 200);
-  --color-ai-soft: oklch(0.72 0.072 200 / 0.16);
-  --color-link: oklch(0.74 0.075 220);
-  --color-link-soft: oklch(0.74 0.075 220 / 0.16);
-  --color-tag: oklch(0.72 0.07 158);
-  --color-tag-soft: oklch(0.72 0.07 158 / 0.16);
+  --color-ai: #8FB4D6;             /* slate — cool whisper */
+  --color-ai-soft: rgba(143,180,214,0.15);
+  --color-link: #8FB4D6;
+  --color-link-soft: rgba(143,180,214,0.15);
+  --color-tag: #9FBE8F;            /* sage */
+  --color-tag-soft: rgba(159,190,143,0.15);
 
-  --color-success: oklch(0.72 0.09 156);
-  --color-warning: oklch(0.78 0.13 72);
-  --color-danger: oklch(0.68 0.15 33);
-  --color-danger-soft: oklch(0.68 0.15 33 / 0.18);
+  --color-success: #9FBE8F;        /* sage */
+  --color-warning: #E0B561;        /* amber */
+  --color-danger: #E08A78;         /* clay */
+  --color-danger-soft: rgba(224,138,120,0.18);
 
   --elevation-1: 0 1px 2px rgba(0,0,0,0.40), 0 2px 10px rgba(0,0,0,0.30);
   --elevation-2: 0 12px 34px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.40);
@@ -156,22 +165,22 @@
   --tab-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 4px 14px -8px rgba(0,0,0,0.5);
 
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
-  --selection: oklch(calc(var(--acc-l) + 0.1) var(--acc-c) var(--acc-h) / 0.30);
+  --selection: rgba(216,110,68,0.28);
 }
 
-/* ============== MIDNIGHT INK (премиум — глубокие чернила + шампань; handoff 2026-06-10) ============== */
+/* ===================== MIDNIGHT INK (премиум — глубокие чернила + шампань) ===================== */
 :root[data-theme='midnight'] {
   color-scheme: dark;
-  --ui-hue: 264; /* холодные сине-графитовые нейтрали */
-  --acc-h: 88; --acc-l: 0.82; --acc-c: 0.066; --acc-lh: 0.88; /* приглушённое шампань-золото */
+  --ui-hue: 264;                       /* холодные сине-графитовые нейтрали */
+  --acc-h: 88; --acc-l: 0.82; --acc-c: 0.066; --acc-lh: 0.88;  /* приглушённое шампань-золото */
 
-  --color-bg: oklch(0.165 0.014 264);
-  --color-chrome: oklch(0.198 0.016 266);
+  --color-bg: oklch(0.165 0.014 264);          /* deep ink canvas */
+  --color-chrome: oklch(0.198 0.016 266);       /* chrome frame */
   --color-chrome-2: oklch(0.228 0.018 266);
-  --color-bg-elevated: oklch(0.232 0.018 266);
+  --color-bg-elevated: oklch(0.232 0.018 266);  /* cards, popovers */
   --color-surface: oklch(0.236 0.018 266);
   --color-surface-hover: oklch(0.278 0.020 266);
-  --color-selected: oklch(0.30 0.026 264);
+  --color-selected: oklch(0.30 0.026 264);      /* selected — cool elevated ink */
   --color-selected-hover: oklch(0.335 0.030 264);
 
   --color-text: oklch(0.925 0.010 264);
@@ -181,12 +190,14 @@
   --color-border: oklch(0.34 0.014 264 / calc(0.5 + 0.5 * var(--chrome)));
   --color-border-strong: oklch(0.42 0.018 266);
 
+  /* champagne accent — luxe, used sparingly */
   --color-accent: oklch(0.84 0.072 88);
   --color-accent-hover: oklch(0.89 0.078 88);
   --color-accent-soft: oklch(0.84 0.072 88 / 0.16);
   --color-accent-rim: oklch(0.84 0.072 88 / 0.5);
   --color-on-accent: #211a08;
 
+  /* cool jewel info layer to match the ink */
   --color-ai: oklch(0.74 0.085 250);
   --color-ai-soft: oklch(0.74 0.085 250 / 0.16);
   --color-link: oklch(0.76 0.08 244);
@@ -199,22 +210,22 @@
   --color-danger: oklch(0.70 0.14 18);
   --color-danger-soft: oklch(0.70 0.14 18 / 0.18);
 
-  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 12px rgba(0, 0, 0, 0.35);
-  --elevation-2: 0 16px 42px rgba(0, 0, 0, 0.62), 0 2px 10px rgba(0, 0, 0, 0.45);
-  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 6px 20px -10px rgba(0, 0, 0, 0.7);
-  --tab-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px -8px rgba(0, 0, 0, 0.55);
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.45), 0 2px 12px rgba(0,0,0,0.35);
+  --elevation-2: 0 16px 42px rgba(0,0,0,0.62), 0 2px 10px rgba(0,0,0,0.45);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 6px 20px -10px rgba(0,0,0,0.7);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 16px -8px rgba(0,0,0,0.55);
 
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
   --selection: oklch(0.84 0.072 88 / 0.26);
 }
 
-/* ============== PLATINUM SLATE (премиум — холодный сланец + платина; handoff 2026-06-10) ============== */
+/* ===================== PLATINUM SLATE (премиум — холодный сланец + платина) ===================== */
 :root[data-theme='platinum'] {
   color-scheme: dark;
-  --ui-hue: 250;
-  --acc-h: 250; --acc-l: 0.80; --acc-c: 0.012; --acc-lh: 0.86; /* почти нейтральная платина */
+  --ui-hue: 250;                       /* cool neutral slate */
+  --acc-h: 250; --acc-l: 0.80; --acc-c: 0.012; --acc-lh: 0.86;  /* near-neutral platinum silver */
 
-  --color-bg: oklch(0.205 0.008 250);
+  --color-bg: oklch(0.205 0.008 250);          /* slate canvas */
   --color-chrome: oklch(0.243 0.009 250);
   --color-chrome-2: oklch(0.272 0.010 250);
   --color-bg-elevated: oklch(0.276 0.010 250);
@@ -230,6 +241,7 @@
   --color-border: oklch(0.38 0.009 250 / calc(0.5 + 0.5 * var(--chrome)));
   --color-border-strong: oklch(0.47 0.011 250);
 
+  /* platinum/silver accent — coolest, quietest luxury */
   --color-accent: oklch(0.82 0.020 248);
   --color-accent-hover: oklch(0.88 0.022 248);
   --color-accent-soft: oklch(0.82 0.020 248 / 0.18);
@@ -248,17 +260,418 @@
   --color-danger: oklch(0.72 0.13 20);
   --color-danger-soft: oklch(0.72 0.13 20 / 0.18);
 
-  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 12px rgba(0, 0, 0, 0.30);
-  --elevation-2: 0 16px 42px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.40);
-  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.06) inset, 0 6px 20px -10px rgba(0, 0, 0, 0.6);
-  --tab-shadow: 0 1px 2px rgba(0, 0, 0, 0.38), 0 4px 16px -8px rgba(0, 0, 0, 0.5);
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.40), 0 2px 12px rgba(0,0,0,0.30);
+  --elevation-2: 0 16px 42px rgba(0,0,0,0.55), 0 2px 10px rgba(0,0,0,0.40);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.06) inset, 0 6px 20px -10px rgba(0,0,0,0.6);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.38), 0 4px 16px -8px rgba(0,0,0,0.5);
 
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
   --selection: oklch(0.82 0.020 248 / 0.26);
 }
+/* ===================== MANUSCRIPT (премиум монохром — чернила на тонкой бумаге) ===================== */
+:root[data-theme='paper'] {
+  color-scheme: light;
+  --ui-hue: 75;                        /* barely-warm neutral — paper, not pure white */
+
+  --color-bg: oklch(0.977 0.0035 75);          /* fine paper — warm off-white, never #fff */
+  --color-chrome: oklch(0.948 0.005 75);        /* chrome — a shade deeper, like a mat board */
+  --color-chrome-2: oklch(0.928 0.006 75);
+  --color-bg-elevated: oklch(0.992 0.002 75);   /* cards / popovers — brightest sheet */
+  --color-surface: oklch(0.940 0.005 75);
+  --color-surface-hover: oklch(0.910 0.006 75);
+  --color-selected: oklch(0.890 0.006 75);      /* selected — soft graphite wash, monochrome */
+  --color-selected-hover: oklch(0.865 0.007 75);
+
+  --color-text: oklch(0.225 0.006 75);          /* ink — near-black, faintly warm */
+  --color-text-muted: oklch(0.43 0.007 75);
+  --color-text-faint: oklch(0.60 0.007 75);
+
+  --color-border: oklch(0.84 0.005 75 / calc(0.55 + 0.45 * var(--chrome)));   /* hairline */
+  --color-border-strong: oklch(0.74 0.006 75);
+
+  /* accent IS the ink — luxury monochrome, no colour */
+  --color-accent: oklch(0.255 0.007 75);
+  --color-accent-hover: oklch(0.15 0.006 75);
+  --color-accent-soft: oklch(0.255 0.007 75 / 0.10);
+  --color-accent-rim: oklch(0.255 0.007 75 / 0.35);
+  --color-on-accent: oklch(0.978 0.003 75);
+
+  /* info layer stays monochrome but readers can still tell roles apart by weight, not hue */
+  --color-ai: oklch(0.36 0.010 75);
+  --color-ai-soft: oklch(0.36 0.010 75 / 0.08);
+  --color-link: oklch(0.30 0.012 250);          /* the one whisper of colour — ink-blue links */
+  --color-link-soft: oklch(0.30 0.012 250 / 0.09);
+  --color-tag: oklch(0.40 0.010 75);
+  --color-tag-soft: oklch(0.40 0.010 75 / 0.09);
+
+  --color-success: oklch(0.46 0.060 156);
+  --color-warning: oklch(0.55 0.090 70);
+  --color-danger: oklch(0.50 0.130 30);
+  --color-danger-soft: oklch(0.50 0.130 30 / 0.10);
+
+  /* soft, warm-grey ink shadows — like a sheet lifting off the desk */
+  --elevation-1: 0 1px 2px rgba(40,36,28,0.06), 0 2px 10px rgba(40,36,28,0.05);
+  --elevation-2: 0 12px 34px rgba(34,30,22,0.13), 0 1px 3px rgba(34,30,22,0.10);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -10px rgba(40,34,22,0.20);
+  --tab-shadow: 0 1px 2px rgba(40,34,22,0.08), 0 4px 12px -7px rgba(40,34,22,0.16);
+
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent-rim);
+  --selection: oklch(0.255 0.007 75 / 0.14);
+}
+
+/* ===================== MOCHA (Catppuccin-inspired — pastel mauve on blue-graphite) ===================== */
+:root[data-theme='mocha'] {
+  color-scheme: dark;
+  --ui-hue: 280;
+
+  --color-bg: #1e1e2e;             /* base */
+  --color-chrome: #181825;         /* mantle */
+  --color-chrome-2: #11111b;       /* crust */
+  --color-bg-elevated: #292c3c;    /* surface, lifted cards/popovers */
+  --color-surface: #313244;        /* surface0 */
+  --color-surface-hover: #45475a;  /* surface1 */
+  --color-selected: #3b3754;       /* mauve-tinted selection — one unified colour */
+  --color-selected-hover: #46415f;
+
+  --color-text: #cdd6f4;           /* text */
+  --color-text-muted: #a6adc8;     /* subtext0 */
+  --color-text-faint: #7f849c;     /* overlay1 */
+
+  --color-border: oklch(0.42 0.03 280 / calc(0.5 + 0.5 * var(--chrome)));
+  --color-border-strong: #585b70;  /* surface2 */
+
+  /* mauve — Catppuccin's signature accent */
+  --color-accent: #cba6f7;
+  --color-accent-hover: #ddbdfb;
+  --color-accent-soft: oklch(0.78 0.12 305 / 0.18);
+  --color-accent-rim: oklch(0.78 0.12 305 / 0.55);
+  --color-on-accent: #1e1e2e;
+
+  /* pastel info layer — blue / lavender / teal */
+  --color-ai: #89b4fa;             /* blue */
+  --color-ai-soft: oklch(0.76 0.12 256 / 0.16);
+  --color-link: #b4befe;           /* lavender */
+  --color-link-soft: oklch(0.82 0.07 280 / 0.16);
+  --color-tag: #94e2d5;            /* teal */
+  --color-tag-soft: oklch(0.86 0.08 175 / 0.16);
+
+  --color-success: #a6e3a1;        /* green */
+  --color-warning: #f9e2af;        /* yellow */
+  --color-danger: #f38ba8;         /* red */
+  --color-danger-soft: oklch(0.74 0.13 13 / 0.18);
+
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.40), 0 2px 12px rgba(0,0,0,0.30);
+  --elevation-2: 0 16px 42px rgba(0,0,0,0.55), 0 2px 10px rgba(0,0,0,0.40);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 6px 20px -10px rgba(0,0,0,0.65);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.38), 0 4px 16px -8px rgba(0,0,0,0.5);
+
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --selection: oklch(0.78 0.12 305 / 0.28);
+}
+
+/* ===================== NORD (arctic — cool blue-grey) ===================== */
+:root[data-theme='nord'] {
+  color-scheme: dark;
+  --ui-hue: 220;
+  --color-bg: #2e3440;            /* polar night 0 */
+  --color-chrome: #2b303b;
+  --color-chrome-2: #272b35;
+  --color-bg-elevated: #3b4252;  /* polar night 1 */
+  --color-surface: #3b4252;
+  --color-surface-hover: #434c5e;/* polar night 2 */
+  --color-selected: #434c5e;
+  --color-selected-hover: #4c566a;/* polar night 3 */
+  --color-text: #eceff4;         /* snow storm 2 */
+  --color-text-muted: #d8dee9;   /* snow storm 0 */
+  --color-text-faint: #9aa4b8;
+  --color-border: oklch(0.46 0.03 250 / calc(0.5 + 0.5 * var(--chrome)));
+  --color-border-strong: #4c566a;
+  --color-accent: #88c0d0;        /* frost — signature arctic cyan */
+  --color-accent-hover: #9fd0dd;
+  --color-accent-soft: oklch(0.79 0.06 220 / 0.18);
+  --color-accent-rim: oklch(0.79 0.06 220 / 0.55);
+  --color-on-accent: #2e3440;
+  --color-ai: #81a1c1;            /* frost blue */
+  --color-ai-soft: oklch(0.68 0.06 250 / 0.18);
+  --color-link: #b48ead;         /* aurora purple */
+  --color-link-soft: oklch(0.68 0.06 330 / 0.16);
+  --color-tag: #8fbcbb;          /* frost teal */
+  --color-tag-soft: oklch(0.74 0.04 185 / 0.16);
+  --color-success: #a3be8c;      /* aurora green */
+  --color-warning: #ebcb8b;      /* aurora yellow */
+  --color-danger: #bf616a;       /* aurora red */
+  --color-danger-soft: oklch(0.58 0.10 20 / 0.20);
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.40), 0 2px 12px rgba(0,0,0,0.28);
+  --elevation-2: 0 16px 42px rgba(0,0,0,0.52), 0 2px 10px rgba(0,0,0,0.38);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 6px 20px -10px rgba(0,0,0,0.6);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.36), 0 4px 16px -8px rgba(0,0,0,0.48);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --selection: oklch(0.79 0.06 220 / 0.28);
+}
+
+/* ===================== TOKYO NIGHT (deep indigo neon) ===================== */
+:root[data-theme='tokyo'] {
+  color-scheme: dark;
+  --ui-hue: 260;
+  --color-bg: #1a1b26;           /* night bg */
+  --color-chrome: #16161e;
+  --color-chrome-2: #13131a;
+  --color-bg-elevated: #24283b;  /* storm surface */
+  --color-surface: #1f2335;
+  --color-surface-hover: #2a2e42;
+  --color-selected: #2d3352;     /* blue-violet wash */
+  --color-selected-hover: #353c63;
+  --color-text: #c0caf5;
+  --color-text-muted: #9aa5ce;
+  --color-text-faint: #6d7299;
+  --color-border: oklch(0.40 0.04 268 / calc(0.5 + 0.5 * var(--chrome)));
+  --color-border-strong: #414868;
+  --color-accent: #7aa2f7;        /* signature blue */
+  --color-accent-hover: #94b6fb;
+  --color-accent-soft: oklch(0.70 0.12 262 / 0.20);
+  --color-accent-rim: oklch(0.70 0.12 262 / 0.55);
+  --color-on-accent: #1a1b26;
+  --color-ai: #bb9af7;            /* magenta-violet */
+  --color-ai-soft: oklch(0.74 0.12 300 / 0.18);
+  --color-link: #7dcfff;         /* cyan */
+  --color-link-soft: oklch(0.82 0.10 230 / 0.16);
+  --color-tag: #73daca;          /* teal */
+  --color-tag-soft: oklch(0.80 0.09 175 / 0.16);
+  --color-success: #9ece6a;
+  --color-warning: #e0af68;
+  --color-danger: #f7768e;
+  --color-danger-soft: oklch(0.70 0.15 10 / 0.18);
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.46), 0 2px 14px rgba(0,0,0,0.34);
+  --elevation-2: 0 18px 46px rgba(0,0,0,0.6), 0 2px 10px rgba(0,0,0,0.42);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.04) inset, 0 6px 22px -10px rgba(0,0,0,0.7);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.42), 0 4px 18px -8px rgba(0,0,0,0.55);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --selection: oklch(0.70 0.12 262 / 0.30);
+}
+
+/* ===================== ROSÉ PINE (cosy minimalism — muted rose on faint mauve-grey) ===================== */
+:root[data-theme='rose'] {
+  color-scheme: dark;
+  --ui-hue: 330;
+  --color-bg: #191724;           /* base */
+  --color-chrome: #1a1825;
+  --color-chrome-2: #16141f;
+  --color-bg-elevated: #26233a;  /* overlay */
+  --color-surface: #1f1d2e;      /* surface */
+  --color-surface-hover: #2a273f;/* highlight med */
+  --color-selected: #2f2b45;
+  --color-selected-hover: #393552;
+  --color-text: #e0def4;         /* text */
+  --color-text-muted: #908caa;   /* subtle */
+  --color-text-faint: #6e6a86;   /* muted */
+  --color-border: oklch(0.40 0.03 320 / calc(0.5 + 0.5 * var(--chrome)));
+  --color-border-strong: #524f67;
+  --color-accent: #ebbcba;        /* rose */
+  --color-accent-hover: #f1cecd;
+  --color-accent-soft: oklch(0.82 0.05 20 / 0.18);
+  --color-accent-rim: oklch(0.82 0.05 20 / 0.5);
+  --color-on-accent: #191724;
+  --color-ai: #c4a7e7;            /* iris */
+  --color-ai-soft: oklch(0.76 0.09 300 / 0.18);
+  --color-link: #9ccfd8;         /* foam */
+  --color-link-soft: oklch(0.82 0.06 200 / 0.16);
+  --color-tag: #ebbcba;          /* rose */
+  --color-tag-soft: oklch(0.82 0.05 20 / 0.16);
+  --color-success: #31748f;      /* pine */
+  --color-warning: #f6c177;      /* gold */
+  --color-danger: #eb6f92;       /* love */
+  --color-danger-soft: oklch(0.66 0.13 0 / 0.18);
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.42), 0 2px 12px rgba(0,0,0,0.30);
+  --elevation-2: 0 16px 42px rgba(0,0,0,0.54), 0 2px 10px rgba(0,0,0,0.40);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 6px 20px -10px rgba(0,0,0,0.62);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.38), 0 4px 16px -8px rgba(0,0,0,0.5);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --selection: oklch(0.82 0.05 20 / 0.26);
+}
+
+/* ===================== SEPIA (warm amber reading — e-ink / Kindle) ===================== */
+:root[data-theme='sepia'] {
+  color-scheme: light;
+  --ui-hue: 60;
+  --color-bg: #f4ecd8;           /* aged cream */
+  --color-chrome: #ece2c9;
+  --color-chrome-2: #e4d9bd;
+  --color-bg-elevated: #faf3e2;
+  --color-surface: #ebe0c6;
+  --color-surface-hover: #e2d5b6;
+  --color-selected: #ddcfa8;     /* warm amber wash */
+  --color-selected-hover: #d4c399;
+  --color-text: #433422;         /* warm sepia ink */
+  --color-text-muted: #6b5840;
+  --color-text-faint: #8a7659;
+  --color-border: oklch(0.78 0.035 78 / calc(0.6 + 0.4 * var(--chrome)));
+  --color-border-strong: #b8a57e;
+  --color-accent: #8a5a2b;        /* burnt sienna */
+  --color-accent-hover: #74491f;
+  --color-accent-soft: oklch(0.52 0.09 55 / 0.14);
+  --color-accent-rim: oklch(0.52 0.09 55 / 0.4);
+  --color-on-accent: #faf3e2;
+  --color-ai: #7a5a30;
+  --color-ai-soft: oklch(0.5 0.07 60 / 0.12);
+  --color-link: #3f6b54;          /* muted forest — sepia book footnote */
+  --color-link-soft: oklch(0.5 0.06 160 / 0.12);
+  --color-tag: #6b5a2e;
+  --color-tag-soft: oklch(0.5 0.06 80 / 0.12);
+  --color-success: #4a6b3a;
+  --color-warning: #9a6b1e;
+  --color-danger: #9a3b2e;
+  --color-danger-soft: oklch(0.5 0.11 30 / 0.12);
+  --elevation-1: 0 1px 2px rgba(80,60,30,0.07), 0 2px 10px rgba(80,60,30,0.05);
+  --elevation-2: 0 12px 34px rgba(70,50,24,0.15), 0 1px 3px rgba(70,50,24,0.10);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.6) inset, 0 6px 18px -10px rgba(80,58,24,0.22);
+  --tab-shadow: 0 1px 2px rgba(80,58,24,0.09), 0 4px 12px -7px rgba(80,58,24,0.18);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent-rim);
+  --selection: oklch(0.52 0.09 55 / 0.16);
+}
+
+/* ===================== CONTRAST (AMOLED / high-contrast — pure black) ===================== */
+:root[data-theme='contrast'] {
+  color-scheme: dark;
+  --ui-hue: 220;
+  --color-bg: #000000;           /* true black — OLED pixels off */
+  --color-chrome: #060608;
+  --color-chrome-2: #000000;
+  --color-bg-elevated: #101014;
+  --color-surface: #141418;
+  --color-surface-hover: #1f1f26;
+  --color-selected: #26313f;     /* clear blue selection — high contrast */
+  --color-selected-hover: #324155;
+  --color-text: #ffffff;         /* pure white — max contrast */
+  --color-text-muted: #c2c8d4;
+  --color-text-faint: #8b93a3;
+  --color-border: oklch(0.42 0.02 230 / calc(0.6 + 0.4 * var(--chrome)));
+  --color-border-strong: #4a5161;
+  --color-accent: #4cc2ff;        /* vivid accessible cyan-blue */
+  --color-accent-hover: #6fcfff;
+  --color-accent-soft: oklch(0.78 0.13 230 / 0.20);
+  --color-accent-rim: oklch(0.78 0.13 230 / 0.6);
+  --color-on-accent: #000000;
+  --color-ai: #7cc4ff;
+  --color-ai-soft: oklch(0.78 0.11 235 / 0.18);
+  --color-link: #6ab7ff;
+  --color-link-soft: oklch(0.76 0.11 240 / 0.18);
+  --color-tag: #4fe0c8;
+  --color-tag-soft: oklch(0.82 0.11 175 / 0.18);
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  --color-danger: #ff5470;
+  --color-danger-soft: oklch(0.68 0.18 12 / 0.20);
+  --elevation-1: 0 0 0 1px rgba(255,255,255,0.06), 0 2px 14px rgba(0,0,0,0.6);
+  --elevation-2: 0 0 0 1px rgba(255,255,255,0.08), 0 18px 48px rgba(0,0,0,0.8);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.06) inset, 0 6px 22px -10px rgba(0,0,0,0.9);
+  --tab-shadow: 0 0 0 1px rgba(255,255,255,0.05), 0 4px 18px -8px rgba(0,0,0,0.7);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --selection: oklch(0.78 0.13 230 / 0.34);
+}
+
+/* ===================== BRONZE OBSIDIAN (antique × hacker — obsidian + museum bronze · Cinzel) ===================== */
+:root[data-theme='bronze'] {
+  color-scheme: dark;
+  --ui-hue: 70;
+  --acc-h: 78; --acc-l: 0.72; --acc-c: 0.075; --acc-lh: 0.80;
+  --font-display: 'Cinzel', 'Source Serif 4 Variable', 'Source Serif 4', serif;
+
+  --color-bg: #13120e;
+  --color-chrome: #171510;
+  --color-chrome-2: #100f0b;
+  --color-bg-elevated: #1d1b14;
+  --color-surface: #1a1812;
+  --color-surface-hover: #232016;
+  --color-selected: #2c2716;      /* bronze-tinted selection, one unified color */
+  --color-selected-hover: #352f1d;
+
+  --color-text: #ece4d2;          /* warm marble white */
+  --color-text-muted: #a99a7c;
+  --color-text-faint: #7a6e57;
+
+  --color-border: oklch(0.40 0.022 75 / calc(0.5 + 0.5 * var(--chrome)));
+  --color-border-strong: #4a4029;
+
+  --color-accent: #c9a35e;        /* museum bronze */
+  --color-accent-hover: #e3c98c;
+  --color-accent-soft: oklch(0.72 0.075 78 / 0.16);
+  --color-accent-rim: oklch(0.72 0.075 78 / 0.5);
+  --color-on-accent: #14120c;
+
+  --color-ai: #d9b779;            /* lighter gold — distinct from accent */
+  --color-ai-soft: oklch(0.80 0.08 82 / 0.15);
+  --color-link: #cdbd97;          /* parchment-gold links */
+  --color-link-soft: oklch(0.80 0.04 85 / 0.16);
+  --color-tag: #9caa7a;           /* antique olive */
+  --color-tag-soft: oklch(0.74 0.06 120 / 0.16);
+
+  --color-success: #97a95f;
+  --color-warning: #d9a544;
+  --color-danger: #c5613f;        /* terracotta-red */
+  --color-danger-soft: oklch(0.60 0.12 40 / 0.18);
+
+  --elevation-1: 0 1px 2px rgba(0,0,0,0.5), 0 2px 12px rgba(0,0,0,0.36);
+  --elevation-2: 0 16px 42px rgba(0,0,0,0.62), 0 2px 10px rgba(0,0,0,0.46);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 6px 20px -10px rgba(0,0,0,0.72);
+  --tab-shadow: 0 1px 2px rgba(0,0,0,0.42), 0 4px 16px -8px rgba(0,0,0,0.56);
+
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --selection: oklch(0.72 0.075 78 / 0.26);
+}
+
+/* ===================== MARBLE CODEX (antique × hacker — marble + ink · Cinzel) ===================== */
+:root[data-theme='marble'] {
+  color-scheme: light;
+  --ui-hue: 70;
+  --acc-h: 55; --acc-l: 0.52; --acc-c: 0.10; --acc-lh: 0.58;
+  --font-display: 'Cinzel', 'Source Serif 4 Variable', 'Source Serif 4', serif;
+
+  --color-bg: #ece4d2;            /* aged marble / parchment */
+  --color-chrome: #e3d9c2;
+  --color-chrome-2: #dccfb2;
+  --color-bg-elevated: #f5efe1;
+  --color-surface: #e7dcc4;
+  --color-surface-hover: #ddd0b4;
+  --color-selected: #dccba4;      /* warm bronze wash */
+  --color-selected-hover: #d2c096;
+
+  --color-text: #2a2418;          /* ink */
+  --color-text-muted: #6b5f47;
+  --color-text-faint: #8a7c63;
+
+  --color-border: oklch(0.74 0.03 75 / calc(0.6 + 0.4 * var(--chrome)));
+  --color-border-strong: #b8a884;
+
+  --color-accent: #9a5a28;        /* burnt sienna / bronze */
+  --color-accent-hover: #7e4820;
+  --color-accent-soft: oklch(0.52 0.10 55 / 0.13);
+  --color-accent-rim: oklch(0.52 0.10 55 / 0.42);
+  --color-on-accent: #f7f1e3;
+
+  --color-ai: #6b5a38;            /* bronze ink */
+  --color-ai-soft: oklch(0.50 0.07 70 / 0.12);
+  --color-link: #4a6448;          /* antique forest */
+  --color-link-soft: oklch(0.48 0.06 150 / 0.13);
+  --color-tag: #7a6a3e;
+  --color-tag-soft: oklch(0.50 0.06 80 / 0.13);
+
+  --color-success: #4a6b3a;
+  --color-warning: #9a6b1e;
+  --color-danger: #9a3b2e;
+  --color-danger-soft: oklch(0.50 0.11 30 / 0.12);
+
+  --elevation-1: 0 1px 2px rgba(80,60,30,0.08), 0 2px 10px rgba(80,60,30,0.06);
+  --elevation-2: 0 12px 34px rgba(70,50,24,0.16), 0 1px 3px rgba(70,50,24,0.10);
+  --chrome-shadow: 0 1px 0 oklch(1 0 0 / 0.6) inset, 0 6px 18px -10px rgba(80,58,24,0.24);
+  --tab-shadow: 0 1px 2px rgba(80,58,24,0.10), 0 4px 12px -7px rgba(80,58,24,0.20);
+
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent-rim);
+  --selection: oklch(0.52 0.10 55 / 0.16);
+}
 
 /* ===================== база ===================== */
 * { box-sizing: border-box; }
+/* #root — корень React-приложения; держим высоту наравне с html/body (app-специфика). */
 html, body, #root { height: 100%; margin: 0; }
 body {
   font-family: var(--font-ui);
@@ -272,6 +685,47 @@ body {
 }
 ::selection { background: var(--selection); }
 
+/* Manuscript theme — fine paper grain overlay (fibrous, very subtle) */
+:root[data-theme='paper'] body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+  opacity: 0.5;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.42  0 0 0 0 0.39  0 0 0 0 0.32  0 0 0 0.5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+:root[data-theme='paper'] body::after {
+  content: "";
+  position: fixed; inset: 0; z-index: 9998; pointer-events: none;
+  opacity: 0.55;
+  background:
+    repeating-linear-gradient(94deg, rgba(60,52,38,0.018) 0 1px, transparent 1px 3px),
+    radial-gradient(120% 80% at 50% 0%, rgba(255,255,255,0.5), transparent 60%);
+}
+
+/* Marble Codex — fine marble veining + soft top light */
+:root[data-theme='marble'] body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+  opacity: 0.42; mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320'%3E%3Cfilter id='mv'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.05' numOctaves='3' seed='7'/%3E%3CfeColorMatrix values='0 0 0 0 0.62  0 0 0 0 0.57  0 0 0 0 0.47  0 0 0 0.5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23mv)'/%3E%3C/svg%3E");
+  background-size: 320px 320px;
+}
+:root[data-theme='marble'] body::after {
+  content: "";
+  position: fixed; inset: 0; z-index: 9998; pointer-events: none;
+  opacity: 0.55;
+  background: radial-gradient(130% 90% at 50% 0%, rgba(255,255,255,0.5), transparent 58%);
+}
+
+/* Bronze Obsidian — warm bronze glow emanating from the top */
+:root[data-theme='bronze'] body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 9998; pointer-events: none;
+  opacity: 0.7;
+  background: radial-gradient(120% 80% at 50% -8%, rgba(201,163,94,0.10), transparent 55%);
+}
+
 button { font-family: inherit; color: inherit; }
 :focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
 
@@ -281,7 +735,7 @@ button { font-family: inherit; color: inherit; }
   background: var(--color-border-strong);
   border-radius: 99px; border: 2px solid transparent; background-clip: padding-box;
 }
-*::-webkit-scrollbar-thumb:hover { background-color: var(--color-text-faint); }
+*::-webkit-scrollbar-thumb:hover { background-clip: padding-box; background-color: var(--color-text-faint); }
 
 /* Кросс-фейд при смене темы (stores/theme.ts добавляет .theme-anim на <html> на 320ms). */
 html.theme-anim,

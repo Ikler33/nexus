@@ -26,6 +26,8 @@
     "@codemirror/view": "^6.43.0",
     "@fontsource-variable/onest": "^5.2.11",
     "@fontsource-variable/source-serif-4": "^5.2.9",
+    "@fontsource/cinzel": "5.2.8",
+    "@fontsource/cormorant": "5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/stix-two-math": "^5.2.1",
     "@lezer/highlight": "^1.2.3",
