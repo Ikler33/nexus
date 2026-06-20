@@ -33,6 +33,14 @@
   font-size: var(--text-lg);
   letter-spacing: -0.02em;
   color: var(--color-text);
+  /* QASR-shell: вордмарк в display-шрифте бренда (антик-темы bronze/marble → Cinzel). */
+  font-family: var(--font-display);
+}
+/* Антик-темы: Cinzel-вордмарк просторнее (по дизайну Qasr app.css). */
+:global([data-theme='bronze']) .appName,
+:global([data-theme='marble']) .appName {
+  font-weight: 600;
+  letter-spacing: 0.16em;
 }
 
 .spacer {

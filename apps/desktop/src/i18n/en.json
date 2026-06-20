@@ -1,6 +1,6 @@
 {
   "app": {
-    "name": "Nexus",
+    "name": "Qasr",
     "openVault": "Open vault…"
   },
   "chrome": {
@@ -13,7 +13,7 @@
     "appOnly": "Preview is available in the desktop app"
   },
   "onboarding": {
-    "welcome": "Welcome to Nexus",
+    "welcome": "Welcome to Qasr",
     "sub": "A local-first knowledge base with a built-in AI layer. Open a vault to begin — everything stays on your machine.",
     "openVault": "Open vault",
     "light": "Light theme",
@@ -40,8 +40,8 @@
     "indexTitle": "Indexing your vault",
     "indexSub": "Runs in the background — you can enter right away; progress shows in the status bar.",
     "indexDone": "All set",
-    "indexDoneSub": "The vault is indexed. Welcome to Nexus.",
-    "enter": "Open Nexus"
+    "indexDoneSub": "The vault is indexed. Welcome to Qasr.",
+    "enter": "Open Qasr"
   },
   "tweaks": {
     "title": "Appearance",
@@ -327,7 +327,7 @@
     "delete": "Move to trash",
     "deleteConfirm": "Move “{{name}}” to trash? You can restore it from .nexus/.trash.",
     "newNote": "New note",
-    "welcomeBody": "# Welcome to Nexus\n\nThis is your first note. A few basics:\n\n- Link notes with [[wiki links]].\n- Tag with #ideas.\n- Open the local graph (Cmd/Ctrl+G) and the AI chat (Cmd/Ctrl+J).\n\nDelete this note anytime — everything stays local on your machine.\n"
+    "welcomeBody": "# Welcome to Qasr\n\nThis is your first note. A few basics:\n\n- Link notes with [[wiki links]].\n- Tag with #ideas.\n- Open the local graph (Cmd/Ctrl+G) and the AI chat (Cmd/Ctrl+J).\n\nDelete this note anytime — everything stays local on your machine.\n"
   },
   "versions": {
     "title": "Version history",
@@ -482,7 +482,7 @@
     "thinkingPlain": "Thinking…",
     "thinkingWeb": "Searching the web…",
     "emptyTitle": "Ask your notes",
-    "ask1": "How does RAG work in Nexus?",
+    "ask1": "How does RAG work in Qasr?",
     "ask2": "What are embeddings?",
     "ask3": "Explain local-first",
     "hintSend": "new line",
@@ -663,7 +663,7 @@
   "news": {
     "title": "News feed",
     "ctaTitle": "AI news feed",
-    "ctaSub": "Once a day Nexus gathers trusted sources, filters the noise, and gives you Russian headlines, summaries and a daily digest — read without leaving the app.",
+    "ctaSub": "Once a day Qasr gathers trusted sources, filters the noise, and gives you Russian headlines, summaries and a daily digest — read without leaving the app.",
     "enable": "Enable feed",
     "consentLead": "Informed consent.",
     "consentBody_one": "Requests will go to {{count}} trusted source:",

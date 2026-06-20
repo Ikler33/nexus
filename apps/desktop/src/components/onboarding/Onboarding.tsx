@@ -153,7 +153,7 @@ export function Onboarding() {
           <>
             <BrandMark size={76} />
             <div className={styles.eyebrow}>{t('onboarding.eyebrow')}</div>
-            <h1 className={styles.title}>Nexus</h1>
+            <h1 className={styles.title}>{t('app.name')}</h1>
             <p className={styles.sub}>{t('onboarding.sub')}</p>
             {onboardingDone ? (
               <button type="button" className={styles.cta} onClick={() => void openVaultFlow()}>
