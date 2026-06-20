@@ -36,15 +36,12 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use nexus_core::actuator::{
-    self, AuditSink, BatchDecision, DecisionSource, DispatchPolicy, EventSink, GatedToolCtx,
-    ItemDecision, NoteCreateTool, NoteEditTool, ProposalBatch, SetFrontmatterTool,
+    self, AuditSink, BatchDecision, DecisionSource, ItemDecision, ProposalBatch,
 };
 use nexus_core::agent::{
-    run_agent_loop, run_store, AgentEvent, AgentMemory, EchoTool, LoopBounds, LoopOutcome,
-    NoopTool, ToolRegistry, VaultAgentMemory, AGENT_PREAMBLE, RECALL_BUDGET_TOKENS,
+    run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, LoopOutcome,
+    SessionSpec, VaultAgentMemory,
 };
-use nexus_core::ai::{ChatMessage, ContextBudget, QwenTokenizer};
-use nexus_core::net::RunCtx;
 
 use crate::error::{AppError, AppResult};
 use crate::state::{AgentRunEntry, AppState};
@@ -64,20 +61,20 @@ const DECISION_CHANNEL_CAP: usize = 8;
 // Ре-экспорт сохраняет прежние имена → остальной desktop-код и тесты не меняются.
 pub use nexus_core::agent::connect::wire::{map_agent_event, AgentStreamEvent};
 
-// ── EventSink → Channel (FIXME(UI-1) РЕШЁН): стрим Proposal/Diff гейта актуатора во фронт ──────────
+// ── AgentEventForwarder → Channel (FIXME(UI-1) РЕШЁН): стрим событий прогона во фронт ──────────────
 
-/// [`EventSink`]-мост гейта актуатора → агент-стрим во фронт. Headless agentd ставит `TracingEventSink`
-/// (только лог — `FIXME(UI-1)`); здесь sink ФОРВАРДИТ Proposal/Diff в тот же [`Channel`], что и события
-/// цикла. Так фронт видит changeset ДО решения, а гейт блокируется на `DecisionSource::decide`, ожидая
-/// `agent_approve` (человек-в-петле). Прочие события (цикл шлёт их сам через `on_event`) игнорируем.
-struct ChannelEventSink {
+/// [`AgentEventForwarder`]-мост прогона → агент-стрим во фронт. ЕДИНЫЙ форвардер для desktop: его
+/// получает и `run_agent_session` (события цикла), и гейт актуатора (Proposal/Diff — через внутренний
+/// `ForwardingEventSink`). Маппит `AgentEvent` → wire-DTO и шлёт в [`Channel`] (best-effort: фронт мог
+/// отвалиться). Гейт блокируется на `DecisionSource::decide`, ожидая `agent_approve` (человек-в-петле).
+/// Headless agentd вместо этого считает шаги + tracing-логирует (см. `agent::job::HeadlessForwarder`).
+struct ChannelForwarder {
     channel: Channel<AgentStreamEvent>,
 }
 
-impl EventSink for ChannelEventSink {
-    fn emit(&self, event: AgentEvent) {
-        // Гейт эмитит только Proposal/Diff; маппер их покрывает. send best-effort (фронт мог отвалиться).
-        if let Some(mapped) = map_agent_event(&event) {
+impl AgentEventForwarder for ChannelForwarder {
+    fn forward(&self, ev: &AgentEvent) {
+        if let Some(mapped) = map_agent_event(ev) {
             let _ = self.channel.send(mapped);
         }
     }
@@ -413,7 +410,6 @@ async fn drive_run(
 ) -> LoopOutcome {
     // mark_running (heartbeat для crash-recovery TTL); ошибка — продолжаем (наблюдаемость, не корректность).
     let _ = run_store::mark_running(writer, run_id).await;
-    let run_ctx = RunCtx::run(run_id);
 
     // Нет провайдера → деградируем чисто (как agentd): error-терминал, lifecycle доказан.
     let Some(provider) = provider else {
@@ -424,67 +420,35 @@ async fn drive_run(
         return LoopOutcome::Error(msg.to_string());
     };
 
-    // Начальный контекст: [system] + [recall памяти] + [task] (зеркало AgentRunHandler::drive).
-    let recalled = memory.recall(&task, RECALL_BUDGET_TOKENS).await;
-    let mut messages = Vec::with_capacity(recalled.len() + 2);
-    messages.push(ChatMessage::system(AGENT_PREAMBLE));
-    messages.extend(recalled);
-    messages.push(ChatMessage::user(&task));
-
-    let bounds = LoopBounds::default();
-    let budget = ContextBudget::from_context_window(context_window);
-    let tk = QwenTokenizer::embedded();
-
-    // Реестр: дефолт-OFF → стабы (echo/noop, vault не трогается); ВКЛ → гейтнутые актуаторы за
-    // dispatch_action (тот же гейт), EventSink = Channel (Proposal/Diff → фронт; FIXME(UI-1) решён),
-    // DecisionSource = UI-driven (кормится agent_approve), per-run kill-switch проброшен в политику.
-    let registry = if actuator_enabled {
-        let ledger = AuditSink::new(writer.clone(), reader.clone());
-        let policy = DispatchPolicy::with_paused(
-            Some(autonomy),
-            overwrite_threshold,
-            blast_cap,
-            paused.clone(),
-        );
-        let events: Arc<dyn EventSink> = Arc::new(ChannelEventSink {
-            channel: channel.clone(),
-        });
-        let gate = GatedToolCtx::new(canon_root, ledger, run_id, policy, decision_source, events);
-        let mut reg = ToolRegistry::new();
-        reg.insert(Arc::new(NoteCreateTool::new(gate.clone())));
-        reg.insert(Arc::new(NoteEditTool::new(gate.clone())));
-        reg.insert(Arc::new(SetFrontmatterTool::new(gate)));
-        reg
-    } else {
-        // Default-safe: стабы (echo + noop — НЕ касаются vault), как `agent::job::stub_registry`.
-        // `decision_source`/`canon_root` тогда не используются (стабы не предлагают) — реальный vault
-        // не затрагивается из коробки.
-        let _ = (&decision_source, &canon_root);
-        let mut reg = ToolRegistry::new();
-        reg.insert(Arc::new(EchoTool));
-        reg.insert(Arc::new(NoopTool));
-        reg
+    // Прогон через ЕДИНУЮ ядровую композицию [`run_agent_session`] (DRY: тот же код у agentd/коннектора).
+    // Форвардер `ChannelForwarder` стримит и события цикла, и Proposal/Diff гейта в один Channel (фронт
+    // видит changeset ДО решения; гейт блокируется на UI-DecisionSource, ожидая agent_approve). Реестр/
+    // recall/скиллы/budget — внутри сессии (actuator default-OFF → стабы, vault не трогается). Skills у
+    // desktop пока нет (None). `RunCtx::run(run_id)` строит сама сессия.
+    let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(ChannelForwarder {
+        channel: channel.clone(),
+    });
+    let spec = SessionSpec {
+        run_id,
+        task,
+        autonomy: Some(autonomy.to_string()),
+        actuator_enabled,
+        overwrite_threshold,
+        blast_cap,
+        context_window,
+        canon_root,
     };
-
-    // on_event: маппим в контракт фронта и шлём в channel (best-effort). Это РЕАЛТАЙМ-стрим: ToolCall/
-    // ToolResult/Final/Error/AssistantToken/ContextUsage идут по мере эмиссии цикла.
-    let mut on_event = |e: AgentEvent| {
-        if let Some(mapped) = map_agent_event(&e) {
-            let _ = channel.send(mapped);
-        }
-    };
-
-    run_agent_loop(
+    run_agent_session(
+        &spec,
         provider.as_ref(),
-        &registry,
-        messages,
-        bounds,
-        &budget,
-        &tk,
-        &cancel,
+        Some(memory.as_ref()),
+        None,
+        decision_source,
+        writer,
+        reader,
         &paused,
-        run_ctx,
-        &mut on_event,
+        &cancel,
+        forwarder,
     )
     .await
 }
@@ -540,8 +504,9 @@ mod tests {
     use super::*;
     use nexus_core::agent::tool::{ToolCall, ToolSpec};
     use nexus_core::ai::tools::{ToolCapableProvider, ToolTurn};
-    use nexus_core::ai::AiResult;
+    use nexus_core::ai::{AiResult, ChatMessage};
     use nexus_core::db::Database;
+    use nexus_core::net::RunCtx;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use tempfile::TempDir;

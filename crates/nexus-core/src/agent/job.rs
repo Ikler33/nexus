@@ -32,22 +32,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::actuator::{
-    AuditSink, DecisionSource, DispatchPolicy, GatedToolCtx, NoteCreateTool, NoteEditTool,
-    SetFrontmatterTool, TracingEventSink,
-};
-use crate::ai::{injection_marker, AIClient, ChatMessage, ContextBudget, QwenTokenizer};
+use crate::actuator::{DecisionSource, EventSink, TracingEventSink};
+use crate::ai::AIClient;
 use crate::db::{ReadPool, WriteActor};
-use crate::net::RunCtx;
 use crate::scheduler::{self, Job, JobHandler};
 
 use super::event::AgentEvent;
 use super::memory::AgentMemory;
-use super::registry::ToolRegistry;
 use super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
-use super::runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
+use super::runner::{BudgetKind, LoopOutcome};
+use super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
 use super::skill_tools::SkillContext;
-use super::stubs::{EchoTool, NoopTool};
 
 /// Kind джобы прогона агента (значение колонки `jobs.kind`).
 pub const KIND_AGENT_RUN: &str = "agent_run";
@@ -65,53 +60,27 @@ pub const AGENT_PREAMBLE: &str =
     "Ты — автономный агент-ассистент Nexus. Реши задачу пользователя, при \
     необходимости вызывая доступные инструменты. Когда задача решена — дай финальный ответ.";
 
-/// Реестр стаб-инструментов прогона (AGENT-2): echo + noop. Безопасны — НЕ касаются vault. Используется,
-/// когда go-live-флаг актуатора ВЫКЛ (по умолчанию) — реальный vault не затрагивается из коробки.
-fn stub_registry() -> ToolRegistry {
-    let mut reg = ToolRegistry::new();
-    reg.insert(Arc::new(EchoTool));
-    reg.insert(Arc::new(NoopTool));
-    reg
+/// Форвардер событий прогона для HEADLESS agentd. Композиция прогона ([`run_agent_session`]) сводит
+/// события цикла И Proposal/Diff гейта в один [`AgentEventForwarder`]; здесь — headless-поведение:
+/// (1) считает `ToolResult`'ы → счётчик шагов (наблюдаемость/replay, персистится `bump_step` ПОСЛЕ
+/// цикла); (2) `tracing`-логирует Proposal/Diff гейта (как прежний [`TracingEventSink`] — UI-стрима у
+/// headless нет; под `PolicyDefault` предложения тут же auto-DENY-отклоняются, но лог остаётся для
+/// аудита). Прочее (AssistantToken/ToolCall/ContextUsage/Final/Error) игнорируется (нет UI/стрима).
+struct HeadlessForwarder {
+    steps: Arc<std::sync::atomic::AtomicI64>,
+    tracing: TracingEventSink,
 }
 
-/// Реестр ГЕЙТНУТЫХ инструментов-актуаторов (AGENT-3e), собранный ПО-ПРОГОННО. Каждый инструмент несёт
-/// единый [`GatedToolCtx`] → `invoke` маршрутизируется ТОЛЬКО через гейт автономии
-/// (`actuator::dispatch_action`). Все три делят ОДНУ [`DispatchPolicy`] (а значит — общий на прогон
-/// blast-radius-счётчик): политика собрана из автономии прогона (`confirm`|`auto`|`None`→confirm),
-/// `overwrite_threshold` и `blast_cap` ИЗ КОНФИГА. Headless agentd передаёт
-/// `decision_source = PolicyDefault` (auto-DENY) и [`TracingEventSink`].
-///
-/// Этот реестр СТРОИТСЯ ТОЛЬКО при включённом флаге `agent_actuator_enabled` (см. [`AgentRunHandler`]);
-/// иначе используется [`stub_registry`] и реальный vault не затрагивается.
-#[allow(clippy::too_many_arguments)]
-fn actuator_registry(
-    canon_root: PathBuf,
-    ledger: AuditSink,
-    run_id: i64,
-    autonomy: Option<&str>,
-    overwrite_threshold: usize,
-    blast_cap: u32,
-    decision_source: Arc<dyn DecisionSource>,
-    agent_paused: Arc<AtomicBool>,
-) -> ToolRegistry {
-    // ОДНА политика на прогон → общий токен-бакет между всеми инструментами (анти-усталость
-    // кросс-инструментна). EventSink — tracing (headless; UI-стриминг предложений — UI-1).
-    // KILL-SWITCH (AGENT-5, чек-пойнт #3): политика несёт `agent_paused` — `dispatch_action` НЕ пишет
-    // под паузой (форс-предложение/отказ), даже если инструмент мид-цикл. Это страхует уже-идущий ход
-    // (цикл-чек #2 ловит лишь МЕЖДУ ходами): пока ход исполняет инструмент, запись в vault блокируется.
-    let policy =
-        DispatchPolicy::with_paused(autonomy, overwrite_threshold, blast_cap, agent_paused);
-    // FIXME(UI-1): связать EventSink.emit → on_event цикла / control-plane-стрим для real-time ревью
-    // предложений. Здесь передаётся [`TracingEventSink`] — headless только ЛОГИРУЕТ Proposal/Diff (нет
-    // UI), а [`PolicyDefault`] (передаваемый decision_source) auto-DENY-отклоняет предложения. UI-1
-    // заменит этот sink на стрим к UI + человеко-в-петле Approve/Reject.
-    let events = Arc::new(TracingEventSink::new());
-    let ctx = GatedToolCtx::new(canon_root, ledger, run_id, policy, decision_source, events);
-    let mut reg = ToolRegistry::new();
-    reg.insert(Arc::new(NoteCreateTool::new(ctx.clone())));
-    reg.insert(Arc::new(NoteEditTool::new(ctx.clone())));
-    reg.insert(Arc::new(SetFrontmatterTool::new(ctx)));
-    reg
+impl AgentEventForwarder for HeadlessForwarder {
+    fn forward(&self, ev: &AgentEvent) {
+        match ev {
+            AgentEvent::ToolResult { .. } => {
+                self.steps.fetch_add(1, Ordering::Relaxed);
+            }
+            AgentEvent::Proposal { .. } | AgentEvent::Diff { .. } => self.tracing.emit(ev.clone()),
+            _ => {}
+        }
+    }
 }
 
 /// Хендлер прогона агента: держит зависимости для прогона цикла как долговечной джобы.
@@ -239,13 +208,12 @@ impl AgentRunHandler {
             return Ok(());
         }
 
-        // 2. running. Корреляция эгресса — через per-call RunCtx ниже (НЕ процесс-глобальный слот):
-        //    строим ctx прогона и пробрасываем его в цикл явно. Сброса не нужно — ctx живёт в стеке
-        //    этого вызова и исчезает с ним (последующий эгресс другого пути несёт свой ctx).
+        // 2. running. Корреляция эгресса — через per-call RunCtx (НЕ процесс-глобальный слот): его
+        //    строит [`run_agent_session`] (`RunCtx::run(run_id)`) и пробрасывает в цикл/провайдера явно.
+        //    Сброса не нужно — ctx живёт в стеке вызова и исчезает с ним (другой путь несёт свой ctx).
         run_store::mark_running(&self.writer, run_id)
             .await
             .map_err(|e| format!("agent_run {run_id}: mark_running: {e}"))?;
-        let ctx = RunCtx::run(run_id);
 
         // 3. Провайдер инструментов: нет — финишируем прогон с error (НЕ сбой джобы — деградируем
         //    чисто, доказываем lifecycle + RunCtx-проводку даже без живой модели).
@@ -262,98 +230,45 @@ impl AgentRunHandler {
             return Ok(());
         };
 
-        // 4. Входы цикла. Память (AGENT-MEM-1) recall'ится по задаче и встаёт МЕЖДУ системным
-        //    преамбулом и задачей: [system преамбул] + [recall-блоки роли user] + [user задача].
-        //    recall — только чтение, никогда не ошибка (деградирует в пусто). Нет memory → пусто →
-        //    поведение AGENT-2 (голый контекст), без регрессии. recall сам держится в своём бюджете;
-        //    весь начальный контекст потом проходит общий ContextBudget::fit внутри цикла.
-        let recalled = match &self.memory {
-            Some(mem) => mem.recall(&run.task, RECALL_BUDGET_TOKENS).await,
-            None => Vec::new(),
-        };
-        // SKILL-2 (tier 1): когда skills-каталог сконфигурирован — инжектим МЕНЮ скиллов как фенсенный
-        // user-role блок (name+description, бюджетирован; НИКОГДА тела). Per-request injection_marker
-        // → автор frontmatter не угадает маркер. Это ДАННЫЕ, не инструкции (I-5): кладём в роль user,
-        // НЕ system. Пустой каталог → None → ничего не добавляем (no regression). Тела раскрывает лишь
-        // tier-2 `activate_skill`; меню только говорит модели, ЧТО существует и как активировать.
-        let skill_menu: Option<ChatMessage> = self
-            .skills
-            .as_ref()
-            .and_then(|sk| sk.catalog_block(&injection_marker()))
-            .map(ChatMessage::user);
-        let mut messages =
-            Vec::with_capacity(recalled.len() + 2 + usize::from(skill_menu.is_some()));
-        messages.push(ChatMessage::system(AGENT_PREAMBLE));
-        messages.extend(recalled);
-        // Меню скиллов — ПОСЛЕ recall, ПЕРЕД задачей (тот же приём, что recall-блоки): данные-фон.
-        messages.extend(skill_menu);
-        messages.push(ChatMessage::user(&run.task));
-        let bounds = LoopBounds::default();
-        let budget = ContextBudget::from_context_window(self.context_window);
-        let tk = QwenTokenizer::embedded();
-        // AGENT-3e: реестр зависит от go-live-флага. ВКЛ → гейтнутые инструменты-актуаторы (per-run
-        // DispatchPolicy из автономии прогона + порога/кэпа конфига + свежий blast-radius; решает
-        // self.decision_source = PolicyDefault в headless). ВЫКЛ (дефолт) → стабы; реальный vault НЕ
-        // затрагивается. Каждый прогон получает СВОЙ ledger (AuditSink) и СВОЙ blast-radius (внутри
-        // DispatchPolicy::new) — счётчик не протекает между прогонами.
-        let mut registry = if self.actuator_enabled {
-            let ledger = AuditSink::new(self.writer.clone(), self.reader.clone());
-            actuator_registry(
-                self.canon_root.clone(),
-                ledger,
-                run_id,
-                run.autonomy.as_deref(),
-                self.overwrite_threshold,
-                self.blast_cap,
-                self.decision_source.clone(),
-                self.agent_paused.clone(),
-            )
-        } else {
-            stub_registry()
-        };
-        // SKILL-2 (tier 2 + 3): при сконфигурированном skills-каталоге регистрируем READ-ONLY
-        // инструменты скиллов — `activate_skill` (загрузить тело) + `read_skill_resource` (читать
-        // ресурс в подкаталоге скилла). НЕЗАВИСИМО от actuator-флага: скиллы только читают, vault не
-        // пишут. Активация скилла НЕ добавляет НИКАКИХ других инструментов (capability-инертность —
-        // SKILL-3 owns the gate): registry получает ровно эти два, и больше ничего.
-        if let Some(skills) = &self.skills {
-            for tool in skills.tools() {
-                registry.insert(tool);
-            }
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-
-        // on_event: считаем результаты инструментов синхронно в общий счётчик (наблюдаемость/replay).
-        // Запись шага в БД делаем НЕ из синхронного `on_event` (он не может await), а ПОСЛЕ цикла
-        // одним awaited bump_step — это снимает гонку «fire-and-forget bump после finish (терминал-гард
-        // отверг бы его)», которая иначе оставила бы step=0. `on_event` мог бы ещё стримить в UI —
-        // это UI-1; здесь только счётчик шагов.
+        // 4-5. Прогон через ЕДИНУЮ композицию [`run_agent_session`] (DRY: тот же код у desktop/коннектора).
+        //    Она собирает начальный контекст ([system преамбул] + [recall памяти AGENT-MEM-1] +
+        //    [меню скиллов SKILL-2 tier-1] + [задача]), выбирает реестр (стабы при ВЫКЛ актуаторе → vault
+        //    не трогается; ВКЛ → гейтнутые актуаторы per-run DispatchPolicy с decision_source=PolicyDefault
+        //    + проброс agent_paused в политику), регистрирует tier-2/3 инструменты скиллов и крутит цикл.
         //
-        // Счётчик стартует с 0 (НЕ с `run.step`): replay перезапускает цикл С НАЧАЛА (messages
-        // пересобраны, инструменты исполняются заново), поэтому `step` означает «результатов
-        // инструментов В ЭТОЙ попытке прогона», а не high-water между перезапусками — иначе он бы
-        // раздувался при каждом requeue, не отражая ни «шаги этого прогона», ни «всего».
+        //    Headless-форвардер: считает `ToolResult`'ы в счётчик шагов (наблюдаемость/replay) +
+        //    tracing-логирует Proposal/Diff гейта (как прежний TracingEventSink). Запись шага — НЕ из
+        //    синхронного форвардера (он не может await), а ПОСЛЕ цикла одним awaited `bump_step`. Счётчик
+        //    стартует с 0 (НЕ с `run.step`): replay перезапускает цикл С НАЧАЛА — `step` означает
+        //    «результатов инструментов В ЭТОЙ попытке», а не high-water между requeue.
+        //    KILL-SWITCH (AGENT-5, чек-пойнт #2): `agent_paused` в цикл → пауза мид-ран → BudgetExhausted{Paused}.
         let steps = Arc::new(std::sync::atomic::AtomicI64::new(0));
-        let steps_for_events = steps.clone();
-        let mut on_event = move |e: AgentEvent| {
-            if matches!(e, AgentEvent::ToolResult { .. }) {
-                steps_for_events.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
+        let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(HeadlessForwarder {
+            steps: steps.clone(),
+            tracing: TracingEventSink::new(),
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let spec = SessionSpec {
+            run_id,
+            task: run.task.clone(),
+            autonomy: run.autonomy.clone(),
+            actuator_enabled: self.actuator_enabled,
+            overwrite_threshold: self.overwrite_threshold,
+            blast_cap: self.blast_cap,
+            context_window: self.context_window,
+            canon_root: self.canon_root.clone(),
         };
-
-        // 5. Прогон цикла. KILL-SWITCH (AGENT-5, чек-пойнт #2): пробрасываем `agent_paused` — пауза
-        //    мид-ран остановит цикл на следующей проверке границы → LoopOutcome BudgetExhausted{Paused}.
-        let outcome = run_agent_loop(
+        let outcome = run_agent_session(
+            &spec,
             provider.as_ref(),
-            &registry,
-            messages,
-            bounds,
-            &budget,
-            &tk,
-            &cancel,
+            self.memory.as_deref(),
+            self.skills.as_ref(),
+            self.decision_source.clone(),
+            &self.writer,
+            &self.reader,
             &self.agent_paused,
-            ctx,
-            &mut on_event,
+            &cancel,
+            forwarder,
         )
         .await;
 
@@ -500,9 +415,9 @@ mod tests {
     use super::*;
     use crate::agent::tool::{ToolCall, ToolSpec};
     use crate::ai::tools::{ToolCapableProvider, ToolTurn};
-    use crate::ai::AiResult;
+    use crate::ai::{AiResult, ChatMessage};
     use crate::db::Database;
-    use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+    use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, RunCtx};
     use std::collections::VecDeque;
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
