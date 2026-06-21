@@ -19,6 +19,10 @@ use std::path::{Path, PathBuf};
 /// существующего `GuardedClient`). SANDBOX-2.
 pub mod proxy;
 
+/// host/act — RPC vault-записи (vault `:ro` в контейнере → записи host-side через `dispatch_action`).
+/// SANDBOX-3.
+pub mod act;
+
 /// Образ песочницы по умолчанию (тот же, что у DEPLOY-3 `nexus deploy docker`).
 pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 /// Путь vault ВНУТРИ контейнера (`:ro`), = `NEXUS_VAULT` образа.
