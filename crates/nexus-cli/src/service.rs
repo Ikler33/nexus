@@ -293,8 +293,17 @@ pub fn default_remote_home(user: &str) -> PathBuf {
     if user == "root" {
         PathBuf::from("/root")
     } else {
-        PathBuf::from("/home").join(user)
+        PathBuf::from(format!("/home/{user}"))
     }
+}
+
+/// POSIX-join для УДАЛЁННЫХ путей: всегда `/`-разделитель, НЕЗАВИСИМО от ОС хоста, где запущен CLI.
+/// `PathBuf::join` вставил бы `\` на Windows → сломанный Linux-юнит/`mkdir` при деплое С Windows на риг
+/// (и падение юнит-тестов на Windows-CI). `tail` — POSIX-хвост (`".nexus/bin"`).
+pub fn posix_join(base: &std::path::Path, tail: &str) -> PathBuf {
+    let b = base.to_string_lossy();
+    let b = b.trim_end_matches('/');
+    PathBuf::from(format!("{b}/{tail}"))
 }
 
 /// `systemctl --user` по ssh идёт В НЕ-логин-сессии (нет `XDG_RUNTIME_DIR`) → задаём явно перед командой.
@@ -304,11 +313,12 @@ const XDG_PREFIX: &str = "export XDG_RUNTIME_DIR=/run/user/$(id -u);";
 /// вызывающим как «чистые» — здесь они встраиваются в shell-команды без экранирования.
 pub fn remote_plan(cfg: &RemoteConfig) -> RemotePlan {
     let target = format!("{}@{}", cfg.user, cfg.host);
-    let bin_dir = cfg.remote_home.join(".nexus").join("bin");
-    let remote_bin = bin_dir.join(REMOTE_BIN_NAME);
-    let unit_dir = cfg.remote_home.join(".config").join("systemd").join("user");
-    let remote_unit_path = unit_dir.join(SYSTEMD_UNIT);
-    let log_dir = cfg.remote_vault.join(".nexus").join("logs");
+    // Удалённые пути — ВСЕГДА POSIX (`/`), даже если CLI запущен на Windows (см. `posix_join`).
+    let bin_dir = posix_join(&cfg.remote_home, ".nexus/bin");
+    let remote_bin = posix_join(&bin_dir, REMOTE_BIN_NAME);
+    let unit_dir = posix_join(&cfg.remote_home, ".config/systemd/user");
+    let remote_unit_path = posix_join(&unit_dir, SYSTEMD_UNIT);
+    let log_dir = posix_join(&cfg.remote_vault, ".nexus/logs");
 
     let unit_content = render_systemd_unit(&DeployConfig {
         vault: cfg.remote_vault.clone(),
@@ -494,6 +504,15 @@ mod tests {
         assert!(p
             .unit_content
             .contains("/home/artan/.nexus/vault/.nexus/agentd.sock"));
+        // Удалённый юнит — POSIX: НИ ОДНОГО бэкслеша (регресс-гард: `PathBuf::join` на Windows вставлял
+        // `\` → сломанный Linux-юнит при деплое С Windows + падение этого теста на Windows-CI).
+        assert!(
+            !p.unit_content.contains('\\'),
+            "unit must be POSIX (no backslash): {}",
+            p.unit_content
+        );
+        assert!(!p.remote_bin.to_string_lossy().contains('\\'));
+        assert!(!p.remote_unit_path.to_string_lossy().contains('\\'));
     }
 
     #[test]

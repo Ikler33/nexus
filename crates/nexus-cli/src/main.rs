@@ -348,15 +348,16 @@ fn cmd_deploy_remote(flags: &[&str]) -> Result<(), String> {
         ));
     }
 
+    // Удалённые пути — ВСЕГДА POSIX (`posix_join`), даже если CLI запущен на Windows-хосте.
     let remote_home = flag(flags, "--remote-home")
         .map(PathBuf::from)
         .unwrap_or_else(|| service::default_remote_home(user));
     let remote_vault = flag(flags, "--remote-vault")
         .map(PathBuf::from)
-        .unwrap_or_else(|| remote_home.join(".nexus").join("vault"));
+        .unwrap_or_else(|| service::posix_join(&remote_home, ".nexus/vault"));
     let remote_socket = flag(flags, "--remote-socket")
         .map(PathBuf::from)
-        .unwrap_or_else(|| remote_vault.join(".nexus").join("agentd.sock"));
+        .unwrap_or_else(|| service::posix_join(&remote_vault, ".nexus/agentd.sock"));
 
     // Удалённые пути встраиваются в ssh-команды без экранирования → строгая валидация.
     for (p, what) in [
