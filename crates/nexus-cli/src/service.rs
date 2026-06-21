@@ -374,6 +374,40 @@ pub fn remote_plan(cfg: &RemoteConfig) -> RemotePlan {
     }
 }
 
+/// План СНЯТИЯ удалённого сервиса (симметрия `remote_plan`): остановить+отключить юнит, удалить файл
+/// юнита, перечитать systemd. Возвращает `(target, remote_unit_path, steps)`. Все шаги best-effort
+/// (снятие отсутствующего сервиса — норма, как у локального `undeploy`). НЕ трогает бинарь/vault —
+/// убираем только сервис, не пользовательские данные (паритет с локальным `undeploy`). Нужны только
+/// `user`/`host`/`remote_home` (путь юнита) — отдельный лёгкий вход, без `RemoteConfig` (бинарь/vault
+/// тут не при чём).
+pub fn remote_undeploy_plan(
+    user: &str,
+    host: &str,
+    remote_home: &std::path::Path,
+) -> (String, PathBuf, Vec<RemoteStep>) {
+    let target = format!("{user}@{host}");
+    let unit_dir = posix_join(remote_home, ".config/systemd/user");
+    let remote_unit_path = posix_join(&unit_dir, SYSTEMD_UNIT);
+    let disable = format!("{XDG_PREFIX} systemctl --user disable --now {SYSTEMD_UNIT}");
+    let rm = format!("rm -f {}", remote_unit_path.display());
+    let reload = format!("{XDG_PREFIX} systemctl --user daemon-reload");
+    let steps = vec![
+        RemoteStep::Run {
+            cmd: disable,
+            best_effort: true,
+        },
+        RemoteStep::Run {
+            cmd: rm,
+            best_effort: true,
+        },
+        RemoteStep::Run {
+            cmd: reload,
+            best_effort: true,
+        },
+    ];
+    (target, remote_unit_path, steps)
+}
+
 // ── Контейнер-деплой (DEPLOY-3) ───────────────────────────────────────────────────────────────────
 //
 // Запуск agentd в Docker-контейнере (образ — `Dockerfile` в корне репо; см. также Фаза-2 Podman).
@@ -635,6 +669,32 @@ mod tests {
             panic!("step5 != Run")
         };
         assert!(reload.contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn remote_undeploy_disables_removes_reloads_best_effort() {
+        let (target, unit, steps) =
+            remote_undeploy_plan("artan", "192.168.0.31", std::path::Path::new("/home/artan"));
+        assert_eq!(target, "artan@192.168.0.31");
+        assert_eq!(
+            unit,
+            PathBuf::from("/home/artan/.config/systemd/user/nexus-agentd.service")
+        );
+        assert_eq!(steps.len(), 3);
+        // disable --now → rm unit → daemon-reload; ВСЕ best-effort (снятие отсутствующего — норма).
+        assert!(
+            matches!(&steps[0], RemoteStep::Run { cmd, best_effort: true } if cmd.contains("disable --now nexus-agentd.service"))
+        );
+        assert!(
+            matches!(&steps[1], RemoteStep::Run { cmd, best_effort: true } if cmd.starts_with("rm -f") && cmd.contains("nexus-agentd.service"))
+        );
+        assert!(
+            matches!(&steps[2], RemoteStep::Run { cmd, best_effort: true } if cmd.contains("daemon-reload"))
+        );
+        // НЕ трогаем бинарь/vault.
+        assert!(!steps
+            .iter()
+            .any(|s| matches!(s, RemoteStep::Run { cmd, .. } if cmd.contains("/.nexus/bin") || cmd.contains("rm -rf"))));
     }
 
     // ── Контейнер-деплой ──────────────────────────────────────────────────────────────────────────
