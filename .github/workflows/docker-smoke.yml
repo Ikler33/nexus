@@ -1,0 +1,71 @@
+name: Docker smoke (nexus-agentd)
+
+# Pre-release-эшелон (TESTING_STRATEGY §5 / AGENT-PROD-PLAN §5): валидирует, что образ agentd из
+# корневого `Dockerfile` (DEPLOY-3) РЕАЛЬНО собирается и бинарь стартует в slim-рантайме. Дорогой
+# (~6-10 мин полной компиляции nexus-core в контейнере), поэтому PATHS-GATED — бежит ТОЛЬКО на PR,
+# трогающих Dockerfile / agentd / ядро / манифесты / toolchain / сам этот workflow (self-validating),
+# плюс еженедельный `schedule` (ловит дрейф ПЛАВАЮЩЕГО базового образа `rust:1-bookworm`, который
+# paths-фильтр поймать не может) и ручной `workflow_dispatch`.
+#
+# ⚠ paths-gated workflow: на PR без перечисленных путей джоба НЕ стартует → её check НЕ появляется.
+# НЕ добавляйте `docker-build` в required status checks (Settings → Branches), иначе непричастные PR
+# зависнут с «expected» навсегда. На push в main НЕ вешаем (PR-прогон уже валидирует merge-результат
+# на squash-репо; main-канарейку держит weekly schedule) — чтобы не собирать дорогой образ дважды.
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'crates/nexus-agentd/**'
+      - 'crates/nexus-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/docker-smoke.yml'
+  schedule:
+    - cron: '0 6 * * 1' # Пн 06:00 UTC — ре-валидация против плавающего rust:1-bookworm.
+  workflow_dispatch:
+
+concurrency:
+  group: docker-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read # least-privilege: джоба только чекаутит + собирает образ локально, токен-скоупы не нужны.
+
+jobs:
+  docker-build:
+    name: Docker build + runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25 # ceiling: build ~6-10 мин + смоук секунды; страховка от зависания будущих правок.
+    env:
+      DOCKER_BUILDKIT: '1' # Dockerfile несёт `# syntax=docker/dockerfile:1` → требует BuildKit.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build agentd image
+        run: docker build -t nexus-agentd:smoke .
+      - name: Runtime smoke — бинарь стартует в образе
+        # Доказывает, что образ РАБОТАЕТ (все .so резолвятся в debian-slim), а не только «собрался»:
+        # запускаем agentd с заведомо НЕсуществующим vault-аргументом → ожидаем ненулевой выход +
+        # сообщение «vault path …» (бинарь дошёл до резолюции аргументов = процесс стартовал, библиотеки
+        # загружены). Позиционный аргумент приоритетнее ENV NEXUS_VAULT (vault_path_from_args) и
+        # детерминированнее анонимного тома (не зависит от прав /vault). Сеть/LLM не нужны: путь vault
+        # резолвится (canonicalize) ДО любого egress/await, поэтому процесс падает быстро.
+        run: |
+          set +e
+          out=$(docker run --rm nexus-agentd:smoke /nonexistent-vault-smoke 2>&1)
+          code=$?
+          echo "--- agentd output ---"
+          echo "$out"
+          echo "--- exit=$code ---"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: ожидали ненулевой выход (нет валидного vault), получили 0"
+            exit 1
+          fi
+          # «vault path» — точный префикс format!-ошибки canonicalize (привязка к нужному код-пути,
+          # а не к любому вхождению слова «vault»).
+          if ! echo "$out" | grep -qi "vault path"; then
+            echo "FAIL: нет ожидаемой ошибки «vault path …» → бинарь не дошёл до проверки аргументов"
+            exit 1
+          fi
+          echo "✓ образ собран, бинарь стартует в slim-рантайме и валидирует аргументы"

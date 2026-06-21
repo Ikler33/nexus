@@ -31,7 +31,7 @@
 6. Параллельный трек десктопа: **Release & Auto-Updater** (распространение приложения).
 
 ### DEPLOY-2 — авто-деплой везде
-**`nexus deploy remote --host user@host --binary <linux-agentd>`** ✅ — ssh/scp-деплой agentd на удалённый `systemd --user` хост; цель — **риг 192.168.0.31** (на нём локальный LLM; VPS отпал — нет LLM). Чистый рендер плана + actuation под `--apply`; валидаторы пути/user/host (allowlist), XDG/linger-рецепт, symlink-safe temp-юнит. **`nexus deploy docker`** ✅ (DEPLOY-3) — multi-stage `Dockerfile` (rust-builder → debian-slim, non-root, rustls-рантайм без openssl) + `deploy docker`/`undeploy docker` (vault-том + AF_UNIX-сокет на bind-mount; Linux-хост). Образ = база Фазы-2 Podman-песочницы. Остаток DEPLOY-2/3: LIVE docker-build + деплой на риг (cross-compiled бинарь / build-on-rig) · CI docker-build-smoke · compose · топологии local-all-in-one / VPS-агент+удалённый-LLM (через amnezia-VPN) / облако+API · remote-undeploy.
+**`nexus deploy remote --host user@host --binary <linux-agentd>`** ✅ — ssh/scp-деплой agentd на удалённый `systemd --user` хост; цель — **риг 192.168.0.31** (на нём локальный LLM; VPS отпал — нет LLM). Чистый рендер плана + actuation под `--apply`; валидаторы пути/user/host (allowlist), XDG/linger-рецепт, symlink-safe temp-юнит. **`nexus deploy docker`** ✅ (DEPLOY-3) — multi-stage `Dockerfile` (rust-builder → debian-slim, non-root, rustls-рантайм без openssl) + `deploy docker`/`undeploy docker` (vault-том + AF_UNIX-сокет на bind-mount; Linux-хост). Образ = база Фазы-2 Podman-песочницы. CI docker-build-smoke ✅ (DEPLOY-4, `.github/workflows/docker-smoke.yml`). Остаток DEPLOY-2/3: LIVE-деплой на риг (cross-compiled бинарь / build-on-rig) · compose · топологии local-all-in-one / VPS-агент+удалённый-LLM (через amnezia-VPN) / облако+API · remote-undeploy.
 
 ### Порт от конкурентов (после PROD-v1, дескоупнуто под local-first)
 P0: skill learning-loop (curator+usage) · session-search FTS5 · субагенты/делегирование. P1: MCP-клиент · cron NL-jobs · backup/restore · observability. Post-1.0/owner-gated: multi-channel-шлюзы · email · deep-research · voice · marketplace.
@@ -66,7 +66,7 @@ P0: skill learning-loop (curator+usage) · session-search FTS5 · субаген
 ## 5. Тест-инфра — что добавить (расширение TESTING_STRATEGY.md)
 - Выделенный **integration-крейт для `nexus-agentd`** (`crates/nexus-agentd/tests/*.rs`, чёрный ящик).
 - **Cross-process e2e** коннектора (in-process / WS).
-- **Deploy/release smoke** в CI (pre-release эшелон): `nexus deploy local`/`docker` + health-check; `--help`/launch собранных артефактов.
+- **Deploy/release smoke** в CI (pre-release эшелон): ✅ docker-build-smoke (`.github/workflows/docker-smoke.yml` — сборка образа agentd + runtime-смоук, paths-gated + weekly cron, DEPLOY-4); остаток — `nexus deploy local` health-check / launch собранных артефактов.
 - Опц. **mutation (`cargo-mutants`)** на security-путях (actuator/egress/connector-auth).
 - Адаптировать CI-строгость конкурентов: trivy/container-scan (когда Docker), secret-scan, osv (есть cargo-deny), dependency-review.
 

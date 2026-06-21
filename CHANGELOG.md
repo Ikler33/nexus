@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### CI · docker-build-smoke — автоматическая валидация образа agentd (DEPLOY-4)
+
+Новый workflow `.github/workflows/docker-smoke.yml`: собирает образ agentd из корневого `Dockerfile` (DEPLOY-3) и гоняет **runtime-смоук** (`docker run … /nonexistent-vault-smoke` → ожидаем ненулевой выход + ошибку «vault path …» = бинарь стартовал в slim-рантайме и все `.so` резолвятся, не просто «собралось»). Закрывает follow-up DEPLOY-3 (Dockerfile нельзя собрать локально — нет Docker на dev-маке). **Self-validating**: PR трогает workflow-файл → смоук бежит на самом PR. **Paths-gated** (Dockerfile/.dockerignore/nexus-agentd/nexus-core/Cargo.*/rust-toolchain.toml/сам workflow) — дорогой (~6-10 мин) образ собирается ТОЛЬКО на причастных PR; + еженедельный `schedule`-cron (дрейф плавающего `rust:1-bookworm`) + `workflow_dispatch`.
+
+**Хардненинг по adversarial-ревью (2 линзы)**: smoke-семантика подтверждена здоровой (позиционный vault-арг приоритетнее ENV; `tracing::error!` печатает до `exit(1)`; нет false-pass/fail). Закрыты находки: **paths-trigger landmine** — комментарий-предупреждение НЕ вешать `docker-build` в required checks (иначе непричастные PR зависнут; ветка сейчас не protected → риск только будущий); **дрейф плавающего базового образа** — weekly `schedule`; **`rust-toolchain.toml`** добавлен в paths (бамп тулчейна влияет на in-container build); **push-триггер убран** (PR валидирует merge-результат на squash-репо — не собираем образ дважды); `permissions: contents: read` (least-priv, сборка untrusted PR-контекста); `timeout-minutes: 25`; grep ужат до `«vault path»` (привязка к коду canonicalize-ошибки). `DOCKER_BUILDKIT=1` (Dockerfile несёт `# syntax=`).
+
 ### Деплой · контейнеризация agentd — `Dockerfile` + `nexus deploy docker` (DEPLOY-3)
 
 Агент-сервис теперь запускается в Docker-контейнере. **Multi-stage `Dockerfile`** (корень репо): builder `rust:1-bookworm` собирает ТОЛЬКО `cargo build --release -p nexus-agentd` (десктоп/Tauri и его webkit/gtk НЕ компилируются) → runtime `debian:bookworm-slim` (ABI-совпадает с builder) + `ca-certificates`, непривилегированный пользователь `nexus` (uid 10001), vault как том `/vault`, `ENTRYPOINT nexus-agentd`. Рантайм минимален: дерево зависимостей agentd чистое — **rustls-tls + bundled webpki-roots** (без openssl), нет git2/native-tls → slim-образу хватает libc (rusqlite — bundled SQLite статикой). `.dockerignore` исключает target/node_modules/.git.
