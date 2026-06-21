@@ -26,12 +26,12 @@
 1. **AGENT-CONNECT spec → код** (блокирующая зависимость) — протокол + транспорт. Спека: `docs/specs/agent-connect.md`. ✅ **ЗАВЕРШЕНО (PR #370-373):** P0a протокол-фундамент (JSON-RPC 2.0 + `Transport`/`ChannelTransport` + `dispatch`/`ConnectHandler`) · P0b-1 wire-DTO унификация (`connect::wire`, единый контракт desktop↔agentd) · P0b-2a единая композиция `run_agent_session` (DRY, 3 копии→1) · P0b-2b `ConnectAgentHandler` (драйвит цикл, стримит `agent/event`, сессии/approve/cancel/undo, автономия `confirm`). **LIVE-проверен на риге** (`live_connect_tool_loop_on_rig`: Qwen3.6-27B вызвала инструмент через коннектор, 32.8 c).
 2. **agentd-демон**: скелет → реальный headless-демон (вынести bounded-loop), AGENT-CONNECT-сервер. ⏳ **СЛЕДУЮЩЕЕ:** agentd хостит `ConnectAgentHandler` по AF_UNIX (сетевой `Transport`, default-OFF за конфиг-флагом).
 3. **Connector-модуль** в app (транспорт in-process / WS). ⏳ after agentd-host.
-4. **`nexus deploy local`** + config-bootstrap + git-sync мост.
+4. **`nexus deploy local`** + config-bootstrap + git-sync мост. ✅ + **`nexus deploy remote`** (DEPLOY-2 ниже).
 5. **THREAT_MODEL.md** (P0-гейт, параллельно) — `docs/THREAT_MODEL.md`. ✅
 6. Параллельный трек десктопа: **Release & Auto-Updater** (распространение приложения).
 
 ### DEPLOY-2 — авто-деплой везде
-Контейнер-образ (= база Фазы-2 песочницы) · `nexus deploy docker|vps` · compose · топологии local-all-in-one / VPS-агент+удалённый-LLM (через amnezia-VPN) / облако+API.
+**`nexus deploy remote --host user@host --binary <linux-agentd>`** ✅ — ssh/scp-деплой agentd на удалённый `systemd --user` хост; цель — **риг 192.168.0.31** (на нём локальный LLM; VPS отпал — нет LLM). Чистый рендер плана + actuation под `--apply`; валидаторы пути/user/host (allowlist), XDG/linger-рецепт, symlink-safe temp-юнит. Остаток DEPLOY-2: LIVE-деплой на риг (cross-compiled linux-бинарь) · контейнер-образ (= база Фазы-2 песочницы) · `nexus deploy docker` · compose · топологии local-all-in-one / VPS-агент+удалённый-LLM (через amnezia-VPN) / облако+API · remote-undeploy.
 
 ### Порт от конкурентов (после PROD-v1, дескоупнуто под local-first)
 P0: skill learning-loop (curator+usage) · session-search FTS5 · субагенты/делегирование. P1: MCP-клиент · cron NL-jobs · backup/restore · observability. Post-1.0/owner-gated: multi-channel-шлюзы · email · deep-research · voice · marketplace.

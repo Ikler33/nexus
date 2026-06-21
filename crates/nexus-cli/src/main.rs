@@ -4,6 +4,9 @@
 //! - `nexus deploy local [--vault P] [--socket P] [--agentd P] [--apply]` — bootstrap `.nexus` + рендер
 //!   сервис-юнита (launchd/systemd --user), который запускает `nexus-agentd <vault>` с
 //!   `NEXUS_AGENTD_CONNECT_SOCKET`. **Safe default — печать ПЛАНА**; реальная установка только под `--apply`.
+//! - `nexus deploy remote --host user@host --binary P [...] [--apply]` — деплой agentd на удалённый
+//!   Linux-хост (systemd --user) через `ssh`/`scp`: `scp` бинаря → юнит → `systemctl --user enable --now`.
+//!   Целевой хост — риг с локальным LLM (192.168.0.31). **Safe default — печать ПЛАНА**; ssh/scp под `--apply`.
 //! - `nexus status [--socket P] [--vault P]` — проба коннектора: подключиться к AF_UNIX-сокету и сделать
 //!   `initialize` → доступность + версия протокола.
 //! - `nexus undeploy [--apply]` — остановить + удалить сервис-юнит (план / `--apply`).
@@ -16,7 +19,7 @@ mod service;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use service::{detect_kind, DeployConfig};
+use service::{detect_kind, DeployConfig, RemoteConfig, RemotePlan, RemoteStep};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -27,6 +30,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["deploy", "local", flags @ ..] => run(cmd_deploy_local(flags)),
+        ["deploy", "remote", flags @ ..] => run(cmd_deploy_remote(flags)),
         ["status", flags @ ..] => run(cmd_status(flags)),
         ["undeploy", flags @ ..] => run(cmd_undeploy(flags)),
         other => {
@@ -54,6 +58,9 @@ fn print_help() {
          КОМАНДЫ:\n  \
          deploy local [--vault P] [--socket P] [--agentd P] [--apply]\n      \
          Развернуть agentd локальным сервисом (launchd/systemd). Без --apply — печать плана.\n  \
+         deploy remote --host user@host --binary P [--remote-vault P] [--remote-socket P]\n               \
+         [--remote-home P] [--apply]\n      \
+         Развернуть agentd на удалённом Linux-хосте (systemd --user) через ssh/scp. Без --apply — план.\n  \
          status [--socket P] [--vault P]\n      Проверить доступность агента (initialize по AF_UNIX).\n  \
          undeploy [--apply]            Остановить и удалить сервис.\n\n\
          Сокет по умолчанию: <vault>/.nexus/agentd.sock"
@@ -256,6 +263,280 @@ fn macos_tcc_warning(cfg: &DeployConfig) -> Option<String> {
     }
 }
 
+// ── deploy remote (DEPLOY-2) ────────────────────────────────────────────────────────────────────
+
+/// Символы, недопустимые в УДАЛЁННОМ пути/хосте — они встраиваются в shell-команду `ssh <target> <cmd>`
+/// БЕЗ экранирования, поэтому любой shell-метасимвол = инъекция. Удалённые пути на риге чистые
+/// (`/home/artan/...`), так что строгий allowlist не мешает легитимным кейсам.
+const SHELL_META: &[char] = &[
+    '\'', '"', '\\', '$', '`', ';', '|', '&', '<', '>', '(', ')', '{', '}', '[', ']', '*', '?',
+    '~', '#', '!', '\n', '\r', '\0', '\t', ' ',
+];
+
+/// Валидирует «чистый» удалённый АБСОЛЮТНЫЙ путь, безопасный для встраивания в ssh/scp-команду без
+/// shell-экранирования: непустой, абсолютный (`/`), без shell-метасимволов и управляющих символов.
+fn validate_remote_path(s: &str, what: &str) -> Result<(), String> {
+    if s.is_empty() {
+        return Err(format!("{what} пуст"));
+    }
+    if !s.starts_with('/') {
+        return Err(format!(
+            "{what} должен быть абсолютным (начинаться с /): {s}"
+        ));
+    }
+    if let Some(c) = s.chars().find(|c| SHELL_META.contains(c) || c.is_control()) {
+        return Err(format!(
+            "{what} содержит недопустимый для ssh-команды символ {c:?}: {s}"
+        ));
+    }
+    Ok(())
+}
+
+/// Валидирует имя удалённого пользователя (ssh + `loginctl enable-linger <user>`): непустое, только
+/// `[A-Za-z0-9._-]`, не начинается с `-` (иначе ssh примет за флаг).
+fn validate_remote_user(u: &str) -> Result<(), String> {
+    if u.is_empty() || u.starts_with('-') {
+        return Err(format!("недопустимое имя пользователя: {u:?}"));
+    }
+    if !u
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(format!("недопустимое имя пользователя: {u:?}"));
+    }
+    Ok(())
+}
+
+/// Валидирует удалённый хост (IPv4/DNS) строгим ALLOWLIST `[A-Za-z0-9.-]`, не начинается с `-`.
+/// Allowlist (а не blocklist) закрывает тихие мис-таргеты: `@` (мис-парс `user@host`), `:` (порт без
+/// `-P` молча игнорируется), `%`/`,`/`=` (ssh-токены/опции). IPv6-литералы (`:`/`[]`) не поддержаны —
+/// используйте hostname или ssh-config-алиас.
+fn validate_remote_host(h: &str) -> Result<(), String> {
+    if h.is_empty() || h.starts_with('-') {
+        return Err(format!("недопустимый хост: {h:?}"));
+    }
+    if let Some(c) = h
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
+    {
+        return Err(format!(
+            "хост содержит недопустимый символ {c:?} (разрешены буквы/цифры/./-, IPv6-литералы — \
+             через hostname/ssh-config): {h}"
+        ));
+    }
+    Ok(())
+}
+
+fn cmd_deploy_remote(flags: &[&str]) -> Result<(), String> {
+    let host_spec = flag(flags, "--host").ok_or("укажите --host user@host")?;
+    let (user, host) = host_spec
+        .split_once('@')
+        .ok_or_else(|| format!("--host должен быть в форме user@host: {host_spec}"))?;
+    validate_remote_user(user)?;
+    validate_remote_host(host)?;
+
+    let local_binary = PathBuf::from(
+        flag(flags, "--binary")
+            .ok_or("укажите --binary <путь к Linux-бинарю nexus-agentd для удалённого хоста>")?,
+    );
+    validate_path_chars(&local_binary, "binary")?;
+    if !local_binary.is_file() {
+        return Err(format!(
+            "локальный бинарь не найден: {} (соберите под Linux: \
+             cargo build --release -p nexus-agentd --target x86_64-unknown-linux-gnu)",
+            local_binary.display()
+        ));
+    }
+
+    let remote_home = flag(flags, "--remote-home")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| service::default_remote_home(user));
+    let remote_vault = flag(flags, "--remote-vault")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| remote_home.join(".nexus").join("vault"));
+    let remote_socket = flag(flags, "--remote-socket")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| remote_vault.join(".nexus").join("agentd.sock"));
+
+    // Удалённые пути встраиваются в ssh-команды без экранирования → строгая валидация.
+    for (p, what) in [
+        (&remote_home, "--remote-home"),
+        (&remote_vault, "--remote-vault"),
+        (&remote_socket, "--remote-socket"),
+    ] {
+        validate_remote_path(&p.to_string_lossy(), what)?;
+    }
+
+    let cfg = RemoteConfig {
+        user: user.to_string(),
+        host: host.to_string(),
+        remote_home,
+        local_binary,
+        remote_vault,
+        remote_socket,
+    };
+    let plan = service::remote_plan(&cfg);
+    let apply = has_flag(flags, "--apply");
+
+    println!(
+        "=== nexus deploy remote (systemd --user @ {}) ===",
+        plan.target
+    );
+    println!("binary(local):  {}", cfg.local_binary.display());
+    println!("binary(remote): {}", plan.remote_bin.display());
+    println!("vault(remote):  {}", cfg.remote_vault.display());
+    println!("socket(remote): {}", cfg.remote_socket.display());
+    println!("unit(remote):   {}", plan.remote_unit_path.display());
+    println!("\n--- содержимое юнита ---\n{}", plan.unit_content);
+    println!("--- шаги ---");
+    for s in &plan.steps {
+        println!("  {}", describe_remote_step(s, &cfg, &plan));
+    }
+
+    if !apply {
+        println!("\n(dry-run — план НЕ применён; повторите с --apply для удалённой установки)");
+        println!(
+            "ПРЕДУСЛОВИЯ: ssh-доступ к {} (ключ/ssh-agent), на хосте — systemd --user.",
+            plan.target
+        );
+        return Ok(());
+    }
+    apply_remote_plan(&cfg, &plan)
+}
+
+/// Человекочитаемое описание шага для печати плана.
+fn describe_remote_step(step: &RemoteStep, cfg: &RemoteConfig, plan: &RemotePlan) -> String {
+    match step {
+        RemoteStep::Run { cmd, best_effort } => {
+            let tail = if *best_effort { "  (best-effort)" } else { "" };
+            format!("ssh {} {cmd:?}{tail}", plan.target)
+        }
+        RemoteStep::PutBinary => format!(
+            "scp {} {}:{}",
+            cfg.local_binary.display(),
+            plan.target,
+            plan.remote_bin.display()
+        ),
+        RemoteStep::PutUnit => format!(
+            "scp <временный-юнит> {}:{}",
+            plan.target,
+            plan.remote_unit_path.display()
+        ),
+    }
+}
+
+/// Исполняет [`RemotePlan`] через `ssh`/`scp` (наследует stdio — интерактивный ввод пароля/passphrase
+/// работает). Не-`best_effort` сбой прерывает деплой. Аутентификация — на стороне ssh (ключ/agent/конфиг).
+fn apply_remote_plan(cfg: &RemoteConfig, plan: &RemotePlan) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::Command;
+    // Временный юнит — детерминированное имя по PID (без Date/random); чистим в конце независимо от исхода.
+    let tmp_unit =
+        std::env::temp_dir().join(format!("nexus-agentd-{}.service", std::process::id()));
+    let cleanup = |t: &Path| {
+        let _ = std::fs::remove_file(t);
+    };
+
+    for step in &plan.steps {
+        let result: Result<(), String> = match step {
+            RemoteStep::Run { cmd, best_effort } => {
+                let st = Command::new("ssh")
+                    .arg(&plan.target)
+                    .arg(cmd)
+                    .status()
+                    .map_err(|e| format!("запуск ssh не удался: {e}"))?;
+                if st.success() {
+                    println!("  ✓ ssh {}: {cmd}", plan.target);
+                    Ok(())
+                } else if *best_effort {
+                    println!(
+                        "  ⚠ (best-effort) ssh {}: {cmd} → код {}",
+                        plan.target,
+                        st.code().unwrap_or(-1)
+                    );
+                    Ok(())
+                } else {
+                    // Подсказка для самого частого фейла «свежего хоста»: `systemctl --user` падает
+                    // с «Failed to connect to bus», если у пользователя нет активной сессии и линджер
+                    // не включился (best-effort `loginctl enable-linger` мог не пройти без root/polkit).
+                    let hint = if cmd.contains("systemctl --user") {
+                        format!(
+                            "\n  ⓘ вероятная причина: у пользователя {} нет user-bus — включите линджер \
+                             с правами: `ssh {} 'sudo loginctl enable-linger {}'` и повторите --apply \
+                             (бинарь и юнит уже доставлены).",
+                            cfg.user, plan.target, cfg.user
+                        )
+                    } else {
+                        String::new()
+                    };
+                    Err(format!(
+                        "шаг провалился (код {}): ssh {} {cmd}{hint}",
+                        st.code().unwrap_or(-1),
+                        plan.target
+                    ))
+                }
+            }
+            RemoteStep::PutBinary => {
+                let remote = format!("{}:{}", plan.target, plan.remote_bin.display());
+                let st = Command::new("scp")
+                    .arg(&cfg.local_binary)
+                    .arg(&remote)
+                    .status()
+                    .map_err(|e| format!("запуск scp не удался: {e}"))?;
+                if st.success() {
+                    println!("  ✓ scp бинаря → {remote}");
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "scp бинаря провалился (код {})",
+                        st.code().unwrap_or(-1)
+                    ))
+                }
+            }
+            RemoteStep::PutUnit => {
+                // Symlink-safe запись в общий /tmp: снимаем возможный устаревший симлинк (unlink НЕ идёт
+                // по ссылке), затем создаём с O_EXCL (`create_new` — не следует по предсуществующей ссылке).
+                let _ = std::fs::remove_file(&tmp_unit);
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&tmp_unit)
+                    .map_err(|e| format!("создание temp-юнита {}: {e}", tmp_unit.display()))?;
+                f.write_all(plan.unit_content.as_bytes())
+                    .map_err(|e| format!("запись temp-юнита {}: {e}", tmp_unit.display()))?;
+                drop(f);
+                let remote = format!("{}:{}", plan.target, plan.remote_unit_path.display());
+                let st = Command::new("scp")
+                    .arg(&tmp_unit)
+                    .arg(&remote)
+                    .status()
+                    .map_err(|e| format!("запуск scp не удался: {e}"))?;
+                if st.success() {
+                    println!("  ✓ scp юнита → {remote}");
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "scp юнита провалился (код {})",
+                        st.code().unwrap_or(-1)
+                    ))
+                }
+            }
+        };
+        if let Err(e) = result {
+            cleanup(&tmp_unit);
+            return Err(e);
+        }
+    }
+    cleanup(&tmp_unit);
+    println!(
+        "\n✓ удалённый деплой применён. Проверка:\n  \
+         ssh {} 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user status {}'",
+        plan.target,
+        service::SYSTEMD_UNIT
+    );
+    Ok(())
+}
+
 // ── undeploy ──────────────────────────────────────────────────────────────────────────────────────
 
 fn cmd_undeploy(flags: &[&str]) -> Result<(), String> {
@@ -414,6 +695,44 @@ mod tests {
     fn path_chars_rejects_control() {
         assert!(validate_path_chars(Path::new("/ok/path"), "x").is_ok());
         assert!(validate_path_chars(Path::new("/bad\npath"), "x").is_err());
+    }
+
+    #[test]
+    fn remote_path_validation() {
+        assert!(validate_remote_path("/home/artan/.nexus/bin", "x").is_ok());
+        assert!(validate_remote_path("relative/path", "x").is_err());
+        assert!(validate_remote_path("/home/with space", "x").is_err());
+        assert!(validate_remote_path("/home/$(whoami)", "x").is_err());
+        assert!(validate_remote_path("/home/a;rm -rf /", "x").is_err());
+        assert!(validate_remote_path("/home/a`x`", "x").is_err());
+        assert!(validate_remote_path("/home/a|b", "x").is_err());
+        assert!(validate_remote_path("", "x").is_err());
+    }
+
+    #[test]
+    fn remote_user_validation() {
+        assert!(validate_remote_user("artan").is_ok());
+        assert!(validate_remote_user("root").is_ok());
+        assert!(validate_remote_user("user.name-1_2").is_ok());
+        assert!(validate_remote_user("").is_err());
+        assert!(validate_remote_user("-flag").is_err());
+        assert!(validate_remote_user("a b").is_err());
+        assert!(validate_remote_user("user;rm").is_err());
+    }
+
+    #[test]
+    fn remote_host_validation() {
+        assert!(validate_remote_host("192.168.0.31").is_ok());
+        assert!(validate_remote_host("rig.local").is_ok());
+        assert!(validate_remote_host("").is_err());
+        assert!(validate_remote_host("-x").is_err());
+        assert!(validate_remote_host("a b").is_err());
+        assert!(validate_remote_host("h$(x)").is_err());
+        assert!(validate_remote_host("h;rm").is_err());
+        // allowlist закрывает тихие мис-таргеты: @ (мис-парс user@host), : (порт), , (host-list).
+        assert!(validate_remote_host("a@b").is_err());
+        assert!(validate_remote_host("h:22").is_err());
+        assert!(validate_remote_host("h,x").is_err());
     }
 
     #[cfg(target_os = "macos")]
