@@ -374,6 +374,88 @@ pub fn remote_plan(cfg: &RemoteConfig) -> RemotePlan {
     }
 }
 
+// ── Контейнер-деплой (DEPLOY-3) ───────────────────────────────────────────────────────────────────
+//
+// Запуск agentd в Docker-контейнере (образ — `Dockerfile` в корне репо; см. также Фаза-2 Podman).
+// Чистый рендер плана (`docker build`/`docker run` как argv-векторы — БЕЗ шелла) отделён от актуации
+// под `--apply`. Коннектор (AF_UNIX) пробрасывается через bind-mount vault → сокет на хосте
+// `<vault>/.nexus/agentd.sock` (работает на Linux-хосте; macOS Docker Desktop сокет не пробрасывает).
+
+/// Путь монтирования vault ВНУТРИ контейнера (= `NEXUS_VAULT` образа).
+pub const CONTAINER_VAULT: &str = "/vault";
+/// Путь AF_UNIX-сокета коннектора ВНУТРИ контейнера (на томе vault → виден на хосте через bind-mount).
+pub const CONTAINER_SOCKET: &str = "/vault/.nexus/agentd.sock";
+
+/// Параметры контейнер-деплоя agentd.
+#[derive(Debug, Clone)]
+pub struct DockerConfig {
+    /// Имя образа `name:tag`.
+    pub image: String,
+    /// Имя контейнера.
+    pub container_name: String,
+    /// Абсолютный путь vault на ХОСТЕ (bind-mount в `/vault`).
+    pub host_vault: PathBuf,
+    /// `Some(ctx)` → включить шаг `docker build -t <image> <ctx>` перед запуском.
+    pub build_context: Option<PathBuf>,
+    /// `Some("uid:gid")` → `docker run --user …`: контейнер бежит под этим uid (по умолчанию образ —
+    /// uid 10001). Нужно, чтобы процесс мог писать bind-mount vault и создать сокет, доступный хосту:
+    /// `--user $(id -u):$(id -g)` приравнивает контейнер-пользователя к владельцу хост-vault.
+    pub run_user: Option<String>,
+}
+
+/// План контейнер-деплоя: упорядоченные `docker`-команды (argv) + где хост-коннектор найдёт сокет.
+#[derive(Debug, Clone)]
+pub struct DockerPlan {
+    /// Команды (`docker build`? → `docker run`), argv-векторы, выполняются по порядку.
+    pub steps: Vec<Vec<String>>,
+    /// Путь сокета на ХОСТЕ (для `nexus status --socket …`).
+    pub host_socket: PathBuf,
+}
+
+/// Строит [`DockerPlan`]. ЧИСТАЯ функция (тестируема). Образ-внутренние пути — POSIX-константы.
+pub fn docker_plan(cfg: &DockerConfig) -> DockerPlan {
+    let mut steps: Vec<Vec<String>> = Vec::new();
+    if let Some(ctx) = &cfg.build_context {
+        steps.push(vec![
+            "docker".into(),
+            "build".into(),
+            "-t".into(),
+            cfg.image.clone(),
+            ctx.display().to_string(),
+        ]);
+    }
+    let mut run: Vec<String> = vec![
+        "docker".into(),
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        cfg.container_name.clone(),
+        "--restart".into(),
+        "unless-stopped".into(),
+    ];
+    if let Some(u) = &cfg.run_user {
+        run.push("--user".into());
+        run.push(u.clone());
+    }
+    run.push("-v".into());
+    run.push(format!("{}:{CONTAINER_VAULT}", cfg.host_vault.display()));
+    run.push("-e".into());
+    run.push(format!("NEXUS_AGENTD_CONNECT_SOCKET={CONTAINER_SOCKET}"));
+    run.push(cfg.image.clone());
+    steps.push(run);
+    // Хост-сокет — нативный путь хоста (vault на хосте + .nexus/agentd.sock), зеркалит CONTAINER_SOCKET.
+    let host_socket = cfg.host_vault.join(".nexus").join("agentd.sock");
+    DockerPlan { steps, host_socket }
+}
+
+/// CFG-независимый план остановки контейнера (для `undeploy docker`): `stop` + `rm` по имени.
+pub fn docker_undeploy_plan(container_name: &str) -> Vec<Vec<String>> {
+    vec![
+        vec!["docker".into(), "stop".into(), container_name.into()],
+        vec!["docker".into(), "rm".into(), container_name.into()],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,5 +635,77 @@ mod tests {
             panic!("step5 != Run")
         };
         assert!(reload.contains("XDG_RUNTIME_DIR"));
+    }
+
+    // ── Контейнер-деплой ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn docker_plan_run_only_without_build() {
+        let p = docker_plan(&DockerConfig {
+            image: "nexus-agentd:local".into(),
+            container_name: "nexus-agentd".into(),
+            host_vault: PathBuf::from("/srv/vault"),
+            build_context: None,
+            run_user: None,
+        });
+        assert_eq!(p.steps.len(), 1, "без build_context — только docker run");
+        assert!(
+            !p.steps[0].contains(&"--user".to_string()),
+            "без run_user — нет --user"
+        );
+        let run = &p.steps[0];
+        assert_eq!(run[0], "docker");
+        assert_eq!(run[1], "run");
+        assert!(run.contains(&"-d".to_string()));
+        assert!(run.contains(&"/srv/vault:/vault".to_string()));
+        assert!(run.contains(&"NEXUS_AGENTD_CONNECT_SOCKET=/vault/.nexus/agentd.sock".to_string()));
+        assert!(run.contains(&"unless-stopped".to_string()));
+        assert_eq!(
+            run.last().unwrap(),
+            "nexus-agentd:local",
+            "образ — последним"
+        );
+        assert_eq!(
+            p.host_socket,
+            PathBuf::from("/srv/vault/.nexus/agentd.sock")
+        );
+    }
+
+    #[test]
+    fn docker_plan_build_step_precedes_run() {
+        let p = docker_plan(&DockerConfig {
+            image: "img:t".into(),
+            container_name: "c".into(),
+            host_vault: PathBuf::from("/v"),
+            build_context: Some(PathBuf::from("/repo")),
+            run_user: None,
+        });
+        assert_eq!(p.steps.len(), 2);
+        assert_eq!(p.steps[0][..4], ["docker", "build", "-t", "img:t"]);
+        assert_eq!(p.steps[0][4], "/repo");
+        assert_eq!(p.steps[1][1], "run");
+    }
+
+    #[test]
+    fn docker_plan_run_user_inserts_user_flag() {
+        let p = docker_plan(&DockerConfig {
+            image: "img:t".into(),
+            container_name: "c".into(),
+            host_vault: PathBuf::from("/v"),
+            build_context: None,
+            run_user: Some("1000:1000".into()),
+        });
+        let run = &p.steps[0];
+        let i = run.iter().position(|a| a == "--user").expect("есть --user");
+        assert_eq!(run[i + 1], "1000:1000");
+        // образ всё ещё последним аргументом.
+        assert_eq!(run.last().unwrap(), "img:t");
+    }
+
+    #[test]
+    fn docker_undeploy_is_stop_then_rm() {
+        let u = docker_undeploy_plan("nexus-agentd");
+        assert_eq!(u[0], vec!["docker", "stop", "nexus-agentd"]);
+        assert_eq!(u[1], vec!["docker", "rm", "nexus-agentd"]);
     }
 }

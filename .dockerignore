@@ -1,0 +1,12 @@
+# Контекст сборки nexus-agentd: исключаем тяжёлое/нерелевантное (ускоряет build, уменьшает образ).
+# Rust-артефакты пересобираются в builder-стейдже; фронт/десктоп для agentd не нужны.
+**/target/
+**/node_modules/
+.git/
+**/dist/
+**/.next/
+**/.svelte-kit/
+**/*.log
+**/.DS_Store
+# Tauri-бандлы/иконки сборки — agentd их не использует.
+apps/desktop/src-tauri/gen/
