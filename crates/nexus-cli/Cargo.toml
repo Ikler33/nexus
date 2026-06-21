@@ -1,0 +1,23 @@
+[package]
+name = "nexus-cli"
+description = "Nexus CLI — деплой/управление агент-сервисом nexus-agentd (PROD-v1: `nexus deploy local` — bootstrap + сервис-юнит launchd/systemd; `nexus status` — проба коннектора по AF_UNIX; `nexus undeploy`)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nexus"
+path = "src/main.rs"
+
+[dependencies]
+# Ядро — для пробы коннектора (`connect_unix`/`RpcMessage`) в `nexus status`. Иных Nexus-связей нет.
+nexus-core = { path = "../nexus-core" }
+# `status` подключается к AF_UNIX-сокету агента → нужен async-рантайм + `#[tokio::main]`.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+serde_json = { workspace = true }
+# Локация HOME / config-dir для пути сервис-юнита (LaunchAgents / systemd --user). Уже workspace-зависимость.
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
