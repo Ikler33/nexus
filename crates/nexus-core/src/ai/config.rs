@@ -39,6 +39,15 @@ pub struct AiConfig {
     #[serde(default)]
     pub agent_actuator_enabled: bool,
 
+    /// **Автономия серверного (headless) прогона агента через коннектор** (`"confirm"` | `"auto"`).
+    /// `None`/невалидно → `"confirm"` (SAFE-default, человек-в-петле для интерактивного десктопа).
+    /// `"auto"` (owner-gated 2026-06-22, headless-сервер): агент САМ авто-применяет Auto-тир актуатора
+    /// (low-risk, blast-cap+undo+audit); Confirm-тир (риск/крупная перезапись) НЕ авто-применяется — он
+    /// ПРЕДЛАГАЕТСЯ по проводу (Proposal) и пишется лишь по явному `agent/approve` (fail-closed reject_all
+    /// при дисконнекте клиента). Эффект только при `agent_actuator_enabled=true`. → `ConnectDeps::autonomy`.
+    #[serde(default)]
+    pub agent_autonomy: Option<String>,
+
     /// Порог «крупной перезаписи» (байт) для гейта актуатора → Confirm-тир (`DispatchPolicy
     /// .overwrite_threshold`). `None` → дефолт [`crate::actuator::OVERWRITE_THRESHOLD`] (64 KiB).
     /// Только при `agent_actuator_enabled=true` имеет эффект.
