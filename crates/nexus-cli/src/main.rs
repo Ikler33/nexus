@@ -397,6 +397,9 @@ mod tests {
         assert_eq!(flag(&["--vault", "--apply"], "--vault"), None);
     }
 
+    // Unix-семантика путей: `/home/...` АБСОЛЮТНО только на Unix (на Windows нет буквы диска → relative,
+    // и resolve_socket его отвергает). Деплой-CLI всё равно Unix-only (launchd/systemd/AF_UNIX).
+    #[cfg(unix)]
     #[test]
     fn socket_default_under_vault_nexus() {
         let s = resolve_socket(&[], Path::new("/home/u/vault")).unwrap();
