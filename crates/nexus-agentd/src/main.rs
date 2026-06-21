@@ -470,6 +470,7 @@ async fn run() -> Result<(), String> {
                 &egress_audit,
                 &w.url,
                 std::time::Duration::from_secs(20),
+                w.allow_public_fetch, // WEB-FETCH-PUBLIC (owner-gated): web.fetch к любому публичному URL
             )
         });
     if agent_web.is_some() {

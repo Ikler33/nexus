@@ -41,17 +41,23 @@ pub struct WebToolsConfig {
 /// скоупе `"web"`) и строит [`WebToolsConfig`] (guarded-клиент `for_web` + URL). `None` — битый URL (без
 /// хоста). Зовётся, когда `ai.web.enabled` (см. agentd). Идемпотентно по политике (повторный вызов
 /// перезапишет allowlist `"web"` тем же хостом). Таймаут — общий web (страницы бывают медленные).
+/// `allow_public_fetch` (WEB-FETCH-PUBLIC, owner-gated) → `web.fetch` к ЛЮБОМУ публичному хосту
+/// (deny_private/SSRF/audit сохранены); default-канал (false) — только allowlist (SearXNG).
 pub fn enable_web_tools(
     policy: &Arc<EgressPolicy>,
     audit: &Arc<EgressAudit>,
     searxng_url: &str,
     timeout: std::time::Duration,
+    allow_public_fetch: bool,
 ) -> Option<WebToolsConfig> {
     let host = reqwest::Url::parse(searxng_url)
         .ok()
         .and_then(|u| u.host_str().map(str::to_string))?;
-    policy.set_feature_enabled(EgressFeature::Web, true);
+    // Порядок: ставим allowlist + web_allow_public ДО включения фичи `Web`, чтобы не было окна, где
+    // `Web` уже жив, а флаги ещё стартовые (для будущих рантайм-перетогглов; сейчас зовётся на старте).
     policy.set_scoped_allowlist("web", [host]);
+    policy.set_web_allow_public(allow_public_fetch);
+    policy.set_feature_enabled(EgressFeature::Web, true);
     let client = GuardedClient::for_web(policy.clone(), audit.clone(), timeout).ok()?;
     Some(WebToolsConfig {
         client,
