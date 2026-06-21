@@ -263,6 +263,7 @@ impl AgentRunHandler {
             provider.as_ref(),
             self.memory.as_deref(),
             self.skills.as_ref(),
+            None, // EGR-AGENT web-инструменты: активация (конфиг) — отдельный срез EGR-AGENT-2
             self.decision_source.clone(),
             &self.writer,
             &self.reader,

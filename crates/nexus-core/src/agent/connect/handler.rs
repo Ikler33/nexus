@@ -259,6 +259,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 deps.provider.as_ref(),
                 deps.memory.as_deref(),
                 deps.skills.as_ref(),
+                None, // EGR-AGENT web-инструменты — активация в отдельном срезе EGR-AGENT-2
                 decision_source,
                 &deps.writer,
                 &deps.reader,

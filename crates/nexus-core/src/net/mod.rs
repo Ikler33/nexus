@@ -522,13 +522,17 @@ impl GuardedClient {
             .as_ref()
             .and_then(|u| u.host_str().map(str::to_string));
         let Some(host) = host else {
-            // URL без хоста: аудитим сырой url (redacted) с отказом и не уходим в сеть.
+            // URL без хоста (нераспарсенный): НЕ персистим сырую строку в durable-аудит — она могла бы
+            // нести креды (`user:pass@`) или иной мусор от модели. Пишем безопасный плейсхолдер.
+            const UNPARSEABLE: &str = "<unparseable-url>";
             self.audit
                 .record(
                     feature,
-                    url.to_string(),
+                    UNPARSEABLE.to_string(),
                     bytes_out,
-                    &Err(EgressDenied::HostNotAllowed(Redacted::new(url.to_string()))),
+                    &Err(EgressDenied::HostNotAllowed(Redacted::new(
+                        UNPARSEABLE.to_string(),
+                    ))),
                     ctx,
                 )
                 .await;
