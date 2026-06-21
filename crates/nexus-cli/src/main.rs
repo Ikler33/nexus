@@ -14,7 +14,9 @@
 //!   `undeploy docker` — stop+rm.
 //! - `nexus status [--socket P] [--vault P]` — проба коннектора: подключиться к AF_UNIX-сокету и сделать
 //!   `initialize` → доступность + версия протокола.
-//! - `nexus undeploy [--apply]` — остановить + удалить сервис-юнит (план / `--apply`).
+//! - `nexus undeploy [--apply]` — остановить + удалить локальный сервис-юнит (план / `--apply`).
+//! - `nexus undeploy remote --host user@host [--remote-home P] [--apply]` — снять удалённый systemd
+//!   --user сервис (disable+rm юнита; бинарь/vault не трогает). `undeploy docker` — stop+rm контейнера.
 //!
 //! Минимум зависимостей (без clap — ручной разбор, как у `nexus-agentd`); сетевого egress нет (только
 //! локальный AF_UNIX для `status`).
@@ -38,8 +40,10 @@ fn main() -> ExitCode {
         ["deploy", "remote", flags @ ..] => run(cmd_deploy_remote(flags)),
         ["deploy", "docker", flags @ ..] => run(cmd_deploy_docker(flags)),
         ["status", flags @ ..] => run(cmd_status(flags)),
-        // `undeploy docker` ДО общего `undeploy` (иначе "docker" утечёт во флаги launchd/systemd-выгрузки).
+        // `undeploy docker`/`undeploy remote` ДО общего `undeploy` (иначе под-команда утечёт во флаги
+        // launchd/systemd-выгрузки).
         ["undeploy", "docker", flags @ ..] => run(cmd_undeploy_docker(flags)),
+        ["undeploy", "remote", flags @ ..] => run(cmd_undeploy_remote(flags)),
         ["undeploy", flags @ ..] => run(cmd_undeploy(flags)),
         other => {
             eprintln!("nexus: неизвестная команда: {}\n", other.join(" "));
@@ -74,6 +78,8 @@ fn print_help() {
          Запустить agentd в Docker-контейнере (vault-том + AF_UNIX-сокет). Без --apply — план.\n  \
          status [--socket P] [--vault P]\n      Проверить доступность агента (initialize по AF_UNIX).\n  \
          undeploy [--apply]            Остановить и удалить локальный сервис.\n  \
+         undeploy remote --host user@host [--remote-home P] [--apply]\n      \
+         Снять удалённый systemd --user сервис (disable+rm юнита; бинарь/vault не трогает).\n  \
          undeploy docker [--name N] [--apply]   Остановить и удалить контейнер.\n\n\
          Сокет по умолчанию: <vault>/.nexus/agentd.sock"
     );
@@ -547,6 +553,55 @@ fn apply_remote_plan(cfg: &RemoteConfig, plan: &RemotePlan) -> Result<(), String
         plan.target,
         service::SYSTEMD_UNIT
     );
+    Ok(())
+}
+
+/// `undeploy remote` — симметрия `deploy remote`: снимает удалённый systemd --user сервис (disable+rm
+/// юнита, daemon-reload). Бинарь/vault НЕ трогает (паритет с локальным `undeploy`).
+fn cmd_undeploy_remote(flags: &[&str]) -> Result<(), String> {
+    let host_spec = flag(flags, "--host").ok_or("укажите --host user@host")?;
+    let (user, host) = host_spec
+        .split_once('@')
+        .ok_or_else(|| format!("--host должен быть в форме user@host: {host_spec}"))?;
+    validate_remote_user(user)?;
+    validate_remote_host(host)?;
+
+    let remote_home = flag(flags, "--remote-home")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| service::default_remote_home(user));
+    validate_remote_path(&remote_home.to_string_lossy(), "--remote-home")?;
+
+    let (target, unit_path, steps) = service::remote_undeploy_plan(user, host, &remote_home);
+    let apply = has_flag(flags, "--apply");
+
+    println!("=== nexus undeploy remote ({target}) ===");
+    println!("unit(remote): {}", unit_path.display());
+    println!("--- шаги (все best-effort) ---");
+    for s in &steps {
+        if let RemoteStep::Run { cmd, .. } = s {
+            println!("  ssh {target} {cmd:?}");
+        }
+    }
+    if !apply {
+        println!("\n(dry-run — план НЕ применён; повторите с --apply)");
+        return Ok(());
+    }
+    // Все шаги best-effort: снятие отсутствующего сервиса не должно валить undeploy.
+    for s in &steps {
+        let RemoteStep::Run { cmd, .. } = s else {
+            continue;
+        };
+        match std::process::Command::new("ssh")
+            .arg(&target)
+            .arg(cmd)
+            .status()
+        {
+            Ok(st) if st.success() => println!("  ✓ ssh {target}: {cmd}"),
+            Ok(st) => println!("  ⚠ ssh {target}: {cmd} → код {}", st.code().unwrap_or(-1)),
+            Err(e) => println!("  ⚠ ssh {target}: {cmd} → {e}"),
+        }
+    }
+    println!("\n✓ undeploy remote применён (бинарь/vault не тронуты)");
     Ok(())
 }
 

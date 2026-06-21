@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Деплой · `nexus undeploy remote` — симметричное снятие удалённого сервиса (DEPLOY-5)
+
+Закрыта асимметрия деплой-CLI: был `deploy remote`, не было чистого снятия. **`nexus undeploy remote --host user@host [--remote-home P] [--apply]`** — ssh `systemctl --user disable --now` + `rm` юнита + `daemon-reload` (`remote_undeploy_plan` в `service.rs`). Все шаги **best-effort** (снятие отсутствующего сервиса — норма, как у локального `undeploy`/`undeploy docker`). Бинарь и vault НЕ трогает (паритет с локальным `undeploy` — убираем сервис, не данные). Переиспользует валидаторы `validate_remote_user/host`/path. **Safe default — печать ПЛАНА**; ssh под `--apply`. Тесты: 26 (1 новый: disable→rm→reload best-effort + не-трогает-бинарь/vault). Гейт зелёный, clippy 0. Теперь поверхность CLI симметрична: local/remote/docker × deploy/undeploy.
+
 ### CI · docker-build-smoke — автоматическая валидация образа agentd (DEPLOY-4)
 
 Новый workflow `.github/workflows/docker-smoke.yml`: собирает образ agentd из корневого `Dockerfile` (DEPLOY-3) и гоняет **runtime-смоук** (`docker run … /nonexistent-vault-smoke` → ожидаем ненулевой выход + ошибку «vault path …» = бинарь стартовал в slim-рантайме и все `.so` резолвятся, не просто «собралось»). Закрывает follow-up DEPLOY-3 (Dockerfile нельзя собрать локально — нет Docker на dev-маке). **Self-validating**: PR трогает workflow-файл → смоук бежит на самом PR. **Paths-gated** (Dockerfile/.dockerignore/nexus-agentd/nexus-core/Cargo.*/rust-toolchain.toml/сам workflow) — дорогой (~6-10 мин) образ собирается ТОЛЬКО на причастных PR; + еженедельный `schedule`-cron (дрейф плавающего `rust:1-bookworm`) + `workflow_dispatch`.
