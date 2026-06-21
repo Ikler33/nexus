@@ -17,8 +17,9 @@
 //! [`ChannelDecision`] (человек-в-петле, fail-closed reject_all при закрытии). `agent/control` — ГЛОБАЛЬНАЯ
 //! пауза демона (`agent_paused`, тот же kill-switch, что SIGUSR1/agent.json; single-owner). `agent/cancel`
 //! — кооперативно (per-run).
-//! `agent/undo` — [`actuator::undo_run`] по run_id (идемпотентно). Автономия прогонов — `confirm`
-//! (безопасно по умолчанию): запись актуатора требует ЯВНОГО `agent/approve`.
+//! `agent/undo` — [`actuator::undo_run`] по run_id (идемпотентно). Автономия прогонов — из
+//! [`ConnectDeps::autonomy`] (default `confirm` — человек-в-петле; headless-сервер поднимает до `auto`
+//! конфигом `ai.agent_autonomy`, owner-gated 2026-06-22).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -56,11 +57,6 @@ const DECISION_CAP: usize = 8;
 /// при переполнении: события best-effort).
 const EVENT_CHANNEL_CAP: usize = 1024;
 
-/// Автономия прогонов коннектора. **`confirm` — SAFE BY DEFAULT**: даже Auto-тир актуатора ПРЕДЛАГАЕТ
-/// (Proposal), запись требует явного `agent/approve` (человек-в-петле). Протокол `agent/run` не несёт
-/// автономии — она фиксирована безопасной до отдельного решения (owner-gated повышение до `auto`).
-const CONNECT_AUTONOMY: &str = "confirm";
-
 /// Композиционные зависимости хендлера (общие на все сессии). Строит композиционный корень (agentd /
 /// desktop in-process). `provider` ОБЯЗАТЕЛЕН (без него коннектор не поднимают — в отличие от desktop,
 /// где провайдер опционален и прогон деградирует в error).
@@ -77,6 +73,13 @@ pub struct ConnectDeps {
     pub canon_root: PathBuf,
     /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT** (`false` → стабы echo/noop, vault не трогается).
     pub actuator_enabled: bool,
+    /// **Автономия прогонов коннектора** (`"confirm"` | `"auto"`), default `"confirm"`
+    /// (безопасно для интерактивного десктопа: человек-в-петле — ВСЕ тиры предлагаются). При `"auto"`
+    /// (owner-gated 2026-06-22) Auto-тир АВТО-применяется (blast-cap+undo+audit), а Confirm-тир (риск)
+    /// по-прежнему ПРЕДЛАГАЕТСЯ по проводу (Proposal) и пишется лишь по явному `agent/approve`
+    /// (decision_source — `ChannelDecision`, fail-closed reject_all при дисконнекте). Невалидное значение
+    /// конфига нормализуется в `"confirm"` ядром (`DispatchPolicy`: `auto = autonomy == Some("auto")`).
+    pub autonomy: String,
     /// Порог «крупной перезаписи» → Confirm-тир (эффект при `actuator_enabled`).
     pub overwrite_threshold: usize,
     /// Кэп blast-radius прогона (эффект при `actuator_enabled`).
@@ -212,7 +215,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 &self.deps.writer,
                 &p.prompt,
                 Some(self.deps.provider.model_id()),
-                Some(CONNECT_AUTONOMY),
+                Some(self.deps.autonomy.as_str()),
             )
             .await
             .map_err(|e| RpcError::internal(format!("create_run: {e}")))?;
@@ -250,7 +253,7 @@ impl ConnectHandler for ConnectAgentHandler {
             let spec = SessionSpec {
                 run_id,
                 task: prompt,
-                autonomy: Some(CONNECT_AUTONOMY.to_string()),
+                autonomy: Some(deps.autonomy.clone()),
                 actuator_enabled: deps.actuator_enabled,
                 overwrite_threshold: deps.overwrite_threshold,
                 blast_cap: deps.blast_cap,
@@ -414,6 +417,16 @@ mod tests {
         db: &Database,
         actuator_enabled: bool,
     ) -> Arc<ConnectDeps> {
+        deps_with_autonomy(provider, canon_root, db, actuator_enabled, "confirm")
+    }
+
+    fn deps_with_autonomy(
+        provider: Arc<dyn ToolCapableProvider>,
+        canon_root: PathBuf,
+        db: &Database,
+        actuator_enabled: bool,
+        autonomy: &str,
+    ) -> Arc<ConnectDeps> {
         Arc::new(ConnectDeps {
             provider,
             memory: None,
@@ -421,6 +434,7 @@ mod tests {
             reader: db.reader().clone(),
             canon_root,
             actuator_enabled,
+            autonomy: autonomy.to_string(),
             overwrite_threshold: 64 * 1024,
             blast_cap: 16,
             context_window: Some(32768),
@@ -516,6 +530,59 @@ mod tests {
         assert!(!run_id.is_empty(), "ack с runId пришёл");
         assert!(got_toolcall, "toolCall застримлен");
         assert!(got_final, "final застримлен");
+    }
+
+    /// AGENT-AUTO: `ConnectDeps.autonomy="auto"` → создаваемый прогон несёт `autonomy="auto"` в run-строке
+    /// (headless-сервер авто-применяет Auto-тир актуатора). Default ("confirm") покрыт прочими тестами.
+    #[tokio::test]
+    async fn deps_autonomy_auto_propagates_to_run_row() {
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (_dir, db) = open_db().await;
+        let provider: Arc<dyn ToolCapableProvider> =
+            Arc::new(FakeProvider::new(vec![Ok(ToolTurn::Final("ok".into()))]));
+        let deps = deps_with_autonomy(provider, _dir.path().to_path_buf(), &db, false, "auto");
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        client
+            .send(RpcMessage::request(
+                1,
+                "initialize",
+                json!({"supportedVersions": ["1.0"]}),
+            ))
+            .await
+            .unwrap();
+        let _ = recv_timeout(&client).await; // init response
+
+        client
+            .send(RpcMessage::request(
+                2,
+                "agent/run",
+                json!({"sessionId": "s1", "prompt": "x"}),
+            ))
+            .await
+            .unwrap();
+        // ack (Response id=2) приходит ПЕРВЫМ (синхронный возврат), события стримятся после.
+        let mut run_id: i64 = -1;
+        for _ in 0..30 {
+            if let RpcMessage::Response { id, result } = recv_timeout(&client).await {
+                if id == json!(2) {
+                    run_id = result.unwrap()["runId"].as_str().unwrap().parse().unwrap();
+                    break;
+                }
+            }
+        }
+        assert!(run_id >= 0, "ack с runId пришёл");
+        let run = crate::agent::run_store::get_run(db.reader(), run_id)
+            .await
+            .unwrap()
+            .expect("run-строка существует");
+        assert_eq!(
+            run.autonomy.as_deref(),
+            Some("auto"),
+            "autonomy=auto из ConnectDeps проброшен в run-строку"
+        );
     }
 
     /// initialize с несовместимой версией → Response с ошибкой version_incompatible (-32001).
@@ -621,6 +688,69 @@ mod tests {
             written.as_deref(),
             Some("создано по проводу"),
             "approve по проводу применил note.create через гейт"
+        );
+    }
+
+    /// AGENT-AUTO keystone: `autonomy="auto"` + actuator ВКЛ → Auto-тир (`note.create`) АВТО-применяется
+    /// БЕЗ единого `agent/approve` (в отличие от confirm-пути выше, где тот же `note.create` ждал approve).
+    /// Пинит поведение НА ГРАНИЦЕ КОННЕКТОРА. (Что Confirm-тир под auto всё равно НЕ авто-применяется —
+    /// покрыто матрицей classify×autonomy в `actuator/orchestrate.rs` + `approve_over_wire_*` выше.)
+    #[tokio::test]
+    async fn auto_autonomy_applies_auto_tier_without_approve() {
+        let (client, server) = channel_pair();
+        let server = Arc::new(server);
+        let (dir, db) = open_db().await;
+        let canon = dir.path().canonicalize().unwrap();
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "n1".into(),
+                name: "note.create".into(),
+                arguments: r#"{"path":"Notes/Auto.md","content":"авто-применено"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("готово".into())),
+        ]));
+        // actuator ВКЛ + autonomy=auto (то, что headless-сервер на .28 поставит).
+        let deps = deps_with_autonomy(provider, canon.clone(), &db, true, "auto");
+        let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
+        serve(handler, server.clone());
+
+        client
+            .send(RpcMessage::request(
+                1,
+                "agent/run",
+                json!({"sessionId": "sauto", "prompt": "создай заметку"}),
+            ))
+            .await
+            .unwrap();
+
+        let mut got_final = false;
+        let mut got_proposal = false;
+        for _ in 0..80 {
+            match recv_timeout(&client).await {
+                RpcMessage::Notification { method, params } if method == "agent/event" => {
+                    match params["type"].as_str().unwrap_or("") {
+                        "proposal" => got_proposal = true,
+                        "final" => {
+                            got_final = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(got_final, "прогон дошёл до final");
+        assert!(
+            !got_proposal,
+            "Auto-тир под autonomy=auto НЕ предлагается (авто-применён) — ни одного proposal"
+        );
+        // КЛЮЧЕВОЕ: файл записан БЕЗ единого agent/approve.
+        let written = std::fs::read_to_string(canon.join("Notes/Auto.md")).ok();
+        assert_eq!(
+            written.as_deref(),
+            Some("авто-применено"),
+            "Auto-тир note.create авто-применён под autonomy=auto БЕЗ approve"
         );
     }
 

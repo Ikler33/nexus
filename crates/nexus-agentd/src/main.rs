@@ -412,6 +412,25 @@ async fn run() -> Result<(), String> {
         .as_ref()
         .and_then(|c| c.ai.agent_blast_radius_cap)
         .unwrap_or(nexus_core::ai::AiConfig::DEFAULT_BLAST_RADIUS_CAP);
+    // AGENT-AUTO (owner-gated 2026-06-22): автономия прогонов коннектора из `ai.agent_autonomy`.
+    // ВАЛИДАЦИЯ fail-safe: только "auto" поднимает автономию, ВСЁ остальное (вкл. опечатки) → "confirm".
+    let agent_autonomy_raw = local_cfg
+        .as_ref()
+        .and_then(|c| c.ai.agent_autonomy.as_deref());
+    let agent_autonomy = if agent_autonomy_raw == Some("auto") {
+        "auto"
+    } else {
+        "confirm"
+    };
+    if matches!(agent_autonomy_raw, Some(v) if v != "auto" && v != "confirm") {
+        tracing::warn!(value = ?agent_autonomy_raw, "ai.agent_autonomy: неизвестное значение → fallback confirm");
+    }
+    if agent_autonomy == "auto" {
+        tracing::warn!(
+            "AGENT-AUTO: автономия коннектора = AUTO (авто-применяет Auto-тир актуатора; Confirm-тир — \
+             предлагается по проводу, пишется лишь по agent/approve). Эффект при actuator_enabled."
+        );
+    }
     let decision_source: Arc<dyn nexus_core::actuator::DecisionSource> =
         Arc::new(nexus_core::actuator::PolicyDefault);
     if actuator_enabled {
@@ -462,7 +481,7 @@ async fn run() -> Result<(), String> {
     // AF_UNIX-хостинг коннектора (P0b-2c), default-OFF (env NEXUS_AGENTD_CONNECT_SOCKET). Делает agentd
     // ПОДКЛЮЧАЕМЫМ агент-сервисом (app↔agentd по протоколу). Тот же провайдер/память/актуатор-конфиг/веб,
     // что у AgentRunHandler — клонируем доли ДО передачи остального в хендлер ниже. AF_UNIX = локальный IPC
-    // (не сетевой egress); автономия коннектора = confirm (запись актуатора требует agent/approve).
+    // (не сетевой egress); автономия коннектора — из `ai.agent_autonomy` (default confirm; auto owner-gated).
     #[cfg(unix)]
     maybe_spawn_connect_server(
         &db,
@@ -470,6 +489,7 @@ async fn run() -> Result<(), String> {
         &agent_memory,
         &root,
         actuator_enabled,
+        agent_autonomy,
         overwrite_threshold,
         blast_cap,
         agent_context_window,
@@ -733,8 +753,9 @@ fn build_skill_context(
 /// `NEXUS_AGENTD_CONNECT_SOCKET=<путь>` → спавнит `serve_unix_at` поверх [`nexus_core::agent::ConnectDeps`]
 /// с ТЕМИ ЖЕ зависимостями, что и `AgentRunHandler` (провайдер `ai.agent_tools` / память / актуатор-конфиг
 /// / скиллы) — клонируем доли (Arc/Clone) ДО передачи остального в хендлер. Нет провайдера
-/// (`ai.agent_tools=None`) → НЕ стартуем (агенту нечем думать). Коннектор фиксирует автономию `confirm`
-/// (запись актуатора требует явного `agent/approve` по проводу — человек-в-петле). Unix-only.
+/// (`ai.agent_tools=None`) → НЕ стартуем (агенту нечем думать). Автономия коннектора — параметр
+/// `autonomy` (из `ai.agent_autonomy`, default `confirm`; headless-сервер может поднять до `auto`,
+/// owner-gated). Unix-only.
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 fn maybe_spawn_connect_server(
@@ -743,6 +764,7 @@ fn maybe_spawn_connect_server(
     memory: &Arc<dyn nexus_core::agent::AgentMemory>,
     canon_root: &Path,
     actuator_enabled: bool,
+    autonomy: &str,
     overwrite_threshold: usize,
     blast_cap: u32,
     context_window: Option<usize>,
@@ -768,6 +790,7 @@ fn maybe_spawn_connect_server(
         reader: db.reader().clone(),
         canon_root: canon_root.to_path_buf(),
         actuator_enabled,
+        autonomy: autonomy.to_string(),
         overwrite_threshold,
         blast_cap,
         context_window,
@@ -778,6 +801,7 @@ fn maybe_spawn_connect_server(
     tracing::warn!(
         socket = %socket,
         actuator_enabled,
+        autonomy,
         "agent-connect: AF_UNIX коннектор ВКЛ (default-OFF; задан NEXUS_AGENTD_CONNECT_SOCKET)"
     );
     tokio::spawn(async move {
