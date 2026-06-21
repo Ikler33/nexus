@@ -23,6 +23,9 @@ pub mod proxy;
 /// SANDBOX-3.
 pub mod act;
 
+/// `ProxyToolProvider` — in-sandbox tool-capable провайдер (stream:false поверх GuardedProxy). SANDBOX-4a.
+pub mod provider;
+
 /// Образ песочницы по умолчанию (тот же, что у DEPLOY-3 `nexus deploy docker`).
 pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 /// Путь vault ВНУТРИ контейнера (`:ro`), = `NEXUS_VAULT` образа.
