@@ -37,8 +37,8 @@
 P0: skill learning-loop (curator+usage) · session-search FTS5 · субагенты/делегирование. P1: MCP-клиент · cron NL-jobs · backup/restore · observability. Post-1.0/owner-gated: multi-channel-шлюзы · email · deep-research · voice · marketplace.
 
 ### 🔒 Owner-gated security (после PROD-v1)
-- **Фаза 2 — sandbox**: rootless Podman `--network=none` + GuardedProxy (AF_UNIX) + headless control-plane + MCP-lite.
-- **Фаза 3 — host-actuator**: shell/process/git ActionTargets ВНУТРИ песочницы. Гейт: THREAT_MODEL + env-scrubbing.
+- **Фаза 2 — sandbox**: rootless Podman `--network=none` + GuardedProxy (AF_UNIX) + headless control-plane + MCP-lite. **Decision-complete дизайн → `docs/specs/agent-sandbox.md`** (выбран эфемерный per-run Podman + GuardedProxy поверх существующего GuardedClient; роадмап SANDBOX-1..5 каркас строится автономно).
+- **Фаза 3 — host-actuator**: shell/process/git ActionTargets ВНУТРИ песочницы (исполнение in-sandbox, решение host-side). Гейт: THREAT_MODEL + env-scrub + owner-greenlight. Срезы SANDBOX-6a..c — owner-gated (`docs/specs/agent-sandbox.md §12`).
 
 ## 3. 6 P0-дыр до «готового продукта» (что забывали)
 1. 🔴 **Авто-апдейтер** (Tauri-updater не включён, нет подписанных релизов).
