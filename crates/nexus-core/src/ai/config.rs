@@ -67,6 +67,16 @@ pub struct AiConfig {
     /// SSRF-гард, allowlist, аудит). Только для прогона агента; chat-путь не затрагивает.
     #[serde(default)]
     pub web: Option<WebConfig>,
+
+    /// **SANDBOX-1 (Фаза-2 каркас), SAFE BY DEFAULT.** Мастер-свитч OS-песочницы прогона агента
+    /// (`docs/specs/agent-sandbox.md`). `false` (ДЕФОЛТ) → агент бежит in-process через
+    /// [`crate::agent::AgentRunHandler`], поведение байт-в-байт сегодняшнее. `true` → (по мере поставки
+    /// срезов SANDBOX-2..5) прогон исполняется в эфемерном rootless-Podman `--network=none` контейнере,
+    /// эгресс — только через host-side GuardedProxy поверх существующего `GuardedClient`. Фича
+    /// Linux-host-only; на не-Linux флаг структурно инертен. На этом срезе (SANDBOX-1) флаг ещё НЕ
+    /// меняет рантайм — только декларирован + используется чистым рендером плана `sandbox::sandbox_run_plan`.
+    #[serde(default)]
+    pub sandbox_enabled: bool,
 }
 
 /// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
