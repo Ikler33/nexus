@@ -60,3 +60,4 @@ pub use skill_tools::{
 };
 pub use stubs::{EchoTool, NoopTool};
 pub use tool::{Tool, ToolCall, ToolError, ToolSpec};
+pub use web_tools::{enable_web_tools, WebToolsConfig};

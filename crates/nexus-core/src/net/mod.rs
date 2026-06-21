@@ -469,6 +469,16 @@ impl GuardedClient {
         Self::new(policy, audit, move |b| b.timeout(timeout))
     }
 
+    /// Профиль web (агент-инструменты web.search/web.fetch, EGR-AGENT): общий таймаут (страницы бывают
+    /// медленные). redirect=none сохранён (core_client_builder) — анти-SSRF на редиректах.
+    pub fn for_web(
+        policy: Arc<EgressPolicy>,
+        audit: Arc<EgressAudit>,
+        timeout: Duration,
+    ) -> Result<Self, NetError> {
+        Self::new(policy, audit, move |b| b.timeout(timeout))
+    }
+
     /// GET через политику (probe `/v1/models`). `bytes_out=None` — тела запроса нет (AC-EGR-10).
     /// `ctx` — per-call run-контекст (AGENT-3a): [`RunCtx::NONE`] вне прогона, [`RunCtx::run`] внутри.
     pub async fn get(

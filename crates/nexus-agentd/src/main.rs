@@ -437,9 +437,31 @@ async fn run() -> Result<(), String> {
     // регрессии). Скиллы — недоверенный внешний контент: они фенсятся в самом хендлере (I-5).
     let agent_skills = build_skill_context(local_cfg.as_ref(), &root);
 
+    // EGR-AGENT-2: веб-инструменты (web.search/web.fetch). Включаются ТОЛЬКО при `ai.web.enabled` —
+    // `enable_web_tools` включает `EgressFeature::Web` + allowlist хоста SearXNG и строит WebToolsConfig
+    // (общий клиент `for_web`). Иначе None (агент без веба). Проброс в AgentRunHandler (scheduler) И
+    // коннектор (clone — Arc внутри GuardedClient дёшев). Эгресс — web-класс (SSRF-гард/allowlist/аудит).
+    let agent_web = local_cfg
+        .as_ref()
+        .and_then(|c| c.ai.web.as_ref())
+        .filter(|w| w.enabled && !w.url.trim().is_empty())
+        .and_then(|w| {
+            nexus_core::agent::enable_web_tools(
+                &egress_policy,
+                &egress_audit,
+                &w.url,
+                std::time::Duration::from_secs(20),
+            )
+        });
+    if agent_web.is_some() {
+        tracing::warn!(
+            "EGR-AGENT: веб-инструменты ВКЛ — web.search/web.fetch (EgressFeature::Web + allowlist SearXNG)"
+        );
+    }
+
     // AF_UNIX-хостинг коннектора (P0b-2c), default-OFF (env NEXUS_AGENTD_CONNECT_SOCKET). Делает agentd
-    // ПОДКЛЮЧАЕМЫМ агент-сервисом (app↔agentd по протоколу). Тот же провайдер/память/актуатор-конфиг, что
-    // у AgentRunHandler — клонируем доли ДО передачи остального в хендлер ниже. AF_UNIX = локальный IPC
+    // ПОДКЛЮЧАЕМЫМ агент-сервисом (app↔agentd по протоколу). Тот же провайдер/память/актуатор-конфиг/веб,
+    // что у AgentRunHandler — клонируем доли ДО передачи остального в хендлер ниже. AF_UNIX = локальный IPC
     // (не сетевой egress); автономия коннектора = confirm (запись актуатора требует agent/approve).
     #[cfg(unix)]
     maybe_spawn_connect_server(
@@ -452,6 +474,7 @@ async fn run() -> Result<(), String> {
         blast_cap,
         agent_context_window,
         &agent_skills,
+        &agent_web,
         &agent_paused,
     );
 
@@ -470,6 +493,7 @@ async fn run() -> Result<(), String> {
             decision_source,
             agent_paused.clone(),
             agent_skills,
+            agent_web,
         )),
     );
     let registry = Arc::new(registry);
@@ -723,6 +747,7 @@ fn maybe_spawn_connect_server(
     blast_cap: u32,
     context_window: Option<usize>,
     skills: &Option<nexus_core::agent::SkillContext>,
+    web: &Option<nexus_core::agent::WebToolsConfig>,
     agent_paused: &Arc<AtomicBool>,
 ) {
     let socket = match std::env::var("NEXUS_AGENTD_CONNECT_SOCKET") {
@@ -747,6 +772,7 @@ fn maybe_spawn_connect_server(
         blast_cap,
         context_window,
         skills: skills.clone(),
+        web: web.clone(), // EGR-AGENT-2: те же веб-инструменты, что у scheduler-AgentRunHandler
         agent_paused: agent_paused.clone(), // ТОТ ЖЕ kill-switch, что у AgentRunHandler (SIGUSR1/agent.json)
     });
     tracing::warn!(
@@ -1106,6 +1132,8 @@ async fn drive_actuator_gate_run(
         // KILL-SWITCH (AGENT-5): smoke/CI-путь — kill-switch НЕ взведён (проверяем go-live apply).
         Arc::new(AtomicBool::new(false)),
         // SKILL-2: actuator-gate smoke не про скиллы → без skills.
+        None,
+        // EGR-AGENT-2: actuator-gate smoke не про веб → без веб-инструментов.
         None,
     );
 

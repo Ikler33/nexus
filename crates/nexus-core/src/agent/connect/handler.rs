@@ -39,6 +39,7 @@ use super::super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR}
 use super::super::runner::{BudgetKind, LoopOutcome};
 use super::super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
 use super::super::skill_tools::SkillContext;
+use super::super::web_tools::WebToolsConfig;
 use super::{
     event_notification, negotiate_version, AgentRunParams, ApproveParams, CancelParams,
     ConnectHandler, ControlParams, InitializeParams, InitializeResult, RpcError, Transport,
@@ -84,6 +85,9 @@ pub struct ConnectDeps {
     pub context_window: Option<usize>,
     /// Контекст скиллов (SKILL-2); `None` → без меню/инструментов скиллов.
     pub skills: Option<SkillContext>,
+    /// **EGR-AGENT-2: веб-инструменты** (`web.search`/`web.fetch`); `None` → без веба. Эгресс через
+    /// `GuardedClient`/`EgressFeature::Web` (composition root собирает через `enable_web_tools`).
+    pub web: Option<WebToolsConfig>,
     /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** ТОТ ЖЕ `Arc`, что у headless `AgentRunHandler`
     /// (agentd: персист `agent.json` + SIGUSR1). Прогоны коннектора честят его → SIGUSR1/agent.json/
     /// `agent/control` останавливают ход мид-ран на границе И блокируют запись актуатора (чек-пойнт #3).
@@ -259,7 +263,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 deps.provider.as_ref(),
                 deps.memory.as_deref(),
                 deps.skills.as_ref(),
-                None, // EGR-AGENT web-инструменты — активация в отдельном срезе EGR-AGENT-2
+                deps.web.as_ref(), // EGR-AGENT-2: веб-инструменты (Some ⇔ ai.web.enabled)
                 decision_source,
                 &deps.writer,
                 &deps.reader,
@@ -421,6 +425,7 @@ mod tests {
             blast_cap: 16,
             context_window: Some(32768),
             skills: None,
+            web: None,
             agent_paused: Arc::new(AtomicBool::new(false)),
         })
     }
