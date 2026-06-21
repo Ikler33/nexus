@@ -28,6 +28,9 @@ pub mod parser;
 pub mod plugin;
 /// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
 pub mod redact;
+/// OS-песочница прогона агента (Фаза-2 каркас, `docs/specs/agent-sandbox.md`). SANDBOX-1: чистый рендер
+/// хардненного `podman run` argv + конфиг (default-OFF). Рантайм/GuardedProxy/host-actuator — позже.
+pub mod sandbox;
 /// Планировщик фоновых задач (ADR-007) — обобщённый движок (очередь+диспатч+воркер-луп через хуки),
 /// tauri-free (CORE-1b). App-specific spawn/handlers — в `crate::scheduler` desktop-крейта.
 pub mod scheduler;
