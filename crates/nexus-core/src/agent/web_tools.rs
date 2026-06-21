@@ -15,7 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::net::{EgressFeature, GuardedClient, RunCtx};
+use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, RunCtx};
 
 use super::tool::{Tool, ToolError, ToolSpec};
 
@@ -35,6 +35,28 @@ pub struct WebToolsConfig {
     pub client: GuardedClient,
     /// База SearXNG (consent-URL). `None` → `web.search` НЕ регистрируется (остаётся только `web.fetch`).
     pub searxng_url: Option<String>,
+}
+
+/// Композиционный корень: ВКЛЮЧАЕТ web-эгресс в политике (фича `Web` + allowlist хоста SearXNG в
+/// скоупе `"web"`) и строит [`WebToolsConfig`] (guarded-клиент `for_web` + URL). `None` — битый URL (без
+/// хоста). Зовётся, когда `ai.web.enabled` (см. agentd). Идемпотентно по политике (повторный вызов
+/// перезапишет allowlist `"web"` тем же хостом). Таймаут — общий web (страницы бывают медленные).
+pub fn enable_web_tools(
+    policy: &Arc<EgressPolicy>,
+    audit: &Arc<EgressAudit>,
+    searxng_url: &str,
+    timeout: std::time::Duration,
+) -> Option<WebToolsConfig> {
+    let host = reqwest::Url::parse(searxng_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))?;
+    policy.set_feature_enabled(EgressFeature::Web, true);
+    policy.set_scoped_allowlist("web", [host]);
+    let client = GuardedClient::for_web(policy.clone(), audit.clone(), timeout).ok()?;
+    Some(WebToolsConfig {
+        client,
+        searxng_url: Some(searxng_url.to_string()),
+    })
 }
 
 /// Собирает run-scoped веб-инструменты (захватывают `ctx` прогона для корреляции эгресса в аудите).

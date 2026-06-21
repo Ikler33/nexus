@@ -60,6 +60,23 @@ pub struct AiConfig {
     /// резолвится вызывающим относительно vault (рекомендация: `<vault>/.nexus/skills`).
     #[serde(default)]
     pub agent_skills_dir: Option<String>,
+
+    /// **EGR-AGENT: веб-инструменты агента (`web.search`/`web.fetch`).** `None`/`enabled=false` (ДЕФОЛТ) →
+    /// агент без веб-доступа. Задан+enabled → composition root включает `EgressFeature::Web` + allowlist
+    /// хоста SearXNG и регистрирует read-only веб-инструменты. Эгресс — через `GuardedClient` (web-класс:
+    /// SSRF-гард, allowlist, аудит). Только для прогона агента; chat-путь не затрагивает.
+    #[serde(default)]
+    pub web: Option<WebConfig>,
+}
+
+/// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebConfig {
+    /// База SearXNG (например `http://host:8888`). Пусто → web.search не поднимается.
+    pub url: String,
+    /// Consent-флаг (ДЕФОЛТ false): без него веб-инструменты не регистрируются.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 impl AiConfig {

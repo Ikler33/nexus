@@ -43,6 +43,7 @@ use super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
 use super::runner::{BudgetKind, LoopOutcome};
 use super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
 use super::skill_tools::SkillContext;
+use super::web_tools::WebToolsConfig;
 
 /// Kind джобы прогона агента (значение колонки `jobs.kind`).
 pub const KIND_AGENT_RUN: &str = "agent_run";
@@ -114,6 +115,9 @@ pub struct AgentRunHandler {
     /// (tier 2) + `read_skill_resource` (tier 3) в реестр. `None` → ни меню, ни инструментов скиллов
     /// (поведение AGENT-2/MEM-1, без регрессии). Скиллы READ-ONLY — работают и при ВЫКЛ актуаторе.
     skills: Option<SkillContext>,
+    /// **EGR-AGENT-2: веб-инструменты прогона.** `Some` ⇔ `ai.web.enabled` — drive регистрирует read-only
+    /// `web.search`/`web.fetch` (эгресс через `GuardedClient`/`EgressFeature::Web`). `None` → без веба.
+    web: Option<WebToolsConfig>,
     /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** Process-global `Arc<AtomicBool>` (взведён ⇒
     /// fail-safe останов). Проверяется на ТРЁХ слоях: (1) `drive` ДО старта (взведён ⇒ прогон остаётся
     /// queued, ре-кьюится); (2) пробрасывается в `run_agent_loop` (мид-ран останов → `Paused`);
@@ -151,6 +155,7 @@ impl AgentRunHandler {
         decision_source: Arc<dyn DecisionSource>,
         agent_paused: Arc<AtomicBool>,
         skills: Option<SkillContext>,
+        web: Option<WebToolsConfig>,
     ) -> Self {
         Self {
             writer,
@@ -165,6 +170,7 @@ impl AgentRunHandler {
             decision_source,
             agent_paused,
             skills,
+            web,
         }
     }
 
@@ -263,7 +269,7 @@ impl AgentRunHandler {
             provider.as_ref(),
             self.memory.as_deref(),
             self.skills.as_ref(),
-            None, // EGR-AGENT web-инструменты: активация (конфиг) — отдельный срез EGR-AGENT-2
+            self.web.as_ref(), // EGR-AGENT-2: веб-инструменты (Some ⇔ ai.web.enabled)
             self.decision_source.clone(),
             &self.writer,
             &self.reader,
@@ -545,6 +551,7 @@ mod tests {
             Arc::new(crate::actuator::PolicyDefault),
             agent_paused,
             None, // SKILL-2: без skills (AGENT-2-поведение, без регрессии)
+            None, // EGR-AGENT-2: без веба
         )
     }
 
@@ -568,6 +575,7 @@ mod tests {
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
             None, // SKILL-2: без skills
+            None, // EGR-AGENT-2: без веба
         )
     }
 
@@ -616,6 +624,7 @@ mod tests {
             decision_source,
             agent_paused,
             None, // SKILL-2: без skills (go-live-тесты актуатора не про скиллы)
+            None, // EGR-AGENT-2: без веба
         )
     }
 
@@ -1164,6 +1173,7 @@ mod tests {
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
             Some(skills),
+            None, // EGR-AGENT-2: без веба
         )
     }
 

@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Агент · EGR-AGENT-2: активация веб-инструментов в проде (конфиг → деплоенный агент, LIVE ✓)
+
+Веб-инструменты из EGR-AGENT теперь РЕАЛЬНО работают в развёрнутом агенте (были построены, но дремали). Конфиг `ai.web {url, enabled}` (`WebConfig` в `AiConfig`, default-OFF) → `nexus-core::agent::enable_web_tools(policy, audit, url, timeout)` включает `EgressFeature::Web` + allowlist хоста SearXNG в скоупе `"web"` (не трогая скоуп `"ai"`) и строит `WebToolsConfig` (клиент `GuardedClient::for_web`, redirect=none). Проброшен в ОБА пути прогона: `AgentRunHandler.web` (scheduler) + `ConnectDeps.web` (коннектор) → `run_agent_session` регистрирует `web.search`/`web.fetch`. `desktop` пока `None` (web в десктоп-UI — отдельный срез).
+
+**LIVE-проверено через демон**: `nexus-agentd` с `ai.web.enabled=true` (SearXNG VPS :8888) + AF_UNIX-коннектор → `nc -U` `agent/run` → агент сделал `toolCall web.search` → результаты с «Париж/Paris» → финал. Лог демона: «EGR-AGENT: веб-инструменты ВКЛ». Конфиг→активация→инструмент→ответ — end-to-end через сокет.
+
+Adversarial-ревью активации (egress-фокус): default-OFF сохранён (web absent/`enabled=false` → фича Web выключена, allowlist пуст), scope-изоляция (`set_scoped_allowlist("web",…)` не клоберит `"ai"`), без over-broadening (только хост SearXNG; прочие URL режутся на step-4b ДО сети), threading корректен (borrow→move), redirect=none сохранён → **0 дефектов**. Гейт зелёный, clippy 0, egress-chokepoint цел.
+
 ### Агент · EGR-AGENT: веб-инструменты агента — `web.search` + `web.fetch` (LIVE ✓)
 
 Агент научился ИССЛЕДОВАТЬ интернет. Новый `nexus-core::agent::web_tools`: **`web.search`** (мета-поиск через SearXNG: build/parse портированы в ядро) + **`web.fetch`** (HTTP GET публичного URL, HTML→текст). Весь эгресс — через `GuardedClient` с **`EgressFeature::Web`** (web-класс: `deny_private=true` → SSRF/DNS-rebind-гард + allowlist хостов + redirect=none + durable-аудит + per-call `RunCtx`). Результат — НЕДОВЕРЕННЫЕ ДАННЫЕ: `run_agent_loop` фенсит КАЖДЫЙ tool-результат (`fence_observation` + per-request `injection_marker`) → веб-контент не может инъектировать инструкции. `WebToolsConfig` (RUN-независимый клиент+SearXNG-URL) строит композиционный корень; `run_agent_session` получил `web: Option<&WebToolsConfig>` и регистрирует read-only веб-инструменты (НЕ требует actuator-флага). Активация в проде (agentd/connect-конфиг) — следующий срез EGR-AGENT-2 (сейчас все прод-вызывающие передают `None`; capability построена + проверена).
