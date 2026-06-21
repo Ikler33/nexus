@@ -232,6 +232,148 @@ pub fn undeploy_plan(
     Ok((label, unit_path, unload_cmds))
 }
 
+// ── Удалённый деплой (DEPLOY-2) ──────────────────────────────────────────────────────────────────
+//
+// Цель — Linux-хост с `systemd --user` (риг 192.168.0.31, на нём локальный LLM). Бинарь agentd
+// доставляется `scp`, юнит — `systemd --user`, запуск — `systemctl --user enable --now`. Рендер плана —
+// ЧИСТЫЙ/тестируемый; актуация (ssh/scp) — в [`crate`] под `--apply`. Удалённые пути ОБЯЗАНЫ быть
+// «чистыми» абсолютными (валидирует [`crate::validate_remote_path`]) — встраиваются в ssh-команды без
+// shell-экранирования.
+
+/// Имя файла бинаря agentd на удалённом хосте (внутри `<home>/.nexus/bin/`).
+pub const REMOTE_BIN_NAME: &str = "nexus-agentd";
+
+/// Параметры удалённого деплоя (Linux systemd --user).
+#[derive(Debug, Clone)]
+pub struct RemoteConfig {
+    /// Удалённый пользователь (ssh + `loginctl enable-linger`).
+    pub user: String,
+    /// Удалённый хост (IP/DNS).
+    pub host: String,
+    /// Домашний каталог удалённого пользователя (для путей бинаря/юнита). Абсолютный.
+    pub remote_home: PathBuf,
+    /// Локальный путь к Linux-бинарю agentd (источник `scp`).
+    pub local_binary: PathBuf,
+    /// Удалённый корень vault (аргумент agentd). Абсолютный.
+    pub remote_vault: PathBuf,
+    /// Удалённый AF_UNIX-сокет коннектора. Абсолютный.
+    pub remote_socket: PathBuf,
+}
+
+/// Шаг удалённого деплоя (исполняется по порядку под `--apply`).
+#[derive(Debug, Clone)]
+pub enum RemoteStep {
+    /// Shell-команда на удалённом хосте (`ssh <target> <cmd>`). `best_effort` — сбой НЕ прерывает план
+    /// (напр. `loginctl enable-linger` требует polkit/root и может не пройти — это не фатально для запуска).
+    Run { cmd: String, best_effort: bool },
+    /// `scp <local_binary> <target>:<remote_bin>`.
+    PutBinary,
+    /// Записать юнит во временный файл и `scp` его в `<target>:<remote_unit_path>`.
+    PutUnit,
+}
+
+/// Полный план удалённого деплоя: контент юнита + упорядоченные ssh/scp-шаги.
+#[derive(Debug, Clone)]
+pub struct RemotePlan {
+    /// `user@host` (аргумент ssh/scp).
+    pub target: String,
+    /// Абсолютный путь бинаря на удалённом хосте.
+    pub remote_bin: PathBuf,
+    /// Абсолютный путь юнита на удалённом хосте.
+    pub remote_unit_path: PathBuf,
+    /// Содержимое systemd-юнита (ссылается на УДАЛЁННЫЕ абсолютные пути).
+    pub unit_content: String,
+    /// Упорядоченные шаги.
+    pub steps: Vec<RemoteStep>,
+}
+
+/// Домашний каталог удалённого пользователя по соглашению: `root → /root`, иначе `/home/<user>`.
+/// Переопределяется `--remote-home` на уровне CLI.
+pub fn default_remote_home(user: &str) -> PathBuf {
+    if user == "root" {
+        PathBuf::from("/root")
+    } else {
+        PathBuf::from(format!("/home/{user}"))
+    }
+}
+
+/// POSIX-join для УДАЛЁННЫХ путей: всегда `/`-разделитель, НЕЗАВИСИМО от ОС хоста, где запущен CLI.
+/// `PathBuf::join` вставил бы `\` на Windows → сломанный Linux-юнит/`mkdir` при деплое С Windows на риг
+/// (и падение юнит-тестов на Windows-CI). `tail` — POSIX-хвост (`".nexus/bin"`).
+pub fn posix_join(base: &std::path::Path, tail: &str) -> PathBuf {
+    let b = base.to_string_lossy();
+    let b = b.trim_end_matches('/');
+    PathBuf::from(format!("{b}/{tail}"))
+}
+
+/// `systemctl --user` по ssh идёт В НЕ-логин-сессии (нет `XDG_RUNTIME_DIR`) → задаём явно перед командой.
+const XDG_PREFIX: &str = "export XDG_RUNTIME_DIR=/run/user/$(id -u);";
+
+/// Строит [`RemotePlan`]. ЧИСТАЯ функция (тестируема). Удалённые пути в `cfg` ДОЛЖНЫ быть провалидированы
+/// вызывающим как «чистые» — здесь они встраиваются в shell-команды без экранирования.
+pub fn remote_plan(cfg: &RemoteConfig) -> RemotePlan {
+    let target = format!("{}@{}", cfg.user, cfg.host);
+    // Удалённые пути — ВСЕГДА POSIX (`/`), даже если CLI запущен на Windows (см. `posix_join`).
+    let bin_dir = posix_join(&cfg.remote_home, ".nexus/bin");
+    let remote_bin = posix_join(&bin_dir, REMOTE_BIN_NAME);
+    let unit_dir = posix_join(&cfg.remote_home, ".config/systemd/user");
+    let remote_unit_path = posix_join(&unit_dir, SYSTEMD_UNIT);
+    let log_dir = posix_join(&cfg.remote_vault, ".nexus/logs");
+
+    let unit_content = render_systemd_unit(&DeployConfig {
+        vault: cfg.remote_vault.clone(),
+        agentd_bin: remote_bin.clone(),
+        socket: cfg.remote_socket.clone(),
+        log_dir: log_dir.clone(),
+    });
+
+    let d = |p: &std::path::Path| p.display().to_string();
+    let mkdir = format!(
+        "mkdir -p {} {} {} {}",
+        d(&bin_dir),
+        d(&unit_dir),
+        d(&log_dir),
+        d(&cfg.remote_vault)
+    );
+    let chmod = format!("chmod +x {}", d(&remote_bin));
+    let linger = format!("loginctl enable-linger {}", cfg.user);
+    let reload = format!("{XDG_PREFIX} systemctl --user daemon-reload");
+    let enable = format!("{XDG_PREFIX} systemctl --user enable --now {SYSTEMD_UNIT}");
+
+    let steps = vec![
+        RemoteStep::Run {
+            cmd: mkdir,
+            best_effort: false,
+        },
+        RemoteStep::PutBinary,
+        RemoteStep::Run {
+            cmd: chmod,
+            best_effort: false,
+        },
+        RemoteStep::PutUnit,
+        RemoteStep::Run {
+            cmd: linger,
+            best_effort: true,
+        },
+        RemoteStep::Run {
+            cmd: reload,
+            best_effort: false,
+        },
+        RemoteStep::Run {
+            cmd: enable,
+            best_effort: false,
+        },
+    ];
+
+    RemotePlan {
+        target,
+        remote_bin,
+        remote_unit_path,
+        unit_content,
+        steps,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +464,94 @@ mod tests {
     #[test]
     fn xml_escape_handles_specials() {
         assert_eq!(xml_escape("a&b<c>d"), "a&amp;b&lt;c&gt;d");
+    }
+
+    // ── Удалённый деплой ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_remote_home_root_vs_user() {
+        assert_eq!(default_remote_home("root"), PathBuf::from("/root"));
+        assert_eq!(default_remote_home("artan"), PathBuf::from("/home/artan"));
+    }
+
+    fn rcfg() -> RemoteConfig {
+        RemoteConfig {
+            user: "artan".into(),
+            host: "192.168.0.31".into(),
+            remote_home: PathBuf::from("/home/artan"),
+            local_binary: PathBuf::from("/local/nexus-agentd"),
+            remote_vault: PathBuf::from("/home/artan/.nexus/vault"),
+            remote_socket: PathBuf::from("/home/artan/.nexus/vault/.nexus/agentd.sock"),
+        }
+    }
+
+    #[test]
+    fn remote_plan_unit_points_at_remote_paths() {
+        let p = remote_plan(&rcfg());
+        assert_eq!(p.target, "artan@192.168.0.31");
+        assert_eq!(
+            p.remote_bin,
+            PathBuf::from("/home/artan/.nexus/bin/nexus-agentd")
+        );
+        assert_eq!(
+            p.remote_unit_path,
+            PathBuf::from("/home/artan/.config/systemd/user/nexus-agentd.service")
+        );
+        // Юнит ссылается на УДАЛЁННЫЕ абсолютные пути (не на локальные).
+        assert!(p.unit_content.contains(
+            r#"ExecStart="/home/artan/.nexus/bin/nexus-agentd" "/home/artan/.nexus/vault""#
+        ));
+        assert!(p
+            .unit_content
+            .contains("/home/artan/.nexus/vault/.nexus/agentd.sock"));
+        // Удалённый юнит — POSIX: НИ ОДНОГО бэкслеша (регресс-гард: `PathBuf::join` на Windows вставлял
+        // `\` → сломанный Linux-юнит при деплое С Windows + падение этого теста на Windows-CI).
+        assert!(
+            !p.unit_content.contains('\\'),
+            "unit must be POSIX (no backslash): {}",
+            p.unit_content
+        );
+        assert!(!p.remote_bin.to_string_lossy().contains('\\'));
+        assert!(!p.remote_unit_path.to_string_lossy().contains('\\'));
+    }
+
+    #[test]
+    fn remote_plan_steps_ordered_and_complete() {
+        let p = remote_plan(&rcfg());
+        // mkdir → scp-binary → chmod → scp-unit → linger(best-effort) → daemon-reload → enable.
+        assert!(
+            matches!(&p.steps[0], RemoteStep::Run { cmd, best_effort: false } if cmd.starts_with("mkdir -p"))
+        );
+        assert!(matches!(p.steps[1], RemoteStep::PutBinary));
+        assert!(
+            matches!(&p.steps[2], RemoteStep::Run { cmd, best_effort: false } if cmd.starts_with("chmod +x"))
+        );
+        assert!(matches!(p.steps[3], RemoteStep::PutUnit));
+        assert!(
+            matches!(&p.steps[4], RemoteStep::Run { cmd, best_effort: true } if cmd.contains("enable-linger artan"))
+        );
+        assert!(
+            matches!(&p.steps[5], RemoteStep::Run { cmd, .. } if cmd.contains("systemctl --user daemon-reload"))
+        );
+        assert!(
+            matches!(&p.steps[6], RemoteStep::Run { cmd, .. } if cmd.contains("enable --now nexus-agentd.service"))
+        );
+    }
+
+    #[test]
+    fn remote_plan_mkdir_covers_all_dirs_and_systemctl_sets_xdg() {
+        let p = remote_plan(&rcfg());
+        let RemoteStep::Run { cmd: mkdir, .. } = &p.steps[0] else {
+            panic!("step0 != Run")
+        };
+        assert!(mkdir.contains("/home/artan/.nexus/bin"));
+        assert!(mkdir.contains("/home/artan/.config/systemd/user"));
+        assert!(mkdir.contains("/home/artan/.nexus/vault/.nexus/logs"));
+        assert!(mkdir.contains("/home/artan/.nexus/vault"));
+        // systemctl-шаги несут XDG_RUNTIME_DIR (ssh без логин-сессии).
+        let RemoteStep::Run { cmd: reload, .. } = &p.steps[5] else {
+            panic!("step5 != Run")
+        };
+        assert!(reload.contains("XDG_RUNTIME_DIR"));
     }
 }
