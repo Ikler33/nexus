@@ -7,6 +7,11 @@
 //! - `nexus deploy remote --host user@host --binary P [...] [--apply]` — деплой agentd на удалённый
 //!   Linux-хост (systemd --user) через `ssh`/`scp`: `scp` бинаря → юнит → `systemctl --user enable --now`.
 //!   Целевой хост — риг с локальным LLM (192.168.0.31). **Safe default — печать ПЛАНА**; ssh/scp под `--apply`.
+//! - `nexus deploy docker --vault P [--image N] [--name N] [--user uid:gid] [--build [--context P]]
+//!   [--apply] [--force]` — запуск agentd в Docker-контейнере (образ — `Dockerfile` в корне репо):
+//!   vault-том + AF_UNIX-сокет на нём. **Safe default — печать ПЛАНА**; `docker build`/`docker run` под
+//!   `--apply` (на macOS `--apply` заблокирован без `--force` — virtiofs не пробрасывает сокет).
+//!   `undeploy docker` — stop+rm.
 //! - `nexus status [--socket P] [--vault P]` — проба коннектора: подключиться к AF_UNIX-сокету и сделать
 //!   `initialize` → доступность + версия протокола.
 //! - `nexus undeploy [--apply]` — остановить + удалить сервис-юнит (план / `--apply`).
@@ -19,7 +24,7 @@ mod service;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use service::{detect_kind, DeployConfig, RemoteConfig, RemotePlan, RemoteStep};
+use service::{detect_kind, DeployConfig, DockerConfig, RemoteConfig, RemotePlan, RemoteStep};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -31,7 +36,10 @@ fn main() -> ExitCode {
         }
         ["deploy", "local", flags @ ..] => run(cmd_deploy_local(flags)),
         ["deploy", "remote", flags @ ..] => run(cmd_deploy_remote(flags)),
+        ["deploy", "docker", flags @ ..] => run(cmd_deploy_docker(flags)),
         ["status", flags @ ..] => run(cmd_status(flags)),
+        // `undeploy docker` ДО общего `undeploy` (иначе "docker" утечёт во флаги launchd/systemd-выгрузки).
+        ["undeploy", "docker", flags @ ..] => run(cmd_undeploy_docker(flags)),
         ["undeploy", flags @ ..] => run(cmd_undeploy(flags)),
         other => {
             eprintln!("nexus: неизвестная команда: {}\n", other.join(" "));
@@ -61,8 +69,12 @@ fn print_help() {
          deploy remote --host user@host --binary P [--remote-vault P] [--remote-socket P]\n               \
          [--remote-home P] [--apply]\n      \
          Развернуть agentd на удалённом Linux-хосте (systemd --user) через ssh/scp. Без --apply — план.\n  \
+         deploy docker --vault P [--image N] [--name N] [--user uid:gid] [--build [--context P]]\n               \
+         [--apply] [--force]\n      \
+         Запустить agentd в Docker-контейнере (vault-том + AF_UNIX-сокет). Без --apply — план.\n  \
          status [--socket P] [--vault P]\n      Проверить доступность агента (initialize по AF_UNIX).\n  \
-         undeploy [--apply]            Остановить и удалить сервис.\n\n\
+         undeploy [--apply]            Остановить и удалить локальный сервис.\n  \
+         undeploy docker [--name N] [--apply]   Остановить и удалить контейнер.\n\n\
          Сокет по умолчанию: <vault>/.nexus/agentd.sock"
     );
 }
@@ -538,6 +550,197 @@ fn apply_remote_plan(cfg: &RemoteConfig, plan: &RemotePlan) -> Result<(), String
     Ok(())
 }
 
+// ── deploy docker (DEPLOY-3) ────────────────────────────────────────────────────────────────────
+
+/// Имя Docker-образа: `[A-Za-z0-9._:/-]`, непустое, не с `-` (иначе docker примет за флаг). Покрывает
+/// `repo/name:tag` и `registry.host/name:tag`.
+fn validate_image_name(s: &str) -> Result<(), String> {
+    if s.is_empty() || s.starts_with('-') {
+        return Err(format!("недопустимое имя образа: {s:?}"));
+    }
+    if let Some(c) = s
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-')))
+    {
+        return Err(format!(
+            "имя образа содержит недопустимый символ {c:?}: {s}"
+        ));
+    }
+    Ok(())
+}
+
+/// Имя контейнера: docker допускает `[a-zA-Z0-9][a-zA-Z0-9_.-]*`; требуем то же (и не с `-`).
+fn validate_container_name(s: &str) -> Result<(), String> {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => {
+            return Err(format!(
+                "имя контейнера должно начинаться с буквы/цифры: {s:?}"
+            ))
+        }
+    }
+    if let Some(c) = chars.find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))) {
+        return Err(format!(
+            "имя контейнера содержит недопустимый символ {c:?}: {s}"
+        ));
+    }
+    Ok(())
+}
+
+/// Значение `docker run --user`: `uid`, `uid:gid`, `name` или `name:group`. Allowlist `[A-Za-z0-9_:.-]`,
+/// не пустое, не с `-` (иначе docker примет за флаг).
+fn validate_docker_user(s: &str) -> Result<(), String> {
+    if s.is_empty() || s.starts_with('-') {
+        return Err(format!("недопустимое значение --user: {s:?}"));
+    }
+    if let Some(c) = s
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '-')))
+    {
+        return Err(format!("--user содержит недопустимый символ {c:?}: {s}"));
+    }
+    Ok(())
+}
+
+fn cmd_deploy_docker(flags: &[&str]) -> Result<(), String> {
+    let image = flag(flags, "--image").unwrap_or("nexus-agentd:local");
+    validate_image_name(image)?;
+    let container_name = flag(flags, "--name").unwrap_or("nexus-agentd");
+    validate_container_name(container_name)?;
+
+    // --vault ОБЯЗАТЕЛЕН (его bind-mount'им в /vault): без него resolve_vault взял бы cwd → случайный
+    // каталог смонтировался бы как vault (footgun). Требуем явно, как `deploy remote` требует --host.
+    if flag(flags, "--vault").is_none() {
+        return Err("укажите --vault <путь к vault> (его монтируем в /vault контейнера)".into());
+    }
+    let host_vault = resolve_vault(flags)?;
+    validate_path_chars(&host_vault, "vault")?;
+
+    // --user uid[:gid] → docker run --user (контейнер пишет bind-mount vault + сокет, доступный хосту).
+    let run_user = match flag(flags, "--user") {
+        Some(u) => {
+            validate_docker_user(u)?;
+            Some(u.to_string())
+        }
+        None => None,
+    };
+
+    // --build → включить шаг docker build; контекст = --context | cwd (репо с Dockerfile).
+    let build_context = if has_flag(flags, "--build") {
+        let ctx = flag(flags, "--context")
+            .map(PathBuf::from)
+            .unwrap_or(std::env::current_dir().map_err(|e| format!("cwd: {e}"))?);
+        let ctx = ctx
+            .canonicalize()
+            .map_err(|e| format!("--context {}: {e}", ctx.display()))?;
+        if !ctx.join("Dockerfile").is_file() {
+            return Err(format!(
+                "в контексте сборки нет Dockerfile: {} (укажите --context <корень репо>)",
+                ctx.display()
+            ));
+        }
+        Some(ctx)
+    } else {
+        None
+    };
+
+    let cfg = DockerConfig {
+        image: image.to_string(),
+        container_name: container_name.to_string(),
+        host_vault: host_vault.clone(),
+        build_context,
+        run_user,
+    };
+    let plan = service::docker_plan(&cfg);
+    let apply = has_flag(flags, "--apply");
+
+    println!("=== nexus deploy docker ===");
+    println!("image:      {}", cfg.image);
+    println!("container:  {}", cfg.container_name);
+    println!("vault(host): {}", cfg.host_vault.display());
+    println!(
+        "build:      {}",
+        cfg.build_context
+            .as_ref()
+            .map(|c| c.display().to_string())
+            .unwrap_or_else(|| "(нет — используется существующий образ)".into())
+    );
+    println!("socket(host): {}", plan.host_socket.display());
+    println!("--- команды ---");
+    for c in &plan.steps {
+        println!("  {}", c.join(" "));
+    }
+    if cfg.build_context.is_none() {
+        eprintln!(
+            "\nⓘ образ {} должен существовать (нет --build). Соберите: `nexus deploy docker --vault {} --build`",
+            cfg.image,
+            cfg.host_vault.display()
+        );
+    }
+    if cfg.run_user.is_none() {
+        eprintln!(
+            "\nⓘ контейнер бежит под uid 10001 (образ): vault {} должен быть доступен ему на запись, \
+             иначе agentd не откроет БД/сокет. Приравняйте к владельцу vault: `--user $(id -u):$(id -g)`.",
+            cfg.host_vault.display()
+        );
+    }
+    let on_macos = cfg!(target_os = "macos");
+    if on_macos {
+        eprintln!(
+            "\n⚠ macOS Docker Desktop: AF_UNIX-сокет на bind-mount НЕ пробрасывается через virtiofs — \
+             коннектор не подключится. Контейнер-деплой рассчитан на Linux-хост (риг/VPS)."
+        );
+    }
+    if !apply {
+        println!("\n(dry-run — план НЕ применён; повторите с --apply)");
+        return Ok(());
+    }
+    // На macOS контейнер запустится, но коннектор недостижим → не ставим заведомо нерабочую конфигурацию
+    // (как `deploy local` отказывается ставить нерабочий сервис). Override — `--force` (напр. контейнер
+    // только под scheduler без коннектора).
+    if on_macos && !has_flag(flags, "--force") {
+        return Err(
+            "--apply на macOS заблокирован: коннектор по AF_UNIX недостижим (см. предупреждение выше). \
+             Деплойте на Linux-хост или повторите с --force, если коннектор не нужен."
+                .into(),
+        );
+    }
+    run_cmds_strict(&plan.steps).map_err(|e| {
+        format!(
+            "{e}\n  ⓘ если контейнер «{}» уже существует — сначала `nexus undeploy docker --name {}`",
+            cfg.container_name, cfg.container_name
+        )
+    })?;
+    println!(
+        "\n✓ контейнер запущен. Проверка: `nexus status --socket {}`",
+        plan.host_socket.display()
+    );
+    Ok(())
+}
+
+fn cmd_undeploy_docker(flags: &[&str]) -> Result<(), String> {
+    let container_name = flag(flags, "--name").unwrap_or("nexus-agentd");
+    validate_container_name(container_name)?;
+    let cmds = service::docker_undeploy_plan(container_name);
+    let apply = has_flag(flags, "--apply");
+
+    println!("=== nexus undeploy docker ===");
+    println!("container: {container_name}");
+    println!("--- команды ---");
+    for c in &cmds {
+        println!("  {}", c.join(" "));
+    }
+    if !apply {
+        println!("\n(dry-run — повторите с --apply)");
+        return Ok(());
+    }
+    // best-effort: `stop`/`rm` уже-отсутствующего контейнера не должны валить undeploy.
+    run_cmds(&cmds);
+    println!("✓ undeploy docker применён");
+    Ok(())
+}
+
 // ── undeploy ──────────────────────────────────────────────────────────────────────────────────────
 
 fn cmd_undeploy(flags: &[&str]) -> Result<(), String> {
@@ -580,6 +783,28 @@ fn run_cmds(cmds: &[Vec<String>]) {
             Err(e) => println!("  ⚠ {} → {e}", c.join(" ")),
         }
     }
+}
+
+/// Выполняет argv-команды СТРОГО: первый сбой прерывает (Err) — напр. провал `docker build` не должен
+/// вести к `docker run` устаревшего/несуществующего образа.
+fn run_cmds_strict(cmds: &[Vec<String>]) -> Result<(), String> {
+    for c in cmds {
+        let Some((prog, rest)) = c.split_first() else {
+            continue;
+        };
+        match std::process::Command::new(prog).args(rest).status() {
+            Ok(st) if st.success() => println!("  ✓ {}", c.join(" ")),
+            Ok(st) => {
+                return Err(format!(
+                    "команда провалилась (код {}): {}",
+                    st.code().unwrap_or(-1),
+                    c.join(" ")
+                ))
+            }
+            Err(e) => return Err(format!("не удалось запустить `{}`: {e}", c.join(" "))),
+        }
+    }
+    Ok(())
 }
 
 // ── status ────────────────────────────────────────────────────────────────────────────────────────
@@ -734,6 +959,38 @@ mod tests {
         assert!(validate_remote_host("a@b").is_err());
         assert!(validate_remote_host("h:22").is_err());
         assert!(validate_remote_host("h,x").is_err());
+    }
+
+    #[test]
+    fn image_name_validation() {
+        assert!(validate_image_name("nexus-agentd:local").is_ok());
+        assert!(validate_image_name("ghcr.io/ikler33/nexus-agentd:1.0").is_ok());
+        assert!(validate_image_name("").is_err());
+        assert!(validate_image_name("-x").is_err());
+        assert!(validate_image_name("img;rm").is_err());
+        assert!(validate_image_name("a b").is_err());
+    }
+
+    #[test]
+    fn container_name_validation() {
+        assert!(validate_container_name("nexus-agentd").is_ok());
+        assert!(validate_container_name("agent_1.test").is_ok());
+        assert!(validate_container_name("").is_err());
+        assert!(validate_container_name("-x").is_err());
+        assert!(validate_container_name(".x").is_err());
+        assert!(validate_container_name("a/b").is_err());
+        assert!(validate_container_name("a b").is_err());
+    }
+
+    #[test]
+    fn docker_user_validation() {
+        assert!(validate_docker_user("1000").is_ok());
+        assert!(validate_docker_user("1000:1000").is_ok());
+        assert!(validate_docker_user("nexus:nexus").is_ok());
+        assert!(validate_docker_user("").is_err());
+        assert!(validate_docker_user("-1").is_err());
+        assert!(validate_docker_user("1000 1000").is_err());
+        assert!(validate_docker_user("u;rm").is_err());
     }
 
     #[cfg(target_os = "macos")]

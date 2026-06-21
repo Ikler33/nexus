@@ -31,7 +31,7 @@
 6. Параллельный трек десктопа: **Release & Auto-Updater** (распространение приложения).
 
 ### DEPLOY-2 — авто-деплой везде
-**`nexus deploy remote --host user@host --binary <linux-agentd>`** ✅ — ssh/scp-деплой agentd на удалённый `systemd --user` хост; цель — **риг 192.168.0.31** (на нём локальный LLM; VPS отпал — нет LLM). Чистый рендер плана + actuation под `--apply`; валидаторы пути/user/host (allowlist), XDG/linger-рецепт, symlink-safe temp-юнит. Остаток DEPLOY-2: LIVE-деплой на риг (cross-compiled linux-бинарь) · контейнер-образ (= база Фазы-2 песочницы) · `nexus deploy docker` · compose · топологии local-all-in-one / VPS-агент+удалённый-LLM (через amnezia-VPN) / облако+API · remote-undeploy.
+**`nexus deploy remote --host user@host --binary <linux-agentd>`** ✅ — ssh/scp-деплой agentd на удалённый `systemd --user` хост; цель — **риг 192.168.0.31** (на нём локальный LLM; VPS отпал — нет LLM). Чистый рендер плана + actuation под `--apply`; валидаторы пути/user/host (allowlist), XDG/linger-рецепт, symlink-safe temp-юнит. **`nexus deploy docker`** ✅ (DEPLOY-3) — multi-stage `Dockerfile` (rust-builder → debian-slim, non-root, rustls-рантайм без openssl) + `deploy docker`/`undeploy docker` (vault-том + AF_UNIX-сокет на bind-mount; Linux-хост). Образ = база Фазы-2 Podman-песочницы. Остаток DEPLOY-2/3: LIVE docker-build + деплой на риг (cross-compiled бинарь / build-on-rig) · CI docker-build-smoke · compose · топологии local-all-in-one / VPS-агент+удалённый-LLM (через amnezia-VPN) / облако+API · remote-undeploy.
 
 ### Порт от конкурентов (после PROD-v1, дескоупнуто под local-first)
 P0: skill learning-loop (curator+usage) · session-search FTS5 · субагенты/делегирование. P1: MCP-клиент · cron NL-jobs · backup/restore · observability. Post-1.0/owner-gated: multi-channel-шлюзы · email · deep-research · voice · marketplace.
@@ -46,7 +46,7 @@ P0: skill learning-loop (curator+usage) · session-search FTS5 · субаген
 3. 🟡 **Подписанные релизы / packaging** (версия хардкод `0.0.0`).
 4. 🟡 **THREAT_MODEL.md** → `docs/THREAT_MODEL.md`.
 5. 🟡 **Install / first-run** (onboarding неполный) + user-доки (INSTALL/GETTING-STARTED/CONFIG).
-6. 🔴 **Container / VPS-деплой** (нет Dockerfile/.service/`nexus deploy`).
+6. 🟡 **Container / VPS-деплой** — ✅ `Dockerfile` + `nexus deploy local/remote/docker`; остаток: compose · CI docker-build-smoke · LIVE-деплой на риг.
 
 ## 4. DoD каждого среза (НЕ забываем)
 Каждый срез агент-эпика мержится ТОЛЬКО при:
