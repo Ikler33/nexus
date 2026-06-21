@@ -37,6 +37,7 @@ pub mod session;
 pub mod skill_tools;
 pub mod stubs;
 pub mod tool;
+pub mod web_tools;
 
 pub use connect::{
     acp_tool_kind, channel_pair, dispatch, event_notification, map_agent_event, negotiate_version,

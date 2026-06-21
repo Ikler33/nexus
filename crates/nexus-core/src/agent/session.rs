@@ -38,6 +38,7 @@ use super::registry::ToolRegistry;
 use super::runner::{run_agent_loop, LoopBounds, LoopOutcome};
 use super::skill_tools::SkillContext;
 use super::stubs::{EchoTool, NoopTool};
+use super::web_tools::WebToolsConfig;
 
 /// СИНХРОННЫЙ форвардер событий прогона наружу. Реализуется потребителем под свой транспорт; вызывается
 /// из двух мест внутри [`run_agent_session`] (loop `on_event` + гейт-[`EventSink`]) — оба синхронны,
@@ -93,6 +94,7 @@ pub async fn run_agent_session(
     provider: &dyn ToolCapableProvider,
     memory: Option<&dyn AgentMemory>,
     skills: Option<&SkillContext>,
+    web: Option<&WebToolsConfig>,
     decision_source: Arc<dyn DecisionSource>,
     writer: &WriteActor,
     reader: &ReadPool,
@@ -158,6 +160,13 @@ pub async fn run_agent_session(
     // SKILL-2 (tier 2 + 3): READ-ONLY инструменты скиллов (activate_skill + read_skill_resource),
     // НЕЗАВИСИМО от actuator-флага (скиллы только читают). Активация скилла НЕ добавляет иных
     // инструментов (capability-инертность — гейт у SKILL-3).
+    // EGR-AGENT: web.search/web.fetch — READ-ONLY (vault не трогают), НЕЗАВИСИМО от actuator-флага.
+    // Эгресс — через GuardedClient(EgressFeature::Web) внутри инструментов; per-run RunCtx для аудита.
+    if let Some(web) = web {
+        for tool in crate::agent::web_tools::web_tools(web, RunCtx::run(spec.run_id)) {
+            registry.insert(tool);
+        }
+    }
     if let Some(skills) = skills {
         for tool in skills.tools() {
             registry.insert(tool);
@@ -281,6 +290,7 @@ mod tests {
             &provider,
             None,
             None,
+            None,
             policy_default(),
             db.writer(),
             db.reader(),
@@ -321,6 +331,7 @@ mod tests {
         let outcome = run_agent_session(
             &spec,
             &provider,
+            None,
             None,
             None,
             policy_default(),
@@ -409,6 +420,7 @@ mod tests {
             &provider,
             None,
             Some(&skills),
+            None,
             policy_default(),
             db.writer(),
             db.reader(),
@@ -503,6 +515,7 @@ mod tests {
         let outcome = run_agent_session(
             &spec,
             provider.as_ref(),
+            None,
             None,
             None,
             policy_default(),

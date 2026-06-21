@@ -442,7 +442,8 @@ async fn drive_run(
         &spec,
         provider.as_ref(),
         Some(memory.as_ref()),
-        None,
+        None, // skills (desktop без скиллов пока)
+        None, // EGR-AGENT web-инструменты — активация в отдельном срезе
         decision_source,
         writer,
         reader,

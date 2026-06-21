@@ -46,7 +46,11 @@ import { dirname, resolve } from 'node:path';
 // заметку через ГЕЙТ актуатора [autonomy=auto → Auto-тир apply] → файл на диске → undo_run восстанавливает;
 // полный стек вживую модель→tool-call→dispatch_action→apply→undo; нужна tool-capable модель; запуск
 // `NEXUS_LIVE_CHAT=1 cargo test live_actuator_create_and_undo_on_rig -- --ignored`).
-const EXPECTED = 26;
+// 26→27: + `live_agent_web_search_on_rig` (EGR-AGENT: реальная модель :8080 исследует веб через web.search
+// → GuardedClient(EgressFeature::Web, allowlist) → SearXNG на VPS :8888 → результаты → финальный ответ;
+// нужны SearXNG + tool-capable модель; запуск `NEXUS_LIVE_CHAT=1 cargo test live_agent_web_search_on_rig
+// -- --ignored`).
+const EXPECTED = 27;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src
