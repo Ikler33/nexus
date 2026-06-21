@@ -15,6 +15,10 @@
 
 use std::path::{Path, PathBuf};
 
+/// GuardedProxy — единственный сетевой путь песочного прогона (`--network=none` + AF_UNIX-прокси поверх
+/// существующего `GuardedClient`). SANDBOX-2.
+pub mod proxy;
+
 /// Образ песочницы по умолчанию (тот же, что у DEPLOY-3 `nexus deploy docker`).
 pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 /// Путь vault ВНУТРИ контейнера (`:ro`), = `NEXUS_VAULT` образа.
