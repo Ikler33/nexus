@@ -96,6 +96,12 @@ pub struct WebConfig {
     /// Consent-флаг (ДЕФОЛТ false): без него веб-инструменты не регистрируются.
     #[serde(default)]
     pub enabled: bool,
+    /// **WEB-FETCH-PUBLIC (owner-gated 2026-06-22):** снимает allowlist-требование для egress-фичи `Web`
+    /// → `web.fetch` к ЛЮБОМУ публичному URL (для deep-research; `web.search` и так ходит только в
+    /// SearXNG). ДЕФОЛТ false (allowlist-only). Эгресс всё равно через guard: deny_private/SSRF-резолв-
+    /// гард/metadata/redirect=none/audit. Эффект при `enabled=true`.
+    #[serde(default)]
+    pub allow_public_fetch: bool,
 }
 
 impl AiConfig {

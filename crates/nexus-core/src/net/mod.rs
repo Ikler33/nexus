@@ -140,6 +140,12 @@ pub struct EgressPolicy {
     /// open-vault/смене настроек), "news" — хосты источников ленты (consent = включение фичи,
     /// NF-4). `check` смотрит объединение. `RwLock` — частые читатели, редкая замена.
     allowlist: RwLock<std::collections::HashMap<&'static str, HashSet<String>>>,
+    /// **WEB-FETCH-PUBLIC (owner-gated 2026-06-22):** когда `true`, фича `Web` (агентский `web.fetch`)
+    /// допускает ЛЮБОЙ ПУБЛИЧНЫЙ хост без allowlist — для deep-research. ВСЕ остальные рубежи сохранены:
+    /// metadata (шаг 1), офлайн-kill (шаг 2), opt-in (шаг 3), `deny_private` (шаг 4а — приватные/LAN
+    /// режутся) + DNS-rebind/SSRF-гард + redirect=none + audit в `authorize`. Default `false`
+    /// (allowlist-only). КАСАЕТСЯ ТОЛЬКО `Web` (НЕ `NewsFeed` — у неё consent по конкретным URL).
+    web_allow_public: AtomicBool,
 }
 
 impl EgressPolicy {
@@ -156,6 +162,7 @@ impl EgressPolicy {
                 AtomicBool::new(false), // Web: web-агент не из коробки (W2, consent = URL SearXNG)
             ],
             allowlist: RwLock::new(std::collections::HashMap::new()),
+            web_allow_public: AtomicBool::new(false),
         }
     }
 
@@ -185,9 +192,15 @@ impl EgressPolicy {
                 host.to_string(),
             )));
         }
-        // 4б. Хост: приватный/loopback (local-first, AC-EGR-9; не для web-класса) ИЛИ
-        //     явный allowlist любого скоупа (E4 — "ai"; NF-4 — "news").
+        // 4б. Хост: приватный/loopback (local-first, AC-EGR-9; не для web-класса) ИЛИ явный allowlist
+        //     любого скоупа (E4 — "ai"; NF-4 — "news") ИЛИ — WEB-FETCH-PUBLIC — фича `Web` при
+        //     `web_allow_public`: ЛЮБОЙ публичный хост (host уже прошёл metadata/offline/deny_private —
+        //     значит публичный и не metadata; allowlist не требуется). Касается ТОЛЬКО `Web`. NB: это
+        //     лишь STRING-гейт; DNS-rebind (публичное имя → приватный IP) добивает РЕЗОЛВ-гард
+        //     `authorize`→`check_resolved_ips(deny_private=true для Web)`, НЕ зависящий от этого флага.
         let allowed = (!feature.denies_private() && is_private_host(host))
+            || (matches!(feature, EgressFeature::Web)
+                && self.web_allow_public.load(Ordering::Relaxed))
             || self
                 .allowlist
                 .read()
@@ -210,6 +223,17 @@ impl EgressPolicy {
     /// Текущее состояние фичи — для UI настроек/персиста (срез 2).
     pub fn is_feature_enabled(&self, feature: EgressFeature) -> bool {
         self.features[feature.idx()].load(Ordering::Relaxed)
+    }
+
+    /// **WEB-FETCH-PUBLIC**: разрешить фиче `Web` любой ПУБЛИЧНЫЙ хост без allowlist (deny_private/SSRF/
+    /// metadata/offline/redirect=none/audit сохранены). Default false. Owner-gated (`ai.web.allow_public_fetch`).
+    pub fn set_web_allow_public(&self, on: bool) {
+        self.web_allow_public.store(on, Ordering::Relaxed);
+    }
+
+    /// Текущее состояние WEB-FETCH-PUBLIC (для индикации/тестов).
+    pub fn web_allow_public(&self) -> bool {
+        self.web_allow_public.load(Ordering::Relaxed)
     }
 
     /// Заменяет allowlist скоупа "ai" (E4: пересобирается из `local.json ai.*` на open-vault и
@@ -790,6 +814,57 @@ mod tests {
         );
     }
 
+    /// WEB-FETCH-PUBLIC: `web_allow_public` снимает требование allowlist для фичи `Web` на ПУБЛИЧНЫХ
+    /// хостах, СОХРАНЯЯ deny_private/metadata/offline; не распространяется на NewsFeed.
+    #[test]
+    fn policy_web_allow_public_lifts_allowlist_for_public_web_only() {
+        let (policy, _) = policy_with_switch();
+        policy.set_feature_enabled(EgressFeature::Web, true);
+        // БЕЗ web_allow_public: публичный хост вне allowlist → отказ (allowlist-only).
+        assert!(matches!(
+            policy.check("example.com", EgressFeature::Web),
+            Err(EgressDenied::HostNotAllowed(_))
+        ));
+        assert!(!policy.web_allow_public());
+        policy.set_web_allow_public(true);
+        assert!(policy.web_allow_public());
+        // Любой ПУБЛИЧНЫЙ хост проходит БЕЗ allowlist.
+        assert_eq!(policy.check("example.com", EgressFeature::Web), Ok(()));
+        assert_eq!(policy.check("203.0.113.7", EgressFeature::Web), Ok(()));
+        // Приватные/LAN/metadata всё равно режутся (deny_private/шаг 1).
+        for blocked in ["192.168.0.10", "127.0.0.1", "10.0.0.1", "169.254.169.254"] {
+            assert!(
+                matches!(
+                    policy.check(blocked, EgressFeature::Web),
+                    Err(EgressDenied::HostNotAllowed(_))
+                ),
+                "{blocked} режется даже при web_allow_public"
+            );
+        }
+        // Касается ТОЛЬКО Web: NewsFeed (тоже web-класс) — публичный без allowlist всё равно отказ.
+        policy.set_feature_enabled(EgressFeature::NewsFeed, true);
+        assert!(
+            matches!(
+                policy.check("example.com", EgressFeature::NewsFeed),
+                Err(EgressDenied::HostNotAllowed(_))
+            ),
+            "web_allow_public НЕ распространяется на NewsFeed"
+        );
+    }
+
+    /// WEB-FETCH-PUBLIC не обходит офлайн-kill: публичный web под офлайном всё равно `Offline`.
+    #[test]
+    fn policy_web_allow_public_respects_offline() {
+        let (policy, offline) = policy_with_switch();
+        policy.set_feature_enabled(EgressFeature::Web, true);
+        policy.set_web_allow_public(true);
+        offline.store(true, Ordering::Relaxed);
+        assert_eq!(
+            policy.check("example.com", EgressFeature::Web),
+            Err(EgressDenied::Offline)
+        );
+    }
+
     /// NF-4 (AC-NF-7/8): NewsFeed — web-класс. Выключена из коробки (consent W2); после
     /// включения публичный хост из "news"-скоупа проходит, а приватный/LAN запрещён ДАЖЕ из
     /// allowlist (`allow_private=false`, W-аддендум); скоупы "ai"/"news" независимы; local-first
@@ -1100,6 +1175,31 @@ mod tests {
             "web-класс: приватный резолв denied: {res:?}"
         );
         assert!(!audit.entries()[0].allowed);
+    }
+
+    /// WEB-FETCH-PUBLIC ∩ SSRF (P0-a, регресс-замок): даже с `web_allow_public=true` ПУБЛИЧНОЕ имя,
+    /// резолвящееся в ПРИВАТНЫЙ IP (DNS-rebind), отклоняется на РЕЗОЛВНУТОМ IP — `authorize` →
+    /// `check_resolved_ips(deny_private=true для Web)` НЕ зависит от `web_allow_public`. Снятие
+    /// string-allowlist НЕ снимает rebind-гард. (Если `Web.denies_private()` когда-нибудь станет false —
+    /// этот тест упадёт, не дав молча открыть SSRF.)
+    #[tokio::test]
+    async fn web_allow_public_still_blocks_dns_rebind_to_private() {
+        let (policy, _) = policy_with_switch();
+        policy.set_feature_enabled(EgressFeature::Web, true);
+        policy.set_web_allow_public(true); // string-allowlist снят для публичных
+        let (client, audit) = guarded_with_ips(policy, vec!["10.0.0.7".parse().unwrap()]);
+        let res = client
+            .get(
+                "https://totally-public.example/page",
+                EgressFeature::Web,
+                RunCtx::NONE,
+            )
+            .await;
+        assert!(
+            matches!(res, Err(NetError::Denied(EgressDenied::HostNotAllowed(_)))),
+            "rebind публичного имени в приватный IP режется ДАЖЕ при web_allow_public: {res:?}"
+        );
+        assert!(!audit.entries()[0].allowed, "denial зафиксирован в audit");
     }
 
     /// P0-a: пустой резолв → типизированный отказ (нечего пинить), аудит как denial, без сети.
