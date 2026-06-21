@@ -73,7 +73,15 @@ impl SandboxConfig {
         let run_id = run_id.into();
         validate_run_id(&run_id)?;
         let host_vault = host_vault.into();
-        let host_run_dir = runtime_base.join(container_name(&run_id));
+        // POSIX-join (`/`), НЕ `PathBuf::join`: песочница — Linux-host-only, путь всегда POSIX. `join`
+        // вставил бы `\` на Windows → backslash в Linux-`-v`-байнде + падение юнит-теста на Windows-CI
+        // (тот же класс, что фикс posix-путей в `nexus-cli deploy remote`).
+        let base = runtime_base.to_string_lossy();
+        let host_run_dir = PathBuf::from(format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            container_name(&run_id)
+        ));
         // Анти-footgun §4.4: каталог сокетов НЕ должен лежать внутри vault (vault монтируется :ro →
         // сокет там не забиндить; и смешивать rw-сокеты с :ro-данными нельзя). Лексическая проверка
         // (пути ещё могут не существовать — canonicalize неприменим).
@@ -262,6 +270,11 @@ mod tests {
             !a.iter()
                 .any(|x| x.contains("/vault/") && x.contains("/run/nexus")),
             "сокет НЕ под vault: {a:?}"
+        );
+        // POSIX-регресс-гард: ни одного бэкслеша (Linux-host пути; `PathBuf::join` на Windows дал бы `\`).
+        assert!(
+            !a.iter().any(|x| x.contains('\\')),
+            "argv должен быть POSIX (без бэкслешей): {a:?}"
         );
     }
 
