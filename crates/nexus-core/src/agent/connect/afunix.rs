@@ -149,7 +149,9 @@ enum LineStatus {
 /// Готовит путь под bind: stale-сокет от прошлого запуска снимается, НО только если это реально СОКЕТ.
 /// Если по пути лежит обычный файл/каталог (мисконфиг `NEXUS_AGENTD_CONNECT_SOCKET`), молчаливое удаление
 /// = потеря данных → ОТКАЗ со внятной ошибкой (чужой файл не трогаем). Нет пути → ок (первый старт).
-fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
+/// `pub(crate)`: переиспользуется host-side `SandboxRunner` (sandbox/runner.rs) для 3 сокетов прогона —
+/// ЕДИНАЯ реализация хардненинга bind (без дублирования non-socket-refusal).
+pub(crate) fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => {
             use std::os::unix::fs::FileTypeExt;
@@ -173,7 +175,9 @@ fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
 /// (драйвит агента, читает vault через tools, тратит токены), поэтому другой локальный пользователь НЕ
 /// должен подключиться (connect требует w-право на файл сокета). Local-first single-owner модель;
 /// multi-tenant (auth-слой) — позже. Best-effort: не валим запуск, если chmod не удался (FS без unix-прав).
-fn harden_socket_perms(path: &Path) {
+/// `pub(crate)`: переиспользуется host-side `SandboxRunner` для egress/act/event-сокетов (спека §4.2/§4.3 —
+/// per-run сокеты 0600; egress.sock даёт guarded-эгресс прогона, act.sock — host-side гейт записи в vault).
+pub(crate) fn harden_socket_perms(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
         tracing::warn!(socket = %path.display(), error = %e, "agent-connect: не удалось сузить права сокета до 0600");

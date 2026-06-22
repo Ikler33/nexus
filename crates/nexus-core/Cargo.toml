@@ -23,7 +23,9 @@ rusqlite = { workspace = true }
 # net/resolve) и tokio::fs (read/metadata в indexer — CORE-1c-1) — фичи добавляются к базовым из
 # [workspace.dependencies] (rt-multi-thread/sync/macros). В app-сборке они и так включались
 # транзитивно (reqwest/tauri), но standalone-крейт обязан объявить то, что использует напрямую.
-tokio = { workspace = true, features = ["time", "net", "fs"] }
+# `process` — host `SandboxRunner` (sandbox/runner.rs) спавнит `podman run` (SANDBOX-4b-2b); `rt` — для
+# tokio::spawn serve-тасков сокетов внутри раннера (вне #[tokio::main]-контекста бинаря).
+tokio = { workspace = true, features = ["time", "net", "fs", "process", "rt"] }
 thiserror = { workspace = true }
 pulldown-cmark = { workspace = true }
 blake3 = { workspace = true }

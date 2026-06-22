@@ -68,10 +68,80 @@ async fn main() {
         .with_max_level(log_level_from_env())
         .init();
 
+    // ПЕСОЧНЫЙ РЕЖИМ (SANDBOX-4b-2b): контейнер запускается как `nexus-agentd --sandbox-child …`.
+    // Перехватываем ДО `run()` (он читает argv[1] как vault-путь). Тонкий in-container loop поверх 3
+    // прокси на host через AF_UNIX (`run_sandbox_child_session`); host-side гейт/egress — у `SandboxRunner`.
+    // Unix-only (AF_UNIX `connect_unix`); песочница — Linux-host фича (rootless-podman).
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some("--sandbox-child") {
+        let code = match run_sandbox_child().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "nexus-agentd --sandbox-child: фатальная ошибка");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
     if let Err(e) = run().await {
         tracing::error!(error = %e, "nexus-agentd: фатальная ошибка");
         std::process::exit(1);
     }
+}
+
+/// In-container точка входа песочницы (`--sandbox-child`). Argv (после флага):
+/// `<run_id> <base_url> <model> <ctx_window> <task>` (позиционно, как формирует
+/// [`nexus_core::sandbox::runner::SandboxChildArgs::to_argv`]). Коннектится к 3 сокетам по ФИКСИРОВАННЫМ
+/// путям (`/run/nexus/{egress,act,event}.sock`) и крутит [`run_sandbox_child_session`]. Возвращает код
+/// выхода контейнера: 0 — `Final`; 1 — Error/прерывание (host-коннектор решает статус прогона по событиям).
+#[cfg(unix)]
+async fn run_sandbox_child() -> Result<i32, String> {
+    use nexus_core::agent::connect::connect_unix;
+    use nexus_core::agent::runner::LoopOutcome;
+    use nexus_core::sandbox::child::{run_sandbox_child_session, SandboxChildSpec};
+    use nexus_core::sandbox::{CONTAINER_RUN_DIR, SOCKET_ACT, SOCKET_EGRESS, SOCKET_EVENT};
+
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let [run_id, base_url, model, ctx_window, task] =
+        <[String; 5]>::try_from(args).map_err(|a| {
+            format!(
+                "--sandbox-child: ожидалось 5 аргументов <run_id> <base_url> <model> <ctx_window> <task>, получено {}",
+                a.len()
+            )
+        })?;
+    let run_id: i64 = run_id
+        .parse()
+        .map_err(|e| format!("run_id не i64 ({run_id:?}): {e}"))?;
+    let context_window: usize = ctx_window
+        .parse()
+        .map_err(|e| format!("ctx_window не usize ({ctx_window:?}): {e}"))?;
+
+    let dir = Path::new(CONTAINER_RUN_DIR);
+    let egress = connect_unix(dir.join(SOCKET_EGRESS))
+        .await
+        .map_err(|e| format!("connect egress.sock: {e}"))?;
+    let act = connect_unix(dir.join(SOCKET_ACT))
+        .await
+        .map_err(|e| format!("connect act.sock: {e}"))?;
+    let event = connect_unix(dir.join(SOCKET_EVENT))
+        .await
+        .map_err(|e| format!("connect event.sock: {e}"))?;
+
+    let spec = SandboxChildSpec {
+        run_id,
+        task,
+        base_url,
+        model,
+        temperature: None,
+        context_window: Some(context_window),
+    };
+    let outcome = run_sandbox_child_session(&spec, egress, act, event).await;
+    tracing::info!(?outcome, "--sandbox-child: прогон завершён");
+    Ok(match outcome {
+        LoopOutcome::Final(_) => 0,
+        _ => 1,
+    })
 }
 
 /// Грубый разбор `RUST_LOG` в `LevelFilter` (без env-filter-зависимостей). Неизвестное → info.

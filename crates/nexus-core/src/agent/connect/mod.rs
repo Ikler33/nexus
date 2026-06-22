@@ -26,6 +26,10 @@ pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamE
 pub mod afunix;
 #[cfg(unix)]
 pub use afunix::{connect_unix, serve_unix, serve_unix_at, AfUnixTransport};
+// Хардненинг bind-пути сокета (0600 + non-socket-refusal) — переиспользует host-side `SandboxRunner`
+// (Unix-only, как и весь AF_UNIX-хостинг).
+#[cfg(unix)]
+pub(crate) use afunix::{harden_socket_perms, prepare_socket_path};
 
 /// Версия протокола этой сборки. Клиент объявляет поддерживаемые в `initialize`; сервер выбирает.
 pub const PROTOCOL_VERSION: &str = "1.0";
