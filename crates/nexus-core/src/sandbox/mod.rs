@@ -34,6 +34,12 @@ pub mod event;
 /// `run_agent_loop`). Composition-root песочницы (`--sandbox-child`). SANDBOX-4b-2b.
 pub mod child;
 
+/// `SandboxRunner` — host-оркестратор: bind 3 AF_UNIX-сокета + spawn `podman run` + serve реальными
+/// backend'ами (GuardedProxy/HostActServer/EventForwardServer). SANDBOX-4b-2b. Unix-only (AF_UNIX +
+/// rootless-podman — Linux-host фича; на Windows `tokio::net::Unix*` отсутствует, как у `connect::afunix`).
+#[cfg(unix)]
+pub mod runner;
+
 /// Образ песочницы по умолчанию (тот же, что у DEPLOY-3 `nexus deploy docker`).
 pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 /// Путь vault ВНУТРИ контейнера (`:ro`), = `NEXUS_VAULT` образа.
@@ -161,8 +167,16 @@ pub struct SandboxPlan {
 /// Рендер хардненного `podman run` argv. ЧИСТАЯ функция (Tier-1-тестируема). Рантайм НЕ запускает,
 /// НЕ передаёт окружение хоста. Egress замкнут `--network=none` (GuardedProxy подключит SANDBOX-2).
 pub fn sandbox_run_plan(cfg: &SandboxConfig) -> SandboxPlan {
+    sandbox_run_plan_with_cmd(cfg, &[])
+}
+
+/// Как [`sandbox_run_plan`], но добавляет команду контейнера ПОСЛЕ образа (аргументы ENTRYPOINT
+/// `nexus-agentd`). `SandboxRunner` (SANDBOX-4b-2b) передаёт `["--sandbox-child", run_id, base_url, model,
+/// ctx_window, task]` — argv (не шелл!), поэтому task с пробелами/спецсимволами не интерпретируется. ENV
+/// хоста по-прежнему НЕ пробрасывается (нет `-e`) — параметры прогона едут позиционно, не как секреты.
+pub fn sandbox_run_plan_with_cmd(cfg: &SandboxConfig, cmd: &[String]) -> SandboxPlan {
     let name = container_name(&cfg.run_id);
-    let argv = vec![
+    let mut argv = vec![
         "podman".into(),
         "run".into(),
         "--rm".into(), // эфемерный: состояние не переживает прогон
@@ -189,11 +203,20 @@ pub fn sandbox_run_plan(cfg: &SandboxConfig) -> SandboxPlan {
         format!("{}:{CONTAINER_RUN_DIR}", cfg.host_run_dir.display()),
         cfg.image.clone(),
     ];
+    // CMD ПОСЛЕ образа → аргументы ENTRYPOINT (nexus-agentd). При пустом cmd образ остаётся последним.
+    argv.extend(cmd.iter().cloned());
     SandboxPlan {
         argv,
         container_name: name,
     }
 }
+
+/// Имена 3 сокетов в per-run каталоге (`SandboxConfig::host_run_dir` на хосте / `CONTAINER_RUN_DIR` в
+/// контейнере): egress (SANDBOX-2) / act (SANDBOX-3) / event (SANDBOX-4b). ЕДИНЫЙ источник имён для host
+/// (`SandboxRunner` биндит) и контейнера (`--sandbox-child` коннектит) — пути не дрейфуют.
+pub const SOCKET_EGRESS: &str = "egress.sock";
+pub const SOCKET_ACT: &str = "act.sock";
+pub const SOCKET_EVENT: &str = "event.sock";
 
 #[cfg(test)]
 mod tests {
