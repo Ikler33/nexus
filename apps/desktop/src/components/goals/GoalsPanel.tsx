@@ -75,7 +75,9 @@ export function GoalsPanel() {
           </div>
         ) : items.length === 0 ? (
           <div className={styles.emptyState}>
-            <Target size={22} className={styles.emptyIco} aria-hidden />
+            <span className={styles.emptyIcoBox}>
+              <Target size={22} className={styles.emptyIco} aria-hidden />
+            </span>
             <p className={styles.empty}>{t('goals.empty')}</p>
           </div>
         ) : (

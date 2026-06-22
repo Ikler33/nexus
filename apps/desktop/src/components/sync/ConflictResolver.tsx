@@ -222,7 +222,7 @@ export function ConflictResolver({ onClose }: { onClose: () => void }) {
                   <div className={styles.compare}>
                     <button
                       type="button"
-                      className={`${styles.side} ${side === 'ours' ? styles.chosen : ''} ${side && side !== 'ours' ? styles.dimmed : ''}`}
+                      className={`${styles.side} ${styles.sideOurs} ${side === 'ours' ? styles.chosen : ''} ${side && side !== 'ours' ? styles.dimmed : ''}`}
                       onClick={() => pick(f.path, 'ours')}
                     >
                       <span className={styles.sideLabel}>
@@ -233,7 +233,7 @@ export function ConflictResolver({ onClose }: { onClose: () => void }) {
                     </button>
                     <button
                       type="button"
-                      className={`${styles.side} ${side === 'theirs' ? styles.chosen : ''} ${side && side !== 'theirs' ? styles.dimmed : ''}`}
+                      className={`${styles.side} ${styles.sideTheirs} ${side === 'theirs' ? styles.chosen : ''} ${side && side !== 'theirs' ? styles.dimmed : ''}`}
                       onClick={() => pick(f.path, 'theirs')}
                     >
                       <span className={styles.sideLabel}>
@@ -248,21 +248,21 @@ export function ConflictResolver({ onClose }: { onClose: () => void }) {
                   <div className={styles.pick}>
                     <button
                       type="button"
-                      className={`${styles.pickBtn} ${side === 'ours' ? styles.pickOn : ''}`}
+                      className={`${styles.pickBtn} ${side === 'ours' ? styles.pickOnLocal : ''}`}
                       onClick={() => pick(f.path, 'ours')}
                     >
                       {t('conflict.ours')}
                     </button>
                     <button
                       type="button"
-                      className={`${styles.pickBtn} ${side === 'theirs' ? styles.pickOn : ''}`}
+                      className={`${styles.pickBtn} ${side === 'theirs' ? styles.pickOnRemote : ''}`}
                       onClick={() => pick(f.path, 'theirs')}
                     >
                       {t('conflict.theirs')}
                     </button>
                     <button
                       type="button"
-                      className={`${styles.pickBtn} ${side === 'both' ? styles.pickOn : ''}`}
+                      className={`${styles.pickBtn} ${side === 'both' ? styles.pickOnBoth : ''}`}
                       onClick={() => pick(f.path, 'both')}
                     >
                       {t('conflict.both')}

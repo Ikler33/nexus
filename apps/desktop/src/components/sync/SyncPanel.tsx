@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { GitBranch, GitMerge, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -121,6 +121,9 @@ export function SyncPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.header}>
+          <span className={styles.headIco} aria-hidden>
+            <GitBranch size={18} />
+          </span>
           <span className={styles.title}>{t('git.title')}</span>
           <button
             className={styles.close}
@@ -138,22 +141,36 @@ export function SyncPanel() {
           ) : changes.length === 0 ? (
             <p className={styles.muted}>{t('git.clean')}</p>
           ) : (
-            <ul className={styles.changes} aria-label={t('git.changes')}>
-              {changes.map((c) => (
-                <li key={c.path} className={styles.change}>
-                  <span className={`${styles.kind} ${styles[c.kind]}`} aria-hidden>
-                    {c.kind === 'new'
-                      ? 'A'
-                      : c.kind === 'deleted'
-                        ? 'D'
-                        : c.kind === 'renamed'
-                          ? 'R'
-                          : 'M'}
-                  </span>
-                  <span className={styles.path}>{c.path}</span>
-                </li>
-              ))}
-            </ul>
+            <div>
+              <div className={styles.secLabel}>
+                {t('git.changes')}
+                <span className={styles.cnt}>{changes.length}</span>
+              </div>
+              <ul className={styles.changes} aria-label={t('git.changes')}>
+                {changes.map((c) => {
+                  const slash = c.path.lastIndexOf('/');
+                  const dir = slash >= 0 ? c.path.slice(0, slash + 1) : '';
+                  const name = slash >= 0 ? c.path.slice(slash + 1) : c.path;
+                  return (
+                    <li key={c.path} className={styles.change}>
+                      <span className={`${styles.kind} ${styles[c.kind]}`} aria-hidden>
+                        {c.kind === 'new'
+                          ? 'A'
+                          : c.kind === 'deleted'
+                            ? 'D'
+                            : c.kind === 'renamed'
+                              ? 'R'
+                              : 'M'}
+                      </span>
+                      <span className={styles.path}>
+                        {dir && <span className={styles.dir}>{dir}</span>}
+                        {name}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
 
           {changes !== null && changes.length > 0 && (
@@ -218,6 +235,7 @@ export function SyncPanel() {
             onClick={() => void sync()}
             disabled={syncBusy || !remoteUrl.trim()}
           >
+            <RefreshCw size={15} aria-hidden />
             {syncBusy ? t('git.syncing') : t('git.syncBtn')}
           </button>
           <button
@@ -225,6 +243,7 @@ export function SyncPanel() {
             onClick={() => void commit()}
             disabled={busy || !changes || changes.length === 0}
           >
+            <GitMerge size={15} aria-hidden />
             {busy ? t('git.committing') : t('git.commit')}
           </button>
         </footer>

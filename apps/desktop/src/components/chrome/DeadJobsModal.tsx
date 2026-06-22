@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, ListTodo, RotateCcw, Power } from 'lucide-react';
+import { AlertTriangle, Clock, ListTodo, RotateCcw, Power } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { tauriApi } from '../../lib/tauri-api';
 import type { ActiveJob, DeadJob } from '../../lib/tauri-api';
@@ -113,7 +113,7 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.header}>
-          <AlertTriangle size={15} className={styles.headIco} aria-hidden />
+          <Clock size={16} className={styles.headIco} aria-hidden />
           <span className={styles.title}>{t('deadJobs.title')}</span>
           {phase.kind === 'list' && (
             <button
@@ -150,13 +150,13 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
                 <section key={j.id} className={styles.job}>
                   <div className={styles.jobHead}>
                     <span className={styles.kind}>{kindLabel(j.kind)}</span>
-                    <span className={styles.meta}>
-                      {j.state === 'running'
-                        ? t('deadJobs.running')
-                        : j.runAt * 1000 <= Date.now()
-                          ? t('deadJobs.queued')
-                          : inLabel(j.runAt)}
-                    </span>
+                    {j.state === 'running' ? (
+                      <span className={`${styles.meta} ${styles.running}`}>{t('deadJobs.running')}</span>
+                    ) : (
+                      <span className={styles.meta}>
+                        {j.runAt * 1000 <= Date.now() ? t('deadJobs.queued') : inLabel(j.runAt)}
+                      </span>
+                    )}
                   </div>
                 </section>
               ))}
@@ -169,7 +169,7 @@ export function DeadJobsModal({ onClose }: { onClose: () => void }) {
               </p>
               <p className={styles.muted}>{t('deadJobs.hint')}</p>
               {phase.jobs.map((j) => (
-                <section key={j.id} className={styles.job}>
+                <section key={j.id} className={`${styles.job} ${styles.errJob}`}>
                   <div className={styles.jobHead}>
                     <span className={styles.kind}>{kindLabel(j.kind)}</span>
                     <span className={styles.meta}>

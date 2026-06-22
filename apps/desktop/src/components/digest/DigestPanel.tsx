@@ -105,7 +105,9 @@ export function DigestPanel() {
           </div>
         ) : (
           <div className={styles.emptyState}>
-            <Newspaper size={22} className={styles.emptyIco} aria-hidden />
+            <span className={styles.emptyIcoBox}>
+              <Newspaper size={22} className={styles.emptyIco} aria-hidden />
+            </span>
             <p className={styles.empty}>{t('digest.empty')}</p>
           </div>
         )}

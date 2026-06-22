@@ -28,11 +28,14 @@
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
-  color: var(--color-text);
+  color: var(--color-accent);
 }
 .title {
-  font-size: var(--text-sm);
+  font-family: var(--font-headline);
+  font-size: 19px;
   font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 .count {
   font-family: var(--font-mono);
@@ -77,13 +80,13 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 .dismissedCard {
-  opacity: 0.6;
+  opacity: 0.55;
 }
 .cardHead {
   display: flex;
@@ -94,7 +97,7 @@
 }
 .date {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--color-text-faint);
   white-space: nowrap;
   flex-shrink: 0;
@@ -107,9 +110,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: inherit;
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-family: var(--font-headline);
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--color-text);
   background: transparent;
   border: none;
@@ -118,8 +122,7 @@
   text-align: left;
 }
 .cardTitle:hover {
-  color: var(--color-ai);
-  text-decoration: underline;
+  color: var(--color-accent);
 }
 .hiddenBadge {
   font-size: 10px;
@@ -139,10 +142,10 @@
 .actBtn {
   display: inline-grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 25px;
+  height: 25px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-faint);
   cursor: pointer;
@@ -152,25 +155,27 @@
   background: var(--color-surface-hover);
 }
 .delBtn:hover {
-  color: var(--color-danger, #c0392b);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
 }
 .summary {
   margin: 0;
-  font-size: var(--text-sm);
+  font-family: var(--font-serif);
+  font-size: var(--text-base);
   color: var(--color-text-muted);
-  line-height: 1.45;
+  line-height: 1.55;
 }
 .topics {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .topic {
-  font-size: 10px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  color: var(--color-ai);
-  background: color-mix(in srgb, var(--color-ai) 10%, transparent);
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  color: var(--color-tag);
+  background: var(--color-tag-soft);
   white-space: nowrap;
 }
 

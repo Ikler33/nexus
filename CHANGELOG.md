@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Дизайн · Hermes-6 фан-аут PR-A — рескин модалок/инсайтов (Память/Эпизоды/Дайджест/Цели/Противоречия/Входящие/DeadJobs/Sync+Conflict)
+
+In-place CSS-рескин 5 поверхностей под `screens.jsx`/`insights.css`/`sync.css`/`conflict.css`: заголовки → `--font-headline` 19px, мета → `--font-mono`, soft-accent пилюли, ember-акцент вместо cool-`--color-ai`, теги → `--color-tag`, soft-square чипы, entry-motion (m-fade/m-pop), empty-state иконо-боксы. Рескин-на-месте — 0 регрессий фич/i18n/a11y (adversarial-ревью 3 линзы, вердикт MERGE). Только per-component `.module.css` (+ аддитивные `emptyIcoBox`/`headIcon` спаны); shared-файлы не тронуты.
+
 ### Дизайн · AI-панель Castor (Hermes-6, Фаза B срез 1) — 2 вкладки + икон-композер + релокация «Связей»
 
 Рескин AI/чат-панели под hi-fi макет (`ai-panel.jsx`). Рескин-на-месте — вся проводка чата сохранена.

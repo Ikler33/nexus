@@ -64,7 +64,9 @@ export function InboxPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <Inbox size={16} aria-hidden />
+          <span className={styles.iconBox}>
+            <Inbox size={16} aria-hidden />
+          </span>
           <span className={styles.title}>{t('inbox.title')}</span>
           <span className={styles.spacer} />
           <button
@@ -92,7 +94,9 @@ export function InboxPanel() {
           </div>
         ) : items.length === 0 ? (
           <div className={styles.emptyState}>
-            <Inbox size={22} className={styles.emptyIco} aria-hidden />
+            <span className={styles.emptyIcoBox}>
+              <Inbox size={22} className={styles.emptyIco} aria-hidden />
+            </span>
             <p className={styles.empty}>{t('inbox.empty')}</p>
           </div>
         ) : (
