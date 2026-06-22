@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2b — host env-build (allow-list §5.4) + `WireExecGo`-builder + `propose_key` в ledger-цепочке
+
+Второй суб-срез исполнительной половины Фазы-3: чистая host-side плита под redeem (6c-2c) — собирает окружение и сигнал «исполни» из СОХРАНЁННОГО действия, БЕЗ исполнения и без ledger-переходов. Плюс load-bearing изменение модели данных для будущего ledger-фенса.
+
+- **`exec_host::build_exec_env`** (§5.4 fail-CLOSED): env exec-команды из ПУСТОГО + фикс. безопасный набор (`PATH`/`LANG` + `HOME=/tmp`) + явный per-skill `skill_passthrough`. **НИКОГДА не читает `std::env` хоста** (структурно fail-closed, не best-effort-скруб). **Denylist ЗАПРЕЩЁН** (fail-OPEN). Зарезервированные `PATH`/`LANG`/`HOME` skill-passthrough НЕ переопределяет (скилл не подменит PATH на writable-каталог). `skill_passthrough` дефолт пуст (SKILL.md→env_passthrough — отдельный срез).
+- **`exec_host::build_exec_go`**: строит `WireExecGo` host-side из СОХРАНЁННОГО `Action` (argv — host-authority, контейнер не переподаёт → TOCTOU-замок). Exhaustive по 3 exec-таргетам (ShellRun→argv; ProcessSpawn→[program]+args; GitOp→["git", op]+args; vault-арм fail-closed пустой). cwd=`ScratchTmpfs{cwd_rel}` (VaultRo отложен — live 6c-3); env=allow-list; таймаут/кэп — дефолты.
+- **`propose_key` в ledger-цепочке**: `ExecDecision::Approved` теперь несёт `{ledger_action_id, propose_key}` (идемпотентность-ключ ledger-строки из `dispatch_exec_decision` — ЕДИНЫЙ источник, не пересчёт во избежание дрейфа); `DispatchExecBackend` сохраняет его в `PendingExec` → redeem/finalize (6c-2c/2d) фенсят `approved→executing→executed|failed` по нему.
+
+18 Tier-1 тестов exec_host (+7: env allowlist-only/HOME=scratch/passthrough/**reserved-not-overridable**; go argv-from-action/defaults/no-cwd; + approve-test пинит сохранённый propose_key). Инертно (build_* зовёт redeem 6c-2c). clippy 0, fmt + node-lints зелёные.
+
 ### Агент · SANDBOX-6c-2a — exec-исполнитель `exec_child` (in-container) + `ExecRunner`-шов + CI-линт INV-CMD-SITE
 
 Первый суб-срез исполнительной половины Фазы-3 (`docs/specs/agent-sandbox.md §5.2`; план — мультиагент-Workflow «plan-sandbox-6c2», 8 суб-срезов). Реализует **ЕДИНСТВЕННОЕ место реального исполнения exec-команды агента** + структурно лочит инверсию «host РЕШАЕТ, контейнер ИСПОЛНЯЕТ». Инертен (вызывающих нет) до 6c-2e.
