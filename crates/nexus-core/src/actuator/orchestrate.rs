@@ -135,6 +135,34 @@ impl EventSink for TracingEventSink {
             } => {
                 tracing::info!(%path, add, del, ?status, "actuator: дифф предложенного файла");
             }
+            // Exec-наблюдаемость (6c-2g): оператор headless видит exec-намерение/исход в логе. summary —
+            // редакция-безопасный силуэт (без сырых argv/значений); ExecResult — exit+finalized без вывода.
+            AgentEvent::ExecProposal {
+                run_id,
+                action_id,
+                summary,
+            } => {
+                tracing::info!(
+                    run_id,
+                    action_id,
+                    %summary,
+                    "actuator: exec-предложение (headless — решает DecisionSource)"
+                );
+            }
+            AgentEvent::ExecResult {
+                run_id,
+                action_id,
+                exit_code,
+                finalized,
+            } => {
+                tracing::info!(
+                    run_id,
+                    action_id,
+                    exit_code,
+                    finalized,
+                    "actuator: exec завершён"
+                );
+            }
             // Прочие события цикла идут через on_event — здесь не наша забота.
             _ => {}
         }
@@ -586,15 +614,17 @@ fn file_status(action: &Action) -> FileStatus {
 }
 
 /// [`ChangeKind`] по виду действия (для долговечного `diff_summary` журнала): create → New,
-/// edit/frontmatter → Edit. Зеркало [`file_status`], но в audit-типе (журнал не тащит UI-FileStatus).
+/// edit/frontmatter → Edit, exec → Exec. Зеркало [`file_status`], но в audit-типе (журнал не тащит
+/// UI-FileStatus). Exec-ветка классифицируется как [`ChangeKind::Exec`] для КОРРЕКТНОСТИ, но по
+/// exec-пути `diff_summary` в журнал НЕ пишется (`dispatch_exec_decision` ставит `None`) — exec вне
+/// vault-diff (нет `+N -M`).
 fn change_kind(action: &Action) -> ChangeKind {
     match &action.target {
         ActionTarget::NoteCreate { .. } => ChangeKind::New,
         ActionTarget::NoteEdit { .. } | ActionTarget::Frontmatter { .. } => ChangeKind::Edit,
-        // exec инертно Edit (см. file_status; в 6b не доходит до журнала diff_summary).
         ActionTarget::ShellRun { .. }
         | ActionTarget::ProcessSpawn { .. }
-        | ActionTarget::GitOp { .. } => ChangeKind::Edit,
+        | ActionTarget::GitOp { .. } => ChangeKind::Exec,
     }
 }
 
@@ -948,12 +978,35 @@ pub enum ExecDecision {
     HardBlocked(String),
 }
 
+/// РЕДАКЦИЯ-БЕЗОПАСНОЕ резюме exec-предложения для [`AgentEvent::ExecProposal`] (наблюдаемость, §5.6
+/// приватность). Несёт ТОЛЬКО структурную форму: дотированное имя инструмента + (для git) bounded-токен
+/// `op` + СЧЁТЧИК argv/args — НЕ сырые значения argv/env (там могли бы оказаться пути/секреты). Зеркало
+/// дисциплины [`DiffSummary`]: событие к UI/логам по построению не несёт содержимого команды, только её
+/// «силуэт». vault-таргеты сюда не приходят (exec-only путь) → fallback-метка `"exec"`.
+fn exec_proposal_summary(action: &Action) -> String {
+    match &action.target {
+        ActionTarget::ShellRun { argv, .. } => {
+            format!("shell.run · argv: {} токен(ов)", argv.len())
+        }
+        ActionTarget::ProcessSpawn { args, .. } => {
+            format!("process.spawn · args: {} токен(ов)", args.len())
+        }
+        ActionTarget::GitOp { op, args } => {
+            format!("git.op · {op} · args: {} токен(ов)", args.len())
+        }
+        ActionTarget::NoteCreate { .. }
+        | ActionTarget::NoteEdit { .. }
+        | ActionTarget::Frontmatter { .. } => "exec".to_string(),
+    }
+}
+
 /// Host-РЕШЕНИЕ по exec-таргету (SANDBOX-6c, спека §5.2 фаза `decide`): `classify_exec` (НИКОГДА Auto) →
 /// под `Confirm` спрашивает [`DecisionSource`] (PolicyDefault=DENY headless; ChannelDecision=человек). На
 /// Approve проводит ledger `proposed→approved` (write-before-act intent) и ВОЗВРАЩАЕТ `action_id` — НО НЕ
 /// ИСПОЛНЯЕТ (исполнение ВНУТРИ песочницы, 6c-2). **Vault-apply-путь (`apply_action`/`apply_now`) НЕ
-/// зовётся** — exec там fail-closed (РУБЕЖ-0). Зеркалит decision-часть [`propose_and_decide`] без apply +
-/// без UI-Proposal (ExecProposal-событие — 6c-2; здесь PolicyDefault/ChannelDecision решают по `action_id`).
+/// зовётся** — exec там fail-closed (РУБЕЖ-0). Зеркалит decision-часть [`propose_and_decide`] без apply.
+/// `events` (6c-2g): эмитит [`AgentEvent::ExecProposal`] (редакция-безопасное резюме) ПОСЛЕ записи
+/// proposed-строки и ДО запроса решения — UI/лог видят намерение прежде, чем человек/политика ответят.
 pub async fn dispatch_exec_decision(
     action: &Action,
     run_id: i64,
@@ -961,6 +1014,7 @@ pub async fn dispatch_exec_decision(
     decision_source: &Arc<dyn DecisionSource>,
     ledger: &AuditSink,
     canon_root: &Path,
+    events: &dyn EventSink,
 ) -> ExecDecision {
     // ── РУБЕЖ 0 (зеркало apply.rs РУБЕЖ-0): exec-only fail-closed, АКТИВНО В RELEASE ──────────────
     // debug_assert компилируется прочь в release; sibling apply_now выбрал РАНТАЙМ-guard. Сейчас не-exec
@@ -1014,6 +1068,14 @@ pub async fn dispatch_exec_decision(
                     }
                 },
             };
+            // ExecProposal (6c-2g): UI/лог видят намерение исполнить ПОСЛЕ записи proposed-строки и ДО
+            // запроса решения. summary — редакция-безопасный силуэт (см. [`exec_proposal_summary`]); сырые
+            // argv/значения/вывод сюда НЕ идут. kill-switch re-check ниже (после decide) НЕ затрагивается.
+            events.emit(AgentEvent::ExecProposal {
+                run_id,
+                action_id,
+                summary: exec_proposal_summary(action),
+            });
             let batch = ProposalBatch {
                 run_id,
                 items: vec![ProposalItem {
@@ -1117,6 +1179,49 @@ mod tests {
     fn block_message_covers_phase3_reasons() {
         assert!(block_message(&BlockReason::ShellDisabled).contains("shell_enable"));
         assert!(block_message(&BlockReason::SandboxUnavailable).contains("песочница"));
+    }
+
+    /// 6c-2g: `change_kind` exec-таргетов → [`ChangeKind::Exec`] (токен "exec"); vault → New/Edit.
+    #[test]
+    fn change_kind_classifies_exec() {
+        assert_eq!(
+            change_kind(&Action::shell_run(vec!["ls".into()], None)),
+            ChangeKind::Exec
+        );
+        assert_eq!(
+            change_kind(&Action::process_spawn("git", vec![], None)),
+            ChangeKind::Exec
+        );
+        assert_eq!(
+            change_kind(&Action::git_op("status", vec![])),
+            ChangeKind::Exec
+        );
+        assert_eq!(
+            change_kind(&Action::note_create("A.md", "x")),
+            ChangeKind::New
+        );
+        assert_eq!(
+            change_kind(&Action::note_edit("B.md", "y")),
+            ChangeKind::Edit
+        );
+        assert_eq!(ChangeKind::Exec.as_str(), "exec");
+    }
+
+    /// 6c-2g приватность: `exec_proposal_summary` несёт силуэт (имя инструмента / git `op` + счётчик), НЕ
+    /// сырые argv-значения (плантованный секрет ОТСУТСТВУЕТ в summary).
+    #[test]
+    fn exec_proposal_summary_is_content_free() {
+        let secret = "TOPSECRET-VALUE-42";
+        let s = exec_proposal_summary(&Action::shell_run(vec!["echo".into(), secret.into()], None));
+        assert!(s.contains("shell.run"), "несёт имя инструмента: {s:?}");
+        assert!(!s.contains(secret), "НЕ несёт сырое argv-значение: {s:?}");
+        // git: op-токен присутствует (bounded shape), argv-значения — нет.
+        let g = exec_proposal_summary(&Action::git_op("status", vec![secret.into()]));
+        assert!(
+            g.contains("git.op") && g.contains("status"),
+            "git op-силуэт: {g:?}"
+        );
+        assert!(!g.contains(secret), "git argv-значение НЕ в summary: {g:?}");
     }
 
     /// Временный vault + БД + sink. canon_root КАНОНИЗИРОВАН (предусловие resolve_vault_path_for_write).

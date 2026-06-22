@@ -332,8 +332,7 @@ struct PendingExec {
 }
 
 /// Висящее ИСПОЛНЯЕМОЕ exec-действие (после redeem, ledger=EXECUTING). report (6c-2d) консьюмит и
-/// финализирует ledger по `propose_key`. `ledger_action_id` — для ExecResult-события (6c-2g).
-#[allow(dead_code)] // поля читает report/события (6c-2d/2g); 6c-2c только заполняет на execute
+/// финализирует ledger по `propose_key`; `ledger_action_id` адресует [`AgentEvent::ExecResult`] (6c-2g).
 struct InFlightExec {
     propose_key: String,
     ledger_action_id: i64,
@@ -556,6 +555,7 @@ impl ExecBackend for DispatchExecBackend {
             &self.ctx.decision_source,
             self.ctx.ledger.as_ref(),
             self.ctx.canon_root.as_path(),
+            self.ctx.events.as_ref(),
         )
         .await;
         match decision {
@@ -701,6 +701,16 @@ impl ExecBackend for DispatchExecBackend {
                 "exec: ledger финализация не применена (строка уже терминальна)",
             ));
         }
+        // ExecResult (6c-2g): UI/лог видят исход. СОДЕРЖИМОЕ-СВОБОДЕН by-design — exit_code + finalized,
+        // НЕ сырой stdout/stderr (приватность §5.6; вывод видит лишь модель через fenced tool-result).
+        self.ctx
+            .events
+            .emit(crate::agent::event::AgentEvent::ExecResult {
+                run_id: self.ctx.run_id,
+                action_id: in_flight.ledger_action_id,
+                exit_code,
+                finalized: true,
+            });
         Ok(WireExecResult {
             exit_code,
             finalized: true,
@@ -838,9 +848,10 @@ mod tests {
 
     // ── DispatchExecBackend end-to-end (Tier-1: настоящий vault+БД+ledger, classify_exec+decision) ──
     use crate::actuator::{
-        AuditSink, ChannelDecision, DecisionSource, DispatchPolicy, EventSink, GatedToolCtx,
-        ItemDecision, PolicyDefault, TracingEventSink, OVERWRITE_THRESHOLD,
+        AuditSink, ChannelDecision, CollectingSink, DecisionSource, DispatchPolicy, EventSink,
+        GatedToolCtx, ItemDecision, PolicyDefault, TracingEventSink, OVERWRITE_THRESHOLD,
     };
+    use crate::agent::event::AgentEvent;
     use crate::db::Database;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -882,6 +893,26 @@ mod tests {
         let events: Arc<dyn EventSink> = Arc::new(TracingEventSink::new());
         let ctx = GatedToolCtx::new(canon_root, ledger, 1, policy, decision, events);
         (dir, DispatchExecBackend::new(ctx))
+    }
+
+    /// Как [`exec_gate`] (shell_enable+sandbox), но с [`CollectingSink`] — тест читает эмитированные
+    /// ExecProposal/ExecResult (6c-2g наблюдаемость).
+    async fn exec_gate_collecting(
+        decision: Arc<dyn DecisionSource>,
+    ) -> (TempDir, DispatchExecBackend, Arc<CollectingSink>) {
+        let dir = TempDir::new().unwrap();
+        let canon_root = dir.path().canonicalize().unwrap();
+        let db = Database::open(canon_root.join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        let ledger = AuditSink::new(db.writer().clone(), db.reader().clone());
+        std::mem::forget(db);
+        let policy =
+            DispatchPolicy::new(Some("auto"), OVERWRITE_THRESHOLD, 16).with_exec_flags(true, true);
+        let sink = Arc::new(CollectingSink::new());
+        let events: Arc<dyn EventSink> = sink.clone();
+        let ctx = GatedToolCtx::new(canon_root, ledger, 1, policy, decision, events);
+        (dir, DispatchExecBackend::new(ctx), sink)
     }
 
     /// shell_enable=false → HardBlocked(ShellDisabled), токен НЕ выдан (pending пуст).
@@ -1257,6 +1288,81 @@ mod tests {
         );
         // undo_ref пока не персистится (6c-2h).
         assert!(row.undo_ref.is_none(), "undo не персистится в 6c-2d");
+    }
+
+    // ── 6c-2g: события ExecProposal/ExecResult (наблюдаемость + приватность) ──────────────────────
+    /// decide эмитит [`AgentEvent::ExecProposal`] (ПОСЛЕ proposed-строки, ДО решения) с редакция-
+    /// безопасным `summary` (имя инструмента + счётчики), БЕЗ сырого argv-значения (плантованный секрет
+    /// в argv ОТСУТСТВУЕТ в summary). `action_id` адресует proposed-строку (id=1).
+    #[tokio::test]
+    async fn exec_decide_emits_exec_proposal() {
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(crate::actuator::BatchDecision::from_pairs([(
+            1,
+            ItemDecision::Approve,
+        )]))
+        .await
+        .unwrap();
+        let (_d, backend, sink) = exec_gate_collecting(Arc::new(chan)).await;
+        let secret = "SUPER-SECRET-IN-ARGV-xyz789";
+        backend
+            .decide(&Action::shell_run(vec!["echo".into(), secret.into()], None))
+            .await;
+        let proposal = sink.events().into_iter().find_map(|e| match e {
+            AgentEvent::ExecProposal {
+                action_id, summary, ..
+            } => Some((action_id, summary)),
+            _ => None,
+        });
+        let (action_id, summary) = proposal.expect("ExecProposal эмитировано");
+        assert_eq!(action_id, 1, "адресует proposed-строку");
+        assert!(
+            summary.contains("shell.run"),
+            "summary несёт имя инструмента: {summary:?}"
+        );
+        assert!(
+            !summary.contains(secret),
+            "summary НЕ несёт сырой argv-секрет: {summary:?}"
+        );
+    }
+
+    /// report эмитит [`AgentEvent::ExecResult`] {exit_code, finalized} — СОДЕРЖИМОЕ-СВОБОДЕН: даже передав
+    /// сырой stdout/stderr в report, событие несёт ТОЛЬКО exit+finalized (нет stdout-поля by-design).
+    #[tokio::test]
+    async fn exec_report_emits_exec_result() {
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(crate::actuator::BatchDecision::from_pairs([(
+            1,
+            ItemDecision::Approve,
+        )]))
+        .await
+        .unwrap();
+        let (_d, backend, sink) = exec_gate_collecting(Arc::new(chan)).await;
+        let token = match backend
+            .decide(&Action::shell_run(vec!["ls".into()], None))
+            .await
+        {
+            WireExecDecision::Approved { exec_token, .. } => exec_token,
+            other => panic!("ожидался Approved, получено {other:?}"),
+        };
+        backend.execute(&token).await.expect("execute ok");
+        backend
+            .report(&token, 0, "RAW-STDOUT-secret", "RAW-STDERR", None)
+            .await
+            .expect("report ok");
+        let result = sink.events().into_iter().find_map(|e| match e {
+            AgentEvent::ExecResult {
+                action_id,
+                exit_code,
+                finalized,
+                ..
+            } => Some((action_id, exit_code, finalized)),
+            _ => None,
+        });
+        let (action_id, exit_code, finalized) = result.expect("ExecResult эмитировано");
+        assert_eq!(action_id, 1);
+        assert_eq!(exit_code, 0);
+        assert!(finalized);
     }
 
     /// report без execute (нет in_flight) → invalid_params.

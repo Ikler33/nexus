@@ -232,6 +232,45 @@ mod tests {
         assert_eq!(got[2].1["text"], "готово");
     }
 
+    /// 6c-2g: ExecResult (struct-вариант) течёт sandbox→host→десктоп через ТОТ ЖЕ релей. Экзаустивный
+    /// `map_agent_event` гарантирует, что новый core-вариант не теряется на проводе (newtype-loss гард),
+    /// и форма на десктопе = camelCase {type:execResult, runId, actionId, exitCode, finalized}.
+    #[tokio::test]
+    async fn event_forward_relays_exec_result() {
+        let (sandbox_t, host_event_sock) = channel_pair();
+        let (desktop_out, desktop_in) = channel_pair();
+        let out: Arc<dyn Transport> = Arc::new(desktop_out);
+        let srv = EventForwardServer::new(out);
+        let host = tokio::spawn(async move {
+            srv.serve(host_event_sock).await;
+        });
+
+        let (fwd, rx) = ProxyEventForwarder::with_capacity(4);
+        fwd.forward(&AgentEvent::ExecResult {
+            run_id: 3,
+            action_id: 7,
+            exit_code: 0,
+            finalized: true,
+        });
+        drop(fwd);
+        drain_events(rx, sandbox_t).await;
+
+        let mut got = Vec::new();
+        while let Ok(Some(msg)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), desktop_in.recv()).await
+        {
+            got.push(as_notification(msg));
+        }
+        host.await.unwrap();
+
+        assert_eq!(got.len(), 1, "ExecResult дошёл до десктопа");
+        assert_eq!(got[0].1["type"], "execResult");
+        assert_eq!(got[0].1["runId"], 3);
+        assert_eq!(got[0].1["actionId"], 7);
+        assert_eq!(got[0].1["exitCode"], 0);
+        assert_eq!(got[0].1["finalized"], true);
+    }
+
     /// Host релеит ТОЛЬКО `agent/event`: чужой метод на event.sock игнорируется (контейнер не диктует).
     #[tokio::test]
     async fn server_ignores_foreign_method() {

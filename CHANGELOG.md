@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2g — события exec (`ExecProposal`/`ExecResult`) + `ChangeKind::Exec` + wire-маппинг
+
+Наблюдаемость + долговечный вид exec. Аддитивно поверх рабочего exec-ядра (6c-2a..f): host эмитит структурные события exec-намерения и исхода; UI/лог/десктоп-релей видят exec-активность БЕЗ сырого содержимого команды/вывода (редакция-дисциплина §5.6, зеркало `DiffSummary`).
+
+- **`ChangeKind::Exec`** (`audit.rs`, токен `"exec"`): `orchestrate::change_kind` exec-таргетов → `Exec` (корректность; по exec-пути `diff_summary` в журнал НЕ пишется — exec вне vault-diff). `FileStatus` НЕ расширяется (exec не порождает changeset-файл).
+- **`AgentEvent::ExecProposal { run_id, action_id, summary }` + `AgentEvent::ExecResult { run_id, action_id, exit_code, finalized }`** (`agent/event.rs`) — **STRUCT-варианты** (НЕ newtype: serde-internal-tag `tag="type"` молча терял бы newtype-варианты — задокументировано в event.rs/sandbox/event.rs); явный camelCase (`runId`/`actionId`/`exitCode`). `summary` — редакция-безопасный силуэт (имя инструмента + `op`-токен git + счётчик argv), `ExecResult` СОДЕРЖИМОЕ-СВОБОДЕН (нет stdout-поля by-design).
+- **Зеркальные `AgentStreamEvent::ExecProposal`/`ExecResult` + `map_agent_event`-рукава** (`wire.rs`): экзаустивный матч компилит-форсит wire-решение; `EventForwardServer` релеит exec-события контейнер→host→десктоп без доп. проводки (через `event_notification`→`map_agent_event`).
+- **Эмиссия host-side через `ctx.events`**: `ExecProposal` в `dispatch_exec_decision` (+параметр `events: &dyn EventSink`) ПОСЛЕ proposed-строки и ДО запроса решения; `ExecResult` в `DispatchExecBackend.report` после финализации ledger. `TracingEventSink` логирует оба (headless-наблюдаемость, паритет с Proposal).
+- **`UNDO_EXEC_GITREF="exec_gitref"`** (`actuator/mod.rs`) — стабильный ledger-дискриминант отмены exec-GitOp объявлен здесь; персист `undo_ref`+exec-undo-ветка — 6c-2h.
+
+Tier-1 (+8, итого 843 nexus-core): `change_kind_classifies_exec` · `exec_proposal_summary_is_content_free` (плантованный секрет ОТСУТСТВУЕТ в summary) · `exec_proposal/result_is_struct_variant_roundtrip` (newtype-loss регресс-гард) · `map_agent_event_covers_exec_variants` · `exec_decide_emits_exec_proposal`/`exec_report_emits_exec_result` (CollectingSink) · `event_forward_relays_exec_result` (сквозной релей до десктопа). agentd компилируется, clippy 0, fmt + node-lints зелёные. Остаётся undo (6c-2h), live-валидация (6c-3).
+
 ### Агент · SANDBOX-6c-2f-3 — host-проводка exec end-to-end (serve_host в SandboxRunner + agentd CLI/харнесс)
 
 Завершает 6c-2f: host теперь ОТВЕЧАЕТ на host/exec вживую (под `shell_enable`), замыкая полный exec-путь decide→execute→exec_child→report. Default-OFF сохранён двухуровнево (registry + serve_host). Завершает Фазу-3 host/exec в коде; остаются события (6c-2g), undo (6c-2h), live-валидация (6c-3).

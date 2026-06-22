@@ -193,6 +193,11 @@ pub enum UndoHandle {
 /// Дискриминанты [`UndoHandle`] для ledger — единый источник строк.
 pub const UNDO_SNAPSHOT: &str = "snapshot";
 pub const UNDO_TRASH: &str = "trash";
+/// Дискриминант отмены exec-GitOp (Фаза-3 SANDBOX-6c §5.5): `undo_ref` несёт pre-op git-ref (sha до
+/// мутирующей операции) для восстановления. Стабильная ledger-строка объявлена здесь (6c-2g); персист
+/// `undo_ref→UndoCols{kind:exec_gitref}` в report и exec-ветка `from_cols`/`undo` — 6c-2h (GitOp pre-op-ref).
+/// shell.run/process.spawn НЕОБРАТИМЫ (undo_ref=None) и НИКОГДА не Auto (classify).
+pub const UNDO_EXEC_GITREF: &str = "exec_gitref";
 
 impl UndoHandle {
     /// Сериализация в (kind, ref) для хранения в ledger. `ref` для Snapshot — `ts` (строкой), для Trash —
