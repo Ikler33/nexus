@@ -23,20 +23,18 @@ afterEach(() => {
 
 describe('ChatView (Ф1-8)', () => {
   // Ревизия владельца 11.06 (вторая итерация): Web — флаг ПОВЕРХ режима, сегмент НЕ трогает.
-  it('Web — независимый тоггл: режим не сбрасывается, сегмент остаётся активным', () => {
+  // Ревизия владельца 11.06: Web — флаг ПОВЕРХ режима. Hermes-6: режим выбирается scope-чипом
+  // (клик циклит vault↔general), Web/Pin — икон-тогглы рядом.
+  it('Web — независимый тоггл: режим не сбрасывается, scope-чип живой', () => {
     render(<ChatView />);
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
-
-    fireEvent.click(screen.getByRole('radio', { name: /общий|general/i }));
+    fireEvent.click(screen.getByRole('button', { name: /по заметкам/i }));
     expect(useChatStore.getState().mode).toBe('general');
 
     fireEvent.click(screen.getByRole('button', { name: /web/i, pressed: false }));
     expect(useChatStore.getState().web).toBe(true);
     expect(useChatStore.getState().mode).toBe('general');
-    // Сегмент живой: можно сменить режим при включённом Web.
-    const vaultRadio = screen.getByRole('radio', { name: /по заметкам|notes/i });
-    expect(vaultRadio).not.toBeDisabled();
-    fireEvent.click(vaultRadio);
+    // Чип живой при включённом Web: Общий → По заметкам.
+    fireEvent.click(screen.getByRole('button', { name: /общий/i }));
     expect(useChatStore.getState().mode).toBe('vault');
     expect(useChatStore.getState().web).toBe(true);
 
@@ -45,22 +43,13 @@ describe('ChatView (Ф1-8)', () => {
     expect(useChatStore.getState().mode).toBe('vault');
   });
 
-  // audit B10: radiogroup-режим — roving tabindex + стрелки переключают (WAI-ARIA radio pattern).
-  it('radiogroup: стрелки переключают режим, roving tabindex (a11y, audit B10)', () => {
+  // Hermes-6: scope = один чип, клик циклит vault↔general (вместо radiogroup-сегмента).
+  it('scope-чип циклит режим vault↔general', () => {
     render(<ChatView />);
-    const group = screen.getByRole('radiogroup');
-    const vaultRadio = screen.getByRole('radio', { name: /по заметкам|notes/i });
-    const generalRadio = screen.getByRole('radio', { name: /общий|general/i });
-    // выбранный режим (vault по умолчанию) — в табовом порядке, остальные изъяты.
-    expect(vaultRadio).toHaveAttribute('tabindex', '0');
-    expect(generalRadio).toHaveAttribute('tabindex', '-1');
-
-    fireEvent.keyDown(group, { key: 'ArrowRight' });
+    expect(useChatStore.getState().mode).toBe('vault');
+    fireEvent.click(screen.getByRole('button', { name: /по заметкам/i }));
     expect(useChatStore.getState().mode).toBe('general');
-    expect(generalRadio).toHaveAttribute('tabindex', '0');
-    expect(vaultRadio).toHaveAttribute('tabindex', '-1');
-
-    fireEvent.keyDown(group, { key: 'ArrowLeft' });
+    fireEvent.click(screen.getByRole('button', { name: /общий/i }));
     expect(useChatStore.getState().mode).toBe('vault');
   });
 
@@ -214,7 +203,7 @@ describe('ChatView (Ф1-8)', () => {
   it('пустое состояние: заголовок + suggestion-pill отправляет вопрос', () => {
     vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {}); // без асинхронного стрима
     render(<ChatView />);
-    expect(screen.getByText('Спросите свои заметки')).toBeInTheDocument();
+    expect(screen.getByText('Спросите Castor')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Как устроен RAG в Orvin?' }));
     // отправка → появилось пользовательское сообщение с текстом пилюли (пустое состояние ушло)
     expect(screen.getByText('Как устроен RAG в Orvin?')).toBeInTheDocument();

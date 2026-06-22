@@ -1078,3 +1078,113 @@
 .chevOpen {
   transform: rotate(90deg);
 }
+
+/* ============================================================
+   Hermes-6 ai-panel рескин: scope-чип композера + круглый send + empty-tile
+   (порт `ai.css` .composer-scope/.send-btn/.chat-empty .glyph).
+   ============================================================ */
+.scopeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 7px;
+}
+.scopeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+.scopeChip:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+.scopeChip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.scopeCaret {
+  opacity: 0.55;
+}
+.scopePin {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+.scopePin:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+.scopePin:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.scopePinOn {
+  color: var(--color-accent);
+  border-color: color-mix(in oklch, var(--color-accent) 55%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+/* Круглые икон-кнопки отправки/стопа (вместо текстовых) */
+.sendBtn,
+.stopBtn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+.sendBtn {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border: none;
+}
+.sendBtn:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+.sendBtn:disabled {
+  background: var(--color-surface);
+  color: var(--color-text-faint);
+  cursor: default;
+}
+.stopBtn {
+  background: var(--color-danger);
+  color: #fff;
+  border: none;
+}
+
+/* Empty-state: знак на ember-плитке (как макет .chat-empty .glyph) */
+.emptyGlyph {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  display: grid;
+  place-items: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}

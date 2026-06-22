@@ -320,3 +320,104 @@
     animation: none;
   }
 }
+
+/* ============================================================
+   Hermes-6: вкладка «Castor» (лаунчер агента) — порт `ai.css` .agent-*.
+   ============================================================ */
+.agentLaunch {
+  display: flex;
+  flex-direction: column;
+}
+.agentIntro {
+  text-align: center;
+  padding: 26px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.agentGlyph {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+.agentName {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-text);
+}
+.agentDesc {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: var(--leading-normal, 1.55);
+  max-width: 280px;
+}
+.agentActs {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 6px 14px 14px;
+}
+.agentActsLabel {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  padding: 10px 0 2px;
+}
+.agentOpen {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in oklch, var(--color-accent) 40%, var(--color-border));
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out);
+}
+.agentOpen:hover {
+  background: color-mix(in oklch, var(--color-accent) 18%, transparent);
+}
+.agentAct {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
+}
+.agentAct:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
+}
+.agentAct span {
+  flex: 1;
+}
+.agentActGo {
+  margin-left: auto;
+  opacity: 0;
+  color: var(--color-text-faint);
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.agentAct:hover .agentActGo {
+  opacity: 0.7;
+}

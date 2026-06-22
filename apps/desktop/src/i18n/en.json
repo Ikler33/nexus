@@ -598,7 +598,7 @@
     "thinking": "Searching notes…",
     "thinkingPlain": "Thinking…",
     "thinkingWeb": "Searching the web…",
-    "emptyTitle": "Ask your notes",
+    "emptyTitle": "Ask Castor",
     "ask1": "How does RAG work in Orvin?",
     "ask2": "What are embeddings?",
     "ask3": "Explain local-first",
