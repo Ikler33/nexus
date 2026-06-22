@@ -21,11 +21,13 @@ use std::sync::Arc;
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::agent::connect::{
-    harden_socket_perms, peer_uid, prepare_socket_path, AfUnixTransport, RpcMessage, Transport,
+    harden_socket_perms, peer_uid, prepare_socket_path, AfUnixTransport, RpcError, RpcMessage,
+    Transport,
 };
 
-use super::act::{ActuatorBackend, HostActServer};
+use super::act::{ActuatorBackend, HostActServer, HOST_ACT};
 use super::event::EventForwardServer;
+use super::exec_host::{ExecBackend, HostExecServer, HOST_EXEC};
 use super::proxy::{EgressBackend, GuardedProxy};
 use super::{sandbox_run_plan_with_cmd, SandboxConfig, SOCKET_ACT, SOCKET_EGRESS, SOCKET_EVENT};
 
@@ -39,8 +41,9 @@ fn uid_matches(expected: Option<u32>, actual: Option<u32>) -> bool {
 /// Авторизует принятое на per-run сокете соединение по `SO_PEERCRED` (спека §4.3 инвариант 6 / §10.1 T8):
 /// валидно ТОЛЬКО если peer бежит под `expected_uid` (= host-видимый uid контейнера, см. `run()`).
 /// Defense-in-depth ПОВЕРХ 0600-сокета + 0700-каталога — ядро-достоверный uid, который клиент не подделает.
-/// Fail-closed (см. [`uid_matches`] и [`peer_uid`]). **Тем же гейтом ОБЯЗАН оборачиваться будущий
-/// `serve_exec` (exec.sock).**
+/// Fail-closed (см. [`uid_matches`] и [`peer_uid`]). **Этот же гейт покрывает host/exec:** exec едет по
+/// host/exec на ТОМ ЖЕ act.sock через [`serve_host`] (НЕТ отдельного exec.sock/serve_exec — §5.2 один
+/// peer-gated канал на host/act+host/exec; не заводить 4-й сокет = не плодить ungated exec-путь).
 fn peer_authorized(stream: &UnixStream, expected_uid: Option<u32>) -> bool {
     uid_matches(expected_uid, peer_uid(stream))
 }
@@ -68,6 +71,44 @@ pub async fn serve_act<T: Transport, B: ActuatorBackend>(transport: T, server: &
     while let Some(msg) = transport.recv().await {
         if let RpcMessage::Request { id, method, params } = msg {
             let result = server.handle(&method, params).await;
+            if transport
+                .send(RpcMessage::Response { id, result })
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+}
+
+/// Обслуживает ОДНО соединение act.sock, маршрутизируя `host/act` + `host/exec` ПО МЕТОДУ (SANDBOX-6c-2f):
+/// один peer-gated канал несёт ОБЕ RPC (контейнерные `ProxyActuator`+`ProxyExecDispatcher` делят его через
+/// `Arc`-транспорт). `exec_server`=`None` (когда `shell_enable=false`) → `host/exec` → `method_not_found`
+/// (fail-closed: exec структурно недоступен). Неизвестный метод → `method_not_found`. Заменяет `serve_act`
+/// на act.sock, когда подключён exec; SO_PEERCRED-гейт обёрнут вызывающим accept-циклом (тот же, что для
+/// act/egress/event) — отдельного 4-го сокета/гейта нет.
+pub async fn serve_host<T, Ab, Eb>(
+    transport: T,
+    act_server: &HostActServer<Ab>,
+    exec_server: Option<&HostExecServer<Eb>>,
+) where
+    T: Transport,
+    Ab: ActuatorBackend,
+    Eb: ExecBackend,
+{
+    while let Some(msg) = transport.recv().await {
+        if let RpcMessage::Request { id, method, params } = msg {
+            let result = if method == HOST_ACT {
+                act_server.handle(&method, params).await
+            } else if method == HOST_EXEC {
+                match exec_server {
+                    Some(srv) => srv.handle(&method, params).await,
+                    None => Err(RpcError::method_not_found()),
+                }
+            } else {
+                Err(RpcError::method_not_found())
+            };
             if transport
                 .send(RpcMessage::Response { id, result })
                 .await
@@ -488,6 +529,127 @@ mod tests {
         // wire round-trip санити (WireAction в импортах — пинит контракт).
         let _ = WireAction::try_from(&Action::note_edit("X.md", "y")).unwrap();
         drop(shim);
+        srv.await.unwrap();
+    }
+
+    // ── 6c-2f-1: serve_host (host/act + host/exec на ОДНОМ соединении по методу) ──────────────────
+    use crate::sandbox::exec_host::{
+        ExecBackend, WireExecAction, WireExecDecision, WireExecPhase, WireExecRequest, HOST_EXEC,
+    };
+
+    struct ActNoop;
+    #[async_trait]
+    impl ActuatorBackend for ActNoop {
+        async fn act(&self, _a: &Action) -> Result<DispatchOutcome, ToolError> {
+            Ok(DispatchOutcome::Applied("ок".into()))
+        }
+    }
+    struct ExecMock(WireExecDecision);
+    #[async_trait]
+    impl ExecBackend for ExecMock {
+        async fn decide(&self, _a: &Action) -> WireExecDecision {
+            self.0.clone()
+        }
+    }
+    fn exec_decide_req(id: i64) -> RpcMessage {
+        let params = serde_json::to_value(WireExecRequest {
+            phase: WireExecPhase::Decide,
+            action: Some(WireExecAction::try_from(&Action::git_op("status", vec![])).unwrap()),
+            exec_token: None,
+            exit_code: None,
+            stdout_tail: None,
+            stderr_tail: None,
+            undo_ref: None,
+        })
+        .unwrap();
+        RpcMessage::request(id, HOST_EXEC, params)
+    }
+
+    /// serve_host роутит ОБЕ RPC (host/act + host/exec) на ОДНОМ соединении по методу.
+    #[tokio::test]
+    async fn serve_host_routes_both_methods_one_connection() {
+        let act_server = HostActServer::new(ActNoop);
+        let exec_server = HostExecServer::new(ExecMock(WireExecDecision::Rejected {
+            summary: "no".into(),
+        }));
+        let (client, host) = channel_pair();
+        let srv = tokio::spawn(async move {
+            serve_host(host, &act_server, Some(&exec_server)).await;
+        });
+
+        // host/act → Applied (Ok).
+        let act_params =
+            serde_json::to_value(WireAction::try_from(&Action::note_create("A.md", "x")).unwrap())
+                .unwrap();
+        client
+            .send(RpcMessage::request(1, HOST_ACT, act_params))
+            .await
+            .unwrap();
+        match client.recv().await.unwrap() {
+            RpcMessage::Response { id, result } => {
+                assert_eq!(id, serde_json::json!(1));
+                assert!(result.is_ok(), "host/act → Ok");
+            }
+            other => panic!("ожидался Response, {other:?}"),
+        }
+        // host/exec decide на ТОМ ЖЕ соединении → Rejected (роут к exec_server).
+        client.send(exec_decide_req(2)).await.unwrap();
+        match client.recv().await.unwrap() {
+            RpcMessage::Response { id, result } => {
+                assert_eq!(id, serde_json::json!(2));
+                let dec: WireExecDecision = serde_json::from_value(result.unwrap()).unwrap();
+                assert!(
+                    matches!(dec, WireExecDecision::Rejected { .. }),
+                    "dec={dec:?}"
+                );
+            }
+            other => panic!("ожидался Response, {other:?}"),
+        }
+        drop(client);
+        srv.await.unwrap();
+    }
+
+    /// exec_server=None (shell_enable=false) → host/exec → method_not_found (fail-closed).
+    #[tokio::test]
+    async fn serve_host_exec_disabled_method_not_found() {
+        let act_server = HostActServer::new(ActNoop);
+        let (client, host) = channel_pair();
+        let srv = tokio::spawn(async move {
+            serve_host(host, &act_server, None::<&HostExecServer<ExecMock>>).await;
+        });
+        client.send(exec_decide_req(1)).await.unwrap();
+        match client.recv().await.unwrap() {
+            RpcMessage::Response { result, .. } => {
+                assert!(result.is_err(), "exec выключен → method_not_found");
+            }
+            other => panic!("ожидался Response, {other:?}"),
+        }
+        drop(client);
+        srv.await.unwrap();
+    }
+
+    /// Неизвестный метод → method_not_found.
+    #[tokio::test]
+    async fn serve_host_unknown_method() {
+        let act_server = HostActServer::new(ActNoop);
+        let exec_server = HostExecServer::new(ExecMock(WireExecDecision::Rejected {
+            summary: "x".into(),
+        }));
+        let (client, host) = channel_pair();
+        let srv = tokio::spawn(async move {
+            serve_host(host, &act_server, Some(&exec_server)).await;
+        });
+        client
+            .send(RpcMessage::request(1, "host/bogus", Value::Null))
+            .await
+            .unwrap();
+        match client.recv().await.unwrap() {
+            RpcMessage::Response { result, .. } => {
+                assert!(result.is_err(), "неизвестный метод → ошибка")
+            }
+            other => panic!("ожидался Response, {other:?}"),
+        }
+        drop(client);
         srv.await.unwrap();
     }
 }

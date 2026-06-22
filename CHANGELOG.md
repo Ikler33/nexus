@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2f-1 — `serve_host` (host/act + host/exec на одном соединении) + `Arc<T>: Transport`
+
+Первый из двух суб-срезов проводки exec: host-side примитивы. `serve_host` — security-keystone (обе RPC на одном peer-gated канале) + sharing-примитив для контейнерных шимов. Сама проводка (runner.run/child.rs/agentd CLI) — 6c-2f-2.
+
+- **`runner::serve_host<T,Ab,Eb>`**: обслуживает act.sock, маршрутизируя `host/act`→`HostActServer` + `host/exec`→`HostExecServer` ПО МЕТОДУ на ОДНОМ соединении. `exec_server=None` (когда `shell_enable=false`) → `host/exec`→`method_not_found` (fail-closed); неизвестный метод→`method_not_found`. Заменит `serve_act` на act.sock когда подключён exec (6c-2f-2). SO_PEERCRED-гейт — тот же accept-цикл (act/egress/event), отдельного 4-го сокета/гейта НЕТ.
+- **`impl<T: Transport + ?Sized> Transport for Arc<T>`** (connect): делегирует send/recv → ДВА `Arc`-клона делят ОДНО act.sock-соединение (контейнерные `ProxyActuator` host/act + `ProxyExecDispatcher` host/exec). Безопасно: tool-вызовы СЕРИАЛИЗОВАНЫ (`run_agent_loop` — один инструмент за раз).
+
+4 Tier-1 теста (channel_pair): serve_host роутит обе RPC на одном соединении · exec-disabled→method_not_found · unknown-method→method_not_found; arc-transport-делит-соединение. clippy 0, fmt + node-lints зелёные. Инертно (serve_host/Arc-impl зовутся проводкой 6c-2f-2; serve_host unix-only как остальной runner).
+
 ### Агент · SANDBOX-6c-2e-2 — 3 exec-инструмента (`shell.run`/`process.spawn`/`git.op`) поверх `ExecDispatcher`
 
 Шестой суб-срез: сами exec-инструменты агента (логика разбора+свёртки), транспорт-агностичные через шов `ExecDispatcher` (6c-2e-1). Регистрация в `child.rs` при `shell_enable` + проводка `ProxyExecDispatcher` поверх shared act.sock + `serve_host` (host отвечает host/act+host/exec на одном соединении) — 6c-2f.
