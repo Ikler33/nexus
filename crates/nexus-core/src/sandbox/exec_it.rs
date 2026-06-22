@@ -124,4 +124,83 @@ mod tier2 {
             "podman run --network=none <image> true → exit 0"
         );
     }
+
+    /// Запуск команды в ХАРДНЕННОМ podman-контейнере (зеркало sandbox_run_plan-флагов: `--network=none`
+    /// `--read-only` `--tmpfs /tmp` `--cap-drop=ALL` `--security-opt=no-new-privileges`) + доп. аргументы.
+    /// Возвращает `(exit, stdout, stderr)`. Только для Tier-2-тестов (gated podman_it_enabled).
+    fn hardened_podman_run(extra: &[&str], cmd: &[&str]) -> (i32, String, String) {
+        let mut a: Vec<String> = [
+            "run",
+            "--rm",
+            "--network=none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        a.extend(extra.iter().map(|s| s.to_string()));
+        a.push(DEFAULT_SANDBOX_IMAGE.to_string());
+        a.extend(cmd.iter().map(|s| s.to_string()));
+        // sandbox-exec-lint: allow podman-launch (Tier-2 контейнерный containment-прогон, не exec агента).
+        let out = std::process::Command::new("podman")
+            .args(&a)
+            .output()
+            .expect("podman run");
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    /// KERNEL-EROFS: запись в `:ro`-vault внутри контейнера падает (Read-only file system), файл не создан.
+    /// Доказывает kernel-enforcement vault-`:ro` (Tier-1 мокал; Tier-2 — реальный mount).
+    #[test]
+    #[ignore = "Tier-2: требует Podman на .28 (NEXUS_SANDBOX_IT=1)"]
+    fn real_vault_write_is_erofs() {
+        if !podman_it_enabled() {
+            return;
+        }
+        let vault = tempfile::TempDir::new().expect("tempdir");
+        assert!(
+            is_safe_test_vault(vault.path()),
+            "тест-vault не под ~/.nexus"
+        );
+        let mount = format!("{}:/vault:ro", vault.path().display());
+        let (code, _out, err) = hardened_podman_run(&["-v", &mount], &["touch", "/vault/probe"]);
+        assert_ne!(code, 0, "запись в :ro vault должна падать (EROFS)");
+        assert!(
+            err.to_lowercase().contains("read-only"),
+            "EROFS-сигнатура в stderr: {err:?}"
+        );
+        assert!(
+            !vault.path().join("probe").exists(),
+            "файл НЕ создан на host-стороне"
+        );
+    }
+
+    /// KERNEL-ENETUNREACH: внутри `--network=none` нет маршрутов (`/proc/net/route` — только заголовок).
+    /// Доказывает реальную сетевую изоляцию exec (Tier-1 не мог — нужен kernel namespace).
+    #[test]
+    #[ignore = "Tier-2: требует Podman на .28 (NEXUS_SANDBOX_IT=1)"]
+    fn no_network_route_inside_exec() {
+        if !podman_it_enabled() {
+            return;
+        }
+        let (code, out, _err) = hardened_podman_run(&[], &["cat", "/proc/net/route"]);
+        assert_eq!(code, 0, "cat /proc/net/route → exit 0");
+        let data_lines = out
+            .lines()
+            .skip(1) // строка-заголовок Iface/Destination/...
+            .filter(|l| !l.trim().is_empty())
+            .count();
+        assert_eq!(
+            data_lines, 0,
+            "в --network=none нет сетевых маршрутов: {out:?}"
+        );
+    }
 }

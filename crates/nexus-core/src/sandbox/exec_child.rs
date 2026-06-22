@@ -439,6 +439,70 @@ mod tests {
         );
     }
 
+    /// ФОРК-ВНУК ДЕРЖИТ ТРУБУ (6c-3c, always-CI): родитель `sh` бэкграундит внука (`sleep`), который
+    /// наследует и УДЕРЖИВАЕТ stdout fd1, и СРАЗУ выходит 0. `read_capped_tail(stdout)` не получит EOF
+    /// (внук держит трубу), но внешний `tokio::time::timeout` ОБЯЗАН вернуть `run()` ~таймаут (drop(exec) →
+    /// kill_on_drop), НЕ виснуть до выхода внука (5с). Это podman-free durable-гарантия (форк-демон-кейс).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_forking_grandchild_holds_pipe_returns_at_timeout() {
+        let sh = first_existing(&["/bin/sh", "/usr/bin/sh"]);
+        let start = std::time::Instant::now();
+        let r = RealExecRunner
+            .run(
+                // внук `sleep 5` держит fd1; sh выходит мгновенно. timeout=250мс ≪ 5с.
+                &go(
+                    vec![sh, "-c", "sleep 5 & exit 0"],
+                    vec![],
+                    scratch(""),
+                    1024,
+                    250,
+                ),
+                Path::new("/tmp"),
+                Path::new("/tmp"),
+            )
+            .await;
+        assert!(
+            r.timed_out,
+            "внук держит fd1 → истёк timeout (не зависли на удержанной трубе)"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(4),
+            "вернулся ~таймаут, не ждал выхода внука (5с): {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// OUTPUT-CAP НА РЕАЛЬНОМ РАННЕРЕ (6c-3c, always-CI): вывод ≫ cap (200КБ через `head -c /dev/zero`,
+    /// портируемо macOS+linux) ⇒ `stdout_truncated=true`, хвост ограничен cap (ring-buffer), exit 0, без
+    /// `read_to_end`/OOM. Дополняет unit-тест `read_capped_tail` сквозной проверкой реального процесса.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_large_output_capped() {
+        let head = first_existing(&["/usr/bin/head", "/bin/head"]);
+        let cap = 65_536usize;
+        let r = RealExecRunner
+            .run(
+                &go(
+                    vec![head, "-c", "200000", "/dev/zero"],
+                    vec![],
+                    scratch(""),
+                    cap,
+                    5000,
+                ),
+                Path::new("/tmp"),
+                Path::new("/tmp"),
+            )
+            .await;
+        assert_eq!(r.exit_code, 0);
+        assert!(r.stdout_truncated, "200КБ > cap ⇒ truncated");
+        assert!(
+            r.stdout_tail.len() <= cap,
+            "хвост ограничен cap (ring): {} > {cap}",
+            r.stdout_tail.len()
+        );
+    }
+
     /// timeout убивает зависшую команду и помечает timed_out (бюджет ~спим дольше таймаута).
     #[cfg(unix)]
     #[tokio::test]

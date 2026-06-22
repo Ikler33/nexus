@@ -54,7 +54,10 @@ import { dirname, resolve } from 'node:path';
 // смоук: реальный `podman run --network=none <image> true`; linux + NEXUS_SANDBOX_IT=1 + podman, иначе
 // no-op; гоняется на .28 — podman нет ни локально, ни в CI). Следующие Tier-2 exec-тесты (6c-3b/c/e/f)
 // тоже лягут в exec_it и поднимут EXPECTED.
-const EXPECTED = 28;
+// 28→30: + SANDBOX-6c-3b/c Tier-2 containment-матрица в `exec_it::tier2`: `real_vault_write_is_erofs`
+// (kernel EROFS на :ro-vault) + `no_network_route_inside_exec` (--network=none, /proc/net/route пуст).
+// (always-CI host-тесты форк-внук/output-cap в exec_child.rs — НЕ #[ignore], в счётчик не идут.)
+const EXPECTED = 30;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src
