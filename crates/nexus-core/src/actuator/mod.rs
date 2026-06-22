@@ -55,8 +55,9 @@ pub use decision::{
 #[cfg(any(test, feature = "test-util"))]
 pub use orchestrate::ManualClock;
 pub use orchestrate::{
-    dispatch_action, Clock, CollectingSink, DispatchOutcome, DispatchPolicy, EventSink,
-    MonotonicClock, TokenBucket, TracingEventSink, DEFAULT_REFILL_PER, DEFAULT_REFILL_TOKENS,
+    dispatch_action, dispatch_exec_decision, Clock, CollectingSink, DispatchOutcome,
+    DispatchPolicy, EventSink, ExecDecision, MonotonicClock, TokenBucket, TracingEventSink,
+    DEFAULT_REFILL_PER, DEFAULT_REFILL_TOKENS,
 };
 pub use tools::{
     ActionDispatcher, GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool,

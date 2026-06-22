@@ -927,6 +927,132 @@ async fn propose_and_decide(
     }
 }
 
+/// Исход host-РЕШЕНИЯ по exec-таргету (Фаза-3, SANDBOX-6c). НЕ применяет — exec исполняется ВНУТРИ
+/// песочницы (6c-2). На Approve несёт `ledger_action_id` (вызывающий минтит exec_token, привязанный к нему).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecDecision {
+    /// Одобрено: строка ledger проведена proposed→approved; `ledger_action_id` — её id.
+    Approved { ledger_action_id: i64 },
+    /// Отклонено (PolicyDefault DENY / человек reject / гонка transition / пауза) — резюме.
+    Rejected(String),
+    /// Жёстко заблокировано (shell_enable=false / песочница недоступна) — фенсенная причина.
+    HardBlocked(String),
+}
+
+/// Host-РЕШЕНИЕ по exec-таргету (SANDBOX-6c, спека §5.2 фаза `decide`): `classify_exec` (НИКОГДА Auto) →
+/// под `Confirm` спрашивает [`DecisionSource`] (PolicyDefault=DENY headless; ChannelDecision=человек). На
+/// Approve проводит ledger `proposed→approved` (write-before-act intent) и ВОЗВРАЩАЕТ `action_id` — НО НЕ
+/// ИСПОЛНЯЕТ (исполнение ВНУТРИ песочницы, 6c-2). **Vault-apply-путь (`apply_action`/`apply_now`) НЕ
+/// зовётся** — exec там fail-closed (РУБЕЖ-0). Зеркалит decision-часть [`propose_and_decide`] без apply +
+/// без UI-Proposal (ExecProposal-событие — 6c-2; здесь PolicyDefault/ChannelDecision решают по `action_id`).
+pub async fn dispatch_exec_decision(
+    action: &Action,
+    run_id: i64,
+    policy: &DispatchPolicy,
+    decision_source: &Arc<dyn DecisionSource>,
+    ledger: &AuditSink,
+    canon_root: &Path,
+) -> ExecDecision {
+    // ── РУБЕЖ 0 (зеркало apply.rs РУБЕЖ-0): exec-only fail-closed, АКТИВНО В RELEASE ──────────────
+    // debug_assert компилируется прочь в release; sibling apply_now выбрал РАНТАЙМ-guard. Сейчас не-exec
+    // сюда не дойдёт (единственный вызыватель — DispatchExecBackend, питаемый WireExecAction::try_into →
+    // только exec), но если vault-таргет когда-либо просочится в release, Confirm-арм записал бы proposed-
+    // строку с target_rel=None (теряя vault-путь) и заминтил бы exec_token на vault-правку. Отсекаем
+    // структурно, не только в debug. debug_assert оставлен как ГРОМКАЯ документация инварианта в тестах.
+    debug_assert!(
+        action.target.is_exec(),
+        "dispatch_exec_decision только для exec-таргетов"
+    );
+    if !action.target.is_exec() {
+        return ExecDecision::Rejected(
+            "не-exec таргет на exec-пути решения — отказано (fail-closed)".into(),
+        );
+    }
+    let ctx = ClassifyCtx {
+        root: canon_root,
+        overwrite_threshold: policy.overwrite_threshold,
+        shell_enable: policy.shell_enable,
+        sandbox_available: policy.sandbox_available,
+    };
+    let tier = classify(action, &ctx);
+    match &tier {
+        RiskTier::HardBlocked(reason) => ExecDecision::HardBlocked(block_message(reason)),
+        // exec НИКОГДА не Auto (classify_exec); fail-closed на случай регрессии classify.
+        RiskTier::Auto => ExecDecision::Rejected(
+            "exec-таргет неожиданно классифицирован Auto — отказано (fail-closed)".into(),
+        ),
+        RiskTier::Confirm(_) => {
+            // classify_hash пуст (нет vault-контента); proposal_key стабилен по действию (exhaustive over exec).
+            let propose_key = proposal_key(run_id, action, "");
+            let entry = ActionEntry {
+                run_id,
+                idempotency_key: propose_key.clone(),
+                tool_name: action.target.tool_name().to_string(),
+                target_rel: None, // exec не имеет vault-цели
+                risk_tier: tier.as_str().to_string(),
+                state: STATE_PROPOSED.to_string(),
+                content_hash: None,
+                diff_summary: None, // exec — не дифф (ExecProposal-метрики — 6c-2)
+            };
+            let action_id = match ledger.record_before(entry).await {
+                Ok(id) => id,
+                Err(_) => match audit::lookup_id(&ledger_reader(ledger), &propose_key).await {
+                    Some(id) => id,
+                    None => {
+                        return ExecDecision::Rejected(
+                            "ledger: не удалось записать строку exec-предложения".into(),
+                        )
+                    }
+                },
+            };
+            let batch = ProposalBatch {
+                run_id,
+                items: vec![ProposalItem {
+                    action_id,
+                    target_rel: String::new(),
+                    tier: tier.clone(),
+                    add: 0,
+                    del: 0,
+                }],
+            };
+            match decision_source.decide(&batch).await.decision_for(action_id) {
+                ItemDecision::Approve => {
+                    // KILL-SWITCH (чек-пойнт #3): под паузой даже одобренный exec НЕ проводится в approved
+                    // (строка остаётся proposed → можно решить снова на un-pause). Re-check ПОСЛЕ decide().
+                    if policy.is_paused() {
+                        return ExecDecision::Rejected(
+                            "exec-предложение: агент на паузе (kill-switch) — подавлено".into(),
+                        );
+                    }
+                    let promoted = audit::transition(
+                        &ledger_writer(ledger),
+                        &propose_key,
+                        STATE_PROPOSED,
+                        STATE_APPROVED,
+                    )
+                    .await
+                    .unwrap_or(false);
+                    if !promoted {
+                        return ExecDecision::Rejected(
+                            "exec-одобрение не применено (строка не в состоянии proposed)".into(),
+                        );
+                    }
+                    ExecDecision::Approved {
+                        ledger_action_id: action_id,
+                    }
+                }
+                ItemDecision::Reject => {
+                    let outcome = "exec-предложение отклонено".to_string();
+                    let _ = ledger
+                        .finish(&propose_key, STATE_REJECTED, &outcome, None)
+                        .await;
+                    ExecDecision::Rejected(outcome)
+                }
+            }
+        }
+    }
+}
+
 /// Ключ строки ПРЕДЛОЖЕНИЯ — отдельный от apply-ключа (префикс), чтобы не коллизировать с record_before
 /// самого apply. Стабилен по `(run_id, tool, args, classify_hash)` — то же предложение даёт тот же ключ.
 fn proposal_key(run_id: i64, action: &Action, classify_hash: &str) -> String {

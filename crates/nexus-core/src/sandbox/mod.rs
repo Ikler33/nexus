@@ -25,6 +25,9 @@ pub mod proxy;
 /// SANDBOX-3.
 pub mod act;
 
+/// host/exec — RPC исполнения Фаза-3 exec-таргетов (host РЕШАЕТ, контейнер ИСПОЛНЯЕТ). SANDBOX-6c.
+pub mod exec_host;
+
 /// `ProxyToolProvider` — in-sandbox tool-capable провайдер (stream:false поверх GuardedProxy). SANDBOX-4a.
 pub mod provider;
 
