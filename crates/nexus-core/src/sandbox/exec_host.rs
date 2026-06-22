@@ -1455,6 +1455,22 @@ mod tests {
         );
     }
 
+    /// 6c-3e: exec-GitOp откат = `git reset --hard <ref>` как ОБЫЧНОЕ exec-действие; под shell_enable+
+    /// sandbox+PolicyDefault → Confirm-gated → Rejected. Доказывает: синтезированный откат НИКОГДА не Auto
+    /// (скомпрометированный агент не само-апрувит свой undo) — он проходит ТОТ ЖЕ гейт, что форвардный GitOp.
+    /// (Конструкцию `git_op("reset",[...])` гоняет прод-драйвер `SandboxUndoExecDriver` в 6c-3d; здесь
+    /// пинится её КЛАССИФИКАЦИЯ как never-Auto.)
+    #[tokio::test]
+    async fn undo_reset_action_gated_never_auto() {
+        let action = Action::git_op("reset", vec!["--hard".into(), "a1b2c3d4".into()]);
+        let (_d, backend) = exec_gate(true, true, Arc::new(PolicyDefault)).await;
+        let dec = backend.decide(&action).await;
+        assert!(
+            matches!(dec, WireExecDecision::Rejected { .. }),
+            "synthesized reset под PolicyDefault → Rejected (Confirm-gated, never Auto): {dec:?}"
+        );
+    }
+
     /// HOST-AUTHORITY над СОДЕРЖИМЫМ ref (review MAJOR): GitOp report с НЕ-hex undo_ref (инъекц-строка) →
     /// host РЕ-валидирует сам ([`is_git_sha`]) → undo НЕ персистится. Скомпрометированный контейнер не
     /// пронесёт `git reset --hard <инъекция>` в долговечный ledger мимо in-container probe.

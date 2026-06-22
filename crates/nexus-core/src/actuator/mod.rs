@@ -64,7 +64,9 @@ pub use tools::{
     ActionDispatcher, GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool,
     OVERWRITE_THRESHOLD,
 };
-pub use undo::{undo_run, ActionUndo, UndoOutcome, UndoStatus};
+pub use undo::{
+    undo_run, undo_run_with_driver, ActionUndo, UndoExecDriver, UndoOutcome, UndoStatus,
+};
 
 /// Состояние действия в статус-машине актуатора (значения `agent_actions.state`).
 ///

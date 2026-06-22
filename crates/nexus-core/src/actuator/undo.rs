@@ -130,8 +130,27 @@ impl UndoOutcome {
     }
 }
 
+/// Шов исполнения exec-undo (SANDBOX-6c-3e): откат GitOp = САМ мутирующий GitOp, поэтому он RE-ENTER'ит
+/// тот же host/exec путь (classify→decide→approve→mint-token→in-container execute→report), НЕ
+/// привилегированный спец-путь. Для строки [`UndoHandle::ExecGitRef`] [`undo_run_with_driver`] ре-валидирует
+/// `reference` host-side ([`crate::sandbox::exec_host::is_git_sha`]) и зовёт [`UndoExecDriver::undo_gitref`].
+/// Прод-impl (6c-3d `SandboxUndoExecDriver`) гоняет ОДИН полный цикл в `--network=none` контейнере под тем
+/// же гейтом: `git reset --hard` классифицируется Confirm-НИКОГДА-Auto ⇒ под headless PolicyDefault
+/// auto-DENY ⇒ откат остаётся `Deferred` честно; шелл/процесс НЕ имеют ExecGitRef-хэндла ⇒ драйвер для них
+/// не зовётся (необратимы). `None` ⇒ поведение [`undo_run`] (Deferred surfacing — vault-only вызыватели).
+#[async_trait::async_trait]
+pub trait UndoExecDriver: Send + Sync {
+    /// Откатить репозиторий к pre-op `reference` (валидный git-sha — ре-проверен вызывающим). Возвращает:
+    /// [`UndoStatus::Restored`] (reset исполнен exit 0 ⇒ исходную строку пометят `undone`),
+    /// [`UndoStatus::Deferred`] (апрув отклонён / undo-worktree не сконфигурирован ⇒ строка остаётся
+    /// `executed`), [`UndoStatus::Failed`] (reset упал ⇒ строка остаётся, повтор допустим).
+    async fn undo_gitref(&self, reference: &str) -> UndoStatus;
+}
+
 /// Откатить прогон `run_id`: пройти его применённые действия NEWEST-FIRST и восстановить каждое через его
 /// [`UndoHandle`]. `canon_root` ОБЯЗАН быть уже канонизированным корнем vault (предусловие рубежа записи).
+/// БЕЗ exec-undo драйвера (exec-GitOp откат остаётся `Deferred` — vault-only поведение); exec-undo —
+/// [`undo_run_with_driver`].
 ///
 /// Reverse-order критичен: две правки одной заметки v0→v1→v2 откатываются v2 (снапшот=v1) ЗАТЕМ v1
 /// (снапшот=v0) → итог v0. Откатив сначала старейшее, мы бы получили v1, а не v0.
@@ -140,6 +159,20 @@ impl UndoOutcome {
 /// [`audit::actions_for_undo`] их не вернёт) → no-op. Толерантен к частичному провалу: один сбойный откат
 /// не прерывает остальные — собираем все исходы в [`UndoOutcome`].
 pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> UndoOutcome {
+    undo_run_with_driver(run_id, canon_root, ledger, None).await
+}
+
+/// Как [`undo_run`], но с опциональным [`UndoExecDriver`] (SANDBOX-6c-3e): `Some` ⇒ exec-GitOp откат
+/// исполняется реально (синтезированный `git reset --hard <ref>` через песочницу под host-апрувом); `None` ⇒
+/// `Deferred` surfacing (байт-в-байт как 6c-2h). Композиционный корень (agentd `--sandbox-undo`, 6c-3d)
+/// подставляет прод-драйвер; vault-only вызыватели зовут [`undo_run`]. `reference` ре-валидируется host-side
+/// ([`crate::sandbox::exec_host::is_git_sha`]) ПЕРЕД вызовом драйвера (инъекц-/мусор-ref ⇒ драйвер НЕ зовём).
+pub async fn undo_run_with_driver(
+    run_id: i64,
+    canon_root: &Path,
+    ledger: &AuditSink,
+    driver: Option<&dyn UndoExecDriver>,
+) -> UndoOutcome {
     let reader = ledger.reader_handle();
     // Newest-first набор executed-строк с undo-хэндлом. Ошибка чтения ⇒ пустой исход (нечего откатывать
     // безопасно; fail-closed — не угадываем порядок без данных).
@@ -177,16 +210,26 @@ pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> Und
                 let rel = target_rel.clone().unwrap_or(trash_rel);
                 (uncreate_via_trash(canon_root, &rel).await, false)
             }
-            // exec-GitOp (6c-2h): pre-op ref ЗАФИКСИРОВАН, но реальный `git reset` — доп. in-container exec
-            // под host-апрувом (6c-3, Tier-2 live). Здесь SURFACING: показываем ref, НЕ помечаем undone
-            // (откат не выполнен — 6c-3 завершит). НЕ vault-write (ничего на диске vault не трогаем).
-            Some(UndoHandle::ExecGitRef { reference }) => (
-                UndoStatus::Deferred(format!(
-                    "exec-GitOp откат отложен (6c-3): восстановить можно `git reset --hard {reference}` \
-                     в репозитории — авто-откат через песочницу под апрувом приходит в Tier-2"
-                )),
-                false,
-            ),
+            // exec-GitOp откат (6c-2h/3e): pre-op ref из ledger. РЕ-ВАЛИДАЦИЯ host-side (defense-in-depth:
+            // ledger мог быть повреждён/подменён — 6c-2h уже валидировал на записи, но не доверяем хранилищу
+            // слепо): мусор-ref ⇒ Failed, драйвер НЕ зовём (никакого `git reset --hard <garbage>`). Валидный
+            // ref: есть драйвер ⇒ реальный sandboxed-откат (Restored ⇒ строку пометят undone ниже); нет
+            // драйвера ⇒ Deferred surfacing (vault-only вызыватели зовут undo_run без драйвера). НЕ vault-write.
+            Some(UndoHandle::ExecGitRef { reference }) => {
+                let status = if !crate::sandbox::exec_host::is_git_sha(&reference) {
+                    UndoStatus::Failed(format!(
+                        "exec-undo: невалидный git-ref в ledger ({reference:?}) — откат невозможен (fail-closed)"
+                    ))
+                } else if let Some(d) = driver {
+                    d.undo_gitref(&reference).await
+                } else {
+                    UndoStatus::Deferred(format!(
+                        "exec-GitOp откат отложен: восстановить можно `git reset --hard {reference}` в \
+                         репозитории — авто-откат через песочницу под апрувом включается `--sandbox-undo` (6c-3d)"
+                    ))
+                };
+                (status, false)
+            }
             // Битый/неизвестный хэндл — откатить нечем (fail-closed). Не должно случаться (apply пишет
             // корректные), но не паникуем: помечаем Failed, идём дальше.
             None => (
@@ -794,6 +837,174 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.state, "executed", "deferred НЕ помечает undone");
+    }
+
+    // ── 6c-3e: UndoExecDriver seam (реальный exec-GitOp откат через гейт) ─────────────────────────
+    /// Засеять executed exec-GitOp строку (undo_kind=exec_gitref, ref=`reference`) НАПРЯМУЮ — для exec нет
+    /// vault-apply. `reference` может быть невалидным (тест порчи/подмены ledger).
+    async fn seed_exec_gitref(sink: &AuditSink, run_id: i64, key: &str, reference: &str) {
+        let entry = audit::ActionEntry {
+            run_id,
+            idempotency_key: key.into(),
+            tool_name: "git_op".into(),
+            target_rel: None,
+            risk_tier: "confirm".into(),
+            state: audit::STATE_EXECUTING.into(),
+            content_hash: None,
+            diff_summary: None,
+        };
+        sink.record_before(entry).await.unwrap();
+        sink.finish(
+            key,
+            audit::STATE_EXECUTED,
+            "exec exit=0",
+            Some(audit::UndoCols {
+                kind: UNDO_EXEC_GITREF.to_string(),
+                reference: reference.into(),
+            }),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// MockUndoExecDriver: скриптованный UndoStatus + флаг факта вызова (для «инъекц-ref → НЕ вызван»).
+    /// Ассертит, что получает ВАЛИДНЫЙ ref (undo_run ре-валидирует ДО вызова — host-authority над ref).
+    struct MockUndoExecDriver {
+        status: UndoStatus,
+        called: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl UndoExecDriver for MockUndoExecDriver {
+        async fn undo_gitref(&self, reference: &str) -> UndoStatus {
+            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                crate::sandbox::exec_host::is_git_sha(reference),
+                "драйвер получает ТОЛЬКО валидный ref (undo_run ре-валидирует): {reference:?}"
+            );
+            self.status.clone()
+        }
+    }
+    fn mock_driver(
+        status: UndoStatus,
+    ) -> (
+        MockUndoExecDriver,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            MockUndoExecDriver {
+                status,
+                called: called.clone(),
+            },
+            called,
+        )
+    }
+
+    async fn state_of(sink: &AuditSink, key: &str) -> String {
+        audit::lookup(&sink.reader_handle(), key)
+            .await
+            .unwrap()
+            .unwrap()
+            .state
+    }
+
+    /// driver=None ⇒ exec-GitOp откат остаётся Deferred БАЙТ-в-байт (vault-only вызыватели, INV-DEFAULT-INERT).
+    #[tokio::test]
+    async fn exec_gitref_with_no_driver_still_deferred() {
+        let (_d, root, sink) = setup().await;
+        seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
+        let outcome = undo_run_with_driver(1, &root, &sink, None).await;
+        assert_eq!(outcome.deferred(), 1);
+        assert_eq!(state_of(&sink, "g").await, "executed", "None ⇒ не undone");
+    }
+
+    /// Драйвер вернул Restored ⇒ исходную exec-GitOp строку помечают executed→undone; restored()==1.
+    #[tokio::test]
+    async fn exec_gitref_driver_restored_marks_undone() {
+        let (_d, root, sink) = setup().await;
+        seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
+        let (driver, called) = mock_driver(UndoStatus::Restored);
+        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        assert!(
+            called.load(std::sync::atomic::Ordering::SeqCst),
+            "драйвер вызван"
+        );
+        assert_eq!(outcome.restored(), 1, "exec-undo засчитан");
+        assert!(outcome.fully_undone());
+        assert_eq!(
+            state_of(&sink, "g").await,
+            audit::STATE_UNDONE,
+            "исходная строка помечена undone ТОЛЬКО после Restored"
+        );
+    }
+
+    /// Драйвер вернул Deferred (апрув отклонён под PolicyDefault) ⇒ строка остаётся executed; deferred()==1.
+    #[tokio::test]
+    async fn exec_gitref_driver_rejected_stays_deferred() {
+        let (_d, root, sink) = setup().await;
+        seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
+        let (driver, _c) = mock_driver(UndoStatus::Deferred("апрув отклонён".into()));
+        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        assert_eq!(outcome.deferred(), 1);
+        assert_eq!(outcome.failed(), 0, "deferred — НЕ провал");
+        assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
+    }
+
+    /// Драйвер вернул Failed (reset упал) ⇒ строка остаётся executed; failed()==1 (повтор допустим).
+    #[tokio::test]
+    async fn exec_gitref_driver_failed_not_undone() {
+        let (_d, root, sink) = setup().await;
+        seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
+        let (driver, _c) = mock_driver(UndoStatus::Failed("reset exit 1".into()));
+        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        assert_eq!(outcome.failed(), 1);
+        assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
+    }
+
+    /// HOST-AUTHORITY над ref: ledger несёт ИНЪЕКЦ/мусор-ref (повреждён/подменён) ⇒ undo_run ре-валидирует
+    /// is_git_sha → Failed, драйвер НЕ вызван (никакого `git reset --hard <garbage>`).
+    #[tokio::test]
+    async fn exec_gitref_invalid_ref_never_calls_driver() {
+        let (_d, root, sink) = setup().await;
+        seed_exec_gitref(&sink, 1, "g", "HEAD; rm -rf ~").await;
+        let (driver, called) = mock_driver(UndoStatus::Restored);
+        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        assert!(
+            !called.load(std::sync::atomic::Ordering::SeqCst),
+            "инъекц-ref → драйвер НЕ вызван (fail-closed)"
+        );
+        assert_eq!(outcome.failed(), 1, "невалидный ref → Failed");
+        assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
+    }
+
+    /// shell.run (executed, undo_kind=None) НЕ в наборе отката ⇒ драйвер не зовётся (необратим структурно).
+    #[tokio::test]
+    async fn shell_exec_has_no_undo_handle() {
+        let (_d, root, sink) = setup().await;
+        let entry = audit::ActionEntry {
+            run_id: 1,
+            idempotency_key: "sh".into(),
+            tool_name: "shell_run".into(),
+            target_rel: None,
+            risk_tier: "confirm".into(),
+            state: audit::STATE_EXECUTING.into(),
+            content_hash: None,
+            diff_summary: None,
+        };
+        sink.record_before(entry).await.unwrap();
+        sink.finish("sh", audit::STATE_EXECUTED, "exec exit=0", None)
+            .await
+            .unwrap();
+        let (driver, called) = mock_driver(UndoStatus::Restored);
+        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        assert!(
+            outcome.actions.is_empty(),
+            "shell без undo-хэндла — не в наборе отката"
+        );
+        assert!(
+            !called.load(std::sync::atomic::Ordering::SeqCst),
+            "драйвер для shell не зовётся (необратим)"
+        );
     }
 
     /// EMPTY RUN: прогон без откатываемых действий → undo_run no-op (пустой исход, fully_undone).
