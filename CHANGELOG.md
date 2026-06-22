@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-4b-2a — ШОВ `ActionDispatcher`: транспорт-агностичные актуатор-инструменты (Tier-1)
+
+Подготовка in-sandbox реестра (`docs/specs/agent-sandbox.md §2/§5`): файловые инструменты (`note.create`/`note.edit`/`note.set_frontmatter`) отвязаны от транспорта применения. Новый трейт `actuator::ActionDispatcher` (`apply(Action) -> Result<String, ToolError>`) с двумя реализациями: **in-process** `GatedToolCtx` (→ host-side `dispatch_action` напрямую) и **in-sandbox** `sandbox::act::ProxyActuator` (→ `host/act` RPC, который на хосте применяет тем же `dispatch_action`). Инструмент теперь держит `Arc<dyn ActionDispatcher>` и НЕ знает транспорт — реестр ОДИН, выбор делает композиционный корень (`run_agent_session` → `GatedToolCtx`; будущий `--sandbox-child` → `ProxyActuator`).
+
+**Инвариант «нет ungated-пути» СОХРАНЁН** (3e hard-gate #1): шов не вводит обхода — ОБЕ реализации сводятся к ОДНОМУ host-side `dispatch_action` (classify/RiskTier×autonomy/decision/ledger/undo), песочница лишь меняет МЕСТО вызова инструмента (контейнер), authoritative-применение остаётся host-side. Чисто рефакторинг — поведение in-process пути байт-в-байт прежнее (`run_agent_session` оборачивает `GatedToolCtx` в `Arc<dyn ActionDispatcher>`). Затронуты только `actuator/tools.rs` + `agent/session.rs` (единственные сайты построения инструментов) + `sandbox/act.rs` (impl для `ProxyActuator`).
+
+Новый Tier-1 тест ПОЛНОЙ ЦЕПИ песочного актуатора через `Tool`-трейт: in-sandbox `NoteCreateTool`(`Arc<ProxyActuator>`) → `invoke` → `host/act` → `HostActServer` → `DispatchActuatorBackend` → `dispatch_action` → запись на диск (тот же `NoteCreateTool`, что in-process — инструмент транспорт-агностичен). 8 actuator-tools тестов (обновлены под `Arc<dyn ActionDispatcher>`) + 46 sandbox-тестов. clippy 0, fmt/egress/tooluse зелёные. Следом 4b-2b: host `SandboxRunner` (podman + 3 сокета) + agentd `--sandbox-child`.
+
 ### Агент · SANDBOX-4b-1 — реальный act-backend + OUTWARD-форвардер событий (Tier-1)
 
 Два host-side примитива рантайма песочницы (`docs/specs/agent-sandbox.md §2/§5`), оба Tier-1-тестируемы без Podman:

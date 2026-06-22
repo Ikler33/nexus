@@ -23,8 +23,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::actuator::{
-    AuditSink, DecisionSource, DispatchPolicy, EventSink, GatedToolCtx, NoteCreateTool,
-    NoteEditTool, SetFrontmatterTool,
+    ActionDispatcher, AuditSink, DecisionSource, DispatchPolicy, EventSink, GatedToolCtx,
+    NoteCreateTool, NoteEditTool, SetFrontmatterTool,
 };
 use crate::ai::tools::ToolCapableProvider;
 use crate::ai::{injection_marker, ChatMessage, ContextBudget, QwenTokenizer};
@@ -144,10 +144,13 @@ pub async fn run_agent_session(
             decision_source,
             events,
         );
+        // ШОВ актуатора (SANDBOX-4b-2): инструменты держат `Arc<dyn ActionDispatcher>`. In-process путь —
+        // `GatedToolCtx` (локальный `dispatch_action`). Песочница подставит `ProxyActuator` (host/act RPC).
+        let dispatcher: Arc<dyn ActionDispatcher> = Arc::new(gate);
         let mut reg = ToolRegistry::new();
-        reg.insert(Arc::new(NoteCreateTool::new(gate.clone())));
-        reg.insert(Arc::new(NoteEditTool::new(gate.clone())));
-        reg.insert(Arc::new(SetFrontmatterTool::new(gate)));
+        reg.insert(Arc::new(NoteCreateTool::new(dispatcher.clone())));
+        reg.insert(Arc::new(NoteEditTool::new(dispatcher.clone())));
+        reg.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
         reg
     } else {
         // Default-safe: стабы (НЕ касаются vault). decision_source/canon_root тогда не используются.
