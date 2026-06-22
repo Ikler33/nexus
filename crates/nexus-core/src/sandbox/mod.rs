@@ -32,6 +32,10 @@ pub mod exec_host;
 /// host НИКОГДА не спавнит команду агента (§5.2 инверсия). SANDBOX-6c-2.
 pub mod exec_child;
 
+/// exec_proxy — IN-SANDBOX клиент host/exec (decide→execute→exec_child→report) за `ExecDispatcher`-швом.
+/// SANDBOX-6c-2e.
+pub mod exec_proxy;
+
 /// `ProxyToolProvider` — in-sandbox tool-capable провайдер (stream:false поверх GuardedProxy). SANDBOX-4a.
 pub mod provider;
 
