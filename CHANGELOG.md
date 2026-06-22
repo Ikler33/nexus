@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2h — обратимость exec: GitOp pre-op-ref undo (§5.5, data-plumbing)
+
+Завершает 6c-2 (exec в коде). Обратимость exec ТАМ, ГДЕ ВОЗМОЖНА (только GitOp): мутирующая git-операция несёт восстановимый pre-op git-ref в ledger ДО финализации; shell/process НЕОБРАТИМЫ (и classify их не Auto). Узкий скоуп: data-plumbing pre-op-ref + персист — реальный `git reset` отложен в 6c-3 (Tier-2 live) за документированным seam.
+
+- **`ProxyExecDispatcher.dispatch_exec` (in-container)**: для GitOp ПЕРЕД мутацией снимает pre-op ref read-only-инвокацией `git rev-parse HEAD` через ТОТ ЖЕ confined [`ExecRunner`] (тот же cwd/env/кэпы). **Best-effort**: ненулевой код / пустой / не-hex вывод (не git-репо, detached) → `undo_ref=None` (необратимо, не падаем). Передаётся в `report`. shell/process — probe не запускается.
+- **`exec_host.report` (host, host-authority над обратимостью)**: `InFlightExec.undo_eligible` вычислен из СОХРАНЁННОГО действия на execute (= это GitOp) — НЕ из claim контейнера. `undo_ref` персистится как `UndoCols{kind:exec_gitref}` ТОЛЬКО при `undo_eligible` И валидном ref → контейнер не сделает shell/process «обратимым», подсунув undo_ref.
+- **HOST-AUTHORITY над СОДЕРЖИМЫМ ref (adversarial-ревью MAJOR)**: host НЕ доверяет in-container probe (тот бежит на НЕдоверенной стороне) — РЕ-валидирует `undo_ref` сам через `is_git_sha` (непустой, ≤64 hex) ПЕРЕД персистом; мусор/инъекц-строка (`HEAD; rm -rf ~`) → `undo=None` (необратимо, fail-closed). Тот же предикат переиспользует probe (единый источник). Закрывает persist-seam, который 6c-3 скормил бы в `git reset --hard`.
+- **`UndoHandle::ExecGitRef{reference}`** + `to_cols`/`from_cols` (`exec_gitref`); `undo_run` surfacing-арм → `UndoStatus::Deferred` (ref зафиксирован, реальный `git reset --hard <ref>` — 6c-3; строка НЕ помечается undone, чтобы 6c-3 завершил). Новый `UndoOutcome::deferred()`; `failed()` теперь СЧИТАЕТ явно (PathEscape|Failed), deferred под него не маскируется; `fully_undone()` = ни провала, ни отложенного.
+
+Tier-1 (+9, итого 852 nexus-core, 0 failed): `gitop_captures_pre_op_ref` (rev-parse ПЕРВЫМ, sha→undo_ref) · `gitop_rev_parse_failure_irreversible` (probe fail→None, не падает) · `non_gitop_skips_pre_op_probe` · `gitop_report_persists_gitref` (ledger exec_gitref+sha, round-trip) · `non_gitop_report_ignores_undo_ref` (host-authority над обратимостью) · `gitop_report_rejects_nonhex_undo_ref` (host-authority над содержимым: инъекц-строка отвергнута) · `is_git_sha_validates` · `exec_gitref_cols_roundtrip` · `exec_gitref_undo_is_deferred` (Deferred, не undone, не провал). 2-линзовый adversarial-ревью (security+корректность) → 1 MAJOR (host доверял контейнерному ref) ЗАКРЫТ в срезе host-side ре-валидацией. agentd компилируется, clippy 0, fmt + node-lints зелёные. Реальный git-reset undo-apply — 6c-3 (Tier-2 live podman .28).
+
 ### Агент · SANDBOX-6c-2g — события exec (`ExecProposal`/`ExecResult`) + `ChangeKind::Exec` + wire-маппинг
 
 Наблюдаемость + долговечный вид exec. Аддитивно поверх рабочего exec-ядра (6c-2a..f): host эмитит структурные события exec-намерения и исхода; UI/лог/десктоп-релей видят exec-активность БЕЗ сырого содержимого команды/вывода (редакция-дисциплина §5.6, зеркало `DiffSummary`).

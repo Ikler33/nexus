@@ -188,6 +188,11 @@ pub enum UndoHandle {
     Snapshot { rel: String, ts: i64 },
     /// Файл перенесён в vault-корзину по `trash_rel` — откат удаления/перезаписи через восстановление.
     Trash { trash_rel: String },
+    /// Pre-op git-ref (sha ДО мутирующей exec-GitOp, §5.5 SANDBOX-6c-2h): `reference` — sha, к которому
+    /// откатывается репозиторий. **Surfacing-only в 6c-2h**: [`super::undo::undo_run`] показывает ref, но
+    /// РЕАЛЬНЫЙ `git reset --hard <ref>` (доп. in-container exec под host-апрувом) отложен в 6c-3 (Tier-2
+    /// live, документ-seam). shell/process НЕОБРАТИМЫ (у них нет undo-хэндла вовсе).
+    ExecGitRef { reference: String },
 }
 
 /// Дискриминанты [`UndoHandle`] для ledger — единый источник строк.
@@ -212,6 +217,10 @@ impl UndoHandle {
                 kind: UNDO_TRASH.to_string(),
                 reference: trash_rel.clone(),
             },
+            UndoHandle::ExecGitRef { reference } => UndoCols {
+                kind: UNDO_EXEC_GITREF.to_string(),
+                reference: reference.clone(),
+            },
         }
     }
 
@@ -228,6 +237,9 @@ impl UndoHandle {
                 }),
             UNDO_TRASH => Some(UndoHandle::Trash {
                 trash_rel: reference.to_string(),
+            }),
+            UNDO_EXEC_GITREF => Some(UndoHandle::ExecGitRef {
+                reference: reference.to_string(),
             }),
             _ => None,
         }
@@ -383,5 +395,20 @@ mod tests {
         // Битый kind / битый snapshot-ref → None.
         assert_eq!(UndoHandle::from_cols("bogus", "x", "r"), None);
         assert_eq!(UndoHandle::from_cols(UNDO_SNAPSHOT, "not-a-ts", "r"), None);
+    }
+
+    /// 6c-2h: ExecGitRef ↔ UndoCols round-trip (exec_gitref дискриминант, ref=sha; rel игнорируется).
+    #[test]
+    fn exec_gitref_cols_roundtrip() {
+        let h = UndoHandle::ExecGitRef {
+            reference: "deadbeefcafe".to_string(),
+        };
+        let cols = h.to_cols();
+        assert_eq!(cols.kind, UNDO_EXEC_GITREF);
+        assert_eq!(cols.reference, "deadbeefcafe");
+        assert_eq!(
+            UndoHandle::from_cols(UNDO_EXEC_GITREF, "deadbeefcafe", "ignored-rel"),
+            Some(h)
+        );
     }
 }
