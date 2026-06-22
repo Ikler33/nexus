@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2e-2 — 3 exec-инструмента (`shell.run`/`process.spawn`/`git.op`) поверх `ExecDispatcher`
+
+Шестой суб-срез: сами exec-инструменты агента (логика разбора+свёртки), транспорт-агностичные через шов `ExecDispatcher` (6c-2e-1). Регистрация в `child.rs` при `shell_enable` + проводка `ProxyExecDispatcher` поверх shared act.sock + `serve_host` (host отвечает host/act+host/exec на одном соединении) — 6c-2f.
+
+- **`nexus-core::sandbox::exec_tools`**: `ShellRunTool`/`ProcessSpawnTool`/`GitOpTool` (impl `Tool`), держат `Arc<dyn ExecDispatcher>`. `invoke`: строгий разбор args (`deny_unknown_fields`, I-4 fail-closed; пустой argv/program → `BadArgs`) → типизированный exec-`Action` → `dispatch_exec` → свёртка `ExecToolOutcome` в текст. **Decision-исходы (Rejected/HardBlocked) — `Ok`-обратная связь** агенту (не ошибка инструмента); ошибка — лишь транспорт/протокол/разбор. `Executed` (любой exit) — результат команды (exit + усечённые хвосты + метки усечения/таймаута).
+- Зеркало note-инструментов (`actuator::tools`), но для exec; ProxyExec/exec_child реальный спавн — НЕ здесь (Command только в `exec_child.rs`, INV-CMD-SITE цел).
+
+9 Tier-1 тестов (MockExecDispatcher без транспорта/podman): для каждого инструмента — args→правильный `ActionTarget` (argv/program/op + cwd_rel) · BadArgs (пустой argv/program, unknown-field) · форматирование Executed (exit/stdout/stderr/усечение/таймаут) · Rejected/HardBlocked→Ok-feedback. clippy 0, fmt + node-lints зелёные. Инертно (регистрация — 6c-2f; default-OFF `shell_enable`).
+
 ### Агент · SANDBOX-6c-2e-1 — `ProxyExecDispatcher` (in-sandbox клиент host/exec) + `ExecDispatcher`-шов
 
 Пятый суб-срез исполнительной половины Фазы-3: IN-SANDBOX клиент, оркеструющий полный host/exec цикл `decide→execute→ЛОКАЛЬНОЕ исполнение→report`. Зеркало `ProxyActuator` для exec-таргетов. 3 exec-инструмента + регистрация при `shell_enable` — 6c-2e-2; `serve_host`-проводка — 6c-2f.
