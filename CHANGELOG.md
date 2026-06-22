@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2a — exec-исполнитель `exec_child` (in-container) + `ExecRunner`-шов + CI-линт INV-CMD-SITE
+
+Первый суб-срез исполнительной половины Фазы-3 (`docs/specs/agent-sandbox.md §5.2`; план — мультиагент-Workflow «plan-sandbox-6c2», 8 суб-срезов). Реализует **ЕДИНСТВЕННОЕ место реального исполнения exec-команды агента** + структурно лочит инверсию «host РЕШАЕТ, контейнер ИСПОЛНЯЕТ». Инертен (вызывающих нет) до 6c-2e.
+
+- **`nexus-core::sandbox::exec_child`** — `RealExecRunner` (ЕДИНСТВЕННАЯ во всём core/host конструкция `process::Command` для команды агента; бежит ВНУТРИ `--network=none` контейнера): `Command::new(argv[0]).args(argv[1..])` **БЕЗ шелла** (INV-NO-SHELL — метасимволы безвредны), `env_clear()` ВСЕГДА перед `envs(go.env)` (INV-ENV-FAILCLOSED — команда видит РОВНО host-собранный allow-list, не наследует даже окружение agentd), `current_dir` под scratch/vault-`:ro` (INV-CWD-CONFINE — резолв через `resolve_cwd` единым правилом `classify::path_confinement`, побег→команда не запускается), wall-clock `timeout`→kill+`timed_out`, output-cap потоковым кольцевым хвостом (`go.output_cap_bytes`, без безлимитного `read_to_end` — анти-OOM «болтливой»/джейлбрейк-команды; `*_truncated`-флаги). `ExecResult`. `ExecRunner`-трейт-шов (инструменты 6c-2e держат `Arc<dyn ExecRunner>`) + `MockExecRunner` (Tier-1-без-podman: security-ассерты на ЛЮБОМ хосте).
+- **CI-линт `scripts/check-sandbox-exec.mjs`** (zero-dep, самотест фейк-нарушением) — **INV-CMD-SITE**: `process::Command`/`Command::new` в host-sandbox-модулях (exec_host/act/runner/child/event/provider/proxy/mod) → красный CI. WHITELIST: `exec_child.rs` целиком + marked podman-launch в `runner.rs` (маркер `sandbox-exec-lint: allow podman-launch`). Wired в `test-all.sh` + `ci.yml`. Лочит инверсию С ПЕРВОГО ДНЯ появления Command.
+- `classify::path_confinement` → `pub(crate)` (единый источник правила конфайнмента, не копия); консты `CONTAINER_SCRATCH=/tmp` (переиспользует рендеримый `--tmpfs /tmp`, без хрупкого nested-mount) / `DEFAULT_EXEC_TIMEOUT_MS=120_000` / `DEFAULT_EXEC_OUTPUT_CAP=65_536`; tokio `+io-util` (capped-чтение).
+
+13 Tier-1 тестов (resolve_cwd scratch/vault/empty/**reject-escape** · capped-tail last-bytes/under-cap/zero-cap · mock-capture; unix-gated на CI-хосте: trivial-argv · nonzero-exit · **env_clear-proven** (host-секрет НЕ утёк) · **timeout-kills** · missing-binary→127). Полный EROFS/ENETUNREACH/cap-deny — 6c-3 (podman-gated). clippy 0, fmt + node-lints (вкл. новый check-sandbox-exec) зелёные.
+
 ### Агент · SANDBOX-6c-1 — `host/exec` контракт + host-РЕШЕНИЕ по exec-таргетам (Tier-1, БЕЗ исполнения)
 
 Первый срез завершающей Фазы-3 (`docs/specs/agent-sandbox.md §5.2`; дизайн — мультиагент-Workflow «design-sandbox-6c»: гибрид no-4th-socket + executor-rigor). Host-СТОРОНА `host/exec`: классификация + решение + ledger + минт токена. **БЕЗ единого исполнения** (контейнерный executor + runner-routing + ProxyExec — 6c-2; live на .28 — 6c-3).

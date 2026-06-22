@@ -28,6 +28,10 @@ pub mod act;
 /// host/exec — RPC исполнения Фаза-3 exec-таргетов (host РЕШАЕТ, контейнер ИСПОЛНЯЕТ). SANDBOX-6c.
 pub mod exec_host;
 
+/// exec_child — ЕДИНСТВЕННОЕ место исполнения exec-команды (ВНУТРИ `--network=none` контейнера).
+/// host НИКОГДА не спавнит команду агента (§5.2 инверсия). SANDBOX-6c-2.
+pub mod exec_child;
+
 /// `ProxyToolProvider` — in-sandbox tool-capable провайдер (stream:false поверх GuardedProxy). SANDBOX-4a.
 pub mod provider;
 
@@ -51,6 +55,20 @@ pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 pub const CONTAINER_VAULT: &str = "/vault";
 /// Каталог per-run сокетов ВНУТРИ контейнера (GuardedProxy/control — SANDBOX-2+). НЕ под vault.
 pub const CONTAINER_RUN_DIR: &str = "/run/nexus";
+
+/// Writable scratch-каталог ВНУТРИ контейнера для exec-команд агента (SANDBOX-6c-2): база
+/// [`exec_host::ExecCwd::ScratchTmpfs`] + `HOME` исполняемой команды. Переиспользуем УЖЕ рендеримый
+/// `--tmpfs /tmp` (writable, эфемерный, per-container) — НЕ заводим вложенный tmpfs под host-owned
+/// `/run/nexus` (избегаем хрупкости nested-mount-над-bind). vault остаётся `:ro` (запись → EROFS).
+pub const CONTAINER_SCRATCH: &str = "/tmp";
+
+/// Дефолтный потолок wall-clock одной exec-команды в песочнице (мс). Спека §5 требует кэп, но не пинит
+/// число; 120с — консервативно. Проводка в конфиг (`ai.exec.*`) — honest-tail, дефолт безопасен.
+pub const DEFAULT_EXEC_TIMEOUT_MS: u64 = 120_000;
+
+/// Дефолтный потолок захватываемого вывода exec-команды (байт на поток stdout/stderr). Защита от
+/// OOM/DoS «болтливой» (в т.ч. джейлбрейкнутой) команды; за кэпом вывод усекается (флаг `*_truncated`).
+pub const DEFAULT_EXEC_OUTPUT_CAP: usize = 65_536;
 
 /// Ресурс-кэпы контейнера. Консервативные дефолты (спека §12 — владелец может настроить под профиль хоста).
 #[derive(Debug, Clone, PartialEq, Eq)]

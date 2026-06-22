@@ -103,7 +103,10 @@ pub struct ClassifyCtx<'a> {
 ///  - любой компонент, начинающийся с `.` (`.nexus`, `.git`, любой dotfile/dotdir) →
 ///    [`BlockReason::ReservedPath`] (НАДмножество `.nexus`/`.git`: режем ВСЕ dot-компоненты —
 ///    fail-closed, чтобы будущий служебный dot-каталог не просочился).
-fn path_confinement(rel: &str) -> Result<(), BlockReason> {
+///
+/// `pub(crate)`: переиспользуется [`crate::sandbox::exec_child::resolve_cwd`] (SANDBOX-6c-2) как ЕДИНЫЙ
+/// источник правила лексического конфайнмента vault-rel (не копия) для cwd exec-команд в песочнице.
+pub(crate) fn path_confinement(rel: &str) -> Result<(), BlockReason> {
     if rel.trim().is_empty() {
         return Err(BlockReason::EmptyPath);
     }
