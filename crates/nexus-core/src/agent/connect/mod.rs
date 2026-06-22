@@ -25,7 +25,7 @@ pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamE
 #[cfg(unix)]
 pub mod afunix;
 #[cfg(unix)]
-pub use afunix::{connect_unix, serve_unix, serve_unix_at, AfUnixTransport};
+pub use afunix::{connect_unix, operator_uid, serve_unix, serve_unix_at, AfUnixTransport};
 // Хардненинг bind-пути сокета (0600 + non-socket-refusal) + peer-uid через SO_PEERCRED —
 // переиспользует host-side `SandboxRunner` (Unix-only, как и весь AF_UNIX-хостинг).
 #[cfg(unix)]

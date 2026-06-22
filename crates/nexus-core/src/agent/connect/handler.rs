@@ -890,7 +890,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn serve_unix_drives_run_over_socket() {
-        use crate::agent::connect::{connect_unix, serve_unix_at};
+        use crate::agent::connect::{connect_unix, operator_uid, serve_unix_at};
 
         let (_dir, db) = open_db().await;
         let provider: Arc<dyn ToolCapableProvider> = Arc::new(FakeProvider::new(vec![
@@ -906,8 +906,12 @@ mod tests {
         // Короткий путь сокета (лимит ~104 симв на macOS) в temp_dir, уникальный по PID.
         let sock = std::env::temp_dir().join(format!("nexus-connect-{}.sock", std::process::id()));
         let sock_for_server = sock.clone();
+        // T8-гейт: ожидаемый peer = наш uid (operator_uid). Клиент `connect_unix` ниже — тот же процесс ⇒
+        // тот же uid ⇒ пропускается (Linux fail-closed; не-Linux perms-only). Доказывает, что гейт не ломает
+        // легитимного оператора end-to-end.
+        let expected_uid = operator_uid();
         tokio::spawn(async move {
-            let _ = serve_unix_at(&sock_for_server, deps).await;
+            let _ = serve_unix_at(&sock_for_server, deps, expected_uid).await;
         });
 
         // Сервер биндит сокет асинхронно — ждём появления файла (поллинг до ~2 c).

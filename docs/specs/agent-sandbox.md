@@ -280,7 +280,7 @@ Posture:
 
 **T2/SSRF/DNS-rebind.** Усилено: песочница не имеет резолвера вовсе; 100% её эгресса ре-проверяется host `GuardedClient` (`check_resolved_ips`, metadata-блок, pin-IP), хост извлечён из `url` host-side (нет request-smuggling/desync), нет альтернативного сокета.
 
-**T8 (connector auth).** Control-сокет — 0600 AF_UNIX + `SO_PEERCRED`/uid-check (только спавненный контейнер драйвит). Согласуется с `agent-connect.md §11`.
+**T8 (connector auth).** ДВА класса 0600 AF_UNIX-листенеров, оба + `SO_PEERCRED`/uid-check (fail-closed на Linux, defense-in-depth ПОВЕРХ 0600): (а) **per-run sandbox-сокеты** (egress/act/event, и будущий exec) — ожидаемый peer = run_as-uid контейнера (`sandbox/runner.rs::peer_authorized`, §4.3 инв. 6); (б) **контрол-сокет коннектора** `serve_unix`/`serve_unix_at` (`agent/connect/afunix.rs`) — ожидаемый peer = uid **ОПЕРАТОРА** (= процесс `agentd`, `operator_uid()`), на не-Linux → perms-only (сокет кросс-платформенный). **✅ Реализовано** (оба). Это про ЛОКАЛЬНЫЕ AF_UNIX-сокеты; удалённый коннектор (app↔agentd по сети) = отдельный транспорт WS+TLS+token (`agent-connect.md §6`, P1a/P1b), вне scope. Согласуется с `agent-connect.md §6`.
 
 ### 10.2 Остаточные риски (честно, согласуется с `THREAT_MODEL §3`)
 

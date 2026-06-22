@@ -49,7 +49,8 @@ pub struct ConnectClient { /* транспорт + correlation-map по id */ }
 Desktop: текущие tauri-команды (`agent_run/approve/...`) → `ConnectClient` поверх `ChannelTransport` (P0d, механически; UI без изменений). **Breaking (UI-1a):** `agent_approve` получает `session_id` (critique-fix).
 
 ## 6. Security
-- Local-first default: in-process / AF_UNIX (mode 0600). Remote = WS+TLS + token, opt-in.
+- Local-first default: in-process / AF_UNIX (mode 0600 + `SO_PEERCRED` peer-uid-гейт). Remote = WS+TLS + token, opt-in.
+- **Peer-auth контрол-сокета (T8).** ПОВЕРХ 0600-прав `serve_unix`/`serve_unix_at` (`agent/connect/afunix.rs`) гейтит accept по `SO_PEERCRED`: ожидаемый peer = **ОПЕРАТОР** (uid самого процесса `agentd`, `operator_uid()`) — в отличие от per-run sandbox-сокетов, где ожидается run_as-uid контейнера (`agent-sandbox.md §4.3` инв. 6). **Linux:** fail-closed (нечитаемый cred / mismatch → дроп соединения, accept-loop продолжает слушать). **Не-Linux:** `SO_PEERCRED` недоступен, контрол-сокет кросс-платформенный (`#[cfg(unix)]`) → fallback на 0600-права (perms-only). ⚠ Это про ЛОКАЛЬНЫЙ AF_UNIX-листенер; удалённый коннектор (app↔agentd по сети, T8) — отдельный транспорт (WS+TLS+token, P1a/P1b), вне scope этого гейта.
 - Approval fail-closed (dropped/timeout → reject_all). Pause durable (agent.json). Undo идемпотентен.
 - Ошибки sanitized. Token per-session scope, keychain/env (не plaintext-конфиг).
 - Egress: коннектор НЕ открывает сырые сокеты к LLM; model-эгресс — через существующий `GuardedClient`/INFER-CFG.

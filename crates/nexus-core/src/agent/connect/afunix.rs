@@ -8,6 +8,13 @@
 //! `serve_unix_at` биндит сокет и обслуживает подключения: на КАЖДОЕ — свой [`ConnectAgentHandler`]
 //! (свой реестр сессий + свой исходящий конец), затем [`dispatch`]-loop. `ConnectDeps` (провайдер/БД/
 //! актуатор-конфиг) ШАРЯТСЯ между подключениями. Unix-only (на Windows тип отсутствует — модуль `cfg`).
+//!
+//! **Авторизация peer'а (T8).** Контрол-сокет коннектора — второй 0600 AF_UNIX-листенер, названный
+//! THREAT_MODEL T8 (`agent-sandbox.md §10.1` / `agent-connect.md §6`). ПОВЕРХ 0600-прав accept-loop
+//! применяет [`connector_peer_authorized`]: ожидаемый peer = **ОПЕРАТОР** (uid процесса `agentd`,
+//! [`operator_uid`]), а НЕ run_as-uid контейнера (как у per-run sandbox-сокетов, `sandbox/runner.rs`).
+//! Linux — fail-closed по `SO_PEERCRED` (переиспользует [`peer_uid`]); не-Linux — perms-only fallback
+//! (см. [`connector_peer_authorized`]).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -235,6 +242,47 @@ pub(crate) fn peer_uid(_stream: &UnixStream) -> Option<u32> {
     None
 }
 
+/// Ожидаемый peer-uid КОНТРОЛ-сокета коннектора = uid САМОГО процесса `agentd` (**ОПЕРАТОР**). Это ключевое
+/// отличие от per-run sandbox-сокетов, где ожидается run_as-uid спавненного контейнера (`sandbox/runner.rs`):
+/// контрол-сокет драйвит не контейнер, а оператор (тот же uid, что у хостящего процесса). Передаётся в
+/// [`serve_unix`]/[`serve_unix_at`] как `expected_uid`. Linux → `Some(getuid())`; не-Linux → `None` (там
+/// `SO_PEERCRED` нет → peer-гейт неприменим, fallback на 0600-права, см. [`connector_peer_authorized`]).
+/// `pub`: вызывается из `nexus-agentd` (внешний крейт) на call-site `serve_unix_at`.
+#[cfg(target_os = "linux")]
+pub fn operator_uid() -> Option<u32> {
+    // SAFETY: `getuid()` инфаллибелен и без side-effects (POSIX: always succeeds), fd/указателей не берёт.
+    Some(unsafe { libc::getuid() })
+}
+
+/// Не-Linux: `SO_PEERCRED` недоступен → ожидаемый uid не вычисляем (peer-гейт там перм-онли). См.
+/// [`operator_uid`] (Linux) и [`connector_peer_authorized`] (fallback-семантика).
+#[cfg(not(target_os = "linux"))]
+pub fn operator_uid() -> Option<u32> {
+    None
+}
+
+/// Авторизует принятое на КОНТРОЛ-сокете коннектора ([`serve_unix`]) соединение. Ожидаемый peer = ОПЕРАТОР
+/// ([`operator_uid`]), в отличие от per-run sandbox-сокетов (там run_as-uid контейнера,
+/// `sandbox/runner.rs::peer_authorized`).
+///
+/// **Linux:** fail-closed гейт ПОВЕРХ 0600-прав (`agent-connect.md §6` / `agent-sandbox.md §10.1 T8`):
+/// пускаем ТОЛЬКО при достоверном равенстве `peer_uid == expected`. Нечитаемый cred ([`peer_uid`]=`None`),
+/// mismatch ИЛИ неизвестный ожидаемый (`expected`=`None`) → отказ — семантика идентична sandbox-`uid_matches`.
+#[cfg(target_os = "linux")]
+fn connector_peer_authorized(stream: &UnixStream, expected_uid: Option<u32>) -> bool {
+    matches!((expected_uid, peer_uid(stream)), (Some(e), Some(a)) if e == a)
+}
+
+/// Не-Linux: `SO_PEERCRED` отсутствует ([`peer_uid`]=`None`), а контрол-сокет коннектора —
+/// КРОСС-ПЛАТФОРМЕННЫЙ (`#[cfg(unix)]`: dev/CI на macOS, E2E-тест `serve_unix_drives_run_over_socket`).
+/// Поэтому peer-uid-гейт структурно неприменим → **fallback на 0600-права** файла сокета (single-owner
+/// local-first): соединение пускаем. NB: sandbox так НЕ делает — он Linux-host-only (§9), там `None`
+/// фейлится наглухо; коннектору же strict-fail-closed на macOS оборвал бы все соединения.
+#[cfg(not(target_os = "linux"))]
+fn connector_peer_authorized(_stream: &UnixStream, _expected_uid: Option<u32>) -> bool {
+    true
+}
+
 /// Клиентское подключение к сокету коннектора (для desktop-коннектора / тестов / `nexus`-CLI).
 pub async fn connect_unix(path: impl AsRef<Path>) -> std::io::Result<AfUnixTransport> {
     let stream = UnixStream::connect(path).await?;
@@ -243,23 +291,29 @@ pub async fn connect_unix(path: impl AsRef<Path>) -> std::io::Result<AfUnixTrans
 
 /// Биндит сокет по пути (удаляя stale-файл прошлого запуска) и обслуживает подключения навсегда.
 /// **default-OFF на уровне вызывающего** (agentd стартует это лишь при заданном `NEXUS_AGENTD_CONNECT_SOCKET`).
+/// `expected_uid` — ожидаемый peer-uid оператора для T8-гейта accept'а (см. [`serve_unix`] / [`operator_uid`]).
 pub async fn serve_unix_at(
     socket_path: impl AsRef<Path>,
     deps: Arc<ConnectDeps>,
+    expected_uid: Option<u32>,
 ) -> std::io::Result<()> {
     let path = socket_path.as_ref();
     prepare_socket_path(path)?;
     let listener = UnixListener::bind(path)?;
     harden_socket_perms(path);
     tracing::info!(socket = %path.display(), "agent-connect: AF_UNIX сервер слушает (mode 0600)");
-    serve_unix(listener, deps).await;
+    serve_unix(listener, deps, expected_uid).await;
     Ok(())
 }
 
 /// Accept-loop поверх готового `UnixListener` (отделён от bind — тестируется без файловой системы спека
 /// сокет-пути). На каждое подключение — свежий [`ConnectAgentHandler`] (изолированный реестр сессий) +
 /// dispatch-loop до закрытия соединения. `deps` (Arc) клонируются в каждое соединение.
-pub async fn serve_unix(listener: UnixListener, deps: Arc<ConnectDeps>) {
+///
+/// `expected_uid` — ожидаемый peer-uid ОПЕРАТОРА (`= uid agentd`, [`operator_uid`]) для T8-гейта
+/// ([`connector_peer_authorized`]): соединение, чей `SO_PEERCRED`-uid не совпал (Linux), дропается
+/// ПЕРЕД dispatch'ем; на не-Linux — perms-only.
+pub async fn serve_unix(listener: UnixListener, deps: Arc<ConnectDeps>, expected_uid: Option<u32>) {
     let mut backoff = std::time::Duration::from_millis(1);
     loop {
         let stream = match listener.accept().await {
@@ -275,6 +329,14 @@ pub async fn serve_unix(listener: UnixListener, deps: Arc<ConnectDeps>) {
                 continue;
             }
         };
+        // T8 (agent-connect §6 / agent-sandbox §10.1): defense-in-depth ПОВЕРХ 0600 — пускаем ТОЛЬКО
+        // оператора (peer-uid == uid agentd) по SO_PEERCRED. Нечитаемый cred / mismatch / неизвестный
+        // ожидаемый → дроп + warn И слушаем дальше (импостор не лишает оператора сервиса — как accept-loop
+        // sandbox-раннера). Не-Linux → perms-only. `stream` дропается выходом из scope (FIN пиру).
+        if !connector_peer_authorized(&stream, expected_uid) {
+            tracing::warn!(target: "agent::connect", "afunix: соединение отвергнуто — peer-uid != uid оператора (SO_PEERCRED, T8)");
+            continue;
+        }
         let deps = deps.clone();
         tokio::spawn(async move {
             let transport: Arc<dyn Transport> = Arc::new(AfUnixTransport::new(stream));
@@ -368,6 +430,44 @@ mod tests {
         assert_eq!(
             mode, 0o600,
             "сокет должен быть owner-only (0600), получили {mode:o}"
+        );
+    }
+
+    /// **Tier-1 (Linux):** T8-гейт контрол-сокета на РЕАЛЬНОЙ паре `UnixListener`↔`UnixStream`. Ожидаемый
+    /// peer = ОПЕРАТОР ([`operator_uid`] = `getuid()`). `SO_PEERCRED` читает наш uid → соединение того же
+    /// uid АВТОРИЗУЕТСЯ; заведомо-чужой ожидаемый uid (mismatch-ветка БЕЗ привилегий — через неверный
+    /// `expected`) и неизвестный ожидаемый (`None`) — ОТВЕРГАЮТСЯ (fail-closed, идентично sandbox-семантике).
+    /// Аналог `sandbox/runner.rs::peer_authorized_accepts_same_uid_rejects_mismatch`. Кросс-uid РЕАЛЬНЫМ
+    /// вторым пользователем — Tier-2 (нужны привилегии). На не-Linux гейт perms-only → тест Linux-gated.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn connector_peer_authorized_accepts_same_uid_rejects_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connect.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        // accept (сервер) и connect (клиент) — оба наш процесс ⇒ один uid (как оператор драйвит коннектор).
+        let (accepted, _client) =
+            tokio::join!(async { listener.accept().await.unwrap().0 }, async {
+                UnixStream::connect(&path).await.unwrap()
+            },);
+        let me = unsafe { libc::getuid() };
+        assert_eq!(
+            operator_uid(),
+            Some(me),
+            "operator_uid() == getuid() (Linux)"
+        );
+        assert_eq!(peer_uid(&accepted), Some(me), "SO_PEERCRED читает наш uid");
+        assert!(
+            connector_peer_authorized(&accepted, Some(me)),
+            "тот же uid (оператор) → авторизован"
+        );
+        assert!(
+            !connector_peer_authorized(&accepted, Some(me.wrapping_add(1))),
+            "чужой ожидаемый uid → отвергнут"
+        );
+        assert!(
+            !connector_peer_authorized(&accepted, None),
+            "неизвестный ожидаемый → отвергнут (fail-closed на Linux)"
         );
     }
 }
