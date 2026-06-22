@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-3b/c — Tier-2 containment-матрица + always-CI edge-тесты exec-раннера
+
+Доказывает, что то, что Tier-1 мокал, реально enforced'ится — частью на УРОВНЕ ЯДРА контейнера (Tier-2, `#[ignore]` на .28), частью на реальном процессе БЕЗ podman (always-CI host-тесты).
+
+- **Always-CI host-тесты `RealExecRunner` (`exec_child.rs`, `#[cfg(unix)]`, НЕ `#[ignore]` — гоняются в CI/локально)**:
+  - `real_forking_grandchild_holds_pipe_returns_at_timeout` — форк-демон-кейс: родитель бэкграундит внука, держащего stdout fd1, и сразу выходит; `read_capped_tail` не получит EOF, но внешний `tokio::timeout`+`kill_on_drop` ОБЯЗАН вернуть `run()` ~таймаут (не виснуть до выхода внука) — **podman-free durable-гарантия**.
+  - `real_large_output_capped` — вывод ≫ cap (200КБ через `head -c /dev/zero`, портируемо macOS+linux) ⇒ `stdout_truncated=true`, хвост ограничен cap (ring), exit 0, без OOM.
+- **Tier-2 containment-матрица (`exec_it::tier2`, `#[ignore]`, только .28)**: `real_vault_write_is_erofs` (запись в `:ro`-vault → kernel EROFS, файл не создан) · `no_network_route_inside_exec` (`--network=none` → `/proc/net/route` без маршрутов). Хелпер `hardened_podman_run` (зеркало sandbox_run_plan-флагов). env-allowlist/no-shell/timeout уже доказаны host-level Tier-1 (`real_env_clear_proven`/`real_*`), не дублируются.
+
+Tier-1 (+2 always-CI → 869 nexus-core, 0 failed) + 2 `#[ignore]` (→ check-ignored 28→30, gated). clippy 0, fmt + node-lints зелёные. Остаток 6c-3: 6c-3d (Dockerfile +git, `--sandbox-undo` entrypoint + прод undo-драйвер + `ai.exec.git_worktree` owner-gated + runbook) + live .28.
+
 ### Агент · SANDBOX-6c-3e — реальный exec-GitOp откат: `UndoExecDriver` seam (gated/ledgered, не raw-host)
 
 Превращает `UndoStatus::Deferred(ExecGitRef)` (6c-2h surfacing) в РЕАЛЬНУЮ обратимость — через шов, а не привилегированный путь. **CI-mergeable seam + Tier-1** (реальный sandboxed `git reset` гоняет прод-драйвер 6c-3d на .28). Default-inert: пока композиционный корень не подставил драйвер, поведение БАЙТ-в-байт как 6c-2h.
