@@ -582,9 +582,6 @@
   "chat": {
     "title": "AI panel",
     "tabChat": "Chat",
-    "tabSuggest": "Links",
-    "tabRelated": "Related",
-    "mode": "Chat mode",
     "modeVault": "From notes",
     "modeGeneral": "General",
     "modeVaultHint": "Answer grounded in your notes (RAG + sources)",

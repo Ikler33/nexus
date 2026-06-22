@@ -415,9 +415,10 @@ export const useUIStore = create<UIState>((set) => ({
   openTagFilter: (tag) => set({ pendingTagFilter: tag, sidebarOpen: true, reading: false }),
   consumeTagFilter: () => set({ pendingTagFilter: null }),
   pendingInspectorSection: null,
-  // Закрываем оверлейные вью, чтобы показался редактор с инспектор-рейлом, и просим открыть секцию.
+  // Закрываем оверлейные вью + выходим из reading (там инспектор-рейл скрыт, как у openTagFilter),
+  // чтобы показался редактор с рейлом, и просим открыть секцию.
   openInspectorSection: (section) =>
-    set({ ...MAIN_VIEWS_CLOSED, pendingInspectorSection: section }),
+    set({ ...MAIN_VIEWS_CLOSED, reading: false, pendingInspectorSection: section }),
   consumeInspectorSection: () => set({ pendingInspectorSection: null }),
   revealTarget: null,
   // Дерево видно только при открытом сайдбаре и не в reading — иначе скролл произойдёт незаметно.

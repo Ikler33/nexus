@@ -593,9 +593,6 @@
   "chat": {
     "title": "AI-панель",
     "tabChat": "Чат",
-    "tabSuggest": "Связи",
-    "tabRelated": "Похожие",
-    "mode": "Режим чата",
     "modeVault": "По заметкам",
     "modeGeneral": "Общий",
     "modeVaultHint": "Ответ по вашим заметкам (RAG + источники)",

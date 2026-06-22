@@ -1,9 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../../lib/tauri-api';
+import { useUIStore } from '../../stores/ui';
 import { InspectorRail } from './InspectorRail';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  useUIStore.setState({ pendingInspectorSection: null });
+});
 
 const DOC = ['# Intro', '## Details', 'body'].join('\n');
 
@@ -57,6 +61,18 @@ describe('InspectorRail (editor-chrome)', () => {
     expect(screen.getByRole('button', { name: 'Свернуть панель' })).toBeInTheDocument();
     fireEvent.click(toggle); // повторно → закрыть (компонент размонтируется до резолва промиса)
     expect(screen.queryByRole('button', { name: 'Свернуть панель' })).toBeNull();
+  });
+
+  // Релокация «Связи» (Hermes-6): команда палитры view.suggest ставит pendingInspectorSection;
+  // InspectorRail открывает секцию и сбрасывает запрос (паттерн pendingTagFilter).
+  it('открывает секцию по pendingInspectorSection и сбрасывает запрос', async () => {
+    vi.spyOn(tauriApi.suggest, 'related').mockResolvedValue([]);
+    useUIStore.setState({ pendingInspectorSection: 'suggest' });
+    render(<InspectorRail doc={DOC} path="A.md" onJump={vi.fn()} />);
+    // Панель раскрылась на запрошенной секции (виден крестик «Свернуть панель»).
+    expect(await screen.findByRole('button', { name: 'Свернуть панель' })).toBeInTheDocument();
+    // Отложенный запрос потреблён (не залипает на следующий маунт).
+    expect(useUIStore.getState().pendingInspectorSection).toBeNull();
   });
 
   it('кнопка-крестик сворачивает открытую панель', () => {

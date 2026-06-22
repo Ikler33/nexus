@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Дизайн · AI-панель Castor (Hermes-6, Фаза B срез 1) — 2 вкладки + икон-композер + релокация «Связей»
+
+Рескин AI/чат-панели под hi-fi макет (`ai-panel.jsx`). Рескин-на-месте — вся проводка чата сохранена.
+
+- Шапка **«Castor»** (орбита-глиф + провайдер-бейдж + история/новая + развернуть-в-раздел Агента + закрыть); **2 вкладки: Чат · Castor** (`AiTab: 'chat'|'agent'`), вкладка Castor = `AgentTab`-лаунчер.
+- **Релокация «Связи» (SuggestView) → инспектор-рейл редактора** (секция `suggest` + `pendingInspectorSection` по паттерну `pendingTagFilter`; команда палитры `view.suggest` перенацелена; reading-режим сбрасывается). «Похожие» уже в рейле.
+- Композер по `ai.css`: scope-чип «По заметкам/Общий» (клик циклит) + Web/Pin икон-тогглы + круглый send/stop; empty «Спросите Castor».
+- Adversarial-ревью (4 линзы, 0 блокеров): фиксы M1 (токен stopBtn), M2 (reading:false + тест), чистка осиротевших i18n-ключей. M3 (панельная RelatedView со слайдером) — осознанная минор-потеря (вставка-ссылки в SuggestView).
+
+tsc · eslint · vitest 899/899 · build · node-чеки — зелёные; скриншот-верификация light+dark.
+
 ### Агент · SANDBOX-6c-3a — Tier-2 фундамент: podman-gate + crash-recovery reaper зависших exec
 
 Старт финального exec-слайса (Tier-2 live на Podman .28). Два куска фундамента, оба **pure-code/CI-green** (podman НЕТ ни локально, ни в CI → live-тесты `ignore`-гейтятся и гоняются только на .28).

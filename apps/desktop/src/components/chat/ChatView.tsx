@@ -6,7 +6,6 @@ import {
   BookOpen,
   Brain,
   Check,
-  ChevronDown,
   Copy,
   FilePlus2,
   FileText,
@@ -287,7 +286,6 @@ export function ChatView() {
             <BookOpen size={13} aria-hidden />
           )}
           {t(`chat.mode${mode === 'vault' ? 'Vault' : 'General'}`)}
-          <ChevronDown size={12} aria-hidden className={styles.scopeCaret} />
         </button>
         <button
           type="button"
