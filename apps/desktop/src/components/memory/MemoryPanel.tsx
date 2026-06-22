@@ -99,7 +99,9 @@ export function MemoryPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <Brain size={16} aria-hidden />
+          <span className={styles.headIcon} aria-hidden>
+            <Brain size={16} />
+          </span>
           <span className={styles.title}>{t('memory.title')}</span>
           {facts.length > 0 && <span className={styles.count}>{facts.length}</span>}
           <span className={styles.spacer} />

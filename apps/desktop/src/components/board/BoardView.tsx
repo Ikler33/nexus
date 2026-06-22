@@ -73,6 +73,20 @@ function prioClass(priority: string | null): string {
   }
 }
 
+/** Класс статус-точки колонки (дизайн Orvin): дефолтные id → свой цвет, «Прочее» → нейтральный, прочее → todo. */
+function colDotClass(id: string): string {
+  switch (id) {
+    case 'doing':
+      return styles.colDotDoing;
+    case 'done':
+      return styles.colDotDone;
+    case OTHER_COLUMN_ID:
+      return styles.colDotOther;
+    default:
+      return styles.colDotTodo;
+  }
+}
+
 /** Класс бейджа причины в плане дня (AI-2b): overdue — опасность, today — акцент, priority — нейтраль. */
 function planBadgeClass(bucket: PlanBucket): string {
   switch (bucket) {
@@ -489,6 +503,7 @@ export function BoardView() {
                 }}
               >
               <div className={styles.colHead}>
+                <span className={`${styles.colDot} ${colDotClass(col.id)}`} aria-hidden />
                 <span className={styles.colTitle}>{columnLabel(col.id)}</span>
                 <span className={styles.colCount}>{col.cards.length}</span>
               </div>

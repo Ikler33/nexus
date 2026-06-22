@@ -1,15 +1,18 @@
-import { useState, type ComponentType } from 'react';
-import { Link2, List, ScrollText, X } from 'lucide-react';
+import { useEffect, useState, type ComponentType } from 'react';
+import { Lightbulb, Link2, List, ScrollText, X } from 'lucide-react';
 import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
+import { SuggestView } from '../chat/SuggestView';
+import { useUIStore } from '../../stores/ui';
 import { BacklinksBar } from './BacklinksBar';
 import { NoteSummary } from './NoteSummary';
 import { OutlineBar } from './OutlineBar';
 import { RelatedNotes } from './RelatedNotes';
 import styles from './InspectorRail.module.css';
 
-/** Секции инспектора (макет editor.jsx): оглавление / связи / похожие / резюме. */
-type Section = 'outline' | 'backlinks' | 'related' | 'summary';
+/** Секции инспектора: оглавление / беклинки / похожие / связи / резюме. «Связи» (suggest) переехали
+ *  сюда из AI-панели (Hermes-6: панель = Чат+Castor) — per-заметочные предложения ссылок. */
+type Section = 'outline' | 'backlinks' | 'related' | 'summary' | 'suggest';
 
 /**
  * Inspector-rail (макет editor.jsx): правый вертикальный rail с 4 тогглами + сворачиваемая панель,
@@ -30,6 +33,16 @@ export function InspectorRail({
 }) {
   const { t } = useTranslation();
   const [active, setActive] = useState<Section | null>(null);
+  // Команда палитры «Связи» (или иной внешний запрос) открывает секцию инспектора — читаем и
+  // сбрасываем отложенный запрос (паттерн pendingTagFilter).
+  const pendingSection = useUIStore((s) => s.pendingInspectorSection);
+  const consumeSection = useUIStore((s) => s.consumeInspectorSection);
+  useEffect(() => {
+    if (pendingSection) {
+      setActive(pendingSection as Section);
+      consumeSection();
+    }
+  }, [pendingSection, consumeSection]);
 
   const items: {
     key: Section;
@@ -39,6 +52,7 @@ export function InspectorRail({
     { key: 'outline', icon: List, label: t('inspector.outline') },
     { key: 'backlinks', icon: Link2, label: t('inspector.backlinks') },
     { key: 'related', icon: OrbitIcon, label: t('inspector.related') },
+    { key: 'suggest', icon: Lightbulb, label: t('inspector.suggest') },
     { key: 'summary', icon: ScrollText, label: t('inspector.summary') },
   ];
 
@@ -61,6 +75,7 @@ export function InspectorRail({
             {active === 'outline' && <OutlineBar doc={doc} onJump={onJump} />}
             {active === 'backlinks' && <BacklinksBar path={path} />}
             {active === 'related' && <RelatedNotes path={path} />}
+            {active === 'suggest' && <SuggestView />}
             {active === 'summary' && <NoteSummary doc={doc} path={path} />}
           </div>
         </aside>

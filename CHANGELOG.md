@@ -15,6 +15,34 @@
 - **Инварианты**: INV-UNDO-GATED (re-enter гейт, нет raw-host exec) · INV-UNDO-NO-HOST-GIT (reset ВНУТРИ контейнера — check-sandbox-exec зелёный) · INV-UNDO-HOST-AUTHORITY (ref из ledger, не от модели; ре-валидирован) · INV-UNDO-NEVER-AUTO (синтезированный reset Confirm-never-Auto ⇒ агент не само-апрувит свой undo) · INV-UNDO-MARKED-ON-VERIFY (undone только после reset EXECUTED) · INV-EXEC-IRREVERSIBLE (shell/process без ExecGitRef-хэндла ⇒ драйвер не зовётся).
 
 Tier-1 (+7, итого 867 nexus-core, 0 failed): no-driver-still-deferred · driver-restored-marks-undone · driver-rejected-stays-deferred · driver-failed-not-undone · invalid-ref-never-calls-driver (host-authority над ref) · shell-exec-has-no-undo-handle · undo-reset-action-gated-never-auto (git reset --hard под PolicyDefault → Rejected). clippy 0, fmt + node-lints зелёные. Прод `SandboxUndoExecDriver` (реальный container-spin) + `ai.exec.git_worktree` (owner-gated rw worktree, default OFF) + `--sandbox-undo` entrypoint — 6c-3d; реальный `git reset` round-trip — Tier-2 .28.
+### Дизайн · Hermes-6 PR-C — app-shell (Titlebar): чат-пузырь AI-тоггл + `/`-разделитель языка
+
+Финальный хром-полиш по `app.jsx`: AI-панель тоггл `PanelRight` → `MessageCircle` (чат-пузырь, по брифу); разделитель RU/EN `·` → `/`. Прочий app-shell (ActivityBar/StatusBar/grid/splits/tabs/reading/scrim) уже совпадал с хэндоффом — не трогался. BrandMark-спутник остаётся `var(--color-accent)` (тема-реактивный, НЕ хардкод-hex). tsc·eslint·vitest — зелёные; DOM-верификация тоггла/разделителя.
+
+### Дизайн · Hermes-6 фан-аут PR-B — рескин read/nav-вью (Home/News/Today/Board/Sidebar/Graph/Палитра/Plugins)
+
+In-place CSS-рескин 8 поверхностей под `home.jsx`/`news.jsx`/`screens.jsx`(Today/Board)/`sidebar.jsx`/`graph.jsx`/`palette.jsx`/`plugins.jsx`:
+- **Home:** greeting → `--display-lg` headline, continue-card headline-title/serif-snippet, плоский фон, приглушённые иконки.
+- **News:** ADD **drop cap** (`::first-letter` Cormorant 3.5em accent на первом абзаце), editorial-reader (kicker 0.2em, lede 20px, paragraph 18px/1.8), CTA → headline/display-md.
+- **Today/Board:** carded-list идиом (плоские ряды → elevated 14px-карточки, status-dots, mono-секции, mono-бейджи); Board DnD/list/task-peek/properties сохранены.
+- **Sidebar/Graph/Palette/Plugins:** точечный полиш (active-state, glass-палитра, plugin-карточки/audit).
+
+Рескин-на-месте — 0 регрессий (adversarial-ревью 4 линзы). Только per-component CSS (+ аддитивные спаны/иконо-боксы); shared-файлы не тронуты.
+
+### Дизайн · Hermes-6 фан-аут PR-A — рескин модалок/инсайтов (Память/Эпизоды/Дайджест/Цели/Противоречия/Входящие/DeadJobs/Sync+Conflict)
+
+In-place CSS-рескин 5 поверхностей под `screens.jsx`/`insights.css`/`sync.css`/`conflict.css`: заголовки → `--font-headline` 19px, мета → `--font-mono`, soft-accent пилюли, ember-акцент вместо cool-`--color-ai`, теги → `--color-tag`, soft-square чипы, entry-motion (m-fade/m-pop), empty-state иконо-боксы. Рескин-на-месте — 0 регрессий фич/i18n/a11y (adversarial-ревью 3 линзы, вердикт MERGE). Только per-component `.module.css` (+ аддитивные `emptyIcoBox`/`headIcon` спаны); shared-файлы не тронуты.
+
+### Дизайн · AI-панель Castor (Hermes-6, Фаза B срез 1) — 2 вкладки + икон-композер + релокация «Связей»
+
+Рескин AI/чат-панели под hi-fi макет (`ai-panel.jsx`). Рескин-на-месте — вся проводка чата сохранена.
+
+- Шапка **«Castor»** (орбита-глиф + провайдер-бейдж + история/новая + развернуть-в-раздел Агента + закрыть); **2 вкладки: Чат · Castor** (`AiTab: 'chat'|'agent'`), вкладка Castor = `AgentTab`-лаунчер.
+- **Релокация «Связи» (SuggestView) → инспектор-рейл редактора** (секция `suggest` + `pendingInspectorSection` по паттерну `pendingTagFilter`; команда палитры `view.suggest` перенацелена; reading-режим сбрасывается). «Похожие» уже в рейле.
+- Композер по `ai.css`: scope-чип «По заметкам/Общий» (клик циклит) + Web/Pin икон-тогглы + круглый send/stop; empty «Спросите Castor».
+- Adversarial-ревью (4 линзы, 0 блокеров): фиксы M1 (токен stopBtn), M2 (reading:false + тест), чистка осиротевших i18n-ключей. M3 (панельная RelatedView со слайдером) — осознанная минор-потеря (вставка-ссылки в SuggestView).
+
+tsc · eslint · vitest 899/899 · build · node-чеки — зелёные; скриншот-верификация light+dark.
 
 ### Агент · SANDBOX-6c-3a — Tier-2 фундамент: podman-gate + crash-recovery reaper зависших exec
 

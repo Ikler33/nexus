@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,29 +8,37 @@ import {
   ShieldCheck,
   Trash2,
   X,
-} from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+} from "lucide-react";
+import { useTranslation } from "react-i18next";
 
-import { type PluginCall, demoPluginSrcdoc, mountPlugin } from '../../lib/plugin-host';
-import { tauriApi, type PermissionChip, type PluginInfo } from '../../lib/tauri-api';
-import { useUIStore } from '../../stores/ui';
-import styles from './PluginsPanel.module.css';
+import {
+  type PluginCall,
+  demoPluginSrcdoc,
+  mountPlugin,
+} from "../../lib/plugin-host";
+import {
+  tauriApi,
+  type PermissionChip,
+  type PluginInfo,
+} from "../../lib/tauri-api";
+import { useUIStore } from "../../stores/ui";
+import styles from "./PluginsPanel.module.css";
 
 interface AuditRow extends PluginCall {
   id: number;
 }
 
 /** Нав-вкладки менеджера (макет plugins.jsx): установленные + журнал доступа. */
-type Nav = 'installed' | 'audit';
+type Nav = "installed" | "audit";
 
 /** Персист consent-решений (DP-8): dir → разрешено. Отзыв — сброс записи. */
-const CONSENT_KEY = 'nexus.plugin.consent.v1';
+const CONSENT_KEY = "nexus.plugin.consent.v1";
 
 function readConsent(): Record<string, boolean> {
   try {
     const raw = localStorage.getItem(CONSENT_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : {};
-    return typeof parsed === 'object' && parsed !== null
+    return typeof parsed === "object" && parsed !== null
       ? (parsed as Record<string, boolean>)
       : {};
   } catch {
@@ -48,7 +56,7 @@ function persistConsent(map: Record<string, boolean>): void {
 
 /** Не-safe права требуют информированного согласия перед запуском (макет plugins.jsx). */
 function needsConsent(p: PluginInfo): boolean {
-  return p.permissions.some((c) => c.level !== 'safe');
+  return p.permissions.some((c) => c.level !== "safe");
 }
 
 /**
@@ -67,7 +75,7 @@ export function PluginsPanel() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const nextId = useRef(0);
   const [calls, setCalls] = useState<AuditRow[]>([]);
-  const [nav, setNav] = useState<Nav>('installed');
+  const [nav, setNav] = useState<Nav>("installed");
   // Запущенный в песочнице плагин (его iframe смонтирован). null — список карточек.
   const [running, setRunning] = useState<PluginInfo | null>(null);
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
@@ -89,8 +97,11 @@ export function PluginsPanel() {
     let disposed = false;
     let handle: { dispose(): void } | undefined;
 
-    void mountPlugin('hello', iframe, {
-      onCall: (c) => setCalls((prev) => [...prev, { id: nextId.current++, ...c }].slice(-50)),
+    void mountPlugin("hello", iframe, {
+      onCall: (c) =>
+        setCalls((prev) =>
+          [...prev, { id: nextId.current++, ...c }].slice(-50),
+        ),
     }).then((h) => {
       if (disposed) h.dispose();
       else handle = h;
@@ -148,7 +159,7 @@ export function PluginsPanel() {
   };
 
   // Двоеточие в kind конфликтует с nsSeparator i18next → ключи через подчёркивание.
-  const permKey = (kind: string) => kind.replace(':', '_');
+  const permKey = (kind: string) => kind.replace(":", "_");
 
   const chip = (c: PermissionChip) => (
     <span
@@ -166,7 +177,7 @@ export function PluginsPanel() {
         className={styles.dialog}
         role="dialog"
         aria-modal="true"
-        aria-label={t('plugins.title')}
+        aria-label={t("plugins.title")}
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.header}>
@@ -174,47 +185,47 @@ export function PluginsPanel() {
             <Puzzle size={19} />
           </span>
           <div className={styles.headTt}>
-            <div className={styles.title}>{t('plugins.title')}</div>
-            <div className={styles.subtitle}>{t('plugins.subtitle')}</div>
+            <div className={styles.title}>{t("plugins.title")}</div>
+            <div className={styles.subtitle}>{t("plugins.subtitle")}</div>
           </div>
           <button
             className={styles.close}
             onClick={closePlugins}
-            aria-label={t('plugins.close')}
-            title={t('plugins.close')}
+            aria-label={t("plugins.close")}
+            title={t("plugins.close")}
           >
             <X size={16} aria-hidden />
           </button>
         </header>
 
-        <nav className={styles.nav} aria-label={t('plugins.title')}>
+        <nav className={styles.nav} aria-label={t("plugins.title")}>
           <button
             type="button"
-            className={`${styles.navItem} ${nav === 'installed' ? styles.navActive : ''}`}
-            aria-current={nav === 'installed'}
-            onClick={() => setNav('installed')}
+            className={`${styles.navItem} ${nav === "installed" ? styles.navActive : ""}`}
+            aria-current={nav === "installed"}
+            onClick={() => setNav("installed")}
           >
             <Puzzle size={16} aria-hidden />
-            {t('plugins.installed')}
+            {t("plugins.installed")}
             <span className={styles.cnt}>{plugins.length}</span>
           </button>
           <button
             type="button"
-            className={`${styles.navItem} ${nav === 'audit' ? styles.navActive : ''}`}
-            aria-current={nav === 'audit'}
-            onClick={() => setNav('audit')}
+            className={`${styles.navItem} ${nav === "audit" ? styles.navActive : ""}`}
+            aria-current={nav === "audit"}
+            onClick={() => setNav("audit")}
           >
             <Clock size={16} aria-hidden />
-            {t('plugins.auditTab')}
+            {t("plugins.auditTab")}
           </button>
           <div className={styles.navNote}>
             <Shield size={15} className={styles.navNoteIc} aria-hidden />
-            {t('plugins.privacyNote')}
+            {t("plugins.privacyNote")}
           </div>
         </nav>
 
         <main className={styles.main}>
-          {nav === 'installed' &&
+          {nav === "installed" &&
             (running ? (
               <div className={styles.sandbox}>
                 <div className={styles.sandboxBar}>
@@ -224,12 +235,17 @@ export function PluginsPanel() {
                     onClick={() => setRunning(null)}
                   >
                     <ArrowLeft size={14} aria-hidden />
-                    {t('plugins.back')}
+                    {t("plugins.back")}
                   </button>
-                  <span className={styles.sandboxName}>{running.name ?? running.dir}</span>
-                  <span className={styles.sandboxTag} title={t('plugins.sandbox')}>
+                  <span className={styles.sandboxName}>
+                    {running.name ?? running.dir}
+                  </span>
+                  <span
+                    className={styles.sandboxTag}
+                    title={t("plugins.sandbox")}
+                  >
                     <Shield size={10} aria-hidden />
-                    {t('plugins.sandbox')}
+                    {t("plugins.sandbox")}
                   </span>
                 </div>
                 <iframe
@@ -243,43 +259,55 @@ export function PluginsPanel() {
             ) : (
               <div className={styles.cards}>
                 {plugins.length === 0 && (
-                  <p className={styles.auditEmpty}>{t('plugins.empty')}</p>
+                  <p className={styles.auditEmpty}>{t("plugins.empty")}</p>
                 )}
                 {plugins.map((p) => (
                   <div
                     key={p.dir}
-                    className={`${styles.card} ${p.enabled ? '' : styles.cardOff}`}
+                    className={`${styles.card} ${p.enabled ? "" : styles.cardOff}`}
                   >
-                    <span className={styles.glyph} aria-hidden>
+                    <span
+                      className={`${styles.glyph} ${p.enabled ? styles.glyphOn : ""}`}
+                      aria-hidden
+                    >
                       <Puzzle size={22} />
                     </span>
                     <div className={styles.cardBody}>
                       <div className={styles.nameLine}>
                         <strong>{p.name ?? p.dir}</strong>
-                        {p.version && <span className={styles.ver}>v{p.version}</span>}
-                        <span className={styles.sandboxBadge} title={t('plugins.sandbox')}>
+                        {p.version && (
+                          <span className={styles.ver}>v{p.version}</span>
+                        )}
+                        <span
+                          className={styles.sandboxBadge}
+                          title={t("plugins.sandbox")}
+                        >
                           <Shield size={10} aria-hidden />
-                          {t('plugins.sandbox')}
+                          {t("plugins.sandbox")}
                         </span>
                         {!p.compatible && (
                           <span className={styles.incompat}>
                             <AlertTriangle size={11} aria-hidden />
-                            {t('plugins.incompatible')}
+                            {t("plugins.incompatible")}
                           </span>
                         )}
                       </div>
-                      {p.error && <div className={styles.cardErr}>{p.error}</div>}
-                      <div className={styles.perms}>{p.permissions.map(chip)}</div>
+                      {p.error && (
+                        <div className={styles.cardErr}>{p.error}</div>
+                      )}
+                      <div className={styles.perms}>
+                        {p.permissions.map(chip)}
+                      </div>
                       {consent[p.dir] && (
                         <div className={styles.consentLine}>
                           <ShieldCheck size={12} aria-hidden />
-                          {t('plugins.consentGiven')}
+                          {t("plugins.consentGiven")}
                           <button
                             type="button"
                             className={styles.revoke}
                             onClick={() => revoke(p)}
                           >
-                            {t('plugins.revoke')}
+                            {t("plugins.revoke")}
                           </button>
                         </div>
                       )}
@@ -287,14 +315,20 @@ export function PluginsPanel() {
                     <div className={styles.side}>
                       <label
                         className={styles.toggle}
-                        title={p.enabled ? t('plugins.disable') : t('plugins.enable')}
+                        title={
+                          p.enabled ? t("plugins.disable") : t("plugins.enable")
+                        }
                       >
                         <input
                           type="checkbox"
                           role="switch"
                           checked={p.enabled}
                           onChange={() => toggleEnabled(p)}
-                          aria-label={p.enabled ? t('plugins.disable') : t('plugins.enable')}
+                          aria-label={
+                            p.enabled
+                              ? t("plugins.disable")
+                              : t("plugins.enable")
+                          }
                         />
                         <span className={styles.toggleTrack} aria-hidden />
                       </label>
@@ -304,14 +338,14 @@ export function PluginsPanel() {
                         disabled={!p.compatible || !p.enabled}
                         onClick={() => launch(p)}
                       >
-                        {t('plugins.launch')}
+                        {t("plugins.launch")}
                       </button>
                       <button
                         type="button"
                         className={styles.remove}
                         onClick={() => removePlugin(p)}
-                        title={t('plugins.remove')}
-                        aria-label={t('plugins.remove')}
+                        title={t("plugins.remove")}
+                        aria-label={t("plugins.remove")}
                       >
                         <Trash2 size={14} aria-hidden />
                       </button>
@@ -321,20 +355,22 @@ export function PluginsPanel() {
               </div>
             ))}
 
-          {nav === 'audit' && (
-            <div className={styles.audit} aria-label={t('plugins.auditTitle')}>
-              <p className={styles.auditSub}>{t('plugins.auditSub')}</p>
+          {nav === "audit" && (
+            <div className={styles.audit} aria-label={t("plugins.auditTitle")}>
+              <p className={styles.auditSub}>{t("plugins.auditSub")}</p>
               {calls.length === 0 ? (
-                <p className={styles.auditEmpty}>{t('plugins.auditEmpty')}</p>
+                <p className={styles.auditEmpty}>{t("plugins.auditEmpty")}</p>
               ) : (
                 <ul className={styles.auditList}>
                   {calls.map((c) => (
                     <li key={c.id} className={c.ok ? styles.ok : styles.denied}>
                       <span className={styles.verdict} aria-hidden>
-                        {c.ok ? '✓' : '✋'}
+                        {c.ok ? "✓" : "✋"}
                       </span>
                       <code className={styles.method}>{c.method}</code>
-                      {c.path != null && <span className={styles.path}>{c.path || '/'}</span>}
+                      {c.path != null && (
+                        <span className={styles.path}>{c.path || "/"}</span>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -344,51 +380,80 @@ export function PluginsPanel() {
         </main>
 
         {sheet && (
-          <div className={styles.consentScrim} role="presentation" onClick={() => setSheet(null)}>
+          <div
+            className={styles.consentScrim}
+            role="presentation"
+            onClick={() => setSheet(null)}
+          >
             <div
               className={styles.consent}
               role="dialog"
               aria-modal="true"
-              aria-label={t('plugins.consentTitle', { name: sheet.name ?? sheet.dir })}
+              aria-label={t("plugins.consentTitle", {
+                name: sheet.name ?? sheet.dir,
+              })}
               onClick={(e) => e.stopPropagation()}
             >
               <div className={styles.consentTop}>
-                <Puzzle size={26} className={styles.glyph} aria-hidden />
-                <div>
-                  <div className={styles.consentName}>{sheet.name ?? sheet.dir}</div>
-                  <div className={styles.consentSub}>{t('plugins.consentSub')}</div>
+                <span className={styles.consentGlyph} aria-hidden>
+                  <Puzzle size={26} />
+                </span>
+                <div className={styles.consentName}>
+                  {sheet.name ?? sheet.dir}
+                </div>
+                <div className={styles.consentSub}>
+                  {t("plugins.consentSub")}
                 </div>
               </div>
               <div className={styles.permRows}>
                 {sheet.permissions.map((c) => (
-                  <div key={c.kind} className={`${styles.permRow} ${styles[c.level]}`}>
+                  <div
+                    key={c.kind}
+                    className={`${styles.permRow} ${styles[c.level]}`}
+                  >
                     <span className={styles.prBadge} aria-hidden>
-                      {c.level === 'sensitive' ? '!' : c.level === 'caution' ? '~' : '✓'}
+                      {c.level === "sensitive"
+                        ? "!"
+                        : c.level === "caution"
+                          ? "~"
+                          : "✓"}
                     </span>
                     <span className={styles.prText}>
                       <span className={styles.prTitle}>
-                        {t(`plugins.perm.${permKey(c.kind)}.title`, { defaultValue: c.kind })}
+                        {t(`plugins.perm.${permKey(c.kind)}.title`, {
+                          defaultValue: c.kind,
+                        })}
                       </span>
                       <span className={styles.prDesc}>
-                        {t(`plugins.perm.${permKey(c.kind)}.desc`, { defaultValue: '' })}
-                        {c.detail ? ` · ${c.detail}` : ''}
+                        {t(`plugins.perm.${permKey(c.kind)}.desc`, {
+                          defaultValue: "",
+                        })}
+                        {c.detail ? ` · ${c.detail}` : ""}
                       </span>
                     </span>
                   </div>
                 ))}
               </div>
               <div className={styles.consentFoot}>
-                <button type="button" className={styles.cancel} onClick={() => setSheet(null)}>
-                  {t('plugins.cancel')}
+                <button
+                  type="button"
+                  className={styles.cancel}
+                  onClick={() => setSheet(null)}
+                >
+                  {t("plugins.cancel")}
                 </button>
-                <button type="button" className={styles.allow} onClick={() => allow(sheet)}>
+                <button
+                  type="button"
+                  className={styles.allow}
+                  onClick={() => allow(sheet)}
+                >
                   <ShieldCheck size={15} aria-hidden />
-                  {t('plugins.allow')}
+                  {t("plugins.allow")}
                 </button>
               </div>
               <div className={styles.consentNote}>
                 <ShieldCheck size={12} aria-hidden />
-                {t('plugins.revocableNote')}
+                {t("plugins.revocableNote")}
               </div>
             </div>
           </div>

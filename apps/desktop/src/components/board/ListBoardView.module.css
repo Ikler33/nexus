@@ -55,10 +55,12 @@
   z-index: 1;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
-  font-size: 0.74rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--color-text-muted);
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
 }
 
 .sortHead {
@@ -144,59 +146,71 @@
   color: var(--color-text-faint, var(--color-text-muted));
 }
 
-/* Бейджи/мета — зеркалят BoardView (те же токены). */
+/* Бейджи/мета — зеркалят BoardView (те же токены, моно-приоритеты Orvin). */
 .badge {
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
   border: 1px solid transparent;
   white-space: nowrap;
 }
 .prioLow,
 .prioOther {
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   background: var(--color-surface);
-  border-color: var(--color-border);
 }
 .prioMedium {
   color: var(--color-link);
-  background: var(--color-accent-soft);
+  background: var(--color-link-soft);
 }
 .prioHigh {
   color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  background: color-mix(in oklch, var(--color-warning) 12%, transparent);
 }
 .prioUrgent {
   color: var(--color-danger);
   background: var(--color-danger-soft);
 }
 
-.due,
-.project {
+.due {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 0.76rem;
-  color: var(--color-text-muted);
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: 6px;
+  padding: 3px 7px;
   min-width: 0;
 }
 .project {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--color-text-faint);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .overdue {
   color: var(--color-danger);
+  background: var(--color-danger-soft);
   font-weight: 600;
 }
 
 .tag {
-  font-size: 0.72rem;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  font-size: 0.66rem;
+  color: var(--color-tag);
+  background: var(--color-tag-soft);
+  border-radius: 5px;
+  padding: 2px 6px;
   white-space: nowrap;
 }
 

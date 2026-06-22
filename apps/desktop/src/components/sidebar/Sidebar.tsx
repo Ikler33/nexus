@@ -319,7 +319,10 @@ export function Sidebar() {
               )}
             </ul>
           ) : (
-            <div className={styles.panelHint}>{t('sidebar.searchHint')}</div>
+            <div className={styles.searchEmpty}>
+              <Search size={26} className={styles.searchEmptyIcon} aria-hidden />
+              <div className={styles.searchEmptySub}>{t('sidebar.searchHint')}</div>
+            </div>
           )}
         </>
       )}

@@ -50,15 +50,17 @@
 }
 
 .empty {
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-6);
+  text-align: center;
   color: var(--color-text-faint);
+  font-size: var(--text-sm);
 }
 
 .item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: 10px;
   padding: 9px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -78,6 +80,7 @@
 
 .title {
   flex: 1;
+  font-size: var(--text-md);
 }
 
 .kbd {
@@ -124,7 +127,7 @@
 .inputRow {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--color-border);
 }
@@ -141,7 +144,7 @@
 .section {
   font-size: var(--text-xs);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   color: var(--color-text-faint);
   font-weight: 600;
   padding: 8px 12px 4px;
@@ -165,8 +168,8 @@
 .foot {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 8px 16px;
+  gap: var(--space-3);
+  padding: 8px 14px;
   border-top: 1px solid var(--color-border);
   color: var(--color-text-faint);
   font-size: var(--text-xs);
@@ -174,7 +177,7 @@
 .footHint {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 /* DF-1: бренд-хинт прижат вправо (макет palette.jsx marginLeft:auto). */
 .footBrand {
@@ -207,8 +210,8 @@
   align-items: center;
 }
 .spotlight {
-  padding-top: 0;
-  align-items: center;
+  padding-top: 22vh;
+  align-items: flex-start;
 }
 .spotlight .palette {
   width: min(560px, 92vw);
@@ -233,7 +236,7 @@
 }
 
 .snippet {
-  font-size: var(--text-xs, 0.74rem);
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;

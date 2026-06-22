@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   AlertTriangle,
+  ArrowUp,
+  BookOpen,
   Brain,
   Check,
   Copy,
@@ -11,6 +13,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  Square,
   X,
   ChevronRight,
   MessageSquare,
@@ -266,69 +269,46 @@ export function ChatView() {
         )}
       </div>
 
-      {/* Web — ДОПОЛНИТЕЛЬНЫЙ флаг поверх режима (ревизия владельца 11.06): сегмент выбирает
-          «По заметкам | Общий», глобус лишь разрешает модели сходить в интернет — режим не трогает. */}
-      <div className={styles.modeRow}>
-        <div
-          role="radiogroup"
-          aria-label={t('chat.mode')}
-          className={styles.modeSeg}
-          // a11y (audit B10): roving-tabindex + стрелки переключают режим внутри radiogroup
-          // (WAI-ARIA radio pattern) — раньше Tab останавливался на каждой кнопке, стрелки не работали.
-          onKeyDown={(e) => {
-            if (streaming) return;
-            const order = ['vault', 'general'] as const;
-            const i = order.indexOf(mode);
-            let next: (typeof order)[number] | null = null;
-            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = order[(i + 1) % order.length];
-            else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
-              next = order[(i - 1 + order.length) % order.length];
-            if (next) {
-              e.preventDefault();
-              setMode(next);
-              e.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
-            }
-          }}
-        >
-          {(['vault', 'general'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              data-mode={m}
-              aria-checked={mode === m}
-              tabIndex={mode === m ? 0 : -1}
-              className={`${styles.modeBtn} ${mode === m ? styles.modeOn : ''}`}
-              onClick={() => setMode(m)}
-              disabled={streaming}
-              title={t(`chat.mode${m === 'vault' ? 'Vault' : 'General'}Hint`)}
-            >
-              {t(`chat.mode${m === 'vault' ? 'Vault' : 'General'}`)}
-            </button>
-          ))}
-        </div>
+      {/* Скоуп-чип (Hermes-6 `ai-panel.jsx`): один чип «По заметкам / Общий» (клик циклит режим) +
+          икон-тогглы Web и Pin. Web — флаг поверх режима (глобус разрешает интернет, режим не трогает);
+          Pin закрепляет активную заметку в контекст. */}
+      <div className={styles.scopeRow}>
         <button
           type="button"
-          className={`${styles.webBtn} ${web ? styles.webOn : ''}`}
+          className={styles.scopeChip}
+          onClick={() => setMode(mode === 'vault' ? 'general' : 'vault')}
+          disabled={streaming}
+          title={t(`chat.mode${mode === 'vault' ? 'Vault' : 'General'}Hint`)}
+        >
+          {mode === 'vault' ? (
+            <FileText size={13} aria-hidden />
+          ) : (
+            <BookOpen size={13} aria-hidden />
+          )}
+          {t(`chat.mode${mode === 'vault' ? 'Vault' : 'General'}`)}
+        </button>
+        <button
+          type="button"
+          className={`${styles.scopePin} ${web ? styles.scopePinOn : ''}`}
           aria-pressed={web}
           onClick={toggleWeb}
           disabled={streaming}
           title={t('chat.modeWebHint')}
+          aria-label={t('chat.modeWeb')}
         >
-          <Globe size={13} aria-hidden />
-          {t('chat.modeWeb')}
+          <Globe size={14} aria-hidden />
         </button>
         {/* P6-PIN: закрепить активную заметку в контекст ИИ («обсудить эту заметку»). */}
         <button
           type="button"
-          className={`${styles.webBtn} ${center && pinned.includes(center) ? styles.webOn : ''}`}
+          className={`${styles.scopePin} ${center && pinned.includes(center) ? styles.scopePinOn : ''}`}
           aria-pressed={!!center && pinned.includes(center)}
           onClick={() => center && togglePin(center)}
           disabled={streaming || !center}
           title={t('chat.pinHint')}
+          aria-label={t('chat.pin')}
         >
           <Pin size={13} aria-hidden />
-          {t('chat.pin')}
         </button>
       </div>
 
@@ -411,12 +391,24 @@ export function ChatView() {
           rows={2}
         />
         {streaming ? (
-          <button type="button" className={styles.stopBtn} onClick={() => stop()}>
-            {t('chat.stop')}
+          <button
+            type="button"
+            className={styles.stopBtn}
+            onClick={() => stop()}
+            title={t('chat.stop')}
+            aria-label={t('chat.stop')}
+          >
+            <Square size={15} aria-hidden />
           </button>
         ) : (
-          <button type="submit" className={styles.sendBtn} disabled={!input.trim()}>
-            {t('chat.send')}
+          <button
+            type="submit"
+            className={styles.sendBtn}
+            disabled={!input.trim()}
+            title={t('chat.send')}
+            aria-label={t('chat.send')}
+          >
+            <ArrowUp size={16} aria-hidden />
           </button>
         )}
       </form>

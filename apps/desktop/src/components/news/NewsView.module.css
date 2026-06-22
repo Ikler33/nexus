@@ -552,9 +552,11 @@
   margin-bottom: 4px;
 }
 .ctaTitle {
-  font-family: var(--font-serif);
-  font-size: 24px;
-  font-weight: 500;
+  font-family: var(--font-headline);
+  font-size: var(--display-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
 }
 .ctaSub {
   font-size: var(--text-md);
@@ -755,10 +757,10 @@
 .readerKicker {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--color-accent);
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
 .readerTitle {
   font-family: var(--font-headline);
@@ -771,8 +773,8 @@
 }
 .readerLede {
   font-family: var(--font-serif);
-  font-size: 18px;
-  line-height: 1.55;
+  font-size: 20px;
+  line-height: 1.5;
   color: var(--color-text-muted);
   font-style: italic;
   padding-bottom: var(--space-4);
@@ -781,11 +783,21 @@
 }
 .readerP {
   font-family: var(--font-serif);
-  font-size: 17px;
-  line-height: 1.75;
+  font-size: 18px;
+  line-height: 1.8;
   color: var(--color-text);
-  margin: 0 0 1.1em;
+  margin: 0 0 1.05em;
   text-wrap: pretty;
+}
+/* Буквица первого абзаца статьи (Hermes-6 news.css:120). */
+.readerDoc .readerP:first-of-type::first-letter {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  font-size: 3.5em;
+  line-height: 0.68;
+  float: left;
+  padding: 0.16em 0.14em 0 0;
+  color: var(--color-accent);
 }
 .readerFoot {
   display: flex;

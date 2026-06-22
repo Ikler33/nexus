@@ -10,6 +10,7 @@
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
   padding: var(--space-4);
+  animation: m-fade var(--dur-2) var(--ease-out);
 }
 .panel {
   display: flex;
@@ -21,13 +22,15 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--elevation-2);
   overflow: hidden;
+  animation: m-pop var(--dur-3) var(--ease-spring);
 }
 .head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3);
+  padding: var(--space-4);
   border-bottom: 1px solid var(--color-border);
+  background: var(--color-chrome);
   color: var(--color-text);
 }
 .title {
@@ -95,8 +98,8 @@
   background: none;
   padding: 0;
   font: inherit;
-  font-size: var(--text-sm);
-  color: var(--color-text);
+  font-size: var(--text-md);
+  color: var(--color-link);
   text-align: left;
   cursor: pointer;
   overflow: hidden;
@@ -104,21 +107,20 @@
   white-space: nowrap;
 }
 .goalTitle:hover {
-  color: var(--color-link);
+  text-decoration: underline;
 }
 .barWrap {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
-  width: 160px;
+  width: 150px;
 }
 .bar {
   flex: 1;
   height: 8px;
   border-radius: 999px;
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
   overflow: hidden;
 }
 .fill {
@@ -141,21 +143,44 @@
   font-style: italic;
 }
 
-/* ── DP-9: thinking-знак и пустое состояние с глифом (макет insights.jsx) ── */
+/* ── DP-9 / Hermes-6: thinking-знак и пустое состояние с глифом (макет insights.jsx) ── */
 .thinking {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 220px;
   padding: var(--space-7) var(--space-4);
+  color: var(--color-ai);
 }
 .emptyState {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: var(--space-5) var(--space-4);
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 220px;
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+}
+.emptyIcoBox {
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-lg);
+  display: grid;
+  place-items: center;
+  background: var(--color-surface);
+  color: var(--color-text-faint);
 }
 .emptyIco {
   color: var(--color-text-faint);
+}
+.emptyState .empty {
+  padding: 0;
+  max-width: 280px;
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: var(--leading-normal);
 }

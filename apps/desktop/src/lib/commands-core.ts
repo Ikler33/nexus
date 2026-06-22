@@ -418,9 +418,9 @@ export function registerCoreCommands(): Disposable {
       title: 'Link suggestions',
       titleKey: 'commands.view.suggest',
       source: 'core',
+      // Hermes-6: «Связи» переехали из AI-панели в инспектор-рейл редактора (per-заметочные).
       run: () => {
-        useUIStore.getState().setAiTab('suggest');
-        useUIStore.getState().openChat();
+        useUIStore.getState().openInspectorSection('suggest');
       },
     }),
     commands.register({

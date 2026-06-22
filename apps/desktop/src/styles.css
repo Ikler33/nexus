@@ -13,6 +13,8 @@
   --font-editor: var(--font-ui);
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
   --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  /* «читательский» шрифт (reader/daily-note) — тот же Source Serif 4 stack (Hermes-6 --font-reading). */
+  --font-reading: var(--font-serif);
   /* editorial display face — высококонтрастный Garamond, ТОЛЬКО на крупных размерах (>=24px) */
   --font-headline: 'Cormorant', 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
   /* display/wordmark font — переопределяется антик-темами (Cinzel) */
