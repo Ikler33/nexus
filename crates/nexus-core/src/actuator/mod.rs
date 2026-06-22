@@ -50,8 +50,8 @@ pub use audit::{
 };
 pub use classify::{classify, BlockReason, ClassifyCtx, ConfirmReason, RiskTier};
 pub use decision::{
-    BatchDecision, ChannelDecision, DecisionSource, ItemDecision, PolicyDefault, ProposalBatch,
-    ProposalItem,
+    ApproveAll, BatchDecision, ChannelDecision, DecisionSource, ItemDecision, PolicyDefault,
+    ProposalBatch, ProposalItem,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use orchestrate::ManualClock;
