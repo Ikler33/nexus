@@ -28,11 +28,45 @@ pub struct EndpointDto {
 
 /// Текущая AI-конфигурация для префилла формы.
 #[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiConfigDto {
     pub chat: Option<EndpointDto>,
     pub embedding: Option<EndpointDto>,
     /// Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B) — inline/судья/сводка reasoning/новости.
     pub fast: Option<EndpointDto>,
+
+    // --- Agent-флаги (Hermes-6/SYNC follow-up). ВАЖНО: десктоп их РАНТАЙМОМ НЕ ЧИТАЕТ — это конфиг
+    // ИСКЛЮЧИТЕЛЬНО headless-агента (`nexus-agentd` через коннектор). Десктоп выбирает автономию
+    // прогона per-run в UI (`stores/agent.ts`), а свой web-режим берёт из отдельного `websearch.json`.
+    // Тогглы Настроек→ИИ лишь ПЕРСИСТЯТ эти ключи в `.nexus/local.json` для серверного агента.
+    /// `ai.agent_autonomy` (`"confirm"`|`"auto"`): дефолт-постура headless-коннектора. `None` → confirm.
+    pub agent_autonomy: Option<String>,
+    /// `ai.sandbox_enabled`: мастер-свитч OS-песочницы (Linux-only). Предпосылка для shell-exec.
+    pub sandbox_enabled: bool,
+    /// `ai.shell_enable`: host-exec в песочнице (Confirm, НИКОГДА Auto). Требует sandbox_enabled + Linux.
+    pub shell_enable: bool,
+    /// `ai.web.allow_public_fetch`: снимает allowlist с агентского `web.fetch` (публичный egress).
+    pub web_allow_public_fetch: bool,
+    /// Может ли песочница/host-exec В ПРИНЦИПЕ работать на ЭТОЙ платформе (Linux-only). Фронт гейтит
+    /// (disabled) тогглы sandbox/shell этим флагом — на macOS/Windows они структурно инертны.
+    pub shell_supported: bool,
+}
+
+/// Записываемый поднабор agent-флагов (вход/выход `set_agent_flags`). Зеркалит TS `AgentFlagsDto`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFlagsDto {
+    /// `"confirm"`|`"auto"`; иное/`None` → ключ не пишется (дефолт confirm у агентд).
+    pub agent_autonomy: Option<String>,
+    pub sandbox_enabled: bool,
+    pub shell_enable: bool,
+    pub web_allow_public_fetch: bool,
+}
+
+/// Может ли host-exec/песочница работать на платформе сборки десктопа (Linux-only — rootless-Podman).
+/// Фронт дизейблит sandbox/shell-тогглы, когда `false` (на этом десктопе они не дадут эффекта).
+const fn shell_supported() -> bool {
+    cfg!(target_os = "linux")
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +131,62 @@ fn apply_ai(
     Ok(doc.pointer("/ai/embedding").cloned() != old_emb)
 }
 
+/// Мержит agent-флаги (агентд-only) в JSON `local.json`, СОХРАНЯЯ все прочие ключи (chat/embedding/
+/// fast/sync/`web.url`/`web.enabled`/`agent_actuator_enabled`/…). Чистая — тестируется без `State`.
+///
+/// - `agent_autonomy`: только валидные `"confirm"`/`"auto"` пишутся; иное/`None` → ключ убирается
+///   (агентд дефолтит на confirm — SAFE).
+/// - `web.allow_public_fetch`: пишется ВНУТРЬ существующего/нового `ai.web` БЕЗ затирания `url`/`enabled`.
+///   Новый `ai.web` создаётся лишь при `true` (с пустым `url` он инертен; парсится — `WebConfig.url`
+///   имеет `#[serde(default)]`). При `false` без существующего `ai.web` — no-op (не плодим шум-ключи).
+fn apply_agent_flags(doc: &mut serde_json::Value, flags: &AgentFlagsDto) -> Result<(), String> {
+    if !doc.get("ai").map(|v| v.is_object()).unwrap_or(false) {
+        doc["ai"] = serde_json::json!({});
+    }
+    let ai = doc
+        .get_mut("ai")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai не объект")?;
+
+    match flags.agent_autonomy.as_deref() {
+        Some(v @ ("confirm" | "auto")) => {
+            ai.insert("agent_autonomy".into(), serde_json::Value::String(v.into()));
+        }
+        _ => {
+            ai.remove("agent_autonomy");
+        }
+    }
+    ai.insert(
+        "sandbox_enabled".into(),
+        serde_json::Value::Bool(flags.sandbox_enabled),
+    );
+    // КОГЕРЕНТНОСТЬ (fail-closed на trust-boundary, не только в UI): shell-exec невозможен без
+    // песочницы → НИКОГДА не персистим `shell_enable=true` при `sandbox_enabled=false`. Прямой вызов
+    // команды (минуя UI) не сможет записать инкогерентную пару. (Агентд и так fail-closed классификацией,
+    // но конфиг тоже держим консистентным.)
+    ai.insert(
+        "shell_enable".into(),
+        serde_json::Value::Bool(flags.shell_enable && flags.sandbox_enabled),
+    );
+
+    // web.allow_public_fetch: трогаем ai.web лишь если флаг true ИЛИ ai.web уже есть (иначе no-op).
+    let web_is_obj = ai.get("web").map(|v| v.is_object()).unwrap_or(false);
+    if flags.web_allow_public_fetch || web_is_obj {
+        if !web_is_obj {
+            ai.insert("web".into(), serde_json::json!({}));
+        }
+        let web = ai
+            .get_mut("web")
+            .and_then(|v| v.as_object_mut())
+            .ok_or("ai.web не объект")?;
+        web.insert(
+            "allow_public_fetch".into(),
+            serde_json::Value::Bool(flags.web_allow_public_fetch),
+        );
+    }
+    Ok(())
+}
+
 /// Текущая AI-конфигурация (из `.nexus/local.json`) — для префилла формы настроек.
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto> {
@@ -105,7 +195,11 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
         .await
         .unwrap_or_default();
     if raw.trim().is_empty() {
-        return Ok(AiConfigDto::default());
+        // Пустой конфиг → дефолты, но `shell_supported` всё равно отражает платформу (на Linux=true).
+        return Ok(AiConfigDto {
+            shell_supported: shell_supported(),
+            ..Default::default()
+        });
     }
     let cfg = LocalConfig::parse(&raw).map_err(|e| AppError::Msg(e.to_string()))?;
     Ok(AiConfigDto {
@@ -121,6 +215,16 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
             url: f.url,
             model: f.model,
         }),
+        agent_autonomy: cfg.ai.agent_autonomy.clone(),
+        sandbox_enabled: cfg.ai.sandbox_enabled,
+        shell_enable: cfg.ai.shell_enable,
+        web_allow_public_fetch: cfg
+            .ai
+            .web
+            .as_ref()
+            .map(|w| w.allow_public_fetch)
+            .unwrap_or(false),
+        shell_supported: shell_supported(),
     })
 }
 
@@ -276,6 +380,46 @@ pub async fn set_ai_config(
     })
 }
 
+/// Персистит agent-флаги (агентд-only) в `.nexus/local.json`, СОХРАНЯЯ прочие ключи. В ОТЛИЧИЕ от
+/// `set_ai_config` — НЕ делает hot-apply провайдеров и НЕ пересобирает egress-allowlist: эти флаги
+/// читает ТОЛЬКО headless-агентд при своём старте (десктоп их рантаймом не применяет). Мгновенно (как
+/// тогглы egress/websearch). Возвращает НОРМАЛИЗОВАННЫЙ набор (невалидная autonomy → `None` = confirm).
+#[tauri::command]
+pub async fn set_agent_flags(
+    state: State<'_, AppState>,
+    flags: AgentFlagsDto,
+) -> AppResult<AgentFlagsDto> {
+    let root = state.vault().await?.root.clone();
+    let dir = root.join(".nexus");
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join("local.json");
+    let raw = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    let mut doc: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&raw).map_err(|e| AppError::Msg(format!("local.json не JSON: {e}")))?
+    };
+    apply_agent_flags(&mut doc, &flags)?;
+    let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
+    // Атомарно (как set_ai_config): обрыв между write и rename не оставит усечённый local.json.
+    let path2 = path.clone();
+    let bytes = pretty.into_bytes();
+    tokio::task::spawn_blocking(move || crate::vault::atomic_write_io(&path2, &bytes))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
+    // Эхо НОРМАЛИЗОВАННОГО набора (то, что реально записано): невалидная autonomy → None (confirm),
+    // shell_enable когерентен с sandbox (см. apply_agent_flags). Фронт берёт его за источник истины.
+    Ok(AgentFlagsDto {
+        agent_autonomy: match flags.agent_autonomy.as_deref() {
+            Some("confirm") | Some("auto") => flags.agent_autonomy.clone(),
+            _ => None,
+        },
+        sandbox_enabled: flags.sandbox_enabled,
+        shell_enable: flags.shell_enable && flags.sandbox_enabled,
+        web_allow_public_fetch: flags.web_allow_public_fetch,
+    })
+}
+
 /// Проверка связи с LLM-эндпоинтом: пробный GET `/v1/models` (OpenAI-совместимо). Любой ответ сервера →
 /// достижим; сетевая ошибка → нет. Через [`GuardedClient`] с `Feature::Probe` (AC-EGR-6): url с фронта
 /// проверяется политикой ДО сети — «первый egress-вектор» (произвольный GET из доверенного ядра) закрыт.
@@ -347,6 +491,119 @@ mod tests {
             doc.pointer("/ai/fast").is_none(),
             "пустой fast-URL удаляет секцию"
         );
+    }
+
+    fn flags(
+        autonomy: Option<&str>,
+        sandbox: bool,
+        shell: bool,
+        public_fetch: bool,
+    ) -> AgentFlagsDto {
+        AgentFlagsDto {
+            agent_autonomy: autonomy.map(str::to_string),
+            sandbox_enabled: sandbox,
+            shell_enable: shell,
+            web_allow_public_fetch: public_fetch,
+        }
+    }
+
+    /// apply_agent_flags пишет 4 флага, СОХРАНЯЯ chat/sync; `web.allow_public_fetch` мержится в
+    /// существующий `ai.web` БЕЗ затирания `url`/`enabled`; итог парсится `LocalConfig` (нет коррапта).
+    #[test]
+    fn apply_agent_flags_sets_flags_and_preserves_chat_sync_and_web_url() {
+        let mut doc = serde_json::json!({
+            "sync": { "remote": "x" },
+            "ai": {
+                "chat": { "url": "http://h:8080", "model": "m" },
+                "web": { "url": "http://searx:8888", "enabled": true }
+            }
+        });
+        apply_agent_flags(&mut doc, &flags(Some("auto"), true, true, true)).unwrap();
+
+        assert_eq!(doc.pointer("/ai/agent_autonomy").unwrap(), "auto");
+        assert_eq!(doc.pointer("/ai/sandbox_enabled").unwrap(), true);
+        assert_eq!(doc.pointer("/ai/shell_enable").unwrap(), true);
+        assert_eq!(doc.pointer("/ai/web/allow_public_fetch").unwrap(), true);
+        // Прочие ключи целы.
+        assert_eq!(doc.pointer("/sync/remote").unwrap(), "x");
+        assert_eq!(doc.pointer("/ai/chat/url").unwrap(), "http://h:8080");
+        assert_eq!(
+            doc.pointer("/ai/web/url").unwrap(),
+            "http://searx:8888",
+            "web.url НЕ затёрт"
+        );
+        assert_eq!(
+            doc.pointer("/ai/web/enabled").unwrap(),
+            true,
+            "web.enabled НЕ затёрт"
+        );
+
+        // Round-trip: документ остаётся валидным local.json (chat не потерян).
+        let pretty = serde_json::to_string(&doc).unwrap();
+        let cfg = crate::ai::LocalConfig::parse(&pretty).unwrap();
+        assert_eq!(cfg.ai.agent_autonomy.as_deref(), Some("auto"));
+        assert!(cfg.ai.shell_enable && cfg.ai.sandbox_enabled);
+        assert!(cfg.ai.web.as_ref().unwrap().allow_public_fetch);
+        assert_eq!(cfg.ai.chat.unwrap().url, "http://h:8080");
+    }
+
+    /// Невалидная/None autonomy → ключ УБИРАЕТСЯ (дефолт confirm у агентд). `allow_public_fetch=false`
+    /// БЕЗ существующего `ai.web` — НЕ создаёт шум-ключ `ai.web` (no-op).
+    #[test]
+    fn apply_agent_flags_removes_invalid_autonomy_and_skips_empty_web() {
+        // Старт с уже записанной autonomy="auto"; новый набор с невалидной → ключ удаляется.
+        let mut doc = serde_json::json!({ "ai": { "agent_autonomy": "auto" } });
+        apply_agent_flags(&mut doc, &flags(Some("nonsense"), false, false, false)).unwrap();
+        assert!(
+            doc.pointer("/ai/agent_autonomy").is_none(),
+            "невалидная autonomy → ключ убран (SAFE confirm)"
+        );
+        assert_eq!(doc.pointer("/ai/sandbox_enabled").unwrap(), false);
+        assert_eq!(doc.pointer("/ai/shell_enable").unwrap(), false);
+        assert!(
+            doc.pointer("/ai/web").is_none(),
+            "public_fetch=false без существующего ai.web → не создаём ai.web"
+        );
+
+        // None autonomy → тоже без ключа.
+        let mut d2 = serde_json::json!({});
+        apply_agent_flags(&mut d2, &flags(None, false, false, false)).unwrap();
+        assert!(d2.pointer("/ai/agent_autonomy").is_none());
+    }
+
+    /// КОГЕРЕНТНОСТЬ trust-boundary: прямой вызов с `shell=true` при `sandbox=false` (минуя UI-гейт)
+    /// НИКОГДА не персистит `shell_enable=true` — exec невозможен без песочницы (fail-closed в конфиге).
+    #[test]
+    fn apply_agent_flags_forces_shell_off_when_sandbox_off() {
+        let mut doc = serde_json::json!({});
+        apply_agent_flags(&mut doc, &flags(None, false, true, false)).unwrap();
+        assert_eq!(
+            doc.pointer("/ai/shell_enable").unwrap(),
+            false,
+            "shell без sandbox → форсим false (нельзя записать инкогерентную пару)"
+        );
+        assert_eq!(doc.pointer("/ai/sandbox_enabled").unwrap(), false);
+
+        // При sandbox=true тот же shell=true проходит (когерентно).
+        let mut on = serde_json::json!({});
+        apply_agent_flags(&mut on, &flags(None, true, true, false)).unwrap();
+        assert_eq!(on.pointer("/ai/shell_enable").unwrap(), true);
+    }
+
+    /// `allow_public_fetch=true` БЕЗ предыдущего `ai.web` → создаётся `ai.web` с пустым url (ИНЕРТЕН) —
+    /// и весь документ остаётся парсимым (`WebConfig.url` `#[serde(default)]`, баг-корапт закрыт).
+    #[test]
+    fn apply_agent_flags_public_fetch_without_web_stays_parseable() {
+        let mut doc = serde_json::json!({ "ai": { "chat": { "url": "http://h:8080" } } });
+        apply_agent_flags(&mut doc, &flags(Some("confirm"), false, false, true)).unwrap();
+        assert_eq!(doc.pointer("/ai/web/allow_public_fetch").unwrap(), true);
+
+        let pretty = serde_json::to_string(&doc).unwrap();
+        let cfg = crate::ai::LocalConfig::parse(&pretty).expect("local.json остаётся валидным");
+        let web = cfg.ai.web.unwrap();
+        assert!(web.url.is_empty(), "url пуст → web инертен");
+        assert!(web.allow_public_fetch);
+        assert_eq!(cfg.ai.chat.unwrap().url, "http://h:8080", "chat не потерян");
     }
 
     /// AC-EGR-6: probe «Проверить связь» идёт через guarded с `Feature::Probe` — url вне политики
