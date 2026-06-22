@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-3d-2 — реальный exec-GitOp откат: `--sandbox-undo` + `SandboxUndoExecDriver` (gated/in-container)
+
+**Завершает 6c-3 в коде.** Превращает `UndoStatus::Deferred(ExecGitRef)` в РЕАЛЬНЫЙ `git reset --hard <pre-op-ref>` ВНУТРИ хардненного `--network=none` контейнера под host-апрувом. Инверсия §5.2 сохранена: host РЕШАЕТ (гейт/ledger), контейнер ИСПОЛНЯЕТ git (host git не спавнит).
+
+- **`sandbox::exec_undo::SandboxUndoExecDriver<R: GitResetRunner>`** (прод `UndoExecDriver`): синтезирует `git_op("reset",["--hard",ref])` → `dispatch_exec_decision` (classify→Confirm НИКОГДА Auto → approve → ledger СВОЯ строка) → `transition` APPROVED→EXECUTING → `GitResetRunner` исполняет в контейнере → `finish` EXECUTED|FAILED. `Restored`/`Deferred`/`Failed` маппинг; исходную строку `undo_run` помечает `undone` ТОЛЬКО при `Restored` (двухстрочный аудит).
+- **`GitResetRunner`-шов** изолирует ЕДИНСТВЕННЫЙ podman-launch (`PodmanGitResetRunner`: `--network=none --read-only --cap-drop=ALL`, worktree rw в `/work` под uid:gid владельца, `-c safe.directory`, marked) → host-логика гейта Tier-1-тестируема `MockGitResetRunner` без podman.
+- **`actuator::ApproveAll`** DecisionSource — operator-consent (одобряет батч ТОЛЬКО при ЯВНОМ `--approve`; Confirm-классификация сохранена, это НЕ Auto; скомпрометированный агент недоступен — выдаёт лишь host-корень).
+- **`nexus-agentd --sandbox-undo <vault> <run_id> [--approve]`** (Unix): откат прогона; exec-GitOp реально reset'ит ТОЛЬКО при `ai.shell_enable=true` + `ai.git_worktree` + `--approve`, иначе **честный `Deferred`** (не `Failed`/exit-1 — review MAJOR: HardBlocked(ShellDisabled) при default-config теперь Deferred с подсказкой включить флаги, а не вводящая в заблуждение ошибка). `parse_sandbox_undo_args` (чистый разбор, БД не трогает при кривых аргументах).
+
+Инварианты: UNDO-GATED (re-enter гейт) · UNDO-NO-HOST-GIT (git в контейнере, marked podman, INV-CMD-SITE цел) · UNDO-NEVER-AUTO (Confirm + ApproveAll-только-оператор) · UNDO-HOST-AUTHORITY (`is_git_sha` ре-валидация ref) · UNDO-MARKED-ON-VERIFY (undone лишь при Restored) · VAULT-RO (worktree — ОТДЕЛЬНЫЙ rw-mount, vault всегда `:ro`).
+
+Tier-1 (+5 nexus-core → 875, +2 agentd → 9, 0 failed): no-worktree→Deferred · invalid-ref→Failed-no-run · approve+exit0→Restored · approve+exit≠0→Failed · no-approve→Deferred-no-run · arg-parse (requires-vault-run_id / approve-flag-any-position). clippy 0, fmt + sandbox-exec lint (13 файлов) зелёные. Реальный container git-reset round-trip — Tier-2 .28 (runbook). **→ 6c-3 код-полон; остаётся live-валидация на .28.**
+
 ### Агент · SANDBOX-6c-3d-1 — образ +git, `ai.git_worktree` (owner-gated) + Tier-2 live-runbook/скрипт
 
 Разблокировка live-валидации Tier-2 на .28 + предпосылка для реального exec-GitOp отката. Малый CI-mergeable срез (entrypoint `--sandbox-undo` + прод `SandboxUndoExecDriver` — 6c-3d-2).

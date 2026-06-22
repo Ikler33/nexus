@@ -147,6 +147,26 @@ impl DecisionSource for ChannelDecision {
     }
 }
 
+/// Источник, ОДОБРЯЮЩИЙ ВСЕ айтемы батча — для **operator-initiated** действий с ЯВНЫМ согласием
+/// (напр. `nexus-agentd --sandbox-undo … --approve`: оператор сам инициировал откат и подтвердил флагом).
+/// НЕ для unattended-агента (тот под [`PolicyDefault`] = DENY). Confirm-классификация СОХРАНЯЕТСЯ — это НЕ
+/// `Auto` (действие всё равно прошло classify→Confirm); просто решение по нему = Approve. Скомпрометированный
+/// in-sandbox агент НЕ может им воспользоваться: его выдаёт ТОЛЬКО host-композиционный корень под `--approve`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ApproveAll;
+
+#[async_trait]
+impl DecisionSource for ApproveAll {
+    async fn decide(&self, batch: &ProposalBatch) -> BatchDecision {
+        BatchDecision::from_pairs(
+            batch
+                .items
+                .iter()
+                .map(|i| (i.action_id, ItemDecision::Approve)),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
