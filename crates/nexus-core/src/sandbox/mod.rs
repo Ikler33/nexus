@@ -40,6 +40,12 @@ pub mod exec_proxy;
 /// Регистрируются при `shell_enable` (6c-2f). SANDBOX-6c-2e-2.
 pub mod exec_tools;
 
+/// `exec_undo` (SANDBOX-6c-3d-2): прод-[`crate::actuator::UndoExecDriver`] — реальный `git reset --hard`
+/// pre-op-ref в хардненном `--network=none` контейнере под host-апрувом. host решает (гейт/ledger),
+/// контейнер исполняет git. `GitResetRunner`-шов изолирует единственный podman-launch (Tier-2); host-логика
+/// Tier-1. worktree из owner-gated `ai.git_worktree`; None ⇒ Deferred.
+pub mod exec_undo;
+
 /// `ProxyToolProvider` — in-sandbox tool-capable провайдер (stream:false поверх GuardedProxy). SANDBOX-4a.
 pub mod provider;
 

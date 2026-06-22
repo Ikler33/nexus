@@ -99,6 +99,21 @@ async fn main() {
         std::process::exit(code);
     }
 
+    // ОТКАТ exec-GitOp (SANDBOX-6c-3d-2): `nexus-agentd --sandbox-undo <vault> <run_id> [--approve]`.
+    // Операторский вход: откатывает действия прогона; exec-GitOp реально reset'ит pre-op-ref в контейнере
+    // (реально только при `ai.shell_enable=true` + `ai.git_worktree` + `--approve`; иначе честный Deferred). Default-safe.
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some("--sandbox-undo") {
+        let code = match run_sandbox_undo().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "nexus-agentd --sandbox-undo: фатальная ошибка");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
     if let Err(e) = run().await {
         tracing::error!(error = %e, "nexus-agentd: фатальная ошибка");
         std::process::exit(1);
@@ -306,6 +321,116 @@ async fn run_sandbox_host() -> Result<i32, String> {
         .await?;
     tracing::info!(?status, "sandbox-run: контейнер завершился");
     Ok(if status.success() { 0 } else { 1 })
+}
+
+/// Распарсенные аргументы `--sandbox-undo <vault> <run_id> [--approve]`. Вынесено для Tier-1-теста
+/// (разбор без БД/IO). `approve` — оператор ЯВНО согласен на исполнение отката (иначе exec-GitOp откат
+/// остаётся `Deferred`: PolicyDefault DENY). Unix-only (как весь sandbox-host-путь).
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+struct SandboxUndoArgs {
+    vault: String,
+    run_id: i64,
+    approve: bool,
+}
+
+/// Чистый разбор argv `--sandbox-undo`. `args` — БЕЗ ведущего флага (т.е. `[vault, run_id, ...]`). Vault и
+/// run_id обязательны; `--approve` — опц. флаг в любой позиции. Ошибка → понятное сообщение (БД не трогаем).
+#[cfg(unix)]
+fn parse_sandbox_undo_args(args: &[String]) -> Result<SandboxUndoArgs, String> {
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let vault = positional
+        .first()
+        .ok_or("--sandbox-undo: нужен <vault>")?
+        .to_string();
+    let run_id = positional
+        .get(1)
+        .ok_or("--sandbox-undo: нужен <run_id>")?
+        .parse::<i64>()
+        .map_err(|_| "--sandbox-undo: <run_id> должен быть числом")?;
+    let approve = args.iter().any(|a| a == "--approve");
+    Ok(SandboxUndoArgs {
+        vault,
+        run_id,
+        approve,
+    })
+}
+
+/// HOST-режим (`--sandbox-undo <vault> <run_id> [--approve]`, SANDBOX-6c-3d-2): откатывает действия прогона
+/// `run_id`. Vault-действия — обычный restore; exec-GitOp — реальный `git reset --hard <pre-op-ref>` в
+/// хардненном контейнере через [`SandboxUndoExecDriver`] (ТОЛЬКО при `ai.shell_enable=true` +
+/// `ai.git_worktree` + `--approve`). Unix-only. Default-safe: без любого из условий exec-GitOp откат
+/// остаётся честным `Deferred` (не `Failed`), с подсказкой какие флаги включить.
+#[cfg(unix)]
+async fn run_sandbox_undo() -> Result<i32, String> {
+    use nexus_core::actuator::{
+        undo_run_with_driver, ApproveAll, AuditSink, DecisionSource, DispatchPolicy, PolicyDefault,
+        TracingEventSink, OVERWRITE_THRESHOLD,
+    };
+    use nexus_core::actuator::{EventSink, UndoExecDriver};
+    use nexus_core::sandbox::exec_undo::{PodmanGitResetRunner, SandboxUndoExecDriver};
+    use nexus_core::sandbox::DEFAULT_SANDBOX_IMAGE;
+
+    let argv: Vec<String> = std::env::args().skip(2).collect();
+    let parsed = parse_sandbox_undo_args(&argv)?;
+    let root = PathBuf::from(&parsed.vault)
+        .canonicalize()
+        .map_err(|e| format!("vault {}: {e}", parsed.vault))?;
+
+    let db = Database::open(root.join(".nexus").join("nexus.db"))
+        .await
+        .map_err(|e| format!("открытие БД: {e}"))?;
+    let cfg = load_local_config(&root)
+        .await
+        .ok_or("нет .nexus/local.json")?;
+
+    let ledger = Arc::new(AuditSink::new(db.writer().clone(), db.reader().clone()));
+    // exec-флаги: shell_enable из конфига; sandbox_available=true (мы на Linux-host-раннере). Без --approve —
+    // PolicyDefault DENY → exec-GitOp откат Deferred. С --approve — ApproveAll (оператор явно согласен).
+    let policy = DispatchPolicy::new(
+        Some("auto"),
+        OVERWRITE_THRESHOLD,
+        nexus_core::ai::AiConfig::DEFAULT_BLAST_RADIUS_CAP,
+    )
+    .with_exec_flags(cfg.ai.shell_enable, true);
+    let decision: Arc<dyn DecisionSource> = if parsed.approve {
+        Arc::new(ApproveAll)
+    } else {
+        Arc::new(PolicyDefault)
+    };
+    let events: Arc<dyn EventSink> = Arc::new(TracingEventSink::new());
+    let worktree = cfg.ai.git_worktree.as_ref().map(PathBuf::from);
+
+    let driver = SandboxUndoExecDriver::new(
+        ledger.clone(),
+        parsed.run_id,
+        root.clone(),
+        policy,
+        decision,
+        events,
+        worktree,
+        PodmanGitResetRunner::new(DEFAULT_SANDBOX_IMAGE),
+    );
+
+    tracing::info!(
+        run_id = parsed.run_id,
+        approve = parsed.approve,
+        worktree = ?cfg.ai.git_worktree,
+        "sandbox-undo: старт отката прогона"
+    );
+    let driver_ref: &dyn UndoExecDriver = &driver;
+    let outcome = undo_run_with_driver(parsed.run_id, &root, &ledger, Some(driver_ref)).await;
+    tracing::info!(
+        restored = outcome.restored(),
+        deferred = outcome.deferred(),
+        failed = outcome.failed(),
+        "sandbox-undo: откат завершён"
+    );
+    for a in &outcome.actions {
+        tracing::info!(tool = %a.tool_name, target = ?a.target_rel, status = ?a.status, "sandbox-undo: действие");
+    }
+    // exit 0, если нет настоящих провалов (Deferred — не провал: откат отложен честно).
+    Ok(if outcome.failed() == 0 { 0 } else { 1 })
 }
 
 /// Грубый разбор `RUST_LOG` в `LevelFilter` (без env-filter-зависимостей). Неизвестное → info.
@@ -1537,6 +1662,40 @@ mod tests {
         let offline = Arc::new(AtomicBool::new(false));
         let policy = Arc::new(EgressPolicy::new(offline.clone()));
         (offline, policy)
+    }
+
+    /// 6c-3d-2: `--sandbox-undo` требует `<vault>` и числовой `<run_id>`; кривые аргументы → ошибка ДО БД.
+    #[cfg(unix)]
+    #[test]
+    fn sandbox_undo_requires_vault_and_run_id() {
+        assert!(parse_sandbox_undo_args(&[]).is_err(), "нет vault");
+        assert!(
+            parse_sandbox_undo_args(&["v".into()]).is_err(),
+            "нет run_id"
+        );
+        assert!(
+            parse_sandbox_undo_args(&["v".into(), "notnum".into()]).is_err(),
+            "run_id не число"
+        );
+        let ok = parse_sandbox_undo_args(&["/vault".into(), "42".into()]).unwrap();
+        assert_eq!(ok.vault, "/vault");
+        assert_eq!(ok.run_id, 42);
+        assert!(!ok.approve, "без флага approve=false (default-safe)");
+    }
+
+    /// 6c-3d-2: `--approve` парсится в любой позиции (позиционные vault/run_id не сбиваются); иначе false.
+    #[cfg(unix)]
+    #[test]
+    fn sandbox_undo_approve_flag_parsed() {
+        let a = parse_sandbox_undo_args(&["/v".into(), "1".into(), "--approve".into()]).unwrap();
+        assert!(a.approve);
+        let b = parse_sandbox_undo_args(&["--approve".into(), "/v".into(), "1".into()]).unwrap();
+        assert!(
+            b.approve && b.vault == "/v" && b.run_id == 1,
+            "флаг в любой позиции"
+        );
+        let c = parse_sandbox_undo_args(&["/v".into(), "1".into()]).unwrap();
+        assert!(!c.approve, "без флага approve=false");
     }
 
     /// **AGENT-3e Fix-1 (HIGH — CI покрывает ЖИВОЙ write-путь актуатора).** Гоняет тот же движок, что
