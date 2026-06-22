@@ -265,13 +265,15 @@ impl<B: ExecBackend> HostExecServer<B> {
     }
 }
 
-/// Запомненное одобренное exec-действие. Контейнер на `execute` (6c-2) предъявит ТОЛЬКО `exec_token`;
+/// Запомненное одобренное exec-действие. Контейнер на `execute` (6c-2c) предъявит ТОЛЬКО `exec_token`;
 /// host строит `WireExecGo` argv из ЭТОГО сохранённого действия (контейнер argv не переподаёт → TOCTOU-
-/// замок approve-`ls`-run-`rm`). Поля читает redeem/finalize (6c-2).
-#[allow(dead_code)] // action/ledger_action_id читаются в 6c-2 (redeem/finalize); 6c-1 только минтит+хранит
+/// замок approve-`ls`-run-`rm`). `propose_key` — idempotency-ключ ledger-строки (redeem/finalize фенсят
+/// `approved→executing→executed|failed` по нему). Поля читает redeem/finalize (6c-2c/2d).
+#[allow(dead_code)] // поля читаются в 6c-2c/2d (redeem/finalize); 6c-2b только минтит+хранит
 struct PendingExec {
     action: Action,
     ledger_action_id: i64,
+    propose_key: String,
 }
 
 /// Каноническая repr exec-действия для fingerprint токена (US-разделитель `\u{1f}`). vault-таргеты сюда не
@@ -296,6 +298,80 @@ fn exec_fingerprint(action: &Action) -> String {
         ActionTarget::NoteCreate { .. }
         | ActionTarget::NoteEdit { .. }
         | ActionTarget::Frontmatter { .. } => String::new(),
+    }
+}
+
+/// Зарезервированные env-ключи: ВСЕГДА из фиксированного безопасного набора, skill-passthrough их НЕ
+/// переопределяет (fail-closed — скилл не подменит PATH на writable-каталог с подброшенным бинарём).
+const RESERVED_ENV_KEYS: [&str; 3] = ["PATH", "LANG", "HOME"];
+
+/// Строит env exec-команды (§5.4) — fail-CLOSED: из ПУСТОГО + фиксированный безопасный набор
+/// (`PATH`/`LANG` + `HOME=scratch_home`) + явный per-skill `skill_passthrough` (КРОМЕ зарезервированных
+/// ключей — их фикс-значения неприкосновенны). **НИКОГДА не читает `std::env` хоста** (структурно
+/// fail-closed, не best-effort-скруб host-env). Denylist ЗАПРЕЩЁН by-design (fail-OPEN: секрет в
+/// креативно-названной переменной / в `HOME` утёк бы). `skill_passthrough` — типизированный шов, дефолт
+/// пуст (источник `SKILL.md::env_passthrough` ещё не в `GatedToolCtx` — отдельный skill-integration срез).
+pub(crate) fn build_exec_env(
+    scratch_home: &str,
+    skill_passthrough: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut env = vec![
+        (
+            "PATH".to_string(),
+            "/usr/local/bin:/usr/bin:/bin".to_string(),
+        ),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("HOME".to_string(), scratch_home.to_string()),
+    ];
+    for (k, v) in skill_passthrough {
+        // Зарезервированный ключ из passthrough игнорируется (фикс-значение приоритетно, fail-closed).
+        if RESERVED_ENV_KEYS.contains(&k.as_str()) {
+            continue;
+        }
+        env.push((k.clone(), v.clone()));
+    }
+    env
+}
+
+/// Строит сигнал «исполни» ([`WireExecGo`]) host-side из СОХРАНЁННОГО [`Action`] (argv — host-authority:
+/// контейнер argv не переподаёт → TOCTOU-замок approve-`ls`-run-`rm`). Exhaustive по 3 exec-таргетам;
+/// vault-таргеты сюда не приходят (decide exec-only) → fail-closed пустой argv (исполнитель даст
+/// launch_failure). env — allow-list ([`build_exec_env`]); cwd — scratch-tmpfs (`cwd_rel` действия;
+/// `VaultRo` отложен — решит live 6c-3 по нужде `git.op`); таймаут/кэп — дефолты [`super`]. Вызывает redeem
+/// (6c-2c) — здесь плита под него + Tier-1-тесты.
+#[allow(dead_code)] // зовётся redeem-фазой (6c-2c); 6c-2b строит+тестирует
+pub(crate) fn build_exec_go(action: &Action, skill_passthrough: &[(String, String)]) -> WireExecGo {
+    let (argv, cwd_rel) = match &action.target {
+        ActionTarget::ShellRun { argv, cwd_rel } => (argv.clone(), cwd_rel.clone()),
+        ActionTarget::ProcessSpawn {
+            program,
+            args,
+            cwd_rel,
+        } => {
+            let mut a = Vec::with_capacity(1 + args.len());
+            a.push(program.clone());
+            a.extend(args.iter().cloned());
+            (a, cwd_rel.clone())
+        }
+        ActionTarget::GitOp { op, args } => {
+            let mut a = Vec::with_capacity(2 + args.len());
+            a.push("git".to_string());
+            a.push(op.clone());
+            a.extend(args.iter().cloned());
+            (a, None)
+        }
+        ActionTarget::NoteCreate { .. }
+        | ActionTarget::NoteEdit { .. }
+        | ActionTarget::Frontmatter { .. } => (Vec::new(), None),
+    };
+    WireExecGo {
+        argv,
+        cwd: ExecCwd::ScratchTmpfs {
+            rel: cwd_rel.unwrap_or_default(),
+        },
+        env: build_exec_env(super::CONTAINER_SCRATCH, skill_passthrough),
+        timeout_ms: super::DEFAULT_EXEC_TIMEOUT_MS,
+        output_cap_bytes: super::DEFAULT_EXEC_OUTPUT_CAP,
     }
 }
 
@@ -342,6 +418,16 @@ impl DispatchExecBackend {
         self.pending.lock().expect("pending mutex").len()
     }
 
+    /// Тест-хелпер: propose_key единственной висящей записи (проверка, что 6c-2b его сохранил).
+    #[cfg(test)]
+    fn only_pending_propose_key(&self) -> Option<String> {
+        let pending = self.pending.lock().expect("pending mutex");
+        if pending.len() != 1 {
+            return None;
+        }
+        pending.values().next().map(|p| p.propose_key.clone())
+    }
+
     /// Тест-хелпер: набить store фиктивными записями (проверка soft-cap без N реальных одобрений).
     #[cfg(test)]
     fn force_fill_pending(&self, n: usize) {
@@ -352,6 +438,7 @@ impl DispatchExecBackend {
                 PendingExec {
                     action: Action::shell_run(vec!["x".into()], None),
                     ledger_action_id: i as i64,
+                    propose_key: format!("dummy-key-{i}"),
                 },
             );
         }
@@ -380,13 +467,17 @@ impl ExecBackend for DispatchExecBackend {
         )
         .await;
         match decision {
-            ExecDecision::Approved { ledger_action_id } => {
+            ExecDecision::Approved {
+                ledger_action_id,
+                propose_key,
+            } => {
                 let token = Self::mint_token(self.ctx.run_id, ledger_action_id, action);
                 self.pending.lock().expect("pending mutex").insert(
                     token.clone(),
                     PendingExec {
                         action: action.clone(),
                         ledger_action_id,
+                        propose_key,
                     },
                 );
                 WireExecDecision::Approved {
@@ -609,9 +700,117 @@ mod tests {
                     1,
                     "одобренный exec сохранён под токеном"
                 );
+                // 6c-2b: PendingExec несёт непустой propose_key (ledger-фенс redeem/finalize).
+                assert!(
+                    backend
+                        .only_pending_propose_key()
+                        .is_some_and(|k| !k.is_empty()),
+                    "propose_key сохранён непустым"
+                );
             }
             other => panic!("ожидался Approved, получено {other:?}"),
         }
+    }
+
+    // ── 6c-2b: build_exec_env (allow-list §5.4) ──────────────────────────────────────────────────
+    #[test]
+    fn build_exec_env_is_allowlist_only() {
+        std::env::set_var("NEXUS_FAKE_SECRET", "leaked");
+        let env = build_exec_env("/tmp", &[]);
+        std::env::remove_var("NEXUS_FAKE_SECRET");
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, vec!["PATH", "LANG", "HOME"], "только фикс-набор");
+        assert!(
+            !env.iter().any(|(k, _)| k == "NEXUS_FAKE_SECRET"),
+            "host-секрет НЕ просочился (build_exec_env не читает std::env)"
+        );
+    }
+
+    #[test]
+    fn build_exec_env_home_is_scratch() {
+        let env = build_exec_env("/tmp", &[]);
+        assert_eq!(
+            env.iter()
+                .find(|(k, _)| k == "HOME")
+                .map(|(_, v)| v.as_str()),
+            Some("/tmp"),
+            "HOME = scratch (не host HOME)"
+        );
+    }
+
+    #[test]
+    fn build_exec_env_includes_declared_passthrough() {
+        let env = build_exec_env("/tmp", &[("FOO".into(), "bar".into())]);
+        assert!(
+            env.iter().any(|(k, v)| k == "FOO" && v == "bar"),
+            "объявленный passthrough присутствует"
+        );
+    }
+
+    /// fail-closed: skill-passthrough НЕ переопределяет зарезервированные PATH/HOME/LANG.
+    #[test]
+    fn build_exec_env_passthrough_cannot_override_reserved() {
+        let env = build_exec_env(
+            "/tmp",
+            &[
+                ("PATH".into(), "/evil".into()),
+                ("HOME".into(), "/evil".into()),
+            ],
+        );
+        let path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.as_str());
+        let home = env
+            .iter()
+            .find(|(k, _)| k == "HOME")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            path,
+            Some("/usr/local/bin:/usr/bin:/bin"),
+            "PATH из фикс-набора, не из skill"
+        );
+        assert_eq!(home, Some("/tmp"), "HOME из scratch, не из skill");
+        // и НЕ продублирован
+        assert_eq!(
+            env.iter().filter(|(k, _)| k == "PATH").count(),
+            1,
+            "PATH не задублирован"
+        );
+    }
+
+    // ── 6c-2b: build_exec_go (argv host-authority + дефолты) ──────────────────────────────────────
+    #[test]
+    fn build_exec_go_argv_from_action() {
+        let g = build_exec_go(&Action::git_op("status", vec!["--short".into()]), &[]);
+        assert_eq!(g.argv, vec!["git", "status", "--short"]);
+        let g = build_exec_go(
+            &Action::shell_run(vec!["ls".into(), "-la".into()], None),
+            &[],
+        );
+        assert_eq!(g.argv, vec!["ls", "-la"]);
+        let g = build_exec_go(&Action::process_spawn("rg", vec!["foo".into()], None), &[]);
+        assert_eq!(g.argv, vec!["rg", "foo"]);
+    }
+
+    #[test]
+    fn build_exec_go_defaults_scratch_cwd_and_caps() {
+        let g = build_exec_go(
+            &Action::shell_run(vec!["ls".into()], Some("sub".into())),
+            &[],
+        );
+        assert_eq!(g.cwd, ExecCwd::ScratchTmpfs { rel: "sub".into() });
+        assert_eq!(g.timeout_ms, super::super::DEFAULT_EXEC_TIMEOUT_MS);
+        assert_eq!(g.output_cap_bytes, super::super::DEFAULT_EXEC_OUTPUT_CAP);
+        // env = allow-list
+        let keys: Vec<&str> = g.env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, vec!["PATH", "LANG", "HOME"]);
+    }
+
+    #[test]
+    fn build_exec_go_no_cwd_defaults_empty_scratch() {
+        let g = build_exec_go(&Action::git_op("log", vec![]), &[]);
+        assert_eq!(g.cwd, ExecCwd::ScratchTmpfs { rel: String::new() });
     }
 
     /// Soft-cap: при заполненном store decide отказывает ДО записи ledger (новый токен не добавлен).

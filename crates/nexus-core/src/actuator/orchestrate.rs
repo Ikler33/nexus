@@ -928,11 +928,18 @@ async fn propose_and_decide(
 }
 
 /// Исход host-РЕШЕНИЯ по exec-таргету (Фаза-3, SANDBOX-6c). НЕ применяет — exec исполняется ВНУТРИ
-/// песочницы (6c-2). На Approve несёт `ledger_action_id` (вызывающий минтит exec_token, привязанный к нему).
+/// песочницы (6c-2). На Approve несёт `ledger_action_id` (вызывающий минтит exec_token, привязанный к нему)
+/// и `propose_key` (СТРОКА idempotency-ключа ledger-строки — redeem/finalize 6c-2c/2d фенсят переходы
+/// approved→executing→executed|failed именно по ней; единый источник — этот `dispatch_exec_decision`,
+/// не пересчитывать в exec_host во избежание дрейфа с записанной строкой).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecDecision {
-    /// Одобрено: строка ledger проведена proposed→approved; `ledger_action_id` — её id.
-    Approved { ledger_action_id: i64 },
+    /// Одобрено: строка ledger проведена proposed→approved; `ledger_action_id` — её id, `propose_key` — её
+    /// idempotency-ключ (для последующих ledger-переходов redeem/finalize).
+    Approved {
+        ledger_action_id: i64,
+        propose_key: String,
+    },
     /// Отклонено (PolicyDefault DENY / человек reject / гонка transition / пауза) — резюме.
     Rejected(String),
     /// Жёстко заблокировано (shell_enable=false / песочница недоступна) — фенсенная причина.
@@ -1039,6 +1046,7 @@ pub async fn dispatch_exec_decision(
                     }
                     ExecDecision::Approved {
                         ledger_action_id: action_id,
+                        propose_key,
                     }
                 }
                 ItemDecision::Reject => {
