@@ -88,6 +88,27 @@ pub enum AgentStreamEvent {
     Final { text: String },
     /// Терминальная ошибка хода (исчерпан бюджет инициации стрима / провайдер упал и т.п.).
     Error { message: String },
+    /// Exec-предложение (Фаза-3 SANDBOX-6c): зеркало [`AgentEvent::ExecProposal`]. `summary` —
+    /// редакция-безопасный силуэт (имя инструмента + счётчики), не сырые argv/env. `runId`/`actionId`
+    /// заданы ЯВНО (rename_all не каскадирует в struct-варианты enum).
+    ExecProposal {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        #[serde(rename = "actionId")]
+        action_id: i64,
+        summary: String,
+    },
+    /// Результат исполненного exec (зеркало [`AgentEvent::ExecResult`]): exit-код + finalized, БЕЗ сырого
+    /// stdout/stderr (приватность). `runId`/`actionId`/`exitCode` — явный camelCase.
+    ExecResult {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        #[serde(rename = "actionId")]
+        action_id: i64,
+        #[serde(rename = "exitCode")]
+        exit_code: i32,
+        finalized: bool,
+    },
 }
 
 /// Маппер `&AgentEvent` → [`AgentStreamEvent`] (контракт «бэкенд → клиент»). Возвращает `Option`: будущее
@@ -144,6 +165,26 @@ pub fn map_agent_event(ev: &AgentEvent) -> Option<AgentStreamEvent> {
         AgentEvent::Final(text) => AgentStreamEvent::Final { text: text.clone() },
         AgentEvent::Error(message) => AgentStreamEvent::Error {
             message: message.clone(),
+        },
+        AgentEvent::ExecProposal {
+            run_id,
+            action_id,
+            summary,
+        } => AgentStreamEvent::ExecProposal {
+            run_id: *run_id,
+            action_id: *action_id,
+            summary: summary.clone(),
+        },
+        AgentEvent::ExecResult {
+            run_id,
+            action_id,
+            exit_code,
+            finalized,
+        } => AgentStreamEvent::ExecResult {
+            run_id: *run_id,
+            action_id: *action_id,
+            exit_code: *exit_code,
+            finalized: *finalized,
         },
         // Матч НАМЕРЕННО экзаустивный (без `_`): wire.rs в `nexus-core` видит все варианты `AgentEvent`,
         // и новый вариант ядра ДОЛЖЕН уронить компиляцию здесь — чтобы его wire-маппинг решили явно
@@ -243,5 +284,64 @@ mod tests {
         };
         let s = serde_json::to_string(&w).unwrap();
         assert_eq!(serde_json::from_str::<AgentStreamEvent>(&s).unwrap(), w);
+    }
+
+    /// 6c-2g: ExecProposal — STRUCT-вариант (не newtype) → camelCase {type, runId, actionId, summary};
+    /// round-trip через AgentStreamEvent сохраняет всё (регресс-гард потери newtype-вариантов serde).
+    #[test]
+    fn exec_proposal_is_struct_variant_roundtrip() {
+        let ev = AgentEvent::ExecProposal {
+            run_id: 5,
+            action_id: 9,
+            summary: "shell.run · argv: 2 токен(ов)".into(),
+        };
+        let v = to_json(&ev);
+        assert_eq!(v["type"], "execProposal");
+        assert_eq!(v["runId"], 5);
+        assert_eq!(v["actionId"], 9);
+        assert_eq!(v["summary"], "shell.run · argv: 2 токен(ов)");
+        let wire = map_agent_event(&ev).unwrap();
+        let s = serde_json::to_string(&wire).unwrap();
+        assert_eq!(serde_json::from_str::<AgentStreamEvent>(&s).unwrap(), wire);
+    }
+
+    /// 6c-2g: ExecResult — STRUCT-вариант, camelCase {type, runId, actionId, exitCode, finalized};
+    /// СОДЕРЖИМОЕ-СВОБОДЕН (нет stdout-поля). Round-trip сохраняет.
+    #[test]
+    fn exec_result_is_struct_variant_roundtrip() {
+        let ev = AgentEvent::ExecResult {
+            run_id: 5,
+            action_id: 9,
+            exit_code: 1,
+            finalized: true,
+        };
+        let v = to_json(&ev);
+        assert_eq!(v["type"], "execResult");
+        assert_eq!(v["runId"], 5);
+        assert_eq!(v["actionId"], 9);
+        assert_eq!(v["exitCode"], 1);
+        assert_eq!(v["finalized"], true);
+        let wire = map_agent_event(&ev).unwrap();
+        let s = serde_json::to_string(&wire).unwrap();
+        assert_eq!(serde_json::from_str::<AgentStreamEvent>(&s).unwrap(), wire);
+    }
+
+    /// 6c-2g: map_agent_event МАПИТ exec-варианты в `Some(...)` (не молчаливый `None`) — экзаустивный
+    /// матч компилит-форсит wire-решение для каждого нового core-варианта.
+    #[test]
+    fn map_agent_event_covers_exec_variants() {
+        assert!(map_agent_event(&AgentEvent::ExecProposal {
+            run_id: 1,
+            action_id: 1,
+            summary: "x".into(),
+        })
+        .is_some());
+        assert!(map_agent_event(&AgentEvent::ExecResult {
+            run_id: 1,
+            action_id: 1,
+            exit_code: 0,
+            finalized: true,
+        })
+        .is_some());
     }
 }

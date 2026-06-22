@@ -124,6 +124,35 @@ pub enum AgentEvent {
     /// Терминальная ошибка хода (исчерпан бюджет инициации стрима / провайдер упал и т.п.). Ошибки
     /// ОТДЕЛЬНЫХ инструментов сюда НЕ идут — они возвращаются как [`AgentEvent::ToolResult`]`{is_error}`.
     Error(String),
+    /// Exec-предложение (Фаза-3 SANDBOX-6c): агент предлагает ИСПОЛНИТЬ команду В ПЕСОЧНИЦЕ
+    /// (shell/process/git), ожидающее host-решения (Confirm-тир; exec НИКОГДА не Auto). `run_id`
+    /// коррелирует с прогоном; `action_id` — `id` строки `agent_actions` (state=proposed) для адресации
+    /// решения; `summary` — РЕДАКЦИЯ-БЕЗОПАСНЫЙ силуэт (имя инструмента/`op`-токен + счётчики argv), НЕ сырые
+    /// argv-значения/env (приватность §5.6 — зеркало [`ProposedFile`]/diff-дисциплины). Эмитится host-side
+    /// в `dispatch_exec_decision` ДО запроса решения. **STRUCT-вариант** (не newtype): serde-internal-tag
+    /// (`#[serde(tag="type")]`) НЕ сериализует newtype-варианты → они молча терялись бы на проводе.
+    ExecProposal {
+        // `rename_all` контейнера НЕ каскадирует в поля struct-вариантов enum (serde-семантика) — задаём
+        // camelCase для составных имён явно (как `Proposal.runId`); фронт получает `runId`/`actionId`.
+        #[serde(rename = "runId")]
+        run_id: i64,
+        #[serde(rename = "actionId")]
+        action_id: i64,
+        summary: String,
+    },
+    /// Результат исполненного exec (после report-фазы 6c-2): `exit_code` — код возврата процесса;
+    /// `finalized` — ledger переведён в терминальное executed|failed. `run_id`/`action_id` коррелируют с
+    /// [`AgentEvent::ExecProposal`]. **СОДЕРЖИМОЕ-СВОБОДЕН by-design**: сырой stdout/stderr сюда НЕ кладётся
+    /// (приватность §5.6 — вывод видит лишь модель через fenced tool-result). **STRUCT-вариант** (не newtype).
+    ExecResult {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        #[serde(rename = "actionId")]
+        action_id: i64,
+        #[serde(rename = "exitCode")]
+        exit_code: i32,
+        finalized: bool,
+    },
 }
 
 #[cfg(test)]

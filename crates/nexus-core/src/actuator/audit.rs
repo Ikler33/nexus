@@ -67,14 +67,21 @@ pub enum ChangeKind {
     New,
     /// Правка существующей заметки (edit/frontmatter) — статус-токен `edit`.
     Edit,
+    /// Исполнение exec-команды в песочнице (shell/process/git, Фаза-3 SANDBOX-6c) — статус-токен `exec`.
+    /// НЕ vault-дифф: exec не порождает changeset-файл, его «изменение» — побочный эффект процесса. По
+    /// exec-пути [`DiffSummary`] в долговечный журнал НЕ пишется (`dispatch_exec_decision` ставит
+    /// `diff_summary=None`); вариант существует для корректной классификации + будущего exec-резюме, не для
+    /// `+N -M`-диффа.
+    Exec,
 }
 
 impl ChangeKind {
-    /// Структурный токен статуса (`new`|`edit`) — фиксированный набор, не свободный текст.
+    /// Структурный токен статуса (`new`|`edit`|`exec`) — фиксированный набор, не свободный текст.
     pub fn as_str(self) -> &'static str {
         match self {
             ChangeKind::New => "new",
             ChangeKind::Edit => "edit",
+            ChangeKind::Exec => "exec",
         }
     }
 }
