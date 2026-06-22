@@ -18,9 +18,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SANDBOX_DIR = resolve(root, 'crates/nexus-core/src/sandbox');
 
 // Запрещённые конструкции (совпадение в КОДЕ; хвост после `//` отрезается, чтобы упоминания в
-// комментариях/доках не давали ложных срабатываний). `process::Command` ловит и std:: и tokio::-формы;
-// `Command::new` ловит вызов через `use ...::Command;`-импорт.
-const FORBIDDEN = [/process::Command/, /\bCommand::new\b/];
+// комментариях/доках не давали ложных срабатываний). `process::Command\b` ловит и std:: и tokio::-формы
+// конструктора; `\b` после `Command` ИСКЛЮЧАЕТ `process::CommandExt` (трейт хардненинга `.pre_exec()/.uid()`
+// — НЕ спавн), но матчит `process::Command::new`/`process::Command;`/`process::Command {`. `Command::new`
+// ловит вызов через `use ...::Command;`-импорт.
+const FORBIDDEN = [/process::Command\b/, /\bCommand::new\b/];
 // Файл-исключение целиком (относительный путь внутри sandbox/): in-container исполнитель.
 const WHOLE_FILE_EXEMPT = new Set(['exec_child.rs']);
 // Маркер обоснованного построчного исключения (только запуск САМОГО podman в runner.rs).
@@ -57,11 +59,12 @@ const selftest = scan([
   { path: 'exec_child.rs', text: 'let c = tokio::process::Command::new("real");' }, // (а) whole-file exempt
   { path: 'runner.rs', text: '// sandbox-exec-lint: allow podman-launch\ntokio::process::Command::new("podman");' }, // (б) marker
   { path: 'mod.rs', text: '//! упоминание process::Command в доке — не код' }, // комментарий
+  // CommandExt (трейт хардненинга `.pre_exec()/.uid()`, НЕ спавн) НЕ ловится (word-boundary): 0 отсюда.
+  { path: 'event.rs', text: 'use std::os::unix::process::CommandExt;' },
 ]);
-// Ожидаем РОВНО 3 нарушения: exec_host (1) + runner-без-маркера (1) + child Command::new (1).
-// child.rs `use ...::Command;` строка тоже матчит `Command` ? нет — FORBIDDEN[1] это `Command::new`,
-// а `use tokio::process::Command;` матчит FORBIDDEN[0] `process::Command` → это ВТОРОЕ нарушение в child.
-// Итого child даёт 2 (use-строка + Command::new-строка). Пересчёт: 1+1+2 = 4.
+// Ожидаем РОВНО 4 нарушения: exec_host (1) + runner-без-маркера (1) + child (use-строка + Command::new = 2);
+// exec_child whole-file-exempt (0), marked podman (0), doc-комментарий (0), CommandExt-импорт (0 — \b).
+// Пересчёт: 1+1+2 = 4.
 if (selftest.length !== 4) {
   console.error('❌ self-test линта провалился: детектор не ловит фейк-нарушения (INV-CMD-SITE).');
   console.error(`   нарушений: ${selftest.length} (ожидалось 4):`);

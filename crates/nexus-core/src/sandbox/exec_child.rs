@@ -17,9 +17,14 @@
 //!  - **INV-CWD-CONFINE**: cwd резолвится ТОЛЬКО под scratch-tmpfs/vault-`:ro` лексическим правилом
 //!    [`crate::actuator::classify::path_confinement`] (единый источник, не копия); побег → команда НЕ
 //!    запускается. Defense-in-depth поверх kernel-`:ro`.
-//!  - **timeout**: wall-clock-кэп (`go.timeout_ms`) → kill + `timed_out=true`.
+//!  - **timeout**: wall-clock-кэп (`go.timeout_ms`) → kill + `timed_out=true`. На таймауте хвосты ПУСТЫ,
+//!    `*_truncated=false` (частичный вывод намеренно отбрасывается — `timed_out=true` единственный сигнал).
+//!    NB: команда, форкнувшая демон-внука, держащего pipe-FD открытым, не даст EOF → exec висит до таймаута
+//!    (ограниченная задержка-в-бюджете; внук-сирота пожинается teardown'ом контейнера — live-кейс 6c-3).
 //!  - **output-cap**: потоковое чтение stdout/stderr с кольцевым хвостом (`go.output_cap_bytes`) — без
 //!    безлимитного `read_to_end` (анти-OOM для «болтливой» команды); за кэпом — `*_truncated=true`.
+//!    Ошибка чтения посреди потока трактуется как EOF (fail-soft: хвост может быть короче; реальный сигнал
+//!    несут `exit_code`/`timed_out`).
 //!
 //! 6c-2a: исполнитель + `ExecRunner`-шов + CI-линт. Инертен (вызывающих нет) до 6c-2e (инструменты).
 
@@ -118,7 +123,8 @@ impl ExecRunner for RealExecRunner {
             (out, err, status)
         };
 
-        let timeout = std::time::Duration::from_millis(go.timeout_ms.max(1));
+        let timeout_ms = go.timeout_ms.max(1);
+        let timeout = std::time::Duration::from_millis(timeout_ms);
         match tokio::time::timeout(timeout, exec).await {
             Ok(((out_tail, out_trunc), (err_tail, err_trunc), status)) => ExecResult {
                 exit_code: status.ok().and_then(|s| s.code()).unwrap_or(-1),
@@ -134,7 +140,7 @@ impl ExecRunner for RealExecRunner {
                 ExecResult {
                     exit_code: -1,
                     stdout_tail: String::new(),
-                    stderr_tail: format!("команда убита по таймауту ({} мс)", go.timeout_ms),
+                    stderr_tail: format!("команда убита по таймауту ({timeout_ms} мс)"),
                     stdout_truncated: false,
                     stderr_truncated: false,
                     timed_out: true,
