@@ -59,7 +59,8 @@ pub use orchestrate::{
     MonotonicClock, TokenBucket, TracingEventSink, DEFAULT_REFILL_PER, DEFAULT_REFILL_TOKENS,
 };
 pub use tools::{
-    GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, OVERWRITE_THRESHOLD,
+    ActionDispatcher, GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool,
+    OVERWRITE_THRESHOLD,
 };
 pub use undo::{undo_run, ActionUndo, UndoOutcome, UndoStatus};
 

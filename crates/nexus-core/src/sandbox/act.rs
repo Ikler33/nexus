@@ -18,7 +18,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::actuator::{dispatch_action, Action, ActionTarget, DispatchOutcome, GatedToolCtx};
+use crate::actuator::{
+    dispatch_action, Action, ActionDispatcher, ActionTarget, DispatchOutcome, GatedToolCtx,
+};
 use crate::agent::connect::{RpcError, RpcMessage, Transport};
 use crate::agent::ToolError;
 
@@ -267,6 +269,17 @@ impl<T: Transport> ProxyActuator<T> {
     }
 }
 
+/// In-sandbox реализация [`ActionDispatcher`] (ШОВ актуатора): файловые инструменты в контейнере держат
+/// `Arc<dyn ActionDispatcher>` = `Arc<ProxyActuator>` → каждое применение уходит `host/act` RPC хосту
+/// (vault `:ro` в контейнере, authoritative-гейт host-side). Свёртка идентична in-process пути
+/// ([`GatedToolCtx::apply`]): Applied/Rejected → `Ok(summary)`, Failed/HardBlock → `Err(ToolError)`.
+#[async_trait]
+impl<T: Transport> ActionDispatcher for ProxyActuator<T> {
+    async fn apply(&self, action: Action) -> Result<String, ToolError> {
+        self.dispatch(&action).await?.into_tool_result()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +381,48 @@ mod tests {
             std::fs::read_to_string(root.join("Notes/Wire.md")).unwrap(),
             "из RPC"
         );
+    }
+
+    /// **ПОЛНАЯ ЦЕПЬ ПЕСОЧНОГО АКТУАТОРА через `Tool`-трейт + ШОВ `ActionDispatcher`**: in-sandbox
+    /// `NoteCreateTool` держит `Arc<ProxyActuator>` (как соберёт `--sandbox-child`) → `invoke` → `host/act`
+    /// RPC → `HostActServer` → `DispatchActuatorBackend` → `dispatch_action` → запись на диск. Доказывает,
+    /// что инструмент НЕ знает про транспорт (тот же `NoteCreateTool`, что in-process), а запись
+    /// authoritative host-side.
+    #[tokio::test]
+    async fn sandbox_tool_via_proxy_actuator_writes_through_host() {
+        use crate::actuator::NoteCreateTool;
+        use crate::agent::Tool;
+        use std::sync::Arc;
+
+        let (client_t, host_t) = channel_pair();
+        let (_d, root, ctx) = real_gate(Some("auto")).await;
+        let srv = HostActServer::new(DispatchActuatorBackend::new(ctx));
+        // Host обслуживает один host/act-запрос (как сделает act.sock-сервер рантайма).
+        let host = tokio::spawn(async move {
+            if let Some(RpcMessage::Request { id, method, params }) = host_t.recv().await {
+                let result = srv.handle(&method, params).await;
+                host_t
+                    .send(RpcMessage::Response { id, result })
+                    .await
+                    .unwrap();
+            }
+        });
+
+        // In-sandbox инструмент: тот же NoteCreateTool, но диспетчер — ProxyActuator (host/act RPC).
+        let dispatcher: Arc<dyn ActionDispatcher> = Arc::new(ProxyActuator::new(client_t));
+        let tool = NoteCreateTool::new(dispatcher);
+        let res = tool
+            .invoke(r#"{"path":"Notes/Sbx.md","content":"через песочницу"}"#)
+            .await
+            .unwrap();
+
+        assert!(res.contains("создана"), "резюме apply: {res}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("Notes/Sbx.md")).unwrap(),
+            "через песочницу",
+            "запись прошла host-side через host/act"
+        );
+        host.await.unwrap();
     }
 
     /// confirm-политика + `PolicyDefault` (reject-all) ⇒ host-бэкенд НЕ пишет (Confirm/Auto-предложение

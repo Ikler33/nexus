@@ -4,25 +4,31 @@
 //! Каждый реализует [`crate::agent::Tool`]. `invoke(args)`:
 //!  1. строгий разбор аргументов (`serde` + `deny_unknown_fields`) → [`ToolError::BadArgs`] (I-4 fail-closed);
 //!  2. сборка типизированного [`Action`];
-//!  3. **маршрутизация ТОЛЬКО через гейт автономии** [`orchestrate::dispatch_action`] — он сам делает
-//!     classify (порог из политики, не хардкод), матч `(RiskTier × autonomy)`, эмиссию Proposal/Diff,
-//!     спрос [`DecisionSource`] и apply ТОЛЬКО одобренного с ОБЯЗАТЕЛЬНЫМ `classify_hash`;
+//!  3. **маршрутизация ТОЛЬКО через ШОВ актуатора** [`ActionDispatcher`] — инструмент держит
+//!     `Arc<dyn ActionDispatcher>` и НЕ знает транспорт. In-process реализация ([`GatedToolCtx`]) сводится
+//!     к host-side [`orchestrate::dispatch_action`]; in-sandbox ([`crate::sandbox::act::ProxyActuator`]) —
+//!     к `host/act` RPC, который на хосте применяет тем же `dispatch_action`. Гейт делает classify (порог
+//!     из политики), матч `(RiskTier × autonomy)`, эмиссию Proposal/Diff, спрос [`DecisionSource`] и apply
+//!     ТОЛЬКО одобренного с ОБЯЗАТЕЛЬНЫМ `classify_hash` — ВСЕГДА host-side (контейнер не решает);
 //!  4. свёртка [`DispatchOutcome`] в строку-результат инструмента (Applied/Rejected → Ok; Failed →
 //!     зафенсенная [`ToolError::Exec`], HardBlocked → [`ToolError::Exec`] изнутри гейта).
 //!
 //! ## AGENT-3e hard-gate #1 — НЕТ УНГЕЙТЕД-ПУТИ
 //! 3c-helper `dispatch` (classify→ПРЯМОЙ `apply_action` для Auto, стаб-строка для Confirm) **УДАЛЁН**.
 //! Инструмент БОЛЬШЕ НЕ зовёт [`apply_action`] напрямую и НЕ имеет ветки, минующей решение автономии:
-//! ЕДИНСТВЕННЫЙ путь, которым зарегистрированный инструмент касается диска, — через
-//! [`orchestrate::dispatch_action`] (он один зовёт `apply_action`). Это акцептанс go-live: ни одно
-//! применение не происходит без гейта.
+//! ЕДИНСТВЕННЫЙ путь, которым зарегистрированный инструмент касается диска, — через [`ActionDispatcher`],
+//! и ОБЕ его реализации сводятся к host-side [`orchestrate::dispatch_action`] (он один зовёт
+//! `apply_action`). Шов транспорт-агностичен, но НЕ вводит обхода гейта: песочница лишь меняет МЕСТО
+//! вызова инструмента (контейнер), authoritative-применение остаётся в ОДНОМ host-side `dispatch_action`.
+//! Это акцептанс go-live: ни одно применение не происходит без гейта.
 //!
-//! ## Зависимости гейта несёт сам инструмент ([`GatedToolCtx`])
-//! Инструмент держит ВСЕ deps `dispatch_action`: `canon_root`, `ledger` ([`AuditSink`]), `run_id`,
-//! [`DispatchPolicy`] (автономия прогона + `overwrite_threshold` из конфига + общий на прогон
+//! ## Зависимости гейта несёт реализация шва ([`GatedToolCtx`])
+//! In-process [`GatedToolCtx`] держит ВСЕ deps `dispatch_action`: `canon_root`, `ledger` ([`AuditSink`]),
+//! `run_id`, [`DispatchPolicy`] (автономия прогона + `overwrite_threshold` из конфига + общий на прогон
 //! токен-бакет [`super::orchestrate::TokenBucket`]), [`DecisionSource`] и [`EventSink`] — все за
-//! [`Arc`] (инструменты дёшево клонируются в реестр и переживают прогон; политика делит токен-бакет
-//! авто-применений между инструментами).
+//! [`Arc`] (дёшево клонируется, переживает прогон; политика делит токен-бакет авто-применений между
+//! инструментами). In-sandbox реализация ([`ProxyActuator`]) этих deps НЕ держит — их держит host-side
+//! бэкенд (`DispatchActuatorBackend`) за `host/act` RPC.
 //!
 //! ## Проводка (AGENT-3e)
 //! Реестр гейтнутых инструментов СТРОИТСЯ ПО-ПРОГОННО в [`crate::agent::AgentRunHandler`] — и ТОЛЬКО
@@ -89,22 +95,40 @@ impl GatedToolCtx {
     }
 }
 
-/// ЕДИНСТВЕННЫЙ путь применения зарегистрированного инструмента — через гейт автономии
-/// [`dispatch_action`]. Свёртывает [`DispatchOutcome`] в строку-результат: Applied/Rejected → `Ok`
-/// (резюме), Failed → зафенсенная [`ToolError::Exec`]; HardBlocked гейт сам отдаёт как `Err(Exec)`.
-/// НЕТ ветки, минующей решение автономии (3e hard-gate #1).
-async fn dispatch_via_gate(ctx: &GatedToolCtx, action: Action) -> Result<String, ToolError> {
-    dispatch_action(
-        &action,
-        ctx.run_id,
-        &ctx.policy,
-        &ctx.decision_source,
-        ctx.events.as_ref(),
-        ctx.ledger.as_ref(),
-        ctx.canon_root.as_path(),
-    )
-    .await?
-    .into_tool_result()
+/// **ШОВ актуатора** — абстракция «применить действие через гейт автономии», ОТВЯЗЫВАЮЩАЯ файловые
+/// инструменты от транспорта применения. Две реализации:
+/// - [`GatedToolCtx`] (in-process) — зовёт host-side [`dispatch_action`] напрямую (классический путь);
+/// - [`crate::sandbox::act::ProxyActuator`] (in-sandbox) — шлёт `host/act` RPC хосту (vault `:ro` в
+///   контейнере → запись host-side), а хост применяет тем же `dispatch_action`.
+///
+/// Инструмент держит `Arc<dyn ActionDispatcher>` и НЕ знает, локально применяется действие или через RPC —
+/// реестр инструментов ОДИН, транспорт actuator'а выбирает композиционный корень (`run_agent_session` →
+/// `GatedToolCtx`; `--sandbox-child` → `ProxyActuator`). ЕДИНСТВЕННЫЙ путь применения (нет ungated-ветки,
+/// 3e hard-gate #1): обе реализации сводятся к ОДНОМУ host-side `dispatch_action`.
+#[async_trait]
+pub trait ActionDispatcher: Send + Sync {
+    /// Применить действие, свёрнутое в строку-результат инструмента: Applied/Rejected → `Ok(summary)`,
+    /// Failed → зафенсенная [`ToolError::Exec`]; HardBlocked гейт сам отдаёт как `Err(Exec)`.
+    async fn apply(&self, action: Action) -> Result<String, ToolError>;
+}
+
+#[async_trait]
+impl ActionDispatcher for GatedToolCtx {
+    /// In-process: ВСЕ deps `dispatch_action` несёт сам контекст (canon_root/ledger/run_id/policy/
+    /// decision_source/events). НЕТ ветки, минующей решение автономии (3e hard-gate #1).
+    async fn apply(&self, action: Action) -> Result<String, ToolError> {
+        dispatch_action(
+            &action,
+            self.run_id,
+            &self.policy,
+            &self.decision_source,
+            self.events.as_ref(),
+            self.ledger.as_ref(),
+            self.canon_root.as_path(),
+        )
+        .await?
+        .into_tool_result()
+    }
 }
 
 /// Аргументы [`NoteCreateTool`] / [`NoteEditTool`]: путь + тело. `deny_unknown_fields` (I-4).
@@ -137,12 +161,12 @@ fn parse_args<T: for<'de> Deserialize<'de>>(args: &str) -> Result<T, ToolError> 
 
 /// `note.create` — создаёт НОВУЮ заметку (fail-closed: цель не должна существовать).
 pub struct NoteCreateTool {
-    ctx: GatedToolCtx,
+    dispatcher: Arc<dyn ActionDispatcher>,
 }
 
 impl NoteCreateTool {
-    pub fn new(ctx: GatedToolCtx) -> Self {
-        Self { ctx }
+    pub fn new(dispatcher: Arc<dyn ActionDispatcher>) -> Self {
+        Self { dispatcher }
     }
 }
 
@@ -169,18 +193,20 @@ impl Tool for NoteCreateTool {
 
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: PathContentArgs = parse_args(args)?;
-        dispatch_via_gate(&self.ctx, Action::note_create(a.path, a.content)).await
+        self.dispatcher
+            .apply(Action::note_create(a.path, a.content))
+            .await
     }
 }
 
 /// `note.edit` — перезаписывает тело СУЩЕСТВУЮЩЕЙ заметки (снапшот-перед-правкой; крупная → Confirm).
 pub struct NoteEditTool {
-    ctx: GatedToolCtx,
+    dispatcher: Arc<dyn ActionDispatcher>,
 }
 
 impl NoteEditTool {
-    pub fn new(ctx: GatedToolCtx) -> Self {
-        Self { ctx }
+    pub fn new(dispatcher: Arc<dyn ActionDispatcher>) -> Self {
+        Self { dispatcher }
     }
 }
 
@@ -208,19 +234,21 @@ impl Tool for NoteEditTool {
 
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: PathContentArgs = parse_args(args)?;
-        dispatch_via_gate(&self.ctx, Action::note_edit(a.path, a.content)).await
+        self.dispatcher
+            .apply(Action::note_edit(a.path, a.content))
+            .await
     }
 }
 
 /// `note.set_frontmatter` — ставит ОДИН плоский top-level frontmatter-ключ (через единственный
 /// санкционированный писатель `set_frontmatter_field`; снапшот-перед-правкой).
 pub struct SetFrontmatterTool {
-    ctx: GatedToolCtx,
+    dispatcher: Arc<dyn ActionDispatcher>,
 }
 
 impl SetFrontmatterTool {
-    pub fn new(ctx: GatedToolCtx) -> Self {
-        Self { ctx }
+    pub fn new(dispatcher: Arc<dyn ActionDispatcher>) -> Self {
+        Self { dispatcher }
     }
 }
 
@@ -248,7 +276,9 @@ impl Tool for SetFrontmatterTool {
 
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: FrontmatterArgs = parse_args(args)?;
-        dispatch_via_gate(&self.ctx, Action::frontmatter(a.path, a.key, a.value)).await
+        self.dispatcher
+            .apply(Action::frontmatter(a.path, a.key, a.value))
+            .await
     }
 }
 
@@ -297,9 +327,15 @@ mod tests {
         )
     }
 
-    /// auto-прогон + PolicyDefault (не должен быть спрошен для Auto-тира).
-    fn auto_ctx(canon_root: &std::path::Path, sink: &AuditSink) -> GatedToolCtx {
-        ctx_with(canon_root, sink, Some("auto"), Arc::new(PolicyDefault))
+    /// auto-прогон + PolicyDefault (не должен быть спрошен для Auto-тира), как `Arc<dyn ActionDispatcher>`
+    /// (in-process ШОВ — `GatedToolCtx`), готовый к подаче в инструмент.
+    fn auto_ctx(canon_root: &std::path::Path, sink: &AuditSink) -> Arc<dyn ActionDispatcher> {
+        Arc::new(ctx_with(
+            canon_root,
+            sink,
+            Some("auto"),
+            Arc::new(PolicyDefault),
+        ))
     }
 
     fn read(root: &std::path::Path, rel: &str) -> String {
@@ -389,7 +425,7 @@ mod tests {
             Arc::new(PolicyDefault),
             events.clone(),
         );
-        let t = NoteCreateTool::new(ctx);
+        let t = NoteCreateTool::new(Arc::new(ctx));
 
         let res = t
             .invoke(r#"{"path":"Notes/N.md","content":"hi"}"#)
@@ -429,7 +465,7 @@ mod tests {
             Arc::new(chan),
             Arc::new(CollectingSink::new()),
         );
-        let t = NoteCreateTool::new(ctx);
+        let t = NoteCreateTool::new(Arc::new(ctx));
 
         let res = t
             .invoke(r#"{"path":"Notes/N.md","content":"hello"}"#)
