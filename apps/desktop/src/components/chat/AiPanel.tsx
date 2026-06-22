@@ -4,7 +4,7 @@ import {
   FilePlus2,
   HardDrive,
   History,
-  RefreshCw,
+  Maximize2,
   SquarePen,
   WifiOff,
   X,
@@ -16,13 +16,9 @@ import { logUi } from '../../lib/debug-log';
 import { tauriApi, type ChatSessionInfo } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { useChatStore } from '../../stores/chat';
-import { useRelatedStore } from '../../stores/related';
-import { useSuggestStore } from '../../stores/suggest';
 import { useUIStore } from '../../stores/ui';
-import { activePath, useWorkspaceStore } from '../../stores/workspace';
+import { AgentTab } from './AgentTab';
 import { ChatView } from './ChatView';
-import { RelatedView } from './RelatedView';
-import { SuggestView } from './SuggestView';
 import styles from './AiPanel.module.css';
 
 /**
@@ -170,10 +166,10 @@ function SessionHistory() {
 }
 
 /**
- * AI-панель по макету `ai-panel.jsx` (DP-12): шапка ai-head (глиф + «AI-ассистент» + бейдж
- * провайдера + действия), табы отдельной строкой с подчёркиванием активного. Вкладки: «Чат»
- * (RAG, Ф1-8), «Связи» (предложения, Ф1-9), «Похожие» (#35); Summary-таб макета не переносим —
- * суммаризация живёт в inline-LLM редактора (honest-адаптация, BACKLOG).
+ * AI-панель Castor (Hermes-6 `ai-panel.jsx`): шапка (орбита-глиф + «Castor» + бейдж провайдера +
+ * история/новая сессия + развернуть-в-раздел + закрыть), две вкладки — «Чат» (RAG, Ф1-8) и «Castor»
+ * (лаунчер раздела Агента). «Связи»/«Похожие» переехали в инспектор-рейл редактора (per-заметочные),
+ * суммаризация — в inline-LLM редактора.
  */
 export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'overlay' }) {
   const { t } = useTranslation();
@@ -191,9 +187,7 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
   const streaming = useChatStore((s) => s.streaming);
   const newSession = useChatStore((s) => s.newSession);
 
-  const reloadSuggest = useSuggestStore((s) => s.load);
-  const reloadRelated = useRelatedStore((s) => s.load);
-  const path = useWorkspaceStore(activePath);
+  const openAgent = useUIStore((s) => s.openAgent);
 
   // Драг-ресайз панели (фидбэк владельца 11.06): тянем левую кромку (side) / верхнюю (bottom);
   // размер живёт в prefs (персист) и применяется грид-переменной App. Overlay не ресайзим.
@@ -255,9 +249,9 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
         </span>
         <span className={styles.headSpacer} />
         <ProviderBadge />
-        {tab === 'chat' ? (
-          // Решение владельца 2026-06-12: ничего не удаляем — вместо корзины «История» и
-          // «Новая сессия» (текущая лента уходит в память «второго мозга», не стирается).
+        {tab === 'chat' && (
+          // Решение владельца 2026-06-12: ничего не удаляем — «История» + «Новая сессия» (текущая
+          // лента уходит в память «второго мозга», не стирается).
           <>
             <SessionHistory />
             <button
@@ -270,16 +264,15 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
               <SquarePen size={15} aria-hidden />
             </button>
           </>
-        ) : (
-          <button
-            className={styles.iconBtn}
-            onClick={() => void (tab === 'related' ? reloadRelated(path) : reloadSuggest(path))}
-            title={t(tab === 'related' ? 'related.recompute' : 'suggest.recompute')}
-            aria-label={t(tab === 'related' ? 'related.recompute' : 'suggest.recompute')}
-          >
-            <RefreshCw size={15} aria-hidden />
-          </button>
         )}
+        <button
+          className={styles.iconBtn}
+          onClick={() => openAgent()}
+          title={t('chat.openAgentSection')}
+          aria-label={t('chat.openAgentSection')}
+        >
+          <Maximize2 size={15} aria-hidden />
+        </button>
         <button
           className={styles.iconBtn}
           onClick={() => closeChat()}
@@ -301,25 +294,15 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
         </button>
         <button
           role="tab"
-          aria-selected={tab === 'suggest'}
-          className={`${styles.tab} ${tab === 'suggest' ? styles.active : ''}`}
-          onClick={() => setTab('suggest')}
+          aria-selected={tab === 'agent'}
+          className={`${styles.tab} ${tab === 'agent' ? styles.active : ''}`}
+          onClick={() => setTab('agent')}
         >
-          {t('chat.tabSuggest')}
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === 'related'}
-          className={`${styles.tab} ${tab === 'related' ? styles.active : ''}`}
-          onClick={() => setTab('related')}
-        >
-          {t('chat.tabRelated')}
+          Castor
         </button>
       </div>
 
-      <div className={styles.body}>
-        {tab === 'chat' ? <ChatView /> : tab === 'related' ? <RelatedView /> : <SuggestView />}
-      </div>
+      <div className={styles.body}>{tab === 'chat' ? <ChatView /> : <AgentTab />}</div>
     </aside>
   );
 }

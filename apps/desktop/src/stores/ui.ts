@@ -13,7 +13,7 @@ function readOnboarded(): boolean {
   }
 }
 
-type AiTab = 'chat' | 'suggest' | 'related';
+type AiTab = 'chat' | 'agent';
 /** Активная секция раздела настроек (Obsidian-style: левый нав → контент). Кросс-план #11. */
 export type SettingsSection = 'general' | 'editor' | 'appearance' | 'ai' | 'hotkeys' | 'about';
 
@@ -153,6 +153,12 @@ interface UIState {
   openTagFilter: (tag: string) => void;
   /** Сбросить отложенный тег-фильтр (сайдбар вызывает после применения). */
   consumeTagFilter: () => void;
+  /** Связи в инспекторе (Hermes-6: AI-панель = Чат+Castor, «Связи» переехали в инспектор-рейл
+   *  редактора). Команда палитры «Связи» просит редактор открыть секцию; InspectorRail читает и
+   *  сбрасывает (consumeInspectorSection), как pendingTagFilter. */
+  pendingInspectorSection: string | null;
+  openInspectorSection: (section: string) => void;
+  consumeInspectorSection: () => void;
   /** REVEAL-ACTIVE-FILE: запрос «показать файл в дереве» — `seq` (а не голый путь), чтобы повтор по
    *  ТОМУ ЖЕ пути перезапускал эффект скролла. FileTree подписан, скроллит и сбрасывает. */
   revealTarget: { path: string; seq: number } | null;
@@ -408,6 +414,11 @@ export const useUIStore = create<UIState>((set) => ({
   // Показать сайдбар и выйти из reading (там сайдбар скрыт), иначе фильтр применится незаметно.
   openTagFilter: (tag) => set({ pendingTagFilter: tag, sidebarOpen: true, reading: false }),
   consumeTagFilter: () => set({ pendingTagFilter: null }),
+  pendingInspectorSection: null,
+  // Закрываем оверлейные вью, чтобы показался редактор с инспектор-рейлом, и просим открыть секцию.
+  openInspectorSection: (section) =>
+    set({ ...MAIN_VIEWS_CLOSED, pendingInspectorSection: section }),
+  consumeInspectorSection: () => set({ pendingInspectorSection: null }),
   revealTarget: null,
   // Дерево видно только при открытом сайдбаре и не в reading — иначе скролл произойдёт незаметно.
   requestReveal: (path) =>
