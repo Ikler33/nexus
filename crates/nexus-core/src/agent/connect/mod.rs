@@ -335,6 +335,20 @@ impl Transport for ChannelTransport {
     }
 }
 
+/// Делегирующий [`Transport`] для `Arc<T>`: позволяет ДВУМ in-sandbox-шимам делить ОДНО соединение через
+/// `Arc`-клоны (SANDBOX-6c-2f: `ProxyActuator` host/act + `ProxyExecDispatcher` host/exec на одном act.sock).
+/// Безопасно, т.к. tool-вызовы СЕРИАЛИЗОВАНЫ (`run_agent_loop` — один инструмент за раз) → send/recv одного
+/// соединения не пересекаются (контракт «один consumer» соблюдён de-facto последовательностью).
+#[async_trait]
+impl<T: Transport + ?Sized> Transport for std::sync::Arc<T> {
+    async fn send(&self, msg: RpcMessage) -> Result<(), TransportError> {
+        (**self).send(msg).await
+    }
+    async fn recv(&self) -> Option<RpcMessage> {
+        (**self).recv().await
+    }
+}
+
 // ───────────────────────── Handler + dispatch ─────────────────────────
 
 /// Поведение агент-сервиса за протоколом. Реализуется в `nexus-agentd` (там есть провайдер/память/
@@ -456,6 +470,24 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    /// `Arc<T>: Transport` делегирует send/recv → ДВА Arc-клона делят ОДНО соединение (6c-2f shared
+    /// act.sock). Оба send'а одного клона приходят на другой конец (один underlying транспорт).
+    #[tokio::test]
+    async fn arc_transport_shares_one_connection() {
+        let (a, b) = channel_pair();
+        let a = Arc::new(a);
+        let a2 = a.clone();
+        a.send(RpcMessage::request(1, "ping", json!(null)))
+            .await
+            .unwrap();
+        a2.send(RpcMessage::request(2, "pong", json!(null)))
+            .await
+            .unwrap();
+        // Оба сообщения (с РАЗНЫХ Arc-клонов) пришли на b → клоны делят один underlying транспорт.
+        assert!(matches!(b.recv().await, Some(RpcMessage::Request { .. })));
+        assert!(matches!(b.recv().await, Some(RpcMessage::Request { .. })));
+    }
 
     // ── framing ──
     #[test]
