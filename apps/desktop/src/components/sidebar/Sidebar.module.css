@@ -27,21 +27,28 @@
   background: var(--color-accent-soft);
 }
 
+/* Поле поиска — пилюля как `global-search` в макете Hermes-6: приподнятый фон + мягкая тень. */
 .searchBox {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin: var(--space-2);
-  padding: var(--space-1) var(--space-3);
+  height: 30px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  border-radius: var(--radius-full, 999px);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--elevation-1);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.searchBox:hover {
+  border-color: var(--color-border-strong);
 }
 
 .searchBox:focus-within {
   border-color: var(--color-accent-rim);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  box-shadow: var(--elevation-1), 0 0 0 3px var(--color-accent-soft);
 }
 
 .searchIcon {
@@ -332,6 +339,25 @@
   font-size: var(--text-sm);
   color: var(--color-text-faint);
   line-height: 1.6;
+}
+
+/* Пустой поиск — центрированный empty-state по макету Hermes-6 (иконка + подпись). */
+.searchEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-7) var(--space-4);
+  text-align: center;
+  color: var(--color-text-faint);
+}
+.searchEmptyIcon {
+  opacity: 0.4;
+}
+.searchEmptySub {
+  font-size: var(--text-sm);
+  max-width: 200px;
+  line-height: var(--leading-normal);
 }
 .tagRow {
   display: flex;

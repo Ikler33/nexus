@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Дизайн · Hermes-6 фан-аут PR-B — рескин read/nav-вью (Home/News/Today/Board/Sidebar/Graph/Палитра/Plugins)
+
+In-place CSS-рескин 8 поверхностей под `home.jsx`/`news.jsx`/`screens.jsx`(Today/Board)/`sidebar.jsx`/`graph.jsx`/`palette.jsx`/`plugins.jsx`:
+- **Home:** greeting → `--display-lg` headline, continue-card headline-title/serif-snippet, плоский фон, приглушённые иконки.
+- **News:** ADD **drop cap** (`::first-letter` Cormorant 3.5em accent на первом абзаце), editorial-reader (kicker 0.2em, lede 20px, paragraph 18px/1.8), CTA → headline/display-md.
+- **Today/Board:** carded-list идиом (плоские ряды → elevated 14px-карточки, status-dots, mono-секции, mono-бейджи); Board DnD/list/task-peek/properties сохранены.
+- **Sidebar/Graph/Palette/Plugins:** точечный полиш (active-state, glass-палитра, plugin-карточки/audit).
+
+Рескин-на-месте — 0 регрессий (adversarial-ревью 4 линзы). Только per-component CSS (+ аддитивные спаны/иконо-боксы); shared-файлы не тронуты.
+
 ### Дизайн · Hermes-6 фан-аут PR-A — рескин модалок/инсайтов (Память/Эпизоды/Дайджест/Цели/Противоречия/Входящие/DeadJobs/Sync+Conflict)
 
 In-place CSS-рескин 5 поверхностей под `screens.jsx`/`insights.css`/`sync.css`/`conflict.css`: заголовки → `--font-headline` 19px, мета → `--font-mono`, soft-accent пилюли, ember-акцент вместо cool-`--color-ai`, теги → `--color-tag`, soft-square чипы, entry-motion (m-fade/m-pop), empty-state иконо-боксы. Рескин-на-месте — 0 регрессий фич/i18n/a11y (adversarial-ревью 3 линзы, вердикт MERGE). Только per-component `.module.css` (+ аддитивные `emptyIcoBox`/`headIcon` спаны); shared-файлы не тронуты.
