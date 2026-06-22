@@ -8,9 +8,9 @@
 //!
 //! [`crate::actuator::Action`]/[`ActionTarget`] НЕ сериализуются напрямую — это security-keystone
 //! (exhaustive-match держит classify честным). Вместо этого — wire-DTO [`WireAction`] с EXHAUSTIVE
-//! fail-closed конверсией: когда Фаза-3 добавит `ShellRun`/`ProcessSpawn`/`GitOp` в `ActionTarget`,
-//! `From<&Action> for WireAction` СЛОМАЕТ компиляцию → осознанное решение, представим ли таргет в
-//! `host/act` (exec-таргеты — НЕТ, у них отдельный `host/exec`, Фаза-3).
+//! fail-closed конверсией [`TryFrom<&Action>`]: Фаза-3 exec-таргеты (`ShellRun`/`ProcessSpawn`/`GitOp`)
+//! НЕ представимы на `host/act` → `Err` (их путь — отдельный `host/exec`, 6c). `WireKind` знает лишь 3
+//! vault-вида → контейнер СТРУКТУРНО не протолкнёт exec через host/act (forge невозможен).
 
 use std::sync::Mutex;
 
@@ -56,23 +56,33 @@ pub struct WireAction {
     pub value: Option<String>,
 }
 
-impl From<&Action> for WireAction {
-    /// EXHAUSTIVE (без `_ =>`): Фаза-3 ActionTarget-варианты сломают компиляцию здесь — намеренно.
-    fn from(a: &Action) -> Self {
+impl TryFrom<&Action> for WireAction {
+    type Error = &'static str;
+    /// FAIL-CLOSED (Фаза-3 keystone): `host/act` НЕСЁТ ТОЛЬКО vault-таргеты. exec-таргеты
+    /// (`ShellRun`/`ProcessSpawn`/`GitOp`) НЕ представимы на проводе host/act → `Err` (их путь — отдельный
+    /// host/exec, Фаза-3 6c). EXHAUSTIVE (без `_ =>`): новый ActionTarget-вариант осознанно решит, vault он
+    /// или нет. Так контейнер СТРУКТУРНО не может протолкнуть exec через host/act (forge невозможен —
+    /// WireKind знает лишь 3 vault-вида).
+    fn try_from(a: &Action) -> Result<Self, Self::Error> {
         let (kind, rel, key) = match &a.target {
             ActionTarget::NoteCreate { rel } => (WireKind::NoteCreate, rel.clone(), None),
             ActionTarget::NoteEdit { rel } => (WireKind::NoteEdit, rel.clone(), None),
             ActionTarget::Frontmatter { rel, key } => {
                 (WireKind::Frontmatter, rel.clone(), Some(key.clone()))
             }
+            ActionTarget::ShellRun { .. }
+            | ActionTarget::ProcessSpawn { .. }
+            | ActionTarget::GitOp { .. } => {
+                return Err("exec-таргет не представим на host/act (используй host/exec, Фаза-3)")
+            }
         };
-        WireAction {
+        Ok(WireAction {
             kind,
             rel,
             key,
             content: a.content.clone(),
             value: a.value.clone(),
-        }
+        })
     }
 }
 
@@ -235,7 +245,9 @@ impl<T: Transport> ProxyActuator<T> {
             *g += 1;
             id
         };
-        let params = serde_json::to_value(WireAction::from(action))
+        // FAIL-CLOSED: exec-таргет не представим на host/act (Фаза-3 → host/exec). TryFrom→Err → ToolError.
+        let wire = WireAction::try_from(action).map_err(|e| ToolError::Exec(e.to_string()))?;
+        let params = serde_json::to_value(wire)
             .map_err(|e| ToolError::Exec(format!("host/act сериализация: {e}")))?;
         self.transport
             .send(RpcMessage::request(id, HOST_ACT, params))
@@ -295,12 +307,28 @@ mod tests {
             Action::frontmatter("Notes/C.md", "status", "done"),
         ];
         for a in actions {
-            let wire = WireAction::from(&a);
+            let wire = WireAction::try_from(&a).unwrap();
             let json = serde_json::to_string(&wire).unwrap();
             let back: WireAction = serde_json::from_str(&json).unwrap();
             let a2: Action = back.try_into().unwrap();
             assert_eq!(a, a2, "round-trip Action↔WireAction↔JSON");
         }
+    }
+
+    /// Фаза-3 keystone: exec-таргеты НЕ представимы на host/act (TryFrom→Err); vault-таргеты → Ok.
+    #[test]
+    fn exec_action_not_representable_on_host_act() {
+        for a in [
+            Action::shell_run(vec!["ls".into()], None),
+            Action::process_spawn("git", vec!["status".into()], None),
+            Action::git_op("status", vec![]),
+        ] {
+            assert!(
+                WireAction::try_from(&a).is_err(),
+                "exec не на host/act: {a:?}"
+            );
+        }
+        assert!(WireAction::try_from(&Action::note_create("A.md", "b")).is_ok());
     }
 
     #[test]
@@ -369,10 +397,9 @@ mod tests {
     async fn host_act_server_with_real_backend_writes_to_disk() {
         let (_d, root, ctx) = real_gate(Some("auto")).await;
         let srv = HostActServer::new(DispatchActuatorBackend::new(ctx));
-        let params = serde_json::to_value(WireAction::from(&Action::note_create(
-            "Notes/Wire.md",
-            "из RPC",
-        )))
+        let params = serde_json::to_value(
+            WireAction::try_from(&Action::note_create("Notes/Wire.md", "из RPC")).unwrap(),
+        )
         .unwrap();
         let out = srv.handle(HOST_ACT, params).await.unwrap();
         let w: WireDispatchOutcome = serde_json::from_value(out).unwrap();
@@ -470,9 +497,10 @@ mod tests {
     async fn host_act_server_maps_applied() {
         let mock = MockBackend::new(Ok(DispatchOutcome::Applied("ok".into())));
         let srv = HostActServer::new(mock.clone());
-        let params =
-            serde_json::to_value(WireAction::from(&Action::note_create("Notes/A.md", "b")))
-                .unwrap();
+        let params = serde_json::to_value(
+            WireAction::try_from(&Action::note_create("Notes/A.md", "b")).unwrap(),
+        )
+        .unwrap();
         let out = srv.handle(HOST_ACT, params).await.unwrap();
         let w: WireDispatchOutcome = serde_json::from_value(out).unwrap();
         assert_eq!(
@@ -489,7 +517,8 @@ mod tests {
         let mock = MockBackend::new(Err(ToolError::Exec("hardblocked".into())));
         let srv = HostActServer::new(mock);
         let params =
-            serde_json::to_value(WireAction::from(&Action::note_edit("X.md", "b"))).unwrap();
+            serde_json::to_value(WireAction::try_from(&Action::note_edit("X.md", "b")).unwrap())
+                .unwrap();
         let out = srv.handle(HOST_ACT, params).await.unwrap();
         let w: WireDispatchOutcome = serde_json::from_value(out).unwrap();
         assert!(

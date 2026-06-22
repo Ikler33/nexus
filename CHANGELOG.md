@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6b — Фаза-3 exec-таргеты: `ShellRun`/`ProcessSpawn`/`GitOp` + classify never-Auto
+
+Расширение типизированной алгебры действий (`docs/specs/agent-sandbox.md §5.1/§5.3`, дизайн — мультиагентный Workflow «design-sandbox-6b»: гибрид Variant-A footprint + Variant-B chokepoints). 3 НОВЫХ `ActionTarget`: `ShellRun{argv,cwd_rel}`, `ProcessSpawn{program,args,cwd_rel}`, `GitOp{op,args}`. **БЕЗ нового рантайм-действия** (исполнение — host/exec, 6c): только типы + classify + все exhaustive-армы fail-closed + инвариант-тесты.
+
+**classify (§5.3, НИКОГДА Auto):** `ClassifyCtx` + `shell_enable`/`sandbox_available` (предвычислено корнем, classify остаётся чистой). `classify_exec`: precedence — `shell_enable=false` → `HardBlocked(ShellDisabled)`; иначе `sandbox_available=false` → `HardBlocked(SandboxUnavailable)` (block by-construction §9, не-Linux/sandbox-off); иначе → `Confirm(ExecRequiresApproval)`. exec-ячейки Auto СТРУКТУРНО нет. `ConfirmReason::ExecRequiresApproval` (unit).
+
+**Два chokepoint'а fail-closed (не per-arm, а by-construction):** (1) `WireAction::From`→`TryFrom`: exec-таргет → `Err` (`host/act` несёт ТОЛЬКО vault; `WireKind` знает лишь 3 vault-вида → контейнер СТРУКТУРНО не протолкнёт exec через host/act); (2) `apply_action` top-guard `is_exec → Failed` (apply — единственный путь к диску; делает exec-армы в WRITE/success_summary ПРОВАБЛИ-МЁРТВЫМИ `unreachable!`, а не молчаливой псевдо-записью). `apply_now` + `proposed_content`/`file_status`/`change_kind`/`proposal_key`/`action_payload` — инертные exec-армы. `DispatchPolicy` + `with_exec_flags` (default false); `dispatch_action` пропускает read-vault для exec + питает ClassifyCtx из политики. agentd `--sandbox-run` проводит флаги (`shell_enable` из конфига; sandbox_available=true).
+
+**Тесты:** `exec_targets_never_auto` (KEYSTONE — вся сетка ×3 варианта) + precedence/sandbox-unavailable/confirm + `exec_action_not_representable_on_host_act` + `adding_variant_breaks_match` расширен до 6 арм (canary). `is_exec` (action.rs).
+
+**Мультиагент-ревью (2 линзы: never-Auto-инвариант / correctness, 0 CRITICAL/MAJOR после перепроверки):** обе линзы поймали ОДНУ реальную (MINOR) дыру — комменты ссылались на тест `exec_apply_is_fail_closed`, которого НЕ БЫЛО (apply-level RUBEZH-0 chokepoint был покрыт только на classify/wire-уровне). Исправлено: добавлен `exec_apply_is_fail_closed` — `apply_action` для всех 3 exec-ctor → `Failed`, БЕЗ файла/ledger-строки (пинит top-guard, от которого зависят `unreachable!()`-армы). 2 NIT приняты как есть (sandbox_available=true корректно ВНУТРИ host-раннера; `GitOp{op,args}` — намеренное обогащение спека-скетча `GitOp{op}`). 774 nexus-core теста зелёные, clippy 0, fmt/egress/tooluse/dangling/ignored зелёные. Следом 6c: `host/exec` RPC + исполнение ВНУТРИ песочницы (Tier-2).
+
 ### Агент · SANDBOX-6a — фундамент Фазы-3: env-scrub fail-closed + `ai.shell_enable` (default-OFF)
 
 ПЕРВЫЙ срез Фазы-3 host-actuator (owner-greenlit, `docs/specs/agent-sandbox.md §5/§11`) — БЕЗ единого нового опасного действия (exec-таргеты вводит 6b, исполнение — 6c). Только фундамент-вокабуляр, всё SAFE-by-default:

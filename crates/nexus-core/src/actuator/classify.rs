@@ -45,6 +45,9 @@ pub enum ConfirmReason {
     /// Перезапись существующей заметки телом крупнее порога (`overwrite_threshold` байт): большой
     /// блок-радиус потери данных → не авто, спросить.
     LargeOverwrite,
+    /// **Фаза-3 (SANDBOX-6b):** host exec-таргет при ВКЛЮЧЁННОМ `shell_enable` + доступной песочнице.
+    /// Произвольное исполнение НИКОГДА не Auto — ВСЕГДА требует явного апрува (исполнится in-sandbox, 6c).
+    ExecRequiresApproval,
 }
 
 /// Тир риска — решение классификатора. ПОРЯДОК серьёзности: `Auto < Confirm < HardBlocked`.
@@ -80,6 +83,12 @@ pub struct ClassifyCtx<'a> {
     pub root: &'a Path,
     /// Порог размера тела (байт) для NoteEdit: `> threshold` ⇒ Confirm(LargeOverwrite).
     pub overwrite_threshold: usize,
+    /// **Фаза-3 (6b):** разрешено ли host-исполнение (`ai.shell_enable`). `false` → exec-таргеты
+    /// HardBlocked(ShellDisabled). Vault-таргеты его ИГНОРИРУЮТ.
+    pub shell_enable: bool,
+    /// **Фаза-3 (6b):** доступна ли песочница СТРУКТУРНО (`sandbox_enabled` И Linux) — ПРЕДвычисляется
+    /// вызывающим (classify остаётся чистой). `false` → exec-таргеты HardBlocked(SandboxUnavailable).
+    pub sandbox_available: bool,
 }
 
 /// ЛЕКСИЧЕСКАЯ (без ФС) проверка конфайнмента vault-rel пути — fail-closed.
@@ -174,6 +183,24 @@ pub fn classify(action: &Action, ctx: &ClassifyCtx) -> RiskTier {
             Err(reason) => RiskTier::HardBlocked(reason),
             Ok(()) => RiskTier::Auto,
         },
+        // Фаза-3 host exec-таргеты — ЕДИНАЯ ветка (GitOp НЕ дробим на read-Auto, §5.3). НИКОГДА Auto.
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => classify_exec(ctx),
+    }
+}
+
+/// Классификация Фаза-3 host exec-таргета. Порядок гейтов ЛОКИРОВАН (precedence): сначала `shell_enable`
+/// (фича не разрешена владельцем → `ShellDisabled`), затем доступность песочницы (нет OS-границы →
+/// `SandboxUnavailable`, block by-construction §9), и ТОЛЬКО при обоих ВКЛ → `Confirm` (исполнение
+/// in-sandbox после апрува, 6c). **НИКОГДА `Auto`** — произвольное исполнение всегда человек-в-петле.
+fn classify_exec(ctx: &ClassifyCtx) -> RiskTier {
+    if !ctx.shell_enable {
+        RiskTier::HardBlocked(BlockReason::ShellDisabled)
+    } else if !ctx.sandbox_available {
+        RiskTier::HardBlocked(BlockReason::SandboxUnavailable)
+    } else {
+        RiskTier::Confirm(ConfirmReason::ExecRequiresApproval)
     }
 }
 
@@ -193,6 +220,8 @@ mod tests {
         let c = ClassifyCtx {
             root: &root,
             overwrite_threshold: t,
+            shell_enable: false,
+            sandbox_available: false,
         };
         classify(&Action::note_create(rel, "body"), &c)
     }
@@ -202,6 +231,8 @@ mod tests {
         let c = ClassifyCtx {
             root: &root,
             overwrite_threshold: t,
+            shell_enable: false,
+            sandbox_available: false,
         };
         classify(&Action::note_edit(rel, body), &c)
     }
@@ -211,6 +242,8 @@ mod tests {
         let c = ClassifyCtx {
             root: &root,
             overwrite_threshold: t,
+            shell_enable: false,
+            sandbox_available: false,
         };
         classify(&Action::frontmatter(rel, "tags", "x"), &c)
     }
@@ -349,6 +382,8 @@ mod tests {
         let c = ClassifyCtx {
             root: &root,
             overwrite_threshold: t,
+            shell_enable: false,
+            sandbox_available: false,
         };
         let a = Action::note_edit("Notes/N.md", "x".repeat(200));
         let first = classify(&a, &c);
@@ -385,6 +420,9 @@ mod tests {
                 ActionTarget::NoteCreate { .. } => "create",
                 ActionTarget::NoteEdit { .. } => "edit",
                 ActionTarget::Frontmatter { .. } => "fm",
+                ActionTarget::ShellRun { .. } => "shell",
+                ActionTarget::ProcessSpawn { .. } => "process",
+                ActionTarget::GitOp { .. } => "git",
             }
         }
         assert_eq!(
@@ -402,5 +440,98 @@ mod tests {
             }),
             "fm"
         );
+    }
+
+    // ── Фаза-3 (6b): classify exec-таргетов — НИКОГДА Auto (§5.3) ──
+    fn classify_exec_t(
+        target: ActionTarget,
+        shell_enable: bool,
+        sandbox_available: bool,
+    ) -> RiskTier {
+        let (root, t) = ctx();
+        let c = ClassifyCtx {
+            root: &root,
+            overwrite_threshold: t,
+            shell_enable,
+            sandbox_available,
+        };
+        classify(
+            &Action {
+                target,
+                content: None,
+                value: None,
+            },
+            &c,
+        )
+    }
+
+    fn exec_targets() -> Vec<ActionTarget> {
+        vec![
+            ActionTarget::ShellRun {
+                argv: vec!["ls".into()],
+                cwd_rel: None,
+            },
+            ActionTarget::ProcessSpawn {
+                program: "git".into(),
+                args: vec![],
+                cwd_rel: None,
+            },
+            ActionTarget::GitOp {
+                op: "status".into(),
+                args: vec![],
+            },
+        ]
+    }
+
+    /// KEYSTONE (§5.3): exec-таргет НИКОГДА не Auto — по ВСЕЙ сетке (shell_enable × sandbox_available) ×
+    /// 3 варианта. Компилятор форсирует ВЕТКУ, этот тест форсирует её БЕЗОПАСНОСТЬ.
+    #[test]
+    fn exec_targets_never_auto() {
+        for t in exec_targets() {
+            for shell in [false, true] {
+                for sandbox in [false, true] {
+                    let tier = classify_exec_t(t.clone(), shell, sandbox);
+                    assert!(
+                        !matches!(tier, RiskTier::Auto),
+                        "exec {t:?} (shell={shell}, sandbox={sandbox}) НЕ должен быть Auto, был {tier:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// shell_enable=false → ВСЕГДА HardBlocked(ShellDisabled), приоритет ВПЕРЁД sandbox-гейта.
+    #[test]
+    fn exec_shell_disabled_precedence() {
+        for t in exec_targets() {
+            for sandbox in [false, true] {
+                assert_eq!(
+                    classify_exec_t(t.clone(), false, sandbox),
+                    RiskTier::HardBlocked(BlockReason::ShellDisabled)
+                );
+            }
+        }
+    }
+
+    /// shell_enable=true но песочница недоступна → HardBlocked(SandboxUnavailable) (block by-construction).
+    #[test]
+    fn exec_sandbox_unavailable() {
+        for t in exec_targets() {
+            assert_eq!(
+                classify_exec_t(t.clone(), true, false),
+                RiskTier::HardBlocked(BlockReason::SandboxUnavailable)
+            );
+        }
+    }
+
+    /// shell_enable=true + песочница доступна → Confirm(ExecRequiresApproval) (единственная рабочая ячейка).
+    #[test]
+    fn exec_enabled_is_confirm() {
+        for t in exec_targets() {
+            assert_eq!(
+                classify_exec_t(t.clone(), true, true),
+                RiskTier::Confirm(ConfirmReason::ExecRequiresApproval)
+            );
+        }
     }
 }

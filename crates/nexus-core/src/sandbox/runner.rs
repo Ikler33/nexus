@@ -372,7 +372,7 @@ mod tests {
             "Notes/A.md"
         );
         // wire round-trip санити (WireAction в импортах — пинит контракт).
-        let _ = WireAction::from(&Action::note_edit("X.md", "y"));
+        let _ = WireAction::try_from(&Action::note_edit("X.md", "y")).unwrap();
         drop(shim);
         srv.await.unwrap();
     }
