@@ -16,14 +16,19 @@
 //!    host-нормализованным argv (контейнер argv НЕ переподаёт → закрыт TOCTOU approve-ls-run-rm).
 //!  - **report** (6c-2): контейнер шлёт исход → host финализирует ledger EXECUTED/FAILED.
 //!
-//! **6c-1 (этот срез):** wire-DTO + `ExecBackend::decide` + `HostExecServer` (decide); execute/report —
-//! зарезервированы (6c-2 `redeem`/`finalize` + контейнерный исполнитель). НИ ОДНОГО исполнения здесь.
+//! **6c-2c (текущий уровень):** реализованы `decide` (6c-1) + `execute` (redeem токена → ledger
+//! `APPROVED→EXECUTING` + host-authority `WireExecGo`, kill-switch last-moment); `HostExecServer` роутит
+//! `decide`+`execute`. `report` (фаза финализации) — зарезервирован → `invalid_params` (6c-2d).
+//! Контейнерный исполнитель (`exec_child`) + ProxyExec-шим + `serve_host`-проводка — 6c-2e/2f. host
+//! НИКОГДА не исполняет команду здесь.
 //!
 //! **6c-2 ОБЯЗАН (review hard-gates, флагнуто здесь чтобы инвариант не дрейфанул):**
-//!  1. `redeem` КОНСЬЮМИТ токен из `pending` (одноразовость + прунинг роста store; см. [`MAX_PENDING_EXEC`]);
-//!  2. `WireExecGo.env` строится ТОЛЬКО из env-allowlist (спека §5.4), НЕ из host-env — НИ ОДНОГО секрета;
-//!  3. `serve_exec` оборачивает accept-путь в `peer_authorized` (`SO_PEERCRED`), как serve_act/egress/event —
-//!     иначе любой локальный процесс гонял бы decide/redeem.
+//!  1. ✅ `redeem` (execute, 6c-2c) КОНСЬЮМИТ токен из `pending` (одноразовость + кэп [`MAX_PENDING_EXEC`]
+//!     на `in_flight` симметрично `pending`); 6c-2d `report` КОНСЬЮМИТ `in_flight` (финализация);
+//!  2. `WireExecGo.env` строится ТОЛЬКО из env-allowlist (спека §5.4, ✅ `build_exec_env` 6c-2b), НЕ из
+//!     host-env — НИ ОДНОГО секрета;
+//!  3. `serve_exec`/`serve_host` оборачивает accept-путь в `peer_authorized` (`SO_PEERCRED`), как
+//!     serve_act/egress/event — иначе любой локальный процесс гонял бы decide/redeem (6c-2f).
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -231,8 +236,8 @@ pub trait ExecBackend: Send + Sync {
     }
 }
 
-/// Host-обработчик `host/exec`. 6c-1: маршрутизирует `decide`; `execute`/`report` зарезервированы (6c-2)
-/// → `invalid_params` (контейнер 6c-1-образа их не шлёт; fail-closed, если кто-то пошлёт раньше времени).
+/// Host-обработчик `host/exec`. 6c-2c: маршрутизирует `decide`+`execute` (redeem) → `backend`;
+/// `report` зарезервирован (6c-2d) → `invalid_params` (fail-closed, если кто-то пошлёт раньше времени).
 pub struct HostExecServer<B: ExecBackend> {
     backend: B,
 }
@@ -543,31 +548,44 @@ impl ExecBackend for DispatchExecBackend {
     /// Фаза execute (6c-2c, redeem): КОНСЬЮМИТ одноразовый токен из `pending` → проводит ledger
     /// `approved→executing` (write-before-act exec) → строит host-authority [`WireExecGo`]. Порядок
     /// security-критичен:
-    ///  1. **kill-switch re-check ДО consume** — под паузой НЕ исполняем и токен НЕ трогаем (валиден для
-    ///     retry после un-pause; иначе пауза «съедала» бы одобрение);
-    ///  2. **consume под локом** (remove) — одноразовость by-construction: повтор/гонка найдёт токен
+    ///  0. **anti-runaway**: `in_flight` ограничен симметрично [`MAX_PENDING_EXEC`] (до consume);
+    ///  1. **consume под локом** (`remove`) — одноразовость by-construction: повтор/гонка найдёт токен
     ///     отсутствующим → `invalid_params` (TOCTOU-замок: argv берётся из СОХРАНЁННОГО действия, не из wire);
+    ///  2. **KILL-SWITCH LAST-MOMENT re-check** — ПОСЛЕ consume, НЕПОСРЕДСТВЕННО перед write-before-act
+    ///     (зеркало `apply_now` «сужение TOCTOU»): `transition` — это DB-`await`, и пауза могла взвестись в
+    ///     окне до записи EXECUTING. Под паузой НЕ пишем и ВОЗВРАЩАЕМ токен в `pending` (approval переживает
+    ///     un-pause: «token stays»). Раньше проверка стояла ДО consume под локом → оставляла await-окно,
+    ///     где флип паузы пропускал запуск (review MAJOR, зеркало `apply_now` orchestrate.rs);
     ///  3. ledger CAS `APPROVED→EXECUTING` (`transition` фенсит `state=approved AND outcome IS NULL`) —
     ///     не promoted ⇒ гонка/не-approved ⇒ ошибка (токен уже консьюмнут, fail-closed);
     ///  4. запоминаем в `in_flight` для report-финализации (6c-2d).
     async fn execute(&self, exec_token: &str) -> Result<WireExecGo, RpcError> {
-        // Шаги 1-2 под ОДНИМ локом (std Mutex — без .await внутри). Берём владение PendingExec.
+        // Шаг 0: anti-runaway симметрично pending-кэпу (до consume — при переполнении токен не трогаем).
+        if self.in_flight.lock().expect("in_flight mutex").len() >= MAX_PENDING_EXEC {
+            return Err(RpcError::internal(
+                "exec: слишком много исполняемых exec — отказано (fail-closed)",
+            ));
+        }
+        // Шаг 1: consume под локом (std Mutex — без .await внутри). Берём владение PendingExec.
+        // Pause-проверка НЕ здесь, а last-moment (шаг 2) — закрыть await-окно до записи EXECUTING.
         let pending = {
             let mut store = self.pending.lock().expect("pending mutex");
-            if !store.contains_key(exec_token) {
+            match store.remove(exec_token) {
+                Some(p) => p,
                 // неизвестный или уже консьюмнутый токен (one-shot replay) — fail-closed.
-                return Err(RpcError::invalid_params());
+                None => return Err(RpcError::invalid_params()),
             }
-            // KILL-SWITCH (чек-пойнт): под паузой НЕ исполняем; токен ОСТАЁТСЯ (un-pause retry).
-            if self.ctx.policy.is_paused() {
-                return Err(RpcError::internal(
-                    "exec: агент на паузе (kill-switch) — исполнение подавлено",
-                ));
-            }
-            store
-                .remove(exec_token)
-                .expect("contains_key проверен выше")
         };
+        // Шаг 2: KILL-SWITCH LAST-MOMENT — под паузой НЕ пишем + ВОЗВРАЩАЕМ токен (un-pause retry).
+        if self.ctx.policy.is_paused() {
+            self.pending
+                .lock()
+                .expect("pending mutex")
+                .insert(exec_token.to_string(), pending);
+            return Err(RpcError::internal(
+                "exec: агент на паузе (kill-switch, last-moment) — исполнение подавлено",
+            ));
+        }
         // Шаг 3: ledger approved→executing (CAS). Вне лока (await).
         let promoted = audit::transition(
             &self.ctx.ledger.writer_handle(),
@@ -677,8 +695,10 @@ mod tests {
         );
     }
 
+    /// HostExecServer роутит фазу Execute в backend.execute(); MockExec НЕ переопределяет execute →
+    /// default-impl `invalid_params` (мок/6c-1-уровень инертен). Реальный redeem-путь — DispatchExecBackend.
     #[tokio::test]
-    async fn host_exec_server_execute_phase_reserved_6c2() {
+    async fn host_exec_server_execute_routes_to_backend_default_inert() {
         let srv = HostExecServer::new(MockExec(WireExecDecision::Rejected {
             summary: "x".into(),
         }));
@@ -691,7 +711,6 @@ mod tests {
             stderr_tail: None,
             undo_ref: None,
         };
-        // 6c-1: execute зарезервирован → invalid_params (6c-2 включит исполнение).
         assert!(srv
             .handle(HOST_EXEC, serde_json::to_value(req).unwrap())
             .await
@@ -1024,7 +1043,10 @@ mod tests {
         assert_eq!(backend.in_flight_count(), 1, "in_flight не задвоился");
     }
 
-    /// KILL-SWITCH: под паузой execute отказывает, токен ОСТАЁТСЯ валиден (un-pause retry), in_flight пуст.
+    /// KILL-SWITCH LAST-MOMENT: пауза взведена ПОСЛЕ approve → execute консьюмит токен, ловит паузу
+    /// last-moment-проверкой (ПОСЛЕ consume, ПЕРЕД ledger EXECUTING) → ВОЗВРАЩАЕТ токен в pending (pending=1,
+    /// in_flight=0, ledger не тронут). un-pause → тот же токен redeem'ится. Пинит «paused ⇒ нет EXECUTING-
+    /// записи» для exec-пути (review MAJOR: window до transition закрыт зеркалом apply_now).
     #[tokio::test]
     async fn execute_when_paused_refuses_and_keeps_token() {
         use std::sync::atomic::{AtomicBool, Ordering};
