@@ -483,6 +483,13 @@ fn block_message(reason: &BlockReason) -> String {
             "путь в служебном каталоге (.nexus/.git/dotfile) — действие заблокировано".to_string()
         }
         BlockReason::EmptyPath => "пустой/невалидный путь — действие заблокировано".to_string(),
+        BlockReason::ShellDisabled => {
+            "host-исполнение выключено (ai.shell_enable=false) — действие заблокировано".to_string()
+        }
+        BlockReason::SandboxUnavailable => {
+            "песочница недоступна (не-Linux / sandbox_enabled=false) — host-исполнение заблокировано"
+                .to_string()
+        }
     }
 }
 
@@ -906,6 +913,13 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// SANDBOX-6a: новые Phase-3 BlockReason'ы дают осмысленные фенсенные сообщения (вокабуляр для 6b).
+    #[test]
+    fn block_message_covers_phase3_reasons() {
+        assert!(block_message(&BlockReason::ShellDisabled).contains("shell_enable"));
+        assert!(block_message(&BlockReason::SandboxUnavailable).contains("песочница"));
+    }
 
     /// Временный vault + БД + sink. canon_root КАНОНИЗИРОВАН (предусловие resolve_vault_path_for_write).
     async fn setup() -> (TempDir, PathBuf, AuditSink) {

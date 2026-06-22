@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6a — фундамент Фазы-3: env-scrub fail-closed + `ai.shell_enable` (default-OFF)
+
+ПЕРВЫЙ срез Фазы-3 host-actuator (owner-greenlit, `docs/specs/agent-sandbox.md §5/§11`) — БЕЗ единого нового опасного действия (exec-таргеты вводит 6b, исполнение — 6c). Только фундамент-вокабуляр, всё SAFE-by-default:
+
+- **`ai.shell_enable: bool`** (default false) — гейт исполнения host exec-таргетов. `false` → exec-таргеты будут `HardBlocked(ShellDisabled)`; `true` (+ `sandbox_enabled` + Linux) → `Confirm` (НИКОГДА `Auto`). На этом срезе ещё не рождает exec-таргеты — декларирован + питает classify/env-scrub 6b/6c.
+- **`BlockReason::ShellDisabled` / `SandboxUnavailable`** + фенсенные сообщения (`block_message`) — вокабуляр для 6b: shell выключен / песочница недоступна структурно (не-Linux / sandbox-off → block by-construction §9). Никаких других exhaustive-match по `BlockReason` не сломалось (только `block_message`, арм добавлены).
+- **env-scrub fail-closed (§5.4):** `SandboxConfig.env_allowlist: Vec<(K,V)>` → рендер `--env K=V`. **ДЕФОЛТ ПУСТ → ни одной `--env`** (host-окружение НЕ пробрасывается ни на одном срезе — Фаза-2 байт-в-байт прежняя). Это НЕ denylist: контейнер увидит РОВНО allow-list (Фаза-3 наполнит минимумом PATH + per-skill `env_passthrough`).
+
+Render-тесты: пустой allowlist→нет `--env` (инвариант Фазы-2 сохранён) / allowlist→ровно `--env K=V` ДО образа; block_message покрывает новые reasons. clippy 0, fmt/egress/dangling/ignored зелёные, 56 sandbox-тестов. Следом 6b: ActionTarget `ShellRun`/`ProcessSpawn`/`GitOp` + classify (Confirm/HardBlocked, never Auto) + `exec_targets_never_auto`-инвариант.
+
 ### Агент · SANDBOX-5b — LIVE Tier-2 валидация каркаса песочницы на Podman .28 ✅ + fix `--user`
 
 **Каркас Фазы-2 РАБОТАЕТ end-to-end против реального Qwen** (live на .28, podman 5.7.0). `nexus-agentd --sandbox-run` на тест-vault: хардненный контейнер (`--network=none`) → egress.sock→GuardedProxy→GuardedClient→Qwen:8080 (агент получил контекст, стримил) → **Qwen вызвал `note.create`** (Notes/Hello.md) → act.sock→HostActServer→`dispatch_action`→auto-тир **ПРИМЕНИЛ** (toolResult «создана заметка», isError=false) → event.sock релеил toolCall/toolResult/final → `Final`, exit 0 → **файл реально записан в host-vault** с точным содержимым. Полный путь (podman+3 сокета+LLM+гейт+vault-запись) подтверждён вживую.

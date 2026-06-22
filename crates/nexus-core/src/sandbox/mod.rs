@@ -11,8 +11,9 @@
 //! `--security-opt no-new-privileges`, `--userns=keep-id` (host-uid маппится в себя) + `--user host-uid:gid`
 //! (процесс контейнера бежит под host-uid → владеет 0600-сокетами и читает `:ro`-vault; ставит `SandboxRunner`),
 //! ресурс-кэпы; vault bind **`:ro`**; per-run каталог сокетов — ОТДЕЛЬНЫЙ mount, НЕ под `:ro`-vault
-//! (спека §4.4, анти-footgun). Окружение хоста НЕ пробрасывается (нет `--env` — env-scrub fail-closed
-//! придёт в SANDBOX-6a; на этом срезе важно лишь, что секреты хоста физически не утекают в argv).
+//! (спека §4.4, анти-footgun). **env-scrub fail-closed (SANDBOX-6a, §5.4):** `--env` рендерится ТОЛЬКО из
+//! явного `SandboxConfig::env_allowlist` (дефолт пуст → ни одной `--env`); host-окружение НЕ пробрасывается
+//! ни на одном срезе (не denylist — контейнер видит РОВНО allow-list).
 
 use std::path::{Path, PathBuf};
 
@@ -88,6 +89,12 @@ pub struct SandboxConfig {
     /// иначе непривилегированный USER образа (uid 10001) НЕ откроет их (EACCES). `SandboxRunner` выставляет
     /// его в host-uid:gid; render оставлен опциональным, чтобы Tier-1 render-тесты не зависели от uid хоста.
     pub run_as: Option<String>,
+    /// **env-scrub fail-closed (SANDBOX-6a, спека §5.4):** ЯВНЫЙ allow-list `(KEY, VALUE)` → `--env K=V`.
+    /// ДЕФОЛТ ПУСТ → НИ ОДНОЙ `--env` (хост-окружение по-прежнему НЕ пробрасывается — секреты не утекают;
+    /// Фаза-2 байт-в-байт прежняя). Это НЕ denylist: контейнер видит РОВНО то, что здесь (пустое окружение
+    /// по умолчанию). Фаза-3 shell-исполнение наполняет его минимумом (PATH и т.п.) + per-skill
+    /// `env_passthrough` — fail-closed: чего нет в списке, того нет в контейнере.
+    pub env_allowlist: Vec<(String, String)>,
 }
 
 impl SandboxConfig {
@@ -130,6 +137,7 @@ impl SandboxConfig {
             host_run_dir,
             caps,
             run_as: None,
+            env_allowlist: Vec::new(), // fail-closed: пустое окружение по умолчанию (§5.4)
         })
     }
 }
@@ -209,6 +217,12 @@ pub fn sandbox_run_plan_with_cmd(cfg: &SandboxConfig, cmd: &[String]) -> Sandbox
         "-v".into(),
         format!("{}:{CONTAINER_RUN_DIR}", cfg.host_run_dir.display()),
     ];
+    // env-scrub (§5.4): ТОЛЬКО явный allow-list → `--env K=V`. Пусто → ни одной `--env` (Фаза-2). Это
+    // fail-closed: контейнер видит РОВНО эти переменные (не host-env, не denylist).
+    for (k, v) in &cfg.env_allowlist {
+        argv.push("--env".into());
+        argv.push(format!("{k}={v}"));
+    }
     // `--user host-uid:gid` (если задан) ДО образа: процесс контейнера бежит под host-uid → владеет
     // 0600-сокетами + читает `:ro`-vault (иначе непривилегированный USER образа → EACCES). Перекрывает
     // USER образа; бинарь world-rx, /tmp tmpfs rw — доступны под host-uid.
@@ -268,6 +282,39 @@ mod tests {
             ResourceCaps::default(),
         );
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn env_allowlist_renders_only_listed_vars() {
+        // Пусто (дефолт) → НИ одной --env (Фаза-2 инвариант «host-env не пробрасывается» сохранён).
+        let p0 = sandbox_run_plan(&cfg());
+        assert!(
+            !p0.argv.iter().any(|x| x == "--env" || x == "-e"),
+            "пустой allow-list → нет --env"
+        );
+        // Allow-list → РОВНО эти --env K=V (fail-closed: ничего сверх списка).
+        let mut c = cfg();
+        c.env_allowlist = vec![
+            ("PATH".into(), "/usr/bin".into()),
+            ("LANG".into(), "C.UTF-8".into()),
+        ];
+        let p = sandbox_run_plan(&c);
+        let envs: Vec<&String> = p
+            .argv
+            .iter()
+            .enumerate()
+            .filter(|(i, x)| *x == "--env" && p.argv.get(i + 1).is_some())
+            .map(|(i, _)| &p.argv[i + 1])
+            .collect();
+        assert_eq!(envs, vec!["PATH=/usr/bin", "LANG=C.UTF-8"]);
+        // --env ДО образа (опции podman run, не arg ENTRYPOINT).
+        let ipos = p
+            .argv
+            .iter()
+            .position(|x| x == DEFAULT_SANDBOX_IMAGE)
+            .unwrap();
+        let epos = p.argv.iter().position(|x| x == "--env").unwrap();
+        assert!(epos < ipos);
     }
 
     #[test]

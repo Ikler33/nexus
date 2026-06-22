@@ -30,6 +30,13 @@ pub enum BlockReason {
     ReservedPath,
     /// Пустой/невалидный rel-путь (нет имени файла, пустая строка).
     EmptyPath,
+    /// **SANDBOX-6a (Фаза-3):** host exec-таргет (`ShellRun`/`ProcessSpawn`/`GitOp`, вводятся в 6b) при
+    /// ВЫКЛЮЧЕННОМ `ai.shell_enable` → жёсткий отказ (фича есть, но не разрешена владельцем).
+    ShellDisabled,
+    /// **SANDBOX-6a (Фаза-3):** host exec-таргет, когда песочница недоступна СТРУКТУРНО — не-Linux ИЛИ
+    /// `ai.sandbox_enabled=false`. Block by-construction (§9): без OS-границы произвольное исполнение НЕ
+    /// допускается даже при `shell_enable` (исполнять было бы негде безопасно).
+    SandboxUnavailable,
 }
 
 /// Причина, по которой действие требует ПОДТВЕРЖДЕНИЯ пользователя (Confirm) перед исполнением.

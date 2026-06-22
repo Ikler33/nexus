@@ -86,6 +86,17 @@ pub struct AiConfig {
     /// меняет рантайм — только декларирован + используется чистым рендером плана `sandbox::sandbox_run_plan`.
     #[serde(default)]
     pub sandbox_enabled: bool,
+
+    /// **SANDBOX-6a (Фаза-3 host-actuator), SAFE BY DEFAULT + OWNER-GATED.** Гейт исполнения host
+    /// exec-таргетов (`ShellRun`/`ProcessSpawn`/`GitOp` — приходят в SANDBOX-6b) ВНУТРИ песочницы.
+    /// `false` (ДЕФОЛТ) → exec-таргеты `classify` → `HardBlocked(ShellDisabled)`, `host/exec` инертен;
+    /// `true` → exec-таргеты `classify` → `Confirm` (НИКОГДА `Auto`), исполняются in-sandbox после
+    /// host-апрува (`docs/specs/agent-sandbox.md §5/§T7`). Требует `sandbox_enabled` И Linux: на не-Linux
+    /// / при выключенной песочнице exec-таргеты → `HardBlocked(SandboxUnavailable)` (block by-construction).
+    /// На этом срезе (6a) флаг ещё НЕ рождает exec-таргеты (их вводит 6b) — только декларирован + питает
+    /// env-scrub-allowlist рендера и будущий classify.
+    #[serde(default)]
+    pub shell_enable: bool,
 }
 
 /// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
