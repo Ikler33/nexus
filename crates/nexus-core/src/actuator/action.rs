@@ -28,6 +28,19 @@ pub enum ActionTarget {
     /// (хирургический, под snapshot-бэкап в более поздних срезах) — произвольный YAML-патч непредставим.
     Frontmatter { rel: String, key: String },
 
+    /// SELF-LEARNING SL-7: создать/перезаписать SKILL.md агент-авторского навыка. `rel` =
+    /// `<name>/SKILL.md` ОТНОСИТЕЛЬНО **skills_root** (НЕ vault — навыки живут вне note-tree, в
+    /// `<vault>/.nexus/skills` по умолчанию). Файловая запись, как заметка, НО конфайнится в skills_root.
+    /// classify: НИКОГДА Auto (агент не само-апрувит свои будущие инструкции), HardBlocked при выключенном
+    /// `ai.skills.learning_enabled` / несконфигурированном skills_root / форме ≠ `<name>/SKILL.md` / в
+    /// `vendor/`. `is_exec()==false` (запись на диск, не host-команда). **SL-7a+b (этот срез): ИНЕРТНО** —
+    /// ни один инструмент не эмитит `SkillSave`, а `apply_action` fail-closed отвергает его на РУБЕЖ-0-bis
+    /// (Failed, без записи). **SL-7c** проведёт реальную запись ОТДЕЛЬНЫМ путём `apply_skill_save`
+    /// (skills_root-confined, обратимый snapshot) — НЕ vault-rooted `apply_action` (тот пишет в `canon_root`
+    /// → для skills это PathEscape + потеря snapshot'а → тихая необратимая перезапись). v1 — только
+    /// in-process (на sandbox-wire непредставим: обе `TryFrom<&Action>` границы дают `Err`).
+    SkillSave { rel: String },
+
     // ── Фаза-3 host exec-таргеты (SANDBOX-6b) ── ИСПОЛНЯЮТСЯ ВНУТРИ песочницы после host-апрува (6c),
     // НИКОГДА не Auto, НИКОГДА не идут vault-путём apply/host-act. classify их режет HardBlocked при
     // выключенном `shell_enable` / недоступной песочнице (см. classify + §5.3). В 6b — ТОЛЬКО типы +
@@ -57,7 +70,10 @@ impl ActionTarget {
         match self {
             ActionTarget::NoteCreate { rel }
             | ActionTarget::NoteEdit { rel }
-            | ActionTarget::Frontmatter { rel, .. } => rel,
+            | ActionTarget::Frontmatter { rel, .. }
+            // SkillSave несёт РЕАЛЬНЫЙ rel (внутри skills_root, не vault) — нужен для idempotency_key,
+            // target_rel ledger'а и восстановления UndoHandle::Snapshot.rel (НЕ exec-сентинел "").
+            | ActionTarget::SkillSave { rel } => rel,
             ActionTarget::ShellRun { .. }
             | ActionTarget::ProcessSpawn { .. }
             | ActionTarget::GitOp { .. } => "",
@@ -83,6 +99,7 @@ impl ActionTarget {
             ActionTarget::NoteCreate { .. } => "note_create",
             ActionTarget::NoteEdit { .. } => "note_edit",
             ActionTarget::Frontmatter { .. } => "frontmatter",
+            ActionTarget::SkillSave { .. } => "skill_save",
             ActionTarget::ShellRun { .. } => "shell_run",
             ActionTarget::ProcessSpawn { .. } => "process_spawn",
             ActionTarget::GitOp { .. } => "git_op",
@@ -135,6 +152,17 @@ impl Action {
             },
             content: None,
             value: Some(value.into()),
+        }
+    }
+
+    /// Конструктор SL-7: сохранить SKILL.md по `rel` (skills_root-rel `<name>/SKILL.md`) с телом
+    /// `content` (полный текст SKILL.md: frontmatter + тело). Байт-зеркало `note_create` (content=Some,
+    /// value=None). create-vs-overwrite решается по наличию файла на диске в `apply_skill_save`.
+    pub fn skill_save(rel: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            target: ActionTarget::SkillSave { rel: rel.into() },
+            content: Some(content.into()),
+            value: None,
         }
     }
 

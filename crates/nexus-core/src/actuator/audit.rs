@@ -73,15 +73,20 @@ pub enum ChangeKind {
     /// `diff_summary=None`); вариант существует для корректной классификации + будущего exec-резюме, не для
     /// `+N -M`-диффа.
     Exec,
+    /// SELF-LEARNING SL-7: авторство/перезапись SKILL.md агентом — статус-токен `skill_save`. Запись на
+    /// диск (в skills_root, НЕ vault), поэтому несёт реальный `+N -M`-дифф (create: del=0; overwrite:
+    /// del>0). Отдельный токен (не conflate с vault new/edit): навык — не заметка.
+    SkillSave,
 }
 
 impl ChangeKind {
-    /// Структурный токен статуса (`new`|`edit`|`exec`) — фиксированный набор, не свободный текст.
+    /// Структурный токен статуса (`new`|`edit`|`exec`|`skill_save`) — фиксированный набор, не свободный текст.
     pub fn as_str(self) -> &'static str {
         match self {
             ChangeKind::New => "new",
             ChangeKind::Edit => "edit",
             ChangeKind::Exec => "exec",
+            ChangeKind::SkillSave => "skill_save",
         }
     }
 }

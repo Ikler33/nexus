@@ -20,6 +20,7 @@
 use std::path::{Component, Path};
 
 use super::action::{Action, ActionTarget};
+use crate::skills::{SKILL_FILE, VENDOR_DIR};
 
 /// Причина жёсткой блокировки (HardBlocked) — действие НЕ исполняется ни авто, ни по подтверждению.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,20 @@ pub enum BlockReason {
     /// `ai.sandbox_enabled=false`. Block by-construction (§9): без OS-границы произвольное исполнение НЕ
     /// допускается даже при `shell_enable` (исполнять было бы негде безопасно).
     SandboxUnavailable,
+    /// **SELF-LEARNING SL-7:** `SkillSave` при ВЫКЛЮЧЕННОМ `ai.skills.learning_enabled` → жёсткий отказ
+    /// (фича есть, но самообучение не разрешено владельцем). Дефолт-OFF гейт авто-авторства навыков.
+    LearningDisabled,
+    /// **SELF-LEARNING SL-7:** `SkillSave`, когда skills_root НЕ сконфигурирован (`ai.agent_skills_dir`
+    /// не задан) → некуда писать. Block by-construction: без явного корня навыков НЕ падаем молча в
+    /// vault-root (это был бы PathEscape/перезапись заметок).
+    SkillsRootUnconfigured,
+    /// **SELF-LEARNING SL-7:** `SkillSave` с целью НЕ формы `<имя>/SKILL.md` ИЛИ в зарезервированном
+    /// `vendor/`-неймспейсе. Keystone-инвариант (ревью SL-7a+b, MAJOR): агент-авторство пишет РОВНО
+    /// `<name>/SKILL.md` (один сегмент-имя + файл) и НИКОГДА не в `vendor/` (hash-pinned вендоренные
+    /// навыки неизменяемы — DB-провенанс их защищает в lifecycle, но НЕ от on-disk клоббера; режем
+    /// ЛЕКСИЧЕСКИ здесь, в keystone, как заметки режут `.nexus`/`.git`). Защищает и от записи чужих
+    /// ресурсов (`other/references/x`) и коллизии имён.
+    InvalidSkillTarget,
 }
 
 /// Причина, по которой действие требует ПОДТВЕРЖДЕНИЯ пользователя (Confirm) перед исполнением.
@@ -48,6 +63,9 @@ pub enum ConfirmReason {
     /// **Фаза-3 (SANDBOX-6b):** host exec-таргет при ВКЛЮЧЁННОМ `shell_enable` + доступной песочнице.
     /// Произвольное исполнение НИКОГДА не Auto — ВСЕГДА требует явного апрува (исполнится in-sandbox, 6c).
     ExecRequiresApproval,
+    /// **SELF-LEARNING SL-7:** `SkillSave` при включённом learning + сконфигурированном skills_root.
+    /// Авторство/перезапись навыка (будущих инструкций агента) НИКОГДА не Auto — ВСЕГДА явный апрув.
+    SkillSaveRequiresApproval,
 }
 
 /// Тир риска — решение классификатора. ПОРЯДОК серьёзности: `Auto < Confirm < HardBlocked`.
@@ -89,6 +107,12 @@ pub struct ClassifyCtx<'a> {
     /// **Фаза-3 (6b):** доступна ли песочница СТРУКТУРНО (`sandbox_enabled` И Linux) — ПРЕДвычисляется
     /// вызывающим (classify остаётся чистой). `false` → exec-таргеты HardBlocked(SandboxUnavailable).
     pub sandbox_available: bool,
+    /// **SL-7:** разрешено ли самообучение (`ai.skills.learning_enabled`). `false` → `SkillSave`
+    /// HardBlocked(LearningDisabled). Vault/exec-таргеты его ИГНОРИРУЮТ.
+    pub learning_enabled: bool,
+    /// **SL-7:** сконфигурирован ли skills_root (`ai.agent_skills_dir` задан и канонизирован) —
+    /// ПРЕДвычисляется вызывающим. `false` → `SkillSave` HardBlocked(SkillsRootUnconfigured).
+    pub skills_root_configured: bool,
 }
 
 /// ЛЕКСИЧЕСКАЯ (без ФС) проверка конфайнмента vault-rel пути — fail-closed.
@@ -186,11 +210,50 @@ pub fn classify(action: &Action, ctx: &ClassifyCtx) -> RiskTier {
             Err(reason) => RiskTier::HardBlocked(reason),
             Ok(()) => RiskTier::Auto,
         },
+        // SL-7: авторство/перезапись SKILL.md — НИКОГДА Auto (агент не само-апрувит свои инструкции).
+        ActionTarget::SkillSave { rel } => classify_skill_save(ctx, rel),
         // Фаза-3 host exec-таргеты — ЕДИНАЯ ветка (GitOp НЕ дробим на read-Auto, §5.3). НИКОГДА Auto.
         ActionTarget::ShellRun { .. }
         | ActionTarget::ProcessSpawn { .. }
         | ActionTarget::GitOp { .. } => classify_exec(ctx),
     }
+}
+
+/// Классификация SL-7 `SkillSave`. Precedence ЛОКИРОВАН (зеркало `classify_exec`): сначала
+/// `learning_enabled` (самообучение не разрешено владельцем → `LearningDisabled`), затем наличие
+/// skills_root (некуда писать → `SkillsRootUnconfigured`), затем ЛЕКСИЧЕСКИЙ конфайнмент `rel` внутри
+/// skills_root ([`path_confinement`] — то же надмножество запретов: абсолют/`..`/dot-резерв), и ТОЛЬКО
+/// при всём ОК → `Confirm`. **НИКОГДА `Auto`**: SKILL.md — это будущие инструкции агента, авторство
+/// всегда человек-в-петле. `rel` тут трактуется так же лексически, как vault-rel (skills_root —
+/// аналогичная база, канонизирующая проверка — в `apply_skill_save`, 6c).
+fn classify_skill_save(ctx: &ClassifyCtx, rel: &str) -> RiskTier {
+    if !ctx.learning_enabled {
+        RiskTier::HardBlocked(BlockReason::LearningDisabled)
+    } else if !ctx.skills_root_configured {
+        RiskTier::HardBlocked(BlockReason::SkillsRootUnconfigured)
+    } else {
+        match path_confinement(rel) {
+            Err(reason) => RiskTier::HardBlocked(reason),
+            // path_confinement отсёк abs/`..`/dot/backslash; теперь ЛЕКСИЧЕСКИ требуем форму цели навыка.
+            Ok(()) => match skill_target_shape(rel) {
+                Err(reason) => RiskTier::HardBlocked(reason),
+                Ok(()) => RiskTier::Confirm(ConfirmReason::SkillSaveRequiresApproval),
+            },
+        }
+    }
+}
+
+/// ЛЕКСИЧЕСКАЯ форма цели `SkillSave` (предполагает уже пройденный [`path_confinement`]): РОВНО
+/// `<имя>/SKILL.md` — два сегмента, второй == [`SKILL_FILE`], первый — непустое имя НЕ [`VENDOR_DIR`].
+/// Иначе [`BlockReason::InvalidSkillTarget`]. Так keystone (а не доверенный-человек-апрувер и не
+/// будущий apply) гарантирует: агент пишет лишь собственный `<name>/SKILL.md`, НИКОГДА не в `vendor/`
+/// (hash-pinned неизменяемый) и не в чужие ресурсы/подкаталоги.
+fn skill_target_shape(rel: &str) -> Result<(), BlockReason> {
+    let parts: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.len() != 2 || parts[1] != SKILL_FILE || parts[0] == VENDOR_DIR {
+        return Err(BlockReason::InvalidSkillTarget);
+    }
+    Ok(())
 }
 
 /// Классификация Фаза-3 host exec-таргета. Порядок гейтов ЛОКИРОВАН (precedence): сначала `shell_enable`
@@ -225,6 +288,8 @@ mod tests {
             overwrite_threshold: t,
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         };
         classify(&Action::note_create(rel, "body"), &c)
     }
@@ -236,6 +301,8 @@ mod tests {
             overwrite_threshold: t,
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         };
         classify(&Action::note_edit(rel, body), &c)
     }
@@ -247,6 +314,8 @@ mod tests {
             overwrite_threshold: t,
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         };
         classify(&Action::frontmatter(rel, "tags", "x"), &c)
     }
@@ -387,6 +456,8 @@ mod tests {
             overwrite_threshold: t,
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         };
         let a = Action::note_edit("Notes/N.md", "x".repeat(200));
         let first = classify(&a, &c);
@@ -423,6 +494,7 @@ mod tests {
                 ActionTarget::NoteCreate { .. } => "create",
                 ActionTarget::NoteEdit { .. } => "edit",
                 ActionTarget::Frontmatter { .. } => "fm",
+                ActionTarget::SkillSave { .. } => "skill_save",
                 ActionTarget::ShellRun { .. } => "shell",
                 ActionTarget::ProcessSpawn { .. } => "process",
                 ActionTarget::GitOp { .. } => "git",
@@ -457,6 +529,8 @@ mod tests {
             overwrite_threshold: t,
             shell_enable,
             sandbox_available,
+            learning_enabled: false,
+            skills_root_configured: false,
         };
         classify(
             &Action {
@@ -536,5 +610,107 @@ mod tests {
                 RiskTier::Confirm(ConfirmReason::ExecRequiresApproval)
             );
         }
+    }
+
+    // ── SL-7: classify SkillSave — НИКОГДА Auto (зеркало exec) ──
+    fn classify_skill(rel: &str, learning_enabled: bool, skills_root_configured: bool) -> RiskTier {
+        let (root, t) = ctx();
+        let c = ClassifyCtx {
+            root: &root,
+            overwrite_threshold: t,
+            shell_enable: false,
+            sandbox_available: false,
+            learning_enabled,
+            skills_root_configured,
+        };
+        classify(&Action::skill_save(rel, "BODY"), &c)
+    }
+
+    /// KEYSTONE: SkillSave НИКОГДА не Auto — по всей сетке (learning × root_configured × валидность пути).
+    #[test]
+    fn skill_save_never_auto() {
+        for learning in [false, true] {
+            for root_cfg in [false, true] {
+                for rel in ["pdf/SKILL.md", "../escape/SKILL.md", ".nexus/x", ""] {
+                    let tier = classify_skill(rel, learning, root_cfg);
+                    assert!(
+                        !matches!(tier, RiskTier::Auto),
+                        "SkillSave(rel={rel}, learning={learning}, root={root_cfg}) НЕ Auto, был {tier:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// learning_enabled=false → HardBlocked(LearningDisabled) ВПЕРЁД любых иных гейтов (даже валидный путь).
+    #[test]
+    fn skill_save_learning_disabled_precedence() {
+        for root_cfg in [false, true] {
+            assert_eq!(
+                classify_skill("pdf/SKILL.md", false, root_cfg),
+                RiskTier::HardBlocked(BlockReason::LearningDisabled)
+            );
+        }
+    }
+
+    /// learning ON но skills_root не сконфигурирован → HardBlocked(SkillsRootUnconfigured).
+    #[test]
+    fn skill_save_root_unconfigured() {
+        assert_eq!(
+            classify_skill("pdf/SKILL.md", true, false),
+            RiskTier::HardBlocked(BlockReason::SkillsRootUnconfigured)
+        );
+    }
+
+    /// learning ON + root сконфигурирован + валидный путь → Confirm(SkillSaveRequiresApproval).
+    #[test]
+    fn skill_save_enabled_valid_is_confirm() {
+        assert_eq!(
+            classify_skill("pdf/SKILL.md", true, true),
+            RiskTier::Confirm(ConfirmReason::SkillSaveRequiresApproval)
+        );
+    }
+
+    /// learning ON + root ON, но путь — побег/резерв → HardBlocked (путь бьёт Confirm).
+    #[test]
+    fn skill_save_bad_path_hardblocked() {
+        assert_eq!(
+            classify_skill("../escape/SKILL.md", true, true),
+            RiskTier::HardBlocked(BlockReason::PathEscape)
+        );
+        assert_eq!(
+            classify_skill(".nexus/sneaky/SKILL.md", true, true),
+            RiskTier::HardBlocked(BlockReason::ReservedPath)
+        );
+        assert_eq!(
+            classify_skill("", true, true),
+            RiskTier::HardBlocked(BlockReason::EmptyPath)
+        );
+    }
+
+    /// KEYSTONE-регрессия (ревью SL-7a+b, MAJOR): `vendor/`-неймспейс и любая форма ≠ `<имя>/SKILL.md` →
+    /// HardBlocked(InvalidSkillTarget). Защищает hash-pinned вендоренные навыки от on-disk клоббера и
+    /// запись чужих ресурсов/коллизий — ЛЕКСИЧЕСКИ в keystone, а не доверяясь апруверу/будущему apply.
+    #[test]
+    fn skill_save_vendor_and_bad_shape_hardblocked() {
+        for rel in [
+            "vendor/kepano/obsidian-markdown/SKILL.md", // вендор-неймспейс (и >2 сегментов)
+            "vendor/SKILL.md",                          // первый сегмент == vendor
+            "myskill/references/data.csv",              // 3 сегмента / не SKILL.md
+            "myskill/notes.md",                         // 2 сегмента, но файл не SKILL.md
+            "SKILL.md",                                 // 1 сегмент (нет имени навыка)
+            "a/b/SKILL.md",                             // 3 сегмента
+        ] {
+            assert_eq!(
+                classify_skill(rel, true, true),
+                RiskTier::HardBlocked(BlockReason::InvalidSkillTarget),
+                "rel={rel} должен быть InvalidSkillTarget"
+            );
+        }
+        // А валидная форма по-прежнему Confirm (не зарегрессировали).
+        assert_eq!(
+            classify_skill("myskill/SKILL.md", true, true),
+            RiskTier::Confirm(ConfirmReason::SkillSaveRequiresApproval)
+        );
     }
 }

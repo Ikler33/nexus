@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · SELF-LEARNING SL-7a+b — `ActionTarget::SkillSave` + `classify_skill_save` (фундамент, default-OFF/инертно)
+
+Фундамент авторства навыков агентом: типизированная цель записи SKILL.md + её классификация риска + конфиг-флаг — всё **СТРУКТУРНО ИНЕРТНО** (никакой инструмент не эмитит `SkillSave`, ни один живой `DispatchPolicy` не включает learning → classify всегда HardBlocked). Реальная запись/откол/инструмент — SL-7c+d.
+
+- **`ActionTarget::SkillSave { rel }`** (rel = `<name>/SKILL.md` относительно **skills_root**, НЕ vault) + `Action::skill_save`. `is_exec()==false`; `rel()` несёт реальный путь; `tool_name()`=`skill_save`.
+- **`classify_skill_save` — НИКОГДА `Auto`** (зеркало `classify_exec`): `!learning_enabled`→HardBlocked(LearningDisabled) → `!skills_root_configured`→HardBlocked(SkillsRootUnconfigured) → `path_confinement(rel)` → иначе Confirm(SkillSaveRequiresApproval). Новые `ConfirmReason::SkillSaveRequiresApproval` + `BlockReason::LearningDisabled`/`SkillsRootUnconfigured` + `block_message`.
+- **`ClassifyCtx`/`DispatchPolicy` +`learning_enabled`+`skills_root_configured`** (`with_skills_flags`, дефолт false) ← `ai.skills.learning_enabled` (NEW nested `SkillsConfig`, NON-Option, serde-default OFF, owner-gated) + `agent_skills_dir.is_some()`.
+- **Keystone-форма цели (ревью SL-7a+b, MAJOR):** `classify_skill_save` ЛЕКСИЧЕСКИ требует РОВНО `<имя>/SKILL.md` и режет `vendor/`-неймспейс → `HardBlocked(InvalidSkillTarget)` (hash-pinned вендоренные навыки неизменяемы — DB-провенанс защищает lifecycle, но НЕ от on-disk клоббера; режем в keystone, как заметки режут `.nexus`). Защищает и от записи чужих ресурсов/коллизии имён.
+- **Fail-closed армы во ВСЕХ exhaustive-матчах** (компилятор-форсед, D4 keystone): apply_action top-guard РУБЕЖ-0-bis (SkillSave→Failed, НЕ vault-путём) + WRITE/success_summary `unreachable!` (пинит тест `skill_save_apply_is_fail_closed`); `ChangeKind::SkillSave` (свой токен); proposed_content/proposal_key (content-несущий); dispatch_action НЕ читает vault для SkillSave (skills_root-rel ≠ canon_root); **обе sandbox-wire-границы (`WireAction`/`WireExecAction`) → `Err`** (SkillSave непредставим на host/act+host/exec; v1 — только in-process).
+
+Tier-1: грид `skill_save_never_auto` (learning×root×путь) + precedence LearningDisabled→RootUnconfigured→InvalidShape/PathEscape→Confirm + `skill_save_vendor_and_bad_shape_hardblocked` + `skill_save_apply_is_fail_closed` + `parses_skills_learning_flag`. `test-all` зелёный. **Adversarial-ревью (3 линзы → 7 подтверждённых, 1 MAJOR vendor-namespace — ВСЕ исправлены в срезе).** Запись/undo (apply_skill_save, skills_root-confined) + `skill_save`-инструмент — SL-7c+d.
+
 ### Агент · SELF-LEARNING SL-2 — проводка телеметрии использования скиллов
 
 Подключает SL-1-слой `agent_skill_usage` к реальному tool-loop: активация навыка и чтение его ресурса теперь инкрементят счётчики использования. Чистая НАБЛЮДАЕМОСТЬ — действий curator'а/`skill_save` нет (это SL-7/SL-curator под БУДУЩИМ флагом `ai.skills.learning_enabled`, которого в конфиге пока нет).

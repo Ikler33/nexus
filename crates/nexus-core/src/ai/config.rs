@@ -106,6 +106,23 @@ pub struct AiConfig {
     /// включает ТОЛЬКО владелец явной конфигурацией; vault остаётся `:ro` всегда.
     #[serde(default)]
     pub git_worktree: Option<String>,
+
+    /// **SELF-LEARNING (SL-7), SAFE BY DEFAULT + OWNER-GATED.** Настройки самообучения навыкам. NON-Option
+    /// (всегда есть, дефолт-OFF — нет None-неоднозначности): отсутствие `ai.skills` в конфиге = всё false.
+    #[serde(default)]
+    pub skills: SkillsConfig,
+}
+
+/// Конфиг самообучения навыкам (SELF-LEARNING). Дефолт-OFF: пустой `ai.skills` → `learning_enabled=false`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SkillsConfig {
+    /// **SL-7, OWNER-GATED, ДЕФОЛТ false.** Гейт ДЕЙСТВИЙ самообучения: `skill_save`-инструмент
+    /// (авторство SKILL.md агентом) + будущая scheduler-джоба curator'а (lifecycle навыков). `false` →
+    /// `SkillSave` `classify` → `HardBlocked(LearningDisabled)`, инструмент НЕ регистрируется, curator
+    /// спит. `true` → агент может ПРЕДЛОЖИТЬ сохранить навык (НИКОГДА `Auto` — всегда апрув). НЕ гейтит
+    /// телеметрию использования (`agent_skill_usage` пишется всегда — чистая наблюдаемость, SL-2).
+    #[serde(default)]
+    pub learning_enabled: bool,
 }
 
 /// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
@@ -494,5 +511,29 @@ mod tests {
         .unwrap();
         assert_eq!(mixed.ai.chat.unwrap().url, "http://h:8080");
         assert!(mixed.ai.web.unwrap().allow_public_fetch);
+    }
+
+    /// SL-7: `ai.skills.learning_enabled` — дефолт false (NON-Option SkillsConfig, нет `ai.skills` → all
+    /// false), явный opt-in парсится, и частичный `ai.skills` не роняет соседний chat/embedding-конфиг.
+    #[test]
+    fn parses_skills_learning_flag() {
+        // Пусто → дефолт OFF.
+        let zc = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert!(
+            !zc.ai.skills.learning_enabled,
+            "нет ai.skills → learning_enabled false (safe default)"
+        );
+
+        // Явный opt-in.
+        let on = LocalConfig::parse(r#"{"ai":{"skills":{"learning_enabled":true}}}"#).unwrap();
+        assert!(on.ai.skills.learning_enabled, "явный true прочитан");
+
+        // Частичный ai.skills рядом с chat — оба сохраняются (serde default не роняет документ).
+        let mixed = LocalConfig::parse(
+            r#"{"ai":{"chat":{"url":"http://h:8080"},"skills":{"learning_enabled":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(mixed.ai.chat.unwrap().url, "http://h:8080");
+        assert!(mixed.ai.skills.learning_enabled);
     }
 }

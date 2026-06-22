@@ -260,6 +260,9 @@ async fn run_sandbox_host() -> Result<i32, String> {
         // Фаза-3 (6b): exec-флаги. shell_enable из конфига (default false → exec HardBlocked);
         // sandbox_available=true — мы здесь ВНУТРИ host-раннера песочницы на Linux (#[cfg(unix)]).
         // В 6b exec всё равно не исполняется (apply fail-closed); проводка демонстрирует паттерн для 6c.
+        // SL-7: skills-флаги ЗДЕСЬ НЕ ставим намеренно (ревью SL-7a+b) — `SkillSave` непредставим на
+        // sandbox-wire (Err на host/act+host/exec) и `skill_save`-инструмент НЕ в sandbox-реестре
+        // (in-process only). In-process `with_skills_flags` (session.rs DispatchPolicy) — в SL-7d.
         .with_exec_flags(cfg.ai.shell_enable, true),
         Arc::new(PolicyDefault),
         Arc::new(TracingEventSink::new()),

@@ -87,6 +87,11 @@ impl TryFrom<&Action> for WireExecAction {
             | ActionTarget::Frontmatter { .. } => {
                 Err("vault-таргет не представим на host/exec (используй host/act)")
             }
+            // SL-7: SkillSave — файловая запись (не exec) → на host/exec непредставим (его путь — отдельный
+            // in-process apply_skill_save; на sandbox-wire v1 не выносится).
+            ActionTarget::SkillSave { .. } => {
+                Err("SkillSave не представим на host/exec (это файловая запись, не команда)")
+            }
             ActionTarget::ShellRun { argv, cwd_rel } => Ok(WireExecAction {
                 kind: WireExecKind::ShellRun,
                 argv: argv.clone(),
@@ -363,9 +368,11 @@ fn exec_fingerprint(action: &Action) -> String {
             cwd_rel.as_deref().unwrap_or("")
         ),
         ActionTarget::GitOp { op, args } => format!("git\u{1f}{op}\u{1f}{}", args.join("\u{1f}")),
+        // vault/skill-таргеты сюда не приходят (decide — exec-only); арм пуст (fingerprint не для них).
         ActionTarget::NoteCreate { .. }
         | ActionTarget::NoteEdit { .. }
-        | ActionTarget::Frontmatter { .. } => String::new(),
+        | ActionTarget::Frontmatter { .. }
+        | ActionTarget::SkillSave { .. } => String::new(),
     }
 }
 
@@ -448,9 +455,11 @@ pub(crate) fn build_exec_go(action: &Action, skill_passthrough: &[(String, Strin
             a.extend(args.iter().cloned());
             (a, None)
         }
+        // vault/skill-таргеты сюда не приходят (exec-only) → пустой argv (исполнитель даст launch_failure).
         ActionTarget::NoteCreate { .. }
         | ActionTarget::NoteEdit { .. }
-        | ActionTarget::Frontmatter { .. } => (Vec::new(), None),
+        | ActionTarget::Frontmatter { .. }
+        | ActionTarget::SkillSave { .. } => (Vec::new(), None),
     };
     WireExecGo {
         argv,
