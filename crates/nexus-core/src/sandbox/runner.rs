@@ -129,10 +129,14 @@ pub struct SandboxChildArgs {
     pub model: String,
     pub context_window: usize,
     pub task: String,
+    /// Фаза-3: регистрировать ли exec-инструменты в контейнере (default-OFF). SANDBOX-6c-2f.
+    pub shell_enable: bool,
 }
 
 impl SandboxChildArgs {
-    /// Позиционный argv: `--sandbox-child <run_id> <base_url> <model> <ctx_window> <task>`.
+    /// Позиционный argv: `--sandbox-child <run_id> <base_url> <model> <ctx_window> <task> <shell_enable>`.
+    /// `shell_enable` — ПОСЛЕДНИЙ (после free-form `task`): `"true"`/`"false"`. ARGV (не шелл) → `task` с
+    /// пробелами/спецсимволами безопасен; парность позиций фиксирована (6 аргументов).
     pub fn to_argv(&self) -> Vec<String> {
         vec![
             "--sandbox-child".into(),
@@ -141,6 +145,7 @@ impl SandboxChildArgs {
             self.model.clone(),
             self.context_window.to_string(),
             self.task.clone(),
+            self.shell_enable.to_string(),
         ]
     }
 }
@@ -175,16 +180,18 @@ impl SandboxRunner {
     /// Гонит песочный прогон end-to-end: каталог сокетов → bind 3 сокета → spawn serve-таски → spawn
     /// `podman run --sandbox-child …` → ждать выхода контейнера → teardown. Возвращает код выхода
     /// контейнера. **Tier-2** (нужен Podman + образ; на хосте без Podman вернёт ошибку spawn).
-    pub async fn run<Eb, Ab>(
+    pub async fn run<Eb, Ab, Xb>(
         &self,
         child: SandboxChildArgs,
         egress_proxy: GuardedProxy<Eb>,
         act_server: HostActServer<Ab>,
         event_out: Arc<dyn Transport>,
+        exec_server: Option<HostExecServer<Xb>>,
     ) -> Result<std::process::ExitStatus, String>
     where
         Eb: EgressBackend + 'static,
         Ab: ActuatorBackend + 'static,
+        Xb: ExecBackend + 'static,
     {
         let dir = self.config.host_run_dir.clone();
         std::fs::create_dir_all(&dir)
@@ -257,6 +264,10 @@ impl SandboxRunner {
         // join с бюджетом; повторный accept не нужен).
         let egress_proxy = Arc::new(egress_proxy);
         let act_server = Arc::new(act_server);
+        // 6c-2f: при shell_enable host отвечает И host/act, И host/exec на act.sock через serve_host;
+        // иначе serve_act (host/exec структурно недоступен — fail-closed method_not_found внутри serve_host
+        // не достижим, т.к. exec_server=None → ветка serve_act). exec_server Arc для move в accept-таск.
+        let exec_server = exec_server.map(Arc::new);
         let event_srv = Arc::new(EventForwardServer::new(event_out));
 
         let eg = {
@@ -276,13 +287,16 @@ impl SandboxRunner {
         };
         let ac = {
             let s = act_server.clone();
+            let xs = exec_server.clone();
             tokio::spawn(async move {
                 loop {
                     let Ok((st, _)) = act_l.accept().await else {
                         break;
                     };
                     if peer_authorized(&st, expected_uid) {
-                        serve_act(AfUnixTransport::new(st), &s).await;
+                        // 6c-2f: serve_host роутит host/act + host/exec по методу на ОДНОМ peer-gated
+                        // соединении (exec_server=None → host/exec method_not_found, fail-closed).
+                        serve_host(AfUnixTransport::new(st), &s, xs.as_deref()).await;
                         break;
                     }
                     tracing::warn!(socket = SOCKET_ACT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
@@ -440,6 +454,7 @@ mod tests {
             model: "qwen".into(),
             context_window: 8192,
             task: "сделай это; rm -rf /".into(), // спецсимволы — но argv (не шелл), безопасно
+            shell_enable: true,
         };
         assert_eq!(
             a.to_argv(),
@@ -449,7 +464,8 @@ mod tests {
                 "http://llm:8080",
                 "qwen",
                 "8192",
-                "сделай это; rm -rf /"
+                "сделай это; rm -rf /",
+                "true"
             ]
         );
     }
