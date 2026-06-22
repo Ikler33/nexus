@@ -184,6 +184,57 @@ pub(crate) fn harden_socket_perms(path: &Path) {
     }
 }
 
+/// Читает uid пира соединённого AF_UNIX-сокета через `SO_PEERCRED` (Linux). Это **ядро-достоверный**
+/// credential: клиент НЕ может его подделать (в отличие от любого прикладного поля внутри RPC-кадра).
+/// Host-side `SandboxRunner` использует его, чтобы пустить на per-run сокет (egress/act/event, и будущий
+/// exec) ТОЛЬКО спавненный контейнер — peer, бегущий под run_as-uid прогона (спека `agent-sandbox.md`
+/// §4.3 инвариант 6 / §10.1 T8: анти-подмена peer'а поверх 0600-сокета + 0700-каталога). **Fail-closed:**
+/// сбой `getsockopt` / усечённый credential → `None` (вызывающий ОБЯЗАН дропнуть соединение).
+/// `pub(crate)`: тот же контракт применим к будущему control-/exec-сокету.
+#[cfg(target_os = "linux")]
+pub(crate) fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+    let fd = stream.as_raw_fd();
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `getsockopt(SOL_SOCKET, SO_PEERCRED)` на соединённом AF_UNIX-fd заполняет `ucred`. Передаём
+    // корректно-размерный обнулённый out-буфер и его длину inout; читаем поля ТОЛЬКО при rc==0 И неусечённой
+    // длине. `fd` валиден на всё время вызова (заимствование `stream` живёт дольше), syscall не сохраняет fd.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+            &mut len,
+        )
+    };
+    if rc != 0 || len as usize != std::mem::size_of::<libc::ucred>() {
+        // Отличаем «cred НЕЧИТАЕМ» (аномалия ядра/fd) от «uid НЕ СОВПАЛ» (логируется на call-site): для
+        // security-гейта это разные события в аудит-следе. Всё равно fail-closed → вызывающий дропнет.
+        tracing::warn!(
+            target: "agent::connect",
+            rc,
+            got_len = len,
+            want_len = std::mem::size_of::<libc::ucred>(),
+            "afunix: getsockopt(SO_PEERCRED) не прочёл peer-cred — fail-closed (соединение будет отвергнуто)"
+        );
+        return None;
+    }
+    Some(cred.uid)
+}
+
+/// Не-Linux: `SO_PEERCRED` отсутствует. Песочница — Linux-host-only (`agent-sandbox.md` §9): на иных ОС
+/// serve-путь раннера не достигается в проде. Возвращаем `None` (fail-closed — вызывающий дропнет соединение).
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn peer_uid(_stream: &UnixStream) -> Option<u32> {
+    None
+}
+
 /// Клиентское подключение к сокету коннектора (для desktop-коннектора / тестов / `nexus`-CLI).
 pub async fn connect_unix(path: impl AsRef<Path>) -> std::io::Result<AfUnixTransport> {
     let stream = UnixStream::connect(path).await?;

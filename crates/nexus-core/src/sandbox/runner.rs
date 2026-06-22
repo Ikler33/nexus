@@ -18,16 +18,32 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::net::UnixListener;
+use tokio::net::{UnixListener, UnixStream};
 
 use crate::agent::connect::{
-    harden_socket_perms, prepare_socket_path, AfUnixTransport, RpcMessage, Transport,
+    harden_socket_perms, peer_uid, prepare_socket_path, AfUnixTransport, RpcMessage, Transport,
 };
 
 use super::act::{ActuatorBackend, HostActServer};
 use super::event::EventForwardServer;
 use super::proxy::{EgressBackend, GuardedProxy};
 use super::{sandbox_run_plan_with_cmd, SandboxConfig, SOCKET_ACT, SOCKET_EGRESS, SOCKET_EVENT};
+
+/// Чистое сопоставление peer-uid с ожидаемым (без I/O — тестируемо на любой ОС). **Fail-closed:**
+/// неизвестный ожидаемый (`run_as` не выставлен/невалиден) ИЛИ нечитаемый фактический uid (`SO_PEERCRED`
+/// не прочёлся) → НЕ авторизован. Авторизуем ТОЛЬКО при достоверном равенстве обоих.
+fn uid_matches(expected: Option<u32>, actual: Option<u32>) -> bool {
+    matches!((expected, actual), (Some(e), Some(a)) if e == a)
+}
+
+/// Авторизует принятое на per-run сокете соединение по `SO_PEERCRED` (спека §4.3 инвариант 6 / §10.1 T8):
+/// валидно ТОЛЬКО если peer бежит под `expected_uid` (= host-видимый uid контейнера, см. `run()`).
+/// Defense-in-depth ПОВЕРХ 0600-сокета + 0700-каталога — ядро-достоверный uid, который клиент не подделает.
+/// Fail-closed (см. [`uid_matches`] и [`peer_uid`]). **Тем же гейтом ОБЯЗАН оборачиваться будущий
+/// `serve_exec` (exec.sock).**
+fn peer_authorized(stream: &UnixStream, expected_uid: Option<u32>) -> bool {
+    uid_matches(expected_uid, peer_uid(stream))
+}
 
 /// Обслуживает ОДНО соединение egress.sock: фреймит request → [`GuardedProxy::handle`] → response, до
 /// закрытия транспорта. Контейнер открывает ровно одно соединение на сокет.
@@ -144,6 +160,22 @@ impl SandboxRunner {
                 config.run_as = Some(format!("{}:{}", meta.uid(), meta.gid()));
             }
         }
+
+        // Ожидаемый peer-uid для SO_PEERCRED-гейта accept'а (спека §4.3 инвариант 6). ЕДИНЫЙ источник
+        // истины с рендером плана: контейнер бежит под `--user <uid>:<gid>` ровно из `config.run_as`
+        // (mod.rs рендерит тот же `config.run_as`), а при rootless-Podman + `--userns=keep-id` его процесс
+        // виден ХОСТ-ядру (через `SO_PEERCRED` на host-сокете) под ТЕМ ЖЕ host-uid. Выше `run()` уже
+        // дефолтит `run_as` в host-uid дир-владельца, если был `None`, — так что здесь в норме Some(numeric).
+        // НАМЕРЕННО без фолбэка на дир-владельца при непарсящемся uid: иначе мисконфиг `run_as`
+        // ("alice:alice" / нечисловой) тихо гейтил бы против ДРУГОГО uid, чем реально рендерится в `--user`.
+        // `None` (run_as отсутствует ⇒ `--user` не рендерится ⇒ image-USER без host-uid всё равно не откроет
+        // 0600-сокеты; ИЛИ нечисловой uid) → peer-гейт fail-closed дропнет ЛЮБОЕ соединение (безопасно).
+        // ⚠ Если будущий срез задаёт `run_as` НЕ-host-uid без keep-id, синхронизировать с host-видимым uid.
+        let expected_uid: Option<u32> = config
+            .run_as
+            .as_deref()
+            .and_then(|s| s.split(':').next())
+            .and_then(|u| u.parse::<u32>().ok());
         // Каталог сокетов — owner-only (0700): defense-in-depth поверх 0600-сокетов (чужой не зайдёт даже
         // в каталог). Best-effort (FS без unix-прав не валит прогон).
         {
@@ -176,7 +208,12 @@ impl SandboxRunner {
             }
         };
 
-        // Serve-таски: каждый принимает ОДНО соединение контейнера и обслуживает реальным backend'ом.
+        // Serve-таски: каждый обслуживает ОДНО легитимное соединение контейнера реальным backend'ом.
+        // accept-LOOP, а не одиночный accept: отвергнутый по peer-uid импостор (защита-в-глубину на случай
+        // ослабленных 0600/0700) НЕ должен лишить легитимный контейнер сокета — продолжаем слушать. Выход:
+        // обслужили валидного пира (соединение закрылось) ЛИБО accept упал. Контейнер открывает РОВНО одно
+        // соединение на сокет → после serve выходим (break) — не виснем на повторном accept (teardown ждёт
+        // join с бюджетом; повторный accept не нужен).
         let egress_proxy = Arc::new(egress_proxy);
         let act_server = Arc::new(act_server);
         let event_srv = Arc::new(EventForwardServer::new(event_out));
@@ -184,24 +221,45 @@ impl SandboxRunner {
         let eg = {
             let p = egress_proxy.clone();
             tokio::spawn(async move {
-                if let Ok((s, _)) = egress_l.accept().await {
-                    serve_egress(AfUnixTransport::new(s), &p).await;
+                loop {
+                    let Ok((s, _)) = egress_l.accept().await else {
+                        break;
+                    };
+                    if peer_authorized(&s, expected_uid) {
+                        serve_egress(AfUnixTransport::new(s), &p).await;
+                        break;
+                    }
+                    tracing::warn!(socket = SOCKET_EGRESS, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
                 }
             })
         };
         let ac = {
             let s = act_server.clone();
             tokio::spawn(async move {
-                if let Ok((st, _)) = act_l.accept().await {
-                    serve_act(AfUnixTransport::new(st), &s).await;
+                loop {
+                    let Ok((st, _)) = act_l.accept().await else {
+                        break;
+                    };
+                    if peer_authorized(&st, expected_uid) {
+                        serve_act(AfUnixTransport::new(st), &s).await;
+                        break;
+                    }
+                    tracing::warn!(socket = SOCKET_ACT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
                 }
             })
         };
         let ev = {
             let s = event_srv.clone();
             tokio::spawn(async move {
-                if let Ok((st, _)) = event_l.accept().await {
-                    s.serve(AfUnixTransport::new(st)).await;
+                loop {
+                    let Ok((st, _)) = event_l.accept().await else {
+                        break;
+                    };
+                    if peer_authorized(&st, expected_uid) {
+                        s.serve(AfUnixTransport::new(st)).await;
+                        break;
+                    }
+                    tracing::warn!(socket = SOCKET_EVENT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
                 }
             })
         };
@@ -275,6 +333,60 @@ mod tests {
             "не-сокет по пути → отказ"
         );
         assert!(path.exists(), "чужой файл НЕ удалён");
+    }
+
+    /// Fail-closed-матрица сопоставления peer-uid (чистая логика, любая ОС — без сокета/`SO_PEERCRED`).
+    /// Авторизуем ТОЛЬКО при достоверном равенстве; любое `None` (неизвестный ожидаемый ИЛИ нечитаемый
+    /// peer-cred) → отказ. Регресс на случай, если кто-то ослабит сравнение до «равны ИЛИ неизвестны».
+    #[test]
+    fn uid_matches_is_fail_closed() {
+        assert!(
+            uid_matches(Some(1000), Some(1000)),
+            "равные uid → авторизован"
+        );
+        assert!(!uid_matches(Some(1000), Some(1001)), "разные uid → отказ");
+        assert!(
+            !uid_matches(None, Some(1000)),
+            "неизвестный ожидаемый → отказ"
+        );
+        assert!(
+            !uid_matches(Some(1000), None),
+            "нечитаемый peer-cred → отказ"
+        );
+        assert!(!uid_matches(None, None), "оба неизвестны → отказ");
+    }
+
+    /// **Tier-1 (Linux):** на РЕАЛЬНОЙ паре `UnixListener` ↔ `UnixStream` `SO_PEERCRED` читает наш uid;
+    /// соединение того же uid АВТОРИЗУЕТСЯ, заведомо-чужой ожидаемый uid — ОТВЕРГАЕТСЯ (mismatch-ветка БЕЗ
+    /// привилегий — через неверный `expected`), неизвестный ожидаемый — тоже (fail-closed). Кросс-uid
+    /// РЕАЛЬНЫМ процессом другого пользователя — **Tier-2** (нужны привилегии/второй uid, здесь недостижимо;
+    /// см. §8.2 podman-gated). На не-Linux `peer_uid`=`None` → всё отвергается (sandbox Linux-only, §9), потому
+    /// тест Linux-gated.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn peer_authorized_accepts_same_uid_rejects_mismatch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("peer.sock");
+        let listener = SandboxRunner::bind_hardened(&path).unwrap();
+        // accept (сервер) и connect (клиент) — оба наш процесс ⇒ один uid (как контейнер под keep-id).
+        let (accepted, _client) =
+            tokio::join!(async { listener.accept().await.unwrap().0 }, async {
+                UnixStream::connect(&path).await.unwrap()
+            },);
+        let me = unsafe { libc::getuid() };
+        assert_eq!(peer_uid(&accepted), Some(me), "SO_PEERCRED читает наш uid");
+        assert!(
+            peer_authorized(&accepted, Some(me)),
+            "тот же uid → авторизован"
+        );
+        assert!(
+            !peer_authorized(&accepted, Some(me.wrapping_add(1))),
+            "чужой ожидаемый uid → отвергнут"
+        );
+        assert!(
+            !peer_authorized(&accepted, None),
+            "неизвестный ожидаемый → отвергнут (fail-closed)"
+        );
     }
 
     #[test]

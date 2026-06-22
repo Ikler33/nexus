@@ -49,6 +49,14 @@ flate2 = { workspace = true }
 # (не только dev — как и в app Cargo.toml), плюс TempDir в тестах модулей.
 tempfile = { workspace = true }
 
+# SANDBOX peer-uid (SO_PEERCRED): host-side проверка, что принятое на per-run сокетах egress/act/event
+# соединение бежит под run_as-uid контейнера (спека `agent-sandbox.md` §4.3 инв.6 / §10.1 T8 — анти-
+# подмена peer'а поверх 0600-сокета + 0700-каталога). std не даёт переносимого peer-cred → читаем uid
+# через `getsockopt(SO_PEERCRED)`. `libc` 0.2 УЖЕ транзитивно в Cargo.lock (tokio/getrandom/tempfile/…)
+# → новой деки в дерево не приходит. ТОЛЬКО под Linux (на иных ОС `SO_PEERCRED` нет; sandbox — Linux-host-only).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # AGENT-6 (приватность): хардлинк-reject в `actuator::apply::confine_for_overwrite` на Windows —
 # зеркало unix `nlink>1`. std не даёт переносимого link-count, поэтому читаем `nNumberOfLinks` через
 # `GetFileInformationByHandle`. `windows-sys` 0.61 УЖЕ транзитивно в Cargo.lock (десятки крейтов; без
