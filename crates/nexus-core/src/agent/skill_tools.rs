@@ -28,9 +28,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::ai::{fence_observation, injection_marker};
+use crate::db::WriteActor;
 use crate::skills::{
-    parse_typed_capabilities, resolve_capabilities, resolve_skill_resource, CapabilityResolution,
-    RunPolicy, SkillCatalog,
+    parse_typed_capabilities, resolve_capabilities, resolve_skill_resource, usage,
+    CapabilityResolution, RunPolicy, SkillCatalog,
 };
 
 use super::tool::{Tool, ToolError, ToolSpec};
@@ -58,14 +59,52 @@ pub struct SkillContext {
     /// КАНОНИЧЕСКИЙ корень skills-каталога — база path-конфайна tier-3 ресурсов. Предусловие:
     /// канонизирован (как `discover_skills` канонизирует корень).
     skills_root: PathBuf,
+    /// SL-2: опц. писатель телеметрии использования (`agent_skill_usage`). `Some` → активация/чтение
+    /// ресурса инкрементят счётчики ([`usage::bump_use`]/[`usage::bump_view`]); `None` → без телеметрии
+    /// (тесты, desktop без БД). Прод-сайт (`agentd::build_skill_context`) подставляет `db.writer()`.
+    /// Запись **best-effort, awaited inline** (дешёвый single-row upsert на общем `WriteActor` ADR-003;
+    /// сериализуется FIFO за прочими записями, но строка крошечная; ошибка ГЛОТАЕТСЯ — наблюдаемость не
+    /// роняет активацию). ВСЕГДА-ON при наличии writer (чистая наблюдаемость) — отдельно от БУДУЩЕГО
+    /// флага `ai.skills.learning_enabled` (SL-7/SL-curator: он будет гейтить ДЕЙСТВИЯ curator'а/
+    /// skill_save, а НЕ наблюдение; сейчас этого флага в конфиге ещё нет).
+    usage_writer: Option<WriteActor>,
 }
 
 impl SkillContext {
-    /// Собирает контекст из каталога + канонического корня skills.
+    /// Собирает контекст из каталога + канонического корня skills. Телеметрия выключена
+    /// (`usage_writer=None`) — подключается отдельно [`with_usage_writer`](Self::with_usage_writer).
     pub fn new(catalog: Arc<SkillCatalog>, skills_root: PathBuf) -> Self {
         Self {
             catalog,
             skills_root,
+            usage_writer: None,
+        }
+    }
+
+    /// SL-2: подключить писатель телеметрии использования скиллов (builder). Прод-композиция
+    /// (`agentd`) даёт `db.writer().clone()`; активация/чтение начнут инкрементить `agent_skill_usage`.
+    pub fn with_usage_writer(mut self, writer: WriteActor) -> Self {
+        self.usage_writer = Some(writer);
+        self
+    }
+
+    /// SL-2: best-effort запись «скилл активирован» ([`usage::bump_use`], awaited inline). No-op без
+    /// `usage_writer`. Ошибку телеметрии ГЛОТАЕМ (debug-лог): наблюдаемость не должна ронять активацию.
+    async fn record_use(&self, name: &str) {
+        if let Some(w) = &self.usage_writer {
+            if let Err(e) = usage::bump_use(w, name).await {
+                tracing::debug!(skill = name, error = %e, "skill usage: bump_use не записан (игнор)");
+            }
+        }
+    }
+
+    /// SL-2: best-effort запись «ресурс скилла прочитан» ([`usage::bump_view`], awaited inline). No-op
+    /// без writer; ошибка глотается.
+    async fn record_view(&self, name: &str) {
+        if let Some(w) = &self.usage_writer {
+            if let Err(e) = usage::bump_view(w, name).await {
+                tracing::debug!(skill = name, error = %e, "skill usage: bump_view не записан (игнор)");
+            }
         }
     }
 
@@ -163,6 +202,8 @@ impl Tool for ActivateSkillTool {
             .catalog
             .get(&parsed.skill)
             .ok_or_else(|| ToolError::UnknownTool(parsed.skill.clone()))?;
+        // SL-2: телеметрия активации (best-effort, awaited inline; no-op без usage_writer; ошибка глотается).
+        self.ctx.record_use(&skill.name).await;
         // SKILL-3 (AC#2): сурфейсим granted-vs-inert capability-сводку. Фаза-C политика — vault
         // read+write (declared лишь ЗАПРАШИВАЕТ; эффективный = forced ∩ run-policy). Скилл, попросивший
         // shell/web, активируется (тело грузится), но получает явную пометку «инертно + причина» —
@@ -293,6 +334,8 @@ impl Tool for ReadSkillResourceTool {
             .await
             .map_err(|e| ToolError::Exec(format!("join: {e}")))?;
         let content = read.map_err(|e| ToolError::Exec(format!("чтение ресурса: {e}")))?;
+        // SL-2: телеметрия чтения ресурса (best-effort, awaited inline; no-op без usage_writer; ошибка глотается).
+        self.ctx.record_view(&skill.name).await;
         // Фенсим контент ресурса (недоверенные ДАННЫЕ, I-5) per-request маркером; метка несёт скилл+путь.
         let marker = injection_marker();
         Ok(fence_observation(
@@ -695,5 +738,57 @@ mod tests {
                 "помечено как данные: {out}"
             );
         }
+    }
+
+    /// SL-2: с подключённым usage_writer активация инкрементит `use_count`, чтение ресурса —
+    /// `view_count` (телеметрия best-effort, awaited inline). Без writer телеметрии нет — это покрыто всеми
+    /// остальными тестами модуля (они строят ctx через `new()` → usage_writer=None и не падают).
+    #[tokio::test]
+    async fn telemetry_records_use_and_view_with_writer() {
+        use crate::db::Database;
+        use crate::skills::usage;
+
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+
+        let (tmp, base) = ctx_with(&[("k", "k", "d", "BODY")]);
+        fs::write(tmp.path().canonicalize().unwrap().join("k/r.txt"), "RES").unwrap();
+        let ctx = base.with_usage_writer(db.writer().clone());
+
+        // Активация → use_count=1, view_count=0.
+        ActivateSkillTool::new(ctx.clone())
+            .invoke(r#"{"skill":"k"}"#)
+            .await
+            .unwrap();
+        let r = usage::get_record(db.reader(), "k").await.unwrap().unwrap();
+        assert_eq!(r.use_count, 1, "activate инкрементнул use_count");
+        assert_eq!(r.view_count, 0);
+        assert_eq!(r.created_by, None, "телеметрия не присваивает провенанс");
+
+        // Чтение ресурса → view_count=1 (use_count не тронут).
+        ReadSkillResourceTool::new(ctx.clone())
+            .invoke(r#"{"skill":"k","resource_path":"r.txt"}"#)
+            .await
+            .unwrap();
+        let r2 = usage::get_record(db.reader(), "k").await.unwrap().unwrap();
+        assert_eq!(r2.use_count, 1);
+        assert_eq!(
+            r2.view_count, 1,
+            "read_skill_resource инкрементнул view_count"
+        );
+
+        // Неизвестный скилл (fail-closed) телеметрию НЕ пишет (lookup падает до record_*).
+        let _ = ActivateSkillTool::new(ctx)
+            .invoke(r#"{"skill":"ghost"}"#)
+            .await;
+        assert!(
+            usage::get_record(db.reader(), "ghost")
+                .await
+                .unwrap()
+                .is_none(),
+            "неизвестный скилл не создаёт строку телеметрии"
+        );
     }
 }

@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SELF-LEARNING SL-2 — проводка телеметрии использования скиллов
+
+Подключает SL-1-слой `agent_skill_usage` к реальному tool-loop: активация навыка и чтение его ресурса теперь инкрементят счётчики использования. Чистая НАБЛЮДАЕМОСТЬ — действий curator'а/`skill_save` нет (это SL-7/SL-curator под БУДУЩИМ флагом `ai.skills.learning_enabled`, которого в конфиге пока нет).
+
+- **`SkillContext.usage_writer: Option<WriteActor>`** + builder `with_usage_writer`. `new()` оставляет `None` (тесты/desktop без БД — без телеметрии, без регрессии). Прод-сайт ОДИН: `agentd::build_skill_context` подставляет `db.writer().clone()`.
+- **`activate_skill` → `bump_use`, `read_skill_resource` → `bump_view`** ПОСЛЕ успешного lookup/чтения, **best-effort (awaited inline, дешёвый single-row upsert на общем `WriteActor`)**: ошибка телеметрии ГЛОТАЕТСЯ (debug-лог) — наблюдаемость не роняет активацию; fail-closed lookup (неизвестный навык) телеметрию НЕ пишет.
+- **Телеметрия ВСЕГДА-ON в проде** (при наличии writer) — осознанно отделена от будущего `ai.skills.learning_enabled` (тот будет гейтить ДЕЙСТВИЯ, а не НАБЛЮДЕНИЕ; данные нужны до включения авто-curation).
+
+Tier-1: `telemetry_records_use_and_view_with_writer` (activate→use_count=1, read→view_count=1, неизвестный навык→строки нет; None-путь покрыт всеми остальными тестами модуля). `test-all` зелёный.
+
 ### Агент · SELF-LEARNING SL-1 — фундамент телеметрии/lifecycle скиллов (`agent_skill_usage`, миграция 023)
 
 Первый срез killer-фичи **самообучения** (порт hermes `skill_usage.py` + ядра `curator.py` на наш SQLite-идиом). ЧИСТЫЙ data-слой; проводки в tool-loop НЕТ (SL-2), `skill_save`/curator/UI — дальше. Всё инертно: ни одного вызова из прода (примитивы ждут SL-2+).

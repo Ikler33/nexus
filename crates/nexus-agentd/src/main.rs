@@ -30,7 +30,7 @@ use nexus_core::ai::{
     self, AIClient, ChatConfig, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
     OpenAiEmbedder,
 };
-use nexus_core::db::Database;
+use nexus_core::db::{Database, WriteActor};
 use nexus_core::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
 use nexus_core::vector::VectorIndex;
 
@@ -813,7 +813,7 @@ async fn run() -> Result<(), String> {
     // SkillContext (меню tier-1 + READ-ONLY инструменты tier-2/3). Относительный путь резолвится от
     // vault-корня (рекомендация `<vault>/.nexus/skills`). Не задан → None (агент без скиллов, без
     // регрессии). Скиллы — недоверенный внешний контент: они фенсятся в самом хендлере (I-5).
-    let agent_skills = build_skill_context(local_cfg.as_ref(), &root);
+    let agent_skills = build_skill_context(local_cfg.as_ref(), &root, db.writer().clone());
 
     // EGR-AGENT-2: веб-инструменты (web.search/web.fetch). Включаются ТОЛЬКО при `ai.web.enabled` —
     // `enable_web_tools` включает `EgressFeature::Web` + allowlist хоста SearXNG и строит WebToolsConfig
@@ -1096,6 +1096,7 @@ async fn load_local_config(root: &Path) -> Option<LocalConfig> {
 fn build_skill_context(
     cfg: Option<&LocalConfig>,
     root: &Path,
+    usage_writer: WriteActor,
 ) -> Option<nexus_core::agent::SkillContext> {
     let dir = cfg?.ai.agent_skills_dir.as_deref()?;
     let p = Path::new(dir);
@@ -1125,10 +1126,14 @@ fn build_skill_context(
         return None;
     }
     tracing::info!(skills_dir = %canon.display(), count = catalog.len(), "skills: каталог загружен (tier-1 меню + activate_skill/read_skill_resource)");
-    Some(nexus_core::agent::SkillContext::new(
-        std::sync::Arc::new(catalog),
-        canon,
-    ))
+    // SL-2: телеметрия использования скиллов ВСЕГДА-ON в проде (чистая наблюдаемость; curator/skill_save
+    // будут гейтиться БУДУЩИМ флагом `ai.skills.learning_enabled` — SL-7/SL-curator, сейчас его в конфиге
+    // ещё нет). Активация/чтение ресурса инкрементят `agent_skill_usage` best-effort (awaited inline,
+    // дешёвый upsert, ошибка глотается).
+    Some(
+        nexus_core::agent::SkillContext::new(std::sync::Arc::new(catalog), canon)
+            .with_usage_writer(usage_writer),
+    )
 }
 
 /// AF_UNIX-хостинг коннектора (AGENT-CONNECT P0b-2c), **default-OFF**. Включается env-переменной
