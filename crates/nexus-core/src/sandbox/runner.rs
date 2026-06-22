@@ -41,8 +41,9 @@ fn uid_matches(expected: Option<u32>, actual: Option<u32>) -> bool {
 /// Авторизует принятое на per-run сокете соединение по `SO_PEERCRED` (спека §4.3 инвариант 6 / §10.1 T8):
 /// валидно ТОЛЬКО если peer бежит под `expected_uid` (= host-видимый uid контейнера, см. `run()`).
 /// Defense-in-depth ПОВЕРХ 0600-сокета + 0700-каталога — ядро-достоверный uid, который клиент не подделает.
-/// Fail-closed (см. [`uid_matches`] и [`peer_uid`]). **Тем же гейтом ОБЯЗАН оборачиваться будущий
-/// `serve_exec` (exec.sock).**
+/// Fail-closed (см. [`uid_matches`] и [`peer_uid`]). **Этот же гейт покрывает host/exec:** exec едет по
+/// host/exec на ТОМ ЖЕ act.sock через [`serve_host`] (НЕТ отдельного exec.sock/serve_exec — §5.2 один
+/// peer-gated канал на host/act+host/exec; не заводить 4-й сокет = не плодить ungated exec-путь).
 fn peer_authorized(stream: &UnixStream, expected_uid: Option<u32>) -> bool {
     uid_matches(expected_uid, peer_uid(stream))
 }
