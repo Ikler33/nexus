@@ -464,7 +464,9 @@ impl DispatchPolicy {
     }
 
     /// Взведён ли kill-switch (пауза агента) — fail-safe: `true` ⇒ актуатор НЕ должен писать.
-    fn is_paused(&self) -> bool {
+    /// `pub(crate)`: exec-redeem ([`crate::sandbox::exec_host`], 6c-2c) re-check'ит паузу ПЕРЕД проводкой
+    /// approved-токена в EXECUTING (единый источник семантики паузы, не дубль чтения Arc).
+    pub(crate) fn is_paused(&self) -> bool {
         self.agent_paused.load(Ordering::Relaxed)
     }
 }

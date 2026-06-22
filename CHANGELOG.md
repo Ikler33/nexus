@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2c — `host/exec` фаза execute (redeem одноразового токена → ledger EXECUTING + WireExecGo)
+
+Третий суб-срез исполнительной половины Фазы-3: host-СТОРОНА фазы `execute` — redeem одноразового `exec_token` в host-authority сигнал «исполни», под write-before-act ledger-переходом + kill-switch. Контейнерный исполнитель + report-финализация — 6c-2d/2e.
+
+- **`ExecBackend::execute(exec_token) -> Result<WireExecGo, RpcError>`** (default `invalid_params` → мок/6c-1 инертны) + `HostExecServer` роутит фазу `Execute` (кросс-фазовый fail-closed: execute несёт ТОЛЬКО `exec_token`, decide/report-поля → отказ); `Report` остаётся `invalid_params` (6c-2d).
+- **`DispatchExecBackend::execute`** (security-критичный порядок): (1) **kill-switch re-check ДО consume** — под паузой НЕ исполняем и токен НЕ трогаем (валиден для retry после un-pause); (2) **consume под локом** (`pending.remove`) — одноразовость by-construction (повтор/гонка → токен отсутствует → `invalid_params`; TOCTOU-замок: argv из СОХРАНЁННОГО действия, не из wire); (3) ledger CAS `APPROVED→EXECUTING` (`audit::transition` фенсит `state=approved AND outcome IS NULL`) — не promoted ⇒ ошибка (токен уже консьюмнут, fail-closed); (4) `in_flight`-store для report-финализации (6c-2d) + `build_exec_go` (6c-2b).
+- `is_paused()` → `pub(crate)` (единый источник семантики паузы для exec-redeem, не дубль чтения Arc).
+
+22 Tier-1 тестов exec_host (+4: **redeem-approved-token** consume+EXECUTING+argv-host-authority / **unknown-token→err** / **replay→err** one-shot / **paused-refuses+keeps-token** + un-pause-retry). 6c-2c инертен для контейнера (ProxyExec — 6c-2e). clippy 0, fmt + node-lints зелёные.
+
 ### Агент · SANDBOX-6c-2b — host env-build (allow-list §5.4) + `WireExecGo`-builder + `propose_key` в ledger-цепочке
 
 Второй суб-срез исполнительной половины Фазы-3: чистая host-side плита под redeem (6c-2c) — собирает окружение и сигнал «исполни» из СОХРАНЁННОГО действия, БЕЗ исполнения и без ledger-переходов. Плюс load-bearing изменение модели данных для будущего ledger-фенса.

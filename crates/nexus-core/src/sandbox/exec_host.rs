@@ -29,6 +29,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::actuator::audit::{self, STATE_APPROVED, STATE_EXECUTING};
 use crate::actuator::{Action, ActionTarget};
 use crate::agent::connect::RpcError;
 
@@ -220,6 +221,14 @@ pub struct WireExecResult {
 pub trait ExecBackend: Send + Sync {
     /// Фаза decide: классифицировать+решить (host-side). Approve → СОХРАНИТЬ действие + минт токена.
     async fn decide(&self, action: &Action) -> WireExecDecision;
+
+    /// Фаза execute (6c-2c): redeem ОДНОРАЗОВОГО `exec_token` → host-нормализованный [`WireExecGo`]
+    /// (argv из СОХРАНЁННОГО действия — контейнер не переподаёт). По умолчанию `invalid_params` (мок/
+    /// 6c-1-уровень не исполняет); реальный — [`DispatchExecBackend`]. Ошибка → `RpcError` (неизвестный/
+    /// консьюмнутый токен, пауза, гонка ledger).
+    async fn execute(&self, _exec_token: &str) -> Result<WireExecGo, RpcError> {
+        Err(RpcError::invalid_params())
+    }
 }
 
 /// Host-обработчик `host/exec`. 6c-1: маршрутизирует `decide`; `execute`/`report` зарезервированы (6c-2)
@@ -259,8 +268,22 @@ impl<B: ExecBackend> HostExecServer<B> {
                 let decision = self.backend.decide(&action).await;
                 serde_json::to_value(decision).map_err(|e| RpcError::internal(e.to_string()))
             }
-            // 6c-2: исполнение ВНУТРИ песочницы (redeem токена → WireExecGo) + финализация ledger.
-            WireExecPhase::Execute | WireExecPhase::Report => Err(RpcError::invalid_params()),
+            WireExecPhase::Execute => {
+                // fail-closed: execute несёт ТОЛЬКО exec_token (decide/report-поля → отказ, кросс-фаза).
+                if req.action.is_some()
+                    || req.exit_code.is_some()
+                    || req.stdout_tail.is_some()
+                    || req.stderr_tail.is_some()
+                    || req.undo_ref.is_some()
+                {
+                    return Err(RpcError::invalid_params());
+                }
+                let token = req.exec_token.ok_or_else(RpcError::invalid_params)?;
+                let go = self.backend.execute(&token).await?;
+                serde_json::to_value(go).map_err(|e| RpcError::internal(e.to_string()))
+            }
+            // 6c-2d: report → финализация ledger (EXECUTING→EXECUTED|FAILED).
+            WireExecPhase::Report => Err(RpcError::invalid_params()),
         }
     }
 }
@@ -268,12 +291,19 @@ impl<B: ExecBackend> HostExecServer<B> {
 /// Запомненное одобренное exec-действие. Контейнер на `execute` (6c-2c) предъявит ТОЛЬКО `exec_token`;
 /// host строит `WireExecGo` argv из ЭТОГО сохранённого действия (контейнер argv не переподаёт → TOCTOU-
 /// замок approve-`ls`-run-`rm`). `propose_key` — idempotency-ключ ledger-строки (redeem/finalize фенсят
-/// `approved→executing→executed|failed` по нему). Поля читает redeem/finalize (6c-2c/2d).
-#[allow(dead_code)] // поля читаются в 6c-2c/2d (redeem/finalize); 6c-2b только минтит+хранит
+/// `approved→executing→executed|failed` по нему). Консьюмится execute (redeem, 6c-2c).
 struct PendingExec {
     action: Action,
     ledger_action_id: i64,
     propose_key: String,
+}
+
+/// Висящее ИСПОЛНЯЕМОЕ exec-действие (после redeem, ledger=EXECUTING). report (6c-2d) консьюмит и
+/// финализирует ledger по `propose_key`. `ledger_action_id` — для ExecResult-события (6c-2g).
+#[allow(dead_code)] // поля читает report/события (6c-2d/2g); 6c-2c только заполняет на execute
+struct InFlightExec {
+    propose_key: String,
+    ledger_action_id: i64,
 }
 
 /// Каноническая repr exec-действия для fingerprint токена (US-разделитель `\u{1f}`). vault-таргеты сюда не
@@ -350,7 +380,6 @@ pub(crate) fn build_exec_env(
 /// который применяет `classify::path_confinement` (отвергает `..`/abs/backslash/dot → команда НЕ
 /// запускается) ВНУТРИ контейнера на exec. 6c-2c ОБЯЗАН гонять cwd ИМЕННО через `resolve_cwd`, не
 /// `scratch_base.join(rel)` напрямую (иначе `cwd_rel="../etc"` сбежал бы из tmpfs внутри контейнера).
-#[allow(dead_code)] // зовётся redeem-фазой (6c-2c); 6c-2b строит+тестирует
 pub(crate) fn build_exec_go(action: &Action, skill_passthrough: &[(String, String)]) -> WireExecGo {
     let (argv, cwd_rel) = match &action.target {
         ActionTarget::ShellRun { argv, cwd_rel } => (argv.clone(), cwd_rel.clone()),
@@ -398,7 +427,10 @@ const MAX_PENDING_EXEC: usize = 64;
 /// и СОХРАНЯЕТ действие. redeem/finalize (фазы execute/report) — 6c-2.
 pub struct DispatchExecBackend {
     ctx: crate::actuator::GatedToolCtx,
+    /// Одобренные, но ещё не redeem'нутые exec (decide→pending). Консьюмится execute (one-shot).
     pending: std::sync::Mutex<std::collections::HashMap<String, PendingExec>>,
+    /// redeem'нутые, исполняемые exec (execute→in_flight, ledger=EXECUTING). Консьюмит report (6c-2d).
+    in_flight: std::sync::Mutex<std::collections::HashMap<String, InFlightExec>>,
 }
 
 impl DispatchExecBackend {
@@ -406,6 +438,7 @@ impl DispatchExecBackend {
         Self {
             ctx,
             pending: std::sync::Mutex::new(std::collections::HashMap::new()),
+            in_flight: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -427,6 +460,12 @@ impl DispatchExecBackend {
     /// Число висящих одобренных exec (для тестов — без раскрытия PendingExec).
     pub fn pending_count(&self) -> usize {
         self.pending.lock().expect("pending mutex").len()
+    }
+
+    /// Число redeem'нутых (исполняемых) exec — для тестов (proxy «transition→EXECUTING прошёл»).
+    #[cfg(test)]
+    fn in_flight_count(&self) -> usize {
+        self.in_flight.lock().expect("in_flight mutex").len()
     }
 
     /// Тест-хелпер: propose_key единственной висящей записи (проверка, что 6c-2b его сохранил).
@@ -499,6 +538,61 @@ impl ExecBackend for DispatchExecBackend {
             ExecDecision::Rejected(s) => WireExecDecision::Rejected { summary: s },
             ExecDecision::HardBlocked(r) => WireExecDecision::HardBlocked { reason: r },
         }
+    }
+
+    /// Фаза execute (6c-2c, redeem): КОНСЬЮМИТ одноразовый токен из `pending` → проводит ledger
+    /// `approved→executing` (write-before-act exec) → строит host-authority [`WireExecGo`]. Порядок
+    /// security-критичен:
+    ///  1. **kill-switch re-check ДО consume** — под паузой НЕ исполняем и токен НЕ трогаем (валиден для
+    ///     retry после un-pause; иначе пауза «съедала» бы одобрение);
+    ///  2. **consume под локом** (remove) — одноразовость by-construction: повтор/гонка найдёт токен
+    ///     отсутствующим → `invalid_params` (TOCTOU-замок: argv берётся из СОХРАНЁННОГО действия, не из wire);
+    ///  3. ledger CAS `APPROVED→EXECUTING` (`transition` фенсит `state=approved AND outcome IS NULL`) —
+    ///     не promoted ⇒ гонка/не-approved ⇒ ошибка (токен уже консьюмнут, fail-closed);
+    ///  4. запоминаем в `in_flight` для report-финализации (6c-2d).
+    async fn execute(&self, exec_token: &str) -> Result<WireExecGo, RpcError> {
+        // Шаги 1-2 под ОДНИМ локом (std Mutex — без .await внутри). Берём владение PendingExec.
+        let pending = {
+            let mut store = self.pending.lock().expect("pending mutex");
+            if !store.contains_key(exec_token) {
+                // неизвестный или уже консьюмнутый токен (one-shot replay) — fail-closed.
+                return Err(RpcError::invalid_params());
+            }
+            // KILL-SWITCH (чек-пойнт): под паузой НЕ исполняем; токен ОСТАЁТСЯ (un-pause retry).
+            if self.ctx.policy.is_paused() {
+                return Err(RpcError::internal(
+                    "exec: агент на паузе (kill-switch) — исполнение подавлено",
+                ));
+            }
+            store
+                .remove(exec_token)
+                .expect("contains_key проверен выше")
+        };
+        // Шаг 3: ledger approved→executing (CAS). Вне лока (await).
+        let promoted = audit::transition(
+            &self.ctx.ledger.writer_handle(),
+            &pending.propose_key,
+            STATE_APPROVED,
+            STATE_EXECUTING,
+        )
+        .await
+        .unwrap_or(false);
+        if !promoted {
+            // Строка не в approved (гонка/двойной redeem/уже терминирована). Токен уже консьюмнут.
+            return Err(RpcError::internal(
+                "exec: ledger approved→executing не применён (не в состоянии approved)",
+            ));
+        }
+        // Шаг 4: запомнить для report (6c-2d) — финализация по propose_key.
+        self.in_flight.lock().expect("in_flight mutex").insert(
+            exec_token.to_string(),
+            InFlightExec {
+                propose_key: pending.propose_key,
+                ledger_action_id: pending.ledger_action_id,
+            },
+        );
+        // argv/env/cwd host-authority из СОХРАНЁННОГО действия (контейнер их не переподаёт).
+        Ok(build_exec_go(&pending.action, &[]))
     }
 }
 
@@ -653,6 +747,25 @@ mod tests {
         std::mem::forget(db);
         let policy = DispatchPolicy::new(Some("auto"), OVERWRITE_THRESHOLD, 16)
             .with_exec_flags(shell_enable, sandbox_available);
+        let events: Arc<dyn EventSink> = Arc::new(TracingEventSink::new());
+        let ctx = GatedToolCtx::new(canon_root, ledger, 1, policy, decision, events);
+        (dir, DispatchExecBackend::new(ctx))
+    }
+
+    /// Как [`exec_gate`], но с ВНЕШНИМ kill-switch `paused` (тест взводит его между decide и execute).
+    async fn exec_gate_with_pause(
+        decision: Arc<dyn DecisionSource>,
+        paused: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (TempDir, DispatchExecBackend) {
+        let dir = TempDir::new().unwrap();
+        let canon_root = dir.path().canonicalize().unwrap();
+        let db = Database::open(canon_root.join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        let ledger = AuditSink::new(db.writer().clone(), db.reader().clone());
+        std::mem::forget(db);
+        let policy = DispatchPolicy::with_paused(Some("auto"), OVERWRITE_THRESHOLD, 16, paused)
+            .with_exec_flags(true, true);
         let events: Arc<dyn EventSink> = Arc::new(TracingEventSink::new());
         let ctx = GatedToolCtx::new(canon_root, ledger, 1, policy, decision, events);
         (dir, DispatchExecBackend::new(ctx))
@@ -842,5 +955,116 @@ mod tests {
             MAX_PENDING_EXEC,
             "кэп не превышен — новый exec не добавлен"
         );
+    }
+
+    // ── 6c-2c: execute (redeem токена) ───────────────────────────────────────────────────────────
+    /// Approve→execute: токен консьюмнут (pending пуст), in_flight=1 (ledger approved→executing прошёл),
+    /// WireExecGo argv из СОХРАНЁННОГО действия (host-authority).
+    #[tokio::test]
+    async fn execute_redeems_approved_token() {
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(crate::actuator::BatchDecision::from_pairs([(
+            1,
+            ItemDecision::Approve,
+        )]))
+        .await
+        .unwrap();
+        let (_d, backend) = exec_gate(true, true, Arc::new(chan)).await;
+        let token = match backend
+            .decide(&Action::shell_run(vec!["ls".into(), "-la".into()], None))
+            .await
+        {
+            WireExecDecision::Approved { exec_token, .. } => exec_token,
+            other => panic!("ожидался Approved, получено {other:?}"),
+        };
+        let go = backend.execute(&token).await.expect("execute redeem ok");
+        assert_eq!(go.argv, vec!["ls", "-la"], "argv из СОХРАНЁННОГО действия");
+        assert_eq!(backend.pending_count(), 0, "токен консьюмнут из pending");
+        assert_eq!(
+            backend.in_flight_count(),
+            1,
+            "переведён в in_flight (EXECUTING)"
+        );
+    }
+
+    /// Неизвестный/непрогнозируемый токен → invalid_params (fail-closed), без побочек.
+    #[tokio::test]
+    async fn execute_unknown_token_fails() {
+        let (_d, backend) = exec_gate(true, true, Arc::new(PolicyDefault)).await;
+        assert!(
+            backend.execute("nope-not-a-real-token").await.is_err(),
+            "неизвестный токен → ошибка"
+        );
+        assert_eq!(backend.in_flight_count(), 0);
+    }
+
+    /// Одноразовость: второй execute тем же токеном → ошибка (токен консьюмнут first-call).
+    #[tokio::test]
+    async fn execute_token_replay_fails() {
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(crate::actuator::BatchDecision::from_pairs([(
+            1,
+            ItemDecision::Approve,
+        )]))
+        .await
+        .unwrap();
+        let (_d, backend) = exec_gate(true, true, Arc::new(chan)).await;
+        let token = match backend
+            .decide(&Action::shell_run(vec!["ls".into()], None))
+            .await
+        {
+            WireExecDecision::Approved { exec_token, .. } => exec_token,
+            other => panic!("ожидался Approved, получено {other:?}"),
+        };
+        assert!(backend.execute(&token).await.is_ok(), "первый redeem ok");
+        assert!(
+            backend.execute(&token).await.is_err(),
+            "повторный redeem того же токена → ошибка (one-shot)"
+        );
+        assert_eq!(backend.in_flight_count(), 1, "in_flight не задвоился");
+    }
+
+    /// KILL-SWITCH: под паузой execute отказывает, токен ОСТАЁТСЯ валиден (un-pause retry), in_flight пуст.
+    #[tokio::test]
+    async fn execute_when_paused_refuses_and_keeps_token() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let paused = Arc::new(AtomicBool::new(false));
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(crate::actuator::BatchDecision::from_pairs([(
+            1,
+            ItemDecision::Approve,
+        )]))
+        .await
+        .unwrap();
+        let (_d, backend) = exec_gate_with_pause(Arc::new(chan), paused.clone()).await;
+        let token = match backend
+            .decide(&Action::shell_run(vec!["ls".into()], None))
+            .await
+        {
+            WireExecDecision::Approved { exec_token, .. } => exec_token,
+            other => panic!("ожидался Approved, получено {other:?}"),
+        };
+        paused.store(true, Ordering::Relaxed); // взводим kill-switch ПОСЛЕ approve
+        assert!(
+            backend.execute(&token).await.is_err(),
+            "под паузой execute отказывает"
+        );
+        assert_eq!(
+            backend.pending_count(),
+            1,
+            "токен НЕ тронут (retry после un-pause)"
+        );
+        assert_eq!(
+            backend.in_flight_count(),
+            0,
+            "ничего не переведено в EXECUTING"
+        );
+        // un-pause → тот же токен redeem'ится.
+        paused.store(false, Ordering::Relaxed);
+        assert!(
+            backend.execute(&token).await.is_ok(),
+            "после un-pause тот же токен ok"
+        );
+        assert_eq!(backend.in_flight_count(), 1);
     }
 }
