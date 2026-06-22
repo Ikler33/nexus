@@ -152,6 +152,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/022_agent_actions.sql"),
         rebuild_fts: false, // idempotency-ledger актуатора (AGENT-3b): журнал действий, производных не трогает
     },
+    Migration {
+        version: 23,
+        name: "agent_skill_usage",
+        sql: include_str!("migrations/023_agent_skill_usage.sql"),
+        rebuild_fts: false, // self-learning (SL-1): телеметрия/lifecycle скиллов, заметочных производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
