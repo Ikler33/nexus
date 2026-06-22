@@ -150,6 +150,8 @@ async fn run_sandbox_child() -> Result<i32, String> {
         model,
         temperature: None,
         context_window: Some(context_window),
+        // 6c-2f-2: exec-инструменты по умолчанию ВЫКЛ; проводка 6-го CLI-арга shell_enable — 6c-2f-3.
+        shell_enable: false,
     };
     let outcome = run_sandbox_child_session(&spec, egress, act, event).await;
     tracing::info!(?outcome, "--sandbox-child: прогон завершён");
