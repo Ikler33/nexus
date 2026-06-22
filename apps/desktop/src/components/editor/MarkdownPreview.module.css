@@ -448,3 +448,121 @@
 .callout[data-callout='quote'] {
   --callout-color: var(--color-text-faint);
 }
+
+/* ── MASTHEAD-1 (Hermes-6 editor.jsx/app.css): editorial-шапка превью/чтения ─────────
+   kicker (теги) · display-title · mono-byline. Рендерится ТОЛЬКО у top-level превью
+   редактора (prop `masthead`); embed/peek/доска не передают → шапки нет. */
+.docHead {
+  margin-bottom: var(--space-6);
+}
+.docKicker {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  margin-bottom: 14px;
+}
+/* `.docHead .docTitle` (а не голый `.docTitle`) — перебить `.preview h1` (он специфичнее класса). */
+.docHead .docTitle {
+  font-family: var(--font-headline);
+  font-weight: 600;
+  font-size: clamp(38px, 4.4vw, 52px);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0 0 16px;
+  text-wrap: balance;
+  color: var(--color-text);
+}
+.docByline {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  letter-spacing: 0.02em;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+.docByline .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* ── Буквица ведущего абзаца (порт dropcap.js + app.css) ─────────────────────────────
+   Постоянный размер float-капа → постоянный «слив» в 3 строки для любого глифа; по
+   data-cap (штампит useLayoutEffect) тюним только ГОРИЗОНТАЛЬНЫЙ зазор: широкие М/Ш
+   жмутся к тексту, узкие Г/Т дышат, круглые О/С получают оптический бонус без смены слива. */
+.preview p[data-dropcap]::first-letter {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  font-size: 3.5em;
+  line-height: 0.68;
+  float: left;
+  padding: 0.16em 0.14em 0 0;
+  color: var(--color-accent);
+}
+/* широкие — притягивают обтекающий текст ближе */
+.preview p[data-dropcap][data-cap='М']::first-letter,
+.preview p[data-dropcap][data-cap='Ш']::first-letter,
+.preview p[data-dropcap][data-cap='Щ']::first-letter,
+.preview p[data-dropcap][data-cap='Ж']::first-letter,
+.preview p[data-dropcap][data-cap='Ф']::first-letter,
+.preview p[data-dropcap][data-cap='Ю']::first-letter,
+.preview p[data-dropcap][data-cap='Ы']::first-letter,
+.preview p[data-dropcap][data-cap='M']::first-letter,
+.preview p[data-dropcap][data-cap='W']::first-letter {
+  padding-right: 0.04em;
+}
+/* узкие со свесом — больше воздуха */
+.preview p[data-dropcap][data-cap='Г']::first-letter,
+.preview p[data-dropcap][data-cap='Т']::first-letter,
+.preview p[data-dropcap][data-cap='Е']::first-letter,
+.preview p[data-dropcap][data-cap='Б']::first-letter,
+.preview p[data-dropcap][data-cap='T']::first-letter,
+.preview p[data-dropcap][data-cap='F']::first-letter,
+.preview p[data-dropcap][data-cap='J']::first-letter,
+.preview p[data-dropcap][data-cap='L']::first-letter,
+.preview p[data-dropcap][data-cap='I']::first-letter {
+  padding-right: 0.22em;
+}
+/* круглые — оптически крупнее, line-height подрезан → высота float-бокса (слив) та же */
+.preview p[data-dropcap][data-cap='О']::first-letter,
+.preview p[data-dropcap][data-cap='С']::first-letter,
+.preview p[data-dropcap][data-cap='Э']::first-letter,
+.preview p[data-dropcap][data-cap='O']::first-letter,
+.preview p[data-dropcap][data-cap='C']::first-letter,
+.preview p[data-dropcap][data-cap='G']::first-letter,
+.preview p[data-dropcap][data-cap='Q']::first-letter,
+.preview p[data-dropcap][data-cap='S']::first-letter {
+  font-size: 3.66em;
+  line-height: 0.65;
+}
+
+/* ── Режим чтения (⌘R): центрированная шапка, крупнее заголовок и буквица (app.css .app.reading).
+   Reading-правила буквицы — ПОСЛЕ glyph-правил: на равной специфичности (тай) выигрывает порядок →
+   3.9em применяется ко ВСЕМ глифам в чтении (как в макете), сохраняя per-glyph line-height круглых. */
+.preview.reading .docHead {
+  text-align: center;
+  margin-bottom: var(--space-8);
+  padding-top: var(--space-6);
+}
+.preview.reading .docKicker {
+  margin-bottom: 18px;
+}
+.preview.reading .docHead .docTitle {
+  font-size: clamp(46px, 5.2vw, 62px);
+  line-height: 1;
+  margin-bottom: 20px;
+}
+.preview.reading .docByline {
+  justify-content: center;
+  opacity: 0.55;
+}
+.preview.reading p[data-dropcap]::first-letter {
+  font-size: 3.9em;
+}
