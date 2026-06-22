@@ -84,6 +84,21 @@ async fn main() {
         std::process::exit(code);
     }
 
+    // HOST-РЕЖИМ ПЕСОЧНИЦЫ (SANDBOX-5): one-shot прогон ОДНОЙ задачи в хардненном контейнере. Собирает
+    // `SandboxRunner` с РЕАЛЬНЫМИ backend'ами (GuardedProxy/HostActServer/event-лог) и спавнит podman.
+    // `nexus-agentd --sandbox-run <vault> <task>`. Default-OFF (только по флагу) — Tier-2 live на .28.
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some("--sandbox-run") {
+        let code = match run_sandbox_host().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "nexus-agentd --sandbox-run: фатальная ошибка");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
     if let Err(e) = run().await {
         tracing::error!(error = %e, "nexus-agentd: фатальная ошибка");
         std::process::exit(1);
@@ -142,6 +157,133 @@ async fn run_sandbox_child() -> Result<i32, String> {
         LoopOutcome::Final(_) => 0,
         _ => 1,
     })
+}
+
+/// HOST-режим (`--sandbox-run <vault> <task>`): собирает `SandboxRunner` с РЕАЛЬНЫМИ backend'ами
+/// (GuardedProxy поверх GuardedClient / HostActServer поверх dispatch_action / event-лог) и гонит ОДНУ
+/// задачу в хардненном контейнере. Tier-2 — нужен Podman + образ `nexus-agentd:local`. Default-OFF (по
+/// флагу). Это композиционный корень host-стороны песочницы (тот же, что позже подключит коннектор при
+/// `ai.sandbox_enabled`); сейчас — one-shot для live-валидации каркаса на .28.
+#[cfg(unix)]
+async fn run_sandbox_host() -> Result<i32, String> {
+    use nexus_core::actuator::{
+        AuditSink, DispatchPolicy, GatedToolCtx, PolicyDefault, TracingEventSink,
+        OVERWRITE_THRESHOLD,
+    };
+    use nexus_core::agent::connect::{RpcMessage, Transport, TransportError};
+    use nexus_core::agent::run_store;
+    use nexus_core::net::{EgressFeature, GuardedClient};
+    use nexus_core::sandbox::act::{DispatchActuatorBackend, HostActServer};
+    use nexus_core::sandbox::proxy::{EgressBudget, GuardedClientBackend, GuardedProxy};
+    use nexus_core::sandbox::runner::{SandboxChildArgs, SandboxRunner};
+    use nexus_core::sandbox::{ResourceCaps, SandboxConfig, DEFAULT_SANDBOX_IMAGE};
+
+    let vault = std::env::args()
+        .nth(2)
+        .ok_or("--sandbox-run: нужен <vault>")?;
+    let task = std::env::args()
+        .nth(3)
+        .ok_or("--sandbox-run: нужен <task>")?;
+    let root = PathBuf::from(&vault)
+        .canonicalize()
+        .map_err(|e| format!("vault {vault}: {e}"))?;
+
+    let db = Database::open(root.join(".nexus").join("nexus.db"))
+        .await
+        .map_err(|e| format!("открытие БД: {e}"))?;
+
+    // Egress-граница (как run()): политика + audit + allowlist из конфига.
+    let egress_offline = Arc::new(AtomicBool::new(false));
+    let egress_policy = Arc::new(EgressPolicy::new(egress_offline.clone()));
+    let egress_audit = Arc::new(EgressAudit::default());
+    egress_audit.set_writer(db.writer().clone());
+    let cfg = load_local_config(&root)
+        .await
+        .ok_or("нет .nexus/local.json (нужен ai.chat.url/model)")?;
+    egress_policy.set_allowlist(cfg.egress_hosts());
+    let chat = cfg.ai.chat.as_ref().ok_or("нет ai.chat в конфиге")?;
+    let model = chat.model.clone().unwrap_or_else(|| "chat".into());
+    let base_url = chat.url.clone();
+    let context_window = chat.context_window.unwrap_or(32768);
+
+    // run_id (ledger-корреляция актуатора).
+    let run_id = run_store::create_run(db.writer(), &task, Some(&model), Some("auto"))
+        .await
+        .map_err(|e| format!("create_run: {e}"))?;
+
+    // egress.sock backend: GuardedProxy поверх настоящего GuardedClient (chokepoint цел).
+    let client = GuardedClient::for_chat(
+        egress_policy.clone(),
+        egress_audit.clone(),
+        chat.connect_timeout(),
+    )
+    .map_err(|e| format!("GuardedClient: {e}"))?;
+    let proxy = GuardedProxy::new(
+        GuardedClientBackend::new(client),
+        run_id,
+        vec![EgressFeature::Chat],
+        EgressBudget::new(16 * 1024 * 1024, 64),
+    );
+
+    // act.sock backend: DispatchActuatorBackend поверх GatedToolCtx (auto-тир, PolicyDefault, tracing).
+    let gate = GatedToolCtx::new(
+        root.clone(),
+        AuditSink::new(db.writer().clone(), db.reader().clone()),
+        run_id,
+        DispatchPolicy::new(
+            Some("auto"),
+            OVERWRITE_THRESHOLD,
+            nexus_core::ai::AiConfig::DEFAULT_BLAST_RADIUS_CAP,
+        ),
+        Arc::new(PolicyDefault),
+        Arc::new(TracingEventSink::new()),
+    );
+    let act_server = HostActServer::new(DispatchActuatorBackend::new(gate));
+
+    // event.sock out: лог-транспорт (события агента в tracing; десктопа в one-shot нет).
+    struct LogTransport;
+    #[async_trait::async_trait]
+    impl Transport for LogTransport {
+        async fn send(&self, msg: RpcMessage) -> Result<(), TransportError> {
+            if let RpcMessage::Notification { method, params } = &msg {
+                tracing::info!(%method, %params, "sandbox-run: событие агента");
+            }
+            Ok(())
+        }
+        async fn recv(&self) -> Option<RpcMessage> {
+            std::future::pending().await // host только шлёт в out; recv не зовётся
+        }
+    }
+    let event_out: Arc<dyn Transport> = Arc::new(LogTransport);
+
+    // Конфиг контейнера: образ + per-run каталог сокетов вне vault (runtime_base = XDG_RUNTIME_DIR|/tmp).
+    let runtime_base = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let config = SandboxConfig::for_run(
+        DEFAULT_SANDBOX_IMAGE,
+        format!("r{run_id}"),
+        root.clone(),
+        Path::new(&runtime_base),
+        ResourceCaps::default(),
+    )
+    .map_err(|e| format!("SandboxConfig: {e}"))?;
+
+    tracing::info!(run_id, %model, %base_url, image = DEFAULT_SANDBOX_IMAGE, "sandbox-run: старт песочного прогона");
+    let status = SandboxRunner::new(config)
+        .run(
+            SandboxChildArgs {
+                run_id: run_id.to_string(),
+                base_url,
+                model,
+                context_window,
+                task,
+            },
+            proxy,
+            act_server,
+            event_out,
+        )
+        .await?;
+    tracing::info!(?status, "sandbox-run: контейнер завершился");
+    Ok(if status.success() { 0 } else { 1 })
 }
 
 /// Грубый разбор `RUST_LOG` в `LevelFilter` (без env-filter-зависимостей). Неизвестное → info.

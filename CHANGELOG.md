@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-5a — agentd `--sandbox-run`: host-харнесс one-shot песочного прогона
+
+Прод-путь ВЫЗОВА `SandboxRunner` (его до сих пор никто не звал — `ai.sandbox_enabled` был инертен). `nexus-agentd --sandbox-run <vault> <task>` — композиционный корень host-стороны: открывает vault-БД, собирает egress-границу (policy+audit+allowlist из `.nexus/local.json`), РЕАЛЬНЫЕ backend'ы — `GuardedProxy` поверх `GuardedClient::for_chat` (egress.sock, chokepoint цел), `HostActServer` поверх `DispatchActuatorBackend(GatedToolCtx)` (act.sock, auto-тир + PolicyDefault + TracingEventSink), event-лог-транспорт (события агента в `tracing`) — и гонит ОДНУ задачу в хардненном контейнере через `SandboxRunner::run`. `run_id` — реальная строка `agent_runs` (ledger-корреляция). Unix-only (`#[cfg(unix)]`), default-OFF (только по флагу). Это ТОТ ЖЕ композиционный корень, что позже подключит коннектор при `ai.sandbox_enabled`; сейчас — для **live Tier-2 валидации каркаса на Podman .28** (образ `nexus-agentd:local`). clippy 0, fmt/egress/tooluse зелёные; CI гейтит компиляцию (полный путь — live, нужен Podman).
+
 ### Агент · SANDBOX-4b-2b-2 — host `SandboxRunner` + agentd `--sandbox-child` (завершение каркаса Фазы-2)
 
 ЗАМЫКАЕТ рантайм песочницы (`docs/specs/agent-sandbox.md §2/§5`): host-оркестратор + in-container точка входа собраны в работающий путь.
