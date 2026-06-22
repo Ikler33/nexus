@@ -434,6 +434,12 @@ pub struct DispatchPolicy {
     /// **Фаза-3 (6b):** доступна ли песочница (`sandbox_enabled` И Linux) — ПРЕДвычислено корнем. DEFAULT
     /// false (fail-safe; exec → HardBlocked(SandboxUnavailable)).
     pub sandbox_available: bool,
+    /// **SL-7:** `ai.skills.learning_enabled` прогона → питает `ClassifyCtx` для `SkillSave`. DEFAULT
+    /// false (fail-safe; SkillSave → HardBlocked(LearningDisabled)). Ставится [`with_skills_flags`].
+    pub learning_enabled: bool,
+    /// **SL-7:** сконфигурирован ли skills_root (`ai.agent_skills_dir` задан) — ПРЕДвычислено корнем.
+    /// DEFAULT false (fail-safe; SkillSave → HardBlocked(SkillsRootUnconfigured)).
+    pub skills_root_configured: bool,
 }
 
 impl DispatchPolicy {
@@ -463,6 +469,8 @@ impl DispatchPolicy {
             agent_paused,
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         }
     }
 
@@ -480,6 +488,8 @@ impl DispatchPolicy {
             agent_paused: Arc::new(AtomicBool::new(false)),
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         }
     }
 
@@ -488,6 +498,19 @@ impl DispatchPolicy {
     pub fn with_exec_flags(mut self, shell_enable: bool, sandbox_available: bool) -> Self {
         self.shell_enable = shell_enable;
         self.sandbox_available = sandbox_available;
+        self
+    }
+
+    /// **SL-7:** проставить skills-флаги (`learning_enabled` из конфига `ai.skills.learning_enabled` +
+    /// `skills_root_configured` = `ai.agent_skills_dir` задан, предвычислено корнем). Builder-стиль;
+    /// DEFAULT обоих — false (fail-safe; SkillSave → HardBlocked).
+    pub fn with_skills_flags(
+        mut self,
+        learning_enabled: bool,
+        skills_root_configured: bool,
+    ) -> Self {
+        self.learning_enabled = learning_enabled;
+        self.skills_root_configured = skills_root_configured;
         self
     }
 
@@ -538,6 +561,18 @@ fn block_message(reason: &BlockReason) -> String {
             "песочница недоступна (не-Linux / sandbox_enabled=false) — host-исполнение заблокировано"
                 .to_string()
         }
+        BlockReason::LearningDisabled => {
+            "самообучение выключено (ai.skills.learning_enabled=false) — сохранение навыка заблокировано"
+                .to_string()
+        }
+        BlockReason::SkillsRootUnconfigured => {
+            "каталог навыков не настроен (ai.agent_skills_dir не задан) — некуда сохранять навык"
+                .to_string()
+        }
+        BlockReason::InvalidSkillTarget => {
+            "цель навыка должна быть `<имя>/SKILL.md` вне служебного `vendor/` — сохранение заблокировано"
+                .to_string()
+        }
     }
 }
 
@@ -585,9 +620,11 @@ fn line_diff(before: &str, after: &str) -> (u32, u32) {
 /// сам отвергнет некорректную правку, диф здесь лишь индикатор).
 fn proposed_content(action: &Action, current: &str) -> String {
     match &action.target {
-        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => {
-            action.content.clone().unwrap_or_default()
-        }
+        // SkillSave — content-несущая запись (тело SKILL.md): proposed = его content (для diff +N/-M
+        // current→proposed, переиспользует apply_skill_save в SL-7c).
+        ActionTarget::NoteCreate { .. }
+        | ActionTarget::NoteEdit { .. }
+        | ActionTarget::SkillSave { .. } => action.content.clone().unwrap_or_default(),
         ActionTarget::Frontmatter { key, .. } => {
             let value = action.value.clone().unwrap_or_default();
             crate::parser::set_frontmatter_field(current, key, &value)
@@ -606,6 +643,8 @@ fn file_status(action: &Action) -> FileStatus {
     match &action.target {
         ActionTarget::NoteCreate { .. } => FileStatus::New,
         ActionTarget::NoteEdit { .. } | ActionTarget::Frontmatter { .. } => FileStatus::Edit,
+        // SL-7: SkillSave не идёт vault-changeset-путём (свой dispatch_skill_save); инертно New здесь.
+        ActionTarget::SkillSave { .. } => FileStatus::New,
         // exec не порождает changeset-файл в 6b; инертно Edit (6c решит отдельный статус, если понадобится).
         ActionTarget::ShellRun { .. }
         | ActionTarget::ProcessSpawn { .. }
@@ -622,6 +661,8 @@ fn change_kind(action: &Action) -> ChangeKind {
     match &action.target {
         ActionTarget::NoteCreate { .. } => ChangeKind::New,
         ActionTarget::NoteEdit { .. } | ActionTarget::Frontmatter { .. } => ChangeKind::Edit,
+        // SL-7: запись навыка — свой токен (не vault new/edit); create-vs-overwrite несут +N/-M.
+        ActionTarget::SkillSave { .. } => ChangeKind::SkillSave,
         ActionTarget::ShellRun { .. }
         | ActionTarget::ProcessSpawn { .. }
         | ActionTarget::GitOp { .. } => ChangeKind::Exec,
@@ -684,7 +725,11 @@ pub async fn dispatch_action(
     // (1) Текущее содержимое цели IN-VAULT → classify_hash (токен на момент classify) + база диффа.
     // None (нет файла / побег) ⇒ classify_hash="" (конвенция apply Рубежа 3: on_disk_hash.unwrap_or("")).
     // exec-таргеты НЕ vault-цели (rel=="") → НЕ читаем диск (нечего; classify их не зависит от content).
-    let current = if is_exec {
+    // SL-7 SkillSave: `rel` — skills_root-rel, НЕ vault → читать его в canon_root БЕССМЫСЛЕННО и неверно
+    // (база рассинхрона). Сегодня недостижимо (classify→HardBlocked, нет инструмента), но defense-in-depth:
+    // НЕ трогаем vault для SkillSave (его pre-image возьмёт apply_skill_save из skills_root, SL-7c).
+    let skip_vault_read = is_exec || matches!(action.target, ActionTarget::SkillSave { .. });
+    let current = if skip_vault_read {
         None
     } else {
         read_current_in_vault(canon_root, &rel).await
@@ -700,6 +745,8 @@ pub async fn dispatch_action(
         overwrite_threshold: policy.overwrite_threshold,
         shell_enable: policy.shell_enable,
         sandbox_available: policy.sandbox_available,
+        learning_enabled: policy.learning_enabled,
+        skills_root_configured: policy.skills_root_configured,
     };
     let tier = classify(action, &ctx);
 
@@ -996,7 +1043,8 @@ fn exec_proposal_summary(action: &Action) -> String {
         }
         ActionTarget::NoteCreate { .. }
         | ActionTarget::NoteEdit { .. }
-        | ActionTarget::Frontmatter { .. } => "exec".to_string(),
+        | ActionTarget::Frontmatter { .. }
+        | ActionTarget::SkillSave { .. } => "exec".to_string(),
     }
 }
 
@@ -1036,6 +1084,8 @@ pub async fn dispatch_exec_decision(
         overwrite_threshold: policy.overwrite_threshold,
         shell_enable: policy.shell_enable,
         sandbox_available: policy.sandbox_available,
+        learning_enabled: policy.learning_enabled,
+        skills_root_configured: policy.skills_root_configured,
     };
     let tier = classify(action, &ctx);
     match &tier {
@@ -1131,7 +1181,10 @@ fn proposal_key(run_id: i64, action: &Action, classify_hash: &str) -> String {
     // EXHAUSTIVE (без `_ =>`): payload-репрезентация на каждый вариант. exec-таргеты не имеют content/value
     // → детерминированный payload из их полей (US-разделитель `\u{1f}`); tool_name() уже различает их.
     let payload: Option<String> = match &action.target {
-        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => action.content.clone(),
+        // SkillSave — content-несущая (тело SKILL.md), как create/edit: payload = content.
+        ActionTarget::NoteCreate { .. }
+        | ActionTarget::NoteEdit { .. }
+        | ActionTarget::SkillSave { .. } => action.content.clone(),
         ActionTarget::Frontmatter { .. } => action.value.clone(),
         ActionTarget::ShellRun { argv, cwd_rel } => Some(format!(
             "{}\u{1f}{}",
@@ -1179,6 +1232,28 @@ mod tests {
     fn block_message_covers_phase3_reasons() {
         assert!(block_message(&BlockReason::ShellDisabled).contains("shell_enable"));
         assert!(block_message(&BlockReason::SandboxUnavailable).contains("песочница"));
+    }
+
+    /// SL-7: skills-причины дают осмысленные сообщения; `with_skills_flags` ставит поля (дефолт OFF),
+    /// `change_kind(SkillSave)` → свой токен. Пинит builder (его прод-вызыватель — session.rs в SL-7d).
+    #[test]
+    fn skills_block_messages_and_policy_flags() {
+        assert!(block_message(&BlockReason::LearningDisabled).contains("learning_enabled"));
+        assert!(block_message(&BlockReason::SkillsRootUnconfigured).contains("agent_skills_dir"));
+        assert!(block_message(&BlockReason::InvalidSkillTarget).contains("SKILL.md"));
+
+        let p = DispatchPolicy::new(None, 64, 16);
+        assert!(
+            !p.learning_enabled && !p.skills_root_configured,
+            "дефолт skills-флагов — OFF (fail-safe)"
+        );
+        let p2 = p.with_skills_flags(true, true);
+        assert!(p2.learning_enabled && p2.skills_root_configured);
+
+        assert_eq!(
+            change_kind(&Action::skill_save("s/SKILL.md", "b")),
+            ChangeKind::SkillSave
+        );
     }
 
     /// 6c-2g: `change_kind` exec-таргетов → [`ChangeKind::Exec`] (токен "exec"); vault → New/Edit.

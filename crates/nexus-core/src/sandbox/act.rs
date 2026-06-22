@@ -75,6 +75,11 @@ impl TryFrom<&Action> for WireAction {
             | ActionTarget::GitOp { .. } => {
                 return Err("exec-таргет не представим на host/act (используй host/exec, Фаза-3)")
             }
+            // SL-7: SkillSave не представим на sandbox-wire (v1 — только in-process; навыки регистрируются
+            // лишь в session.rs, НЕ в sandbox/child.rs). Forge-невозможен: WireKind знает лишь 3 vault-вида.
+            ActionTarget::SkillSave { .. } => {
+                return Err("SkillSave не представим на host/act (v1 — только in-process)")
+            }
         };
         Ok(WireAction {
             kind,

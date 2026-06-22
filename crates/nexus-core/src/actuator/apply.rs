@@ -178,6 +178,17 @@ pub(in crate::actuator) async fn apply_action(
             "exec-таргет не применяется vault-путём apply (host/exec — Фаза-3 6c)".into(),
         );
     }
+    // ── РУБЕЖ 0-bis (SL-7): SkillSave НЕ пишется vault-путём apply ────────────────────────────────
+    // SkillSave конфайнится в skills_root и идёт ОТДЕЛЬНЫМ путём `apply_skill_save` (SL-7c), НЕ через
+    // apply_action (тот rooted в `canon_root` → писал бы навык в vault как заметку, потеряв snapshot →
+    // тихая необратимая перезапись). top-guard fail-closed: дошёл сюда SkillSave — Failed, БЕЗ записи
+    // (армы SkillSave в WRITE/success_summary/change_kind ниже становятся unreachable). Loud > молчаливо.
+    if matches!(action.target, ActionTarget::SkillSave { .. }) {
+        return ApplyOutcome::Failed(
+            "SkillSave не применяется vault-путём apply (skills_root — отдельный путь apply_skill_save)"
+                .into(),
+        );
+    }
     let rel = action.target.rel().to_string();
 
     // ── РУБЕЖ 1: canonicalize/symlink RAMPART (2-й рубеж к лексическому classify) ──────────────
@@ -461,6 +472,10 @@ pub(in crate::actuator) async fn apply_action(
         | ActionTarget::GitOp { .. } => {
             unreachable!("exec-таргет отсечён top-guard РУБЕЖА 0 в apply_action")
         }
+        // SL-7: SkillSave отсечён top-guard'ом РУБЕЖА 0-bis (return Failed до сюда) — provably dead.
+        ActionTarget::SkillSave { .. } => {
+            unreachable!("SkillSave отсечён top-guard РУБЕЖА 0-bis в apply_action")
+        }
     };
 
     // ── РУБЕЖ 7: ledger FINISH (поглощающий) ──────────────────────────────────────────────────
@@ -624,9 +639,11 @@ fn reject_symlinked_components(
 /// `value` (значение ключа) для frontmatter. Единый источник, чтобы ключ был стабилен.
 fn action_payload(action: &Action) -> Option<&str> {
     match &action.target {
-        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => {
-            action.content.as_deref()
-        }
+        // SkillSave — content-несущая запись (тело SKILL.md), как create/edit: payload = content
+        // (стабильный idempotency_key для skills-строки ledger'а; apply_skill_save переиспользует, SL-7c).
+        ActionTarget::NoteCreate { .. }
+        | ActionTarget::NoteEdit { .. }
+        | ActionTarget::SkillSave { .. } => action.content.as_deref(),
         ActionTarget::Frontmatter { .. } => action.value.as_deref(),
         // exec не имеет content/value payload (и отсечён top-guard'ом до сюда) → None (безвредно).
         ActionTarget::ShellRun { .. }
@@ -650,6 +667,10 @@ fn success_summary(action: &Action, rel: &str) -> String {
             unreachable!(
                 "exec-таргет не доходит до success_summary (отсечён top-guard apply_action)"
             )
+        }
+        // SL-7: SkillSave идёт через apply_skill_save (своё резюме), apply_action его отсекает top-guard'ом.
+        ActionTarget::SkillSave { .. } => {
+            unreachable!("SkillSave не доходит до success_summary apply_action (top-guard 0-bis)")
         }
     }
 }
@@ -997,6 +1018,8 @@ mod tests {
             overwrite_threshold: 64 * 1024,
             shell_enable: false,
             sandbox_available: false,
+            learning_enabled: false,
+            skills_root_configured: false,
         };
         assert_eq!(
             super::super::classify::classify(&action, &ctx),
@@ -1459,5 +1482,34 @@ mod tests {
             .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
             .count();
         assert_eq!(md_count, 0, "exec НЕ должен создавать файлы в vault");
+    }
+
+    /// **SL-7 RUBEZH-0-bis:** `apply_action` отвергает `SkillSave` top-guard'ом ДО любого vault-IO →
+    /// `Failed`, БЕЗ файла в vault и БЕЗ ledger-строки. ПИНИТ guard, от которого зависят
+    /// `unreachable!()`-армы SkillSave в WRITE/success_summary: уберут guard рефактором — покраснеет ДО
+    /// panic. SkillSave НИКОГДА не пишется vault-путём (его путь — `apply_skill_save`/skills_root, SL-7c).
+    #[tokio::test]
+    async fn skill_save_apply_is_fail_closed() {
+        let (_d, root, sink) = setup().await;
+        // rel формы навыка; даже выглядящий «как заметка» — apply_action не должен его писать в vault.
+        let action = Action::skill_save("MySkill/SKILL.md", "body of skill");
+        let outcome = apply_action(&action, 1, &root, &sink, Some("")).await;
+        assert!(
+            matches!(outcome, ApplyOutcome::Failed(_)),
+            "SkillSave должен быть Failed (RUBEZH-0-bis), получено {outcome:?}"
+        );
+        // Ни в vault-корне, ни во вложенном MySkill/ ничего не создано.
+        assert!(
+            !root.join("MySkill").exists(),
+            "SkillSave НЕ должен создавать каталог/файл в vault"
+        );
+        let any_file = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().is_file());
+        assert!(
+            !any_file,
+            "SkillSave НЕ должен создавать файлы в vault-корне"
+        );
     }
 }
