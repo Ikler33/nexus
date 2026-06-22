@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::actuator::{Action, ActionTarget, DispatchOutcome};
+use crate::actuator::{dispatch_action, Action, ActionTarget, DispatchOutcome, GatedToolCtx};
 use crate::agent::connect::{RpcError, RpcMessage, Transport};
 use crate::agent::ToolError;
 
@@ -137,6 +137,45 @@ pub trait ActuatorBackend: Send + Sync {
     /// Исполнить действие host-side. `run_id`/контекст держит бэкенд (host-штамповка). Err(ToolError) —
     /// HardBlocked/невалид (фенсенная ошибка для агента).
     async fn act(&self, action: &Action) -> Result<DispatchOutcome, ToolError>;
+}
+
+/// РЕАЛЬНЫЙ host-side [`ActuatorBackend`] рантайма песочницы (SANDBOX-4b): держит [`GatedToolCtx`]
+/// прогона (ВСЕ deps `dispatch_action` — canon_root / ledger / run_id / policy / decision_source / events)
+/// и исполняет действие через НЕИЗМЕНЁННЫЙ `dispatch_action`. Это host-сторона `host/act`: in-sandbox
+/// [`ProxyActuator`] шлёт RPC → [`HostActServer`] десериализует [`WireAction`]→`Action` → ЭТОТ бэкенд
+/// применяет authoritative (classify / RiskTier×autonomy / TokenBucket / kill-switch / snapshot / ledger
+/// write-before-act / undo — всё host-side).
+///
+/// КЛЮЧЕВОЙ ИНВАРИАНТ (нет второго policy-пути): `GatedToolCtx` — РОВНО тот контекст, что несут in-process
+/// актуатор-инструменты ([`crate::actuator::NoteCreateTool`] и пр.), поэтому гейт/леджер/blast-radius/undo
+/// у песочного прогона ИДЕНТИЧНЫ in-process пути. Песочница лишь добавляет OS-изоляцию вокруг loop'а;
+/// authoritative-решение остаётся в ОДНОМ `dispatch_action`. Proposal/Diff эмитятся `events` контекста
+/// (host-side forwarder → десктоп), а decision приходит host-side (`decision_source`) — НЕ из контейнера.
+pub struct DispatchActuatorBackend {
+    ctx: GatedToolCtx,
+}
+
+impl DispatchActuatorBackend {
+    /// Собрать из per-run [`GatedToolCtx`] (тот же, что у in-process инструментов прогона).
+    pub fn new(ctx: GatedToolCtx) -> Self {
+        Self { ctx }
+    }
+}
+
+#[async_trait]
+impl ActuatorBackend for DispatchActuatorBackend {
+    async fn act(&self, action: &Action) -> Result<DispatchOutcome, ToolError> {
+        dispatch_action(
+            action,
+            self.ctx.run_id,
+            &self.ctx.policy,
+            &self.ctx.decision_source,
+            self.ctx.events.as_ref(),
+            self.ctx.ledger.as_ref(),
+            self.ctx.canon_root.as_path(),
+        )
+        .await
+    }
 }
 
 /// Host-side обработчик `host/act`: десериализует [`WireAction`] → `Action` (exhaustive fail-closed) →
@@ -267,6 +306,85 @@ mod tests {
             value: Some("v".into()),
         };
         assert!(Action::try_from(wire).is_err());
+    }
+
+    // --- РЕАЛЬНЫЙ бэкенд (DispatchActuatorBackend) end-to-end (Tier-1: настоящий vault + dispatch_action) ---
+
+    use crate::actuator::{AuditSink, DecisionSource, DispatchPolicy, PolicyDefault};
+    use crate::db::Database;
+    use tempfile::TempDir;
+
+    /// Временный КАНОНИЗИРОВАННЫЙ vault + БД + `GatedToolCtx` (auto-политика, токены есть → Auto-тир
+    /// применяется сразу). Зеркалит harness `orchestrate::tests::setup`.
+    async fn real_gate(autonomy: Option<&str>) -> (TempDir, std::path::PathBuf, GatedToolCtx) {
+        let dir = TempDir::new().unwrap();
+        let canon_root = dir.path().canonicalize().unwrap();
+        let db = Database::open(canon_root.join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        let ledger = AuditSink::new(db.writer().clone(), db.reader().clone());
+        std::mem::forget(db); // writer/reader клонированы в ledger — актор жив, пока жив клон.
+        let policy = DispatchPolicy::new(autonomy, 100, 3);
+        let decision: Arc<dyn DecisionSource> = Arc::new(PolicyDefault);
+        let events: Arc<dyn crate::actuator::EventSink> =
+            Arc::new(crate::actuator::CollectingSink::new());
+        let ctx = GatedToolCtx::new(canon_root.clone(), ledger, 1, policy, decision, events);
+        (dir, canon_root, ctx)
+    }
+
+    /// Реальный бэкенд + auto-политика ⇒ Auto-тир `note.create` ПРИМЕНЯЕТСЯ на диск (тот же
+    /// `dispatch_action`, что in-process) — доказывает, что `GatedToolCtx`→`dispatch_action` живёт
+    /// через `ActuatorBackend`-трейт без второго policy-пути.
+    #[tokio::test]
+    async fn dispatch_backend_applies_auto_tier_to_disk() {
+        let (_d, root, ctx) = real_gate(Some("auto")).await;
+        let backend = DispatchActuatorBackend::new(ctx);
+        let out = backend
+            .act(&Action::note_create("Notes/Real.md", "живое тело"))
+            .await
+            .unwrap();
+        assert!(matches!(out, DispatchOutcome::Applied(_)), "out={out:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("Notes/Real.md")).unwrap(),
+            "живое тело"
+        );
+    }
+
+    /// ПОЛНЫЙ host-путь песочницы: `WireAction` → `HostActServer` → РЕАЛЬНЫЙ `DispatchActuatorBackend`
+    /// → `dispatch_action` → запись на диск. Это сборка SANDBOX-3 (сервер) + SANDBOX-4b (реальный бэкенд).
+    #[tokio::test]
+    async fn host_act_server_with_real_backend_writes_to_disk() {
+        let (_d, root, ctx) = real_gate(Some("auto")).await;
+        let srv = HostActServer::new(DispatchActuatorBackend::new(ctx));
+        let params = serde_json::to_value(WireAction::from(&Action::note_create(
+            "Notes/Wire.md",
+            "из RPC",
+        )))
+        .unwrap();
+        let out = srv.handle(HOST_ACT, params).await.unwrap();
+        let w: WireDispatchOutcome = serde_json::from_value(out).unwrap();
+        assert!(matches!(w, WireDispatchOutcome::Applied { .. }), "w={w:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("Notes/Wire.md")).unwrap(),
+            "из RPC"
+        );
+    }
+
+    /// confirm-политика + `PolicyDefault` (reject-all) ⇒ host-бэкенд НЕ пишет (Confirm/Auto-предложение
+    /// отклонено host-side) — kill-path: контейнер НЕ может форсировать запись, host решает.
+    #[tokio::test]
+    async fn dispatch_backend_confirm_policy_does_not_write() {
+        let (_d, root, ctx) = real_gate(Some("confirm")).await;
+        let backend = DispatchActuatorBackend::new(ctx);
+        let out = backend
+            .act(&Action::note_create(
+                "Notes/Nope.md",
+                "не должно записаться",
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(out, DispatchOutcome::Rejected(_)), "out={out:?}");
+        assert!(!root.join("Notes/Nope.md").exists(), "файл НЕ записан");
     }
 
     /// Мок-бэкенд: записывает последнее действие + возвращает заданный исход (без vault/гейта).
