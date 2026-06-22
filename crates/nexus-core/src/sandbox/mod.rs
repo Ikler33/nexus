@@ -82,6 +82,11 @@ pub struct SandboxConfig {
     pub host_run_dir: PathBuf,
     /// Ресурс-кэпы контейнера.
     pub caps: ResourceCaps,
+    /// `--user <uid>:<gid>` процесса контейнера (None → USER образа). КРИТИЧНО для socket/vault-доступа:
+    /// при `--userns=keep-id` процесс ДОЛЖЕН бежать под HOST-uid (владельцем 0600-сокетов и `:ro`-vault),
+    /// иначе непривилегированный USER образа (uid 10001) НЕ откроет их (EACCES). `SandboxRunner` выставляет
+    /// его в host-uid:gid; render оставлен опциональным, чтобы Tier-1 render-тесты не зависели от uid хоста.
+    pub run_as: Option<String>,
 }
 
 impl SandboxConfig {
@@ -123,6 +128,7 @@ impl SandboxConfig {
             host_vault,
             host_run_dir,
             caps,
+            run_as: None,
         })
     }
 }
@@ -188,7 +194,7 @@ pub fn sandbox_run_plan_with_cmd(cfg: &SandboxConfig, cmd: &[String]) -> Sandbox
         "/tmp".into(), // writable scratch (rootfs read-only)
         "--cap-drop=ALL".into(),
         "--security-opt=no-new-privileges".into(), // `=`-форма (как --cap-drop=/--network=), спека §3.1
-        "--userns=keep-id".into(), // uid контейнера = host-uid (владелец vault-bind)
+        "--userns=keep-id".into(),                 // host-uid маппится в себя в userns
         "--pids-limit".into(),
         cfg.caps.pids.to_string(),
         "--memory".into(),
@@ -201,8 +207,15 @@ pub fn sandbox_run_plan_with_cmd(cfg: &SandboxConfig, cmd: &[String]) -> Sandbox
         // per-run сокеты (rw) — ОТДЕЛЬНЫЙ mount, НЕ под vault (§4.4).
         "-v".into(),
         format!("{}:{CONTAINER_RUN_DIR}", cfg.host_run_dir.display()),
-        cfg.image.clone(),
     ];
+    // `--user host-uid:gid` (если задан) ДО образа: процесс контейнера бежит под host-uid → владеет
+    // 0600-сокетами + читает `:ro`-vault (иначе непривилегированный USER образа → EACCES). Перекрывает
+    // USER образа; бинарь world-rx, /tmp tmpfs rw — доступны под host-uid.
+    if let Some(user) = &cfg.run_as {
+        argv.push("--user".into());
+        argv.push(user.clone());
+    }
+    argv.push(cfg.image.clone());
     // CMD ПОСЛЕ образа → аргументы ENTRYPOINT (nexus-agentd). При пустом cmd образ остаётся последним.
     argv.extend(cmd.iter().cloned());
     SandboxPlan {
@@ -254,6 +267,26 @@ mod tests {
             ResourceCaps::default(),
         );
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn run_as_renders_user_before_image() {
+        let mut c = cfg();
+        c.run_as = Some("1000:1000".into());
+        let p = sandbox_run_plan(&c);
+        let upos = p.argv.iter().position(|x| x == "--user").expect("--user");
+        assert_eq!(p.argv[upos + 1], "1000:1000");
+        let ipos = p
+            .argv
+            .iter()
+            .position(|x| x == DEFAULT_SANDBOX_IMAGE)
+            .unwrap();
+        assert!(
+            upos < ipos,
+            "--user ДО образа (это опция podman run, не arg ENTRYPOINT)"
+        );
+        // None (дефолт) → нет --user (Tier-1 render-тесты не зависят от uid хоста).
+        assert!(!sandbox_run_plan(&cfg()).argv.iter().any(|x| x == "--user"));
     }
 
     #[test]

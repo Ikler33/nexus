@@ -132,6 +132,18 @@ impl SandboxRunner {
         let dir = self.config.host_run_dir.clone();
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("создать каталог сокетов {}: {e}", dir.display()))?;
+
+        // КРИТИЧНО (live-bug на .28): процесс контейнера ДОЛЖЕН бежать под host-uid, иначе
+        // непривилегированный USER образа (uid 10001) + `--userns=keep-id` НЕ откроет host-owned
+        // 0600-сокеты/`:ro`-vault (EACCES). Берём uid:gid из ТОЛЬКО ЧТО созданного нами каталога (его
+        // владелец = наш процесс) — без libc/getuid. Рендерим `--user`.
+        let mut config = self.config.clone();
+        if config.run_as.is_none() {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(meta) = std::fs::metadata(&dir) {
+                config.run_as = Some(format!("{}:{}", meta.uid(), meta.gid()));
+            }
+        }
         // Каталог сокетов — owner-only (0700): defense-in-depth поверх 0600-сокетов (чужой не зайдёт даже
         // в каталог). Best-effort (FS без unix-прав не валит прогон).
         {
@@ -195,7 +207,7 @@ impl SandboxRunner {
         };
 
         // Spawn `podman run … --sandbox-child …` и ждать выхода контейнера (агент-loop завершился).
-        let plan = sandbox_run_plan_with_cmd(&self.config, &child.to_argv());
+        let plan = sandbox_run_plan_with_cmd(&config, &child.to_argv());
         let status_res = tokio::process::Command::new(&plan.argv[0])
             .args(&plan.argv[1..])
             .status()
