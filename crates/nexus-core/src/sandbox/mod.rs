@@ -30,6 +30,10 @@ pub mod provider;
 /// → реальный host-форвардер (события хода → десктоп). SANDBOX-4b.
 pub mod event;
 
+/// `run_sandbox_child_session` — драйвер in-container loop'а (proxy провайдер/актуатор/форвардер +
+/// `run_agent_loop`). Composition-root песочницы (`--sandbox-child`). SANDBOX-4b-2b.
+pub mod child;
+
 /// Образ песочницы по умолчанию (тот же, что у DEPLOY-3 `nexus deploy docker`).
 pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 /// Путь vault ВНУТРИ контейнера (`:ro`), = `NEXUS_VAULT` образа.
