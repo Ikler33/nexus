@@ -134,7 +134,9 @@ impl OpenAiToolProvider {
 }
 
 /// [`ToolSpec`] → OpenAI `tools[]`-элемент (`{type:"function", function:{name,description,parameters}}`).
-fn tool_spec_to_json(spec: &ToolSpec) -> serde_json::Value {
+/// `pub(crate)` — переиспользуется in-sandbox `ProxyToolProvider` (SANDBOX-4), чтобы не дублировать
+/// схему function-tools.
+pub(crate) fn tool_spec_to_json(spec: &ToolSpec) -> serde_json::Value {
     serde_json::json!({
         "type": "function",
         "function": {
