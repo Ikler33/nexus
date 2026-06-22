@@ -48,7 +48,7 @@
   flex-shrink: 0;
   border-radius: var(--radius-md);
   background: var(--color-warning);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .headText {
@@ -58,6 +58,7 @@
 }
 
 .title {
+  font-family: var(--font-headline);
   font-size: var(--text-lg);
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -226,13 +227,19 @@
   border-color: var(--color-border-strong);
 }
 
-.chosen {
+/* per-side accent: local = accent, remote = link (макет conflict.css) */
+.sideOurs.chosen {
   background: var(--color-accent-soft);
   border-color: var(--color-accent);
 }
 
+.sideTheirs.chosen {
+  background: var(--color-link-soft);
+  border-color: var(--color-link);
+}
+
 .dimmed {
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
 .sideLabel {
@@ -249,6 +256,14 @@
   color: var(--color-text-faint);
   background: var(--color-chrome);
   border-bottom: 1px solid var(--color-border);
+}
+
+.sideOurs .sideLabel {
+  color: var(--color-accent);
+}
+
+.sideTheirs .sideLabel {
+  color: var(--color-link);
 }
 
 .sideText {
@@ -290,10 +305,39 @@
   color: var(--color-accent);
 }
 
-.pickOn {
+/* per-side ON states (макет conflict.css): local=accent fill, remote=link soft, both=muted */
+.pickOnLocal {
   background: var(--color-accent);
   color: var(--color-on-accent);
-  border-color: var(--color-accent);
+  border-color: transparent;
+}
+
+.pickOnLocal:hover {
+  color: var(--color-on-accent);
+}
+
+/* remote/both use soft tints (theme-safe, token-only) instead of a solid fill
+   that would need a non-existent on-link colour across the 13 themes */
+.pickOnRemote {
+  background: var(--color-link-soft);
+  color: var(--color-link);
+  border-color: var(--color-link);
+}
+
+.pickOnRemote:hover {
+  color: var(--color-link);
+  border-color: var(--color-link);
+}
+
+.pickOnBoth {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.pickOnBoth:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
 }
 
 .result {
