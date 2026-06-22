@@ -16,11 +16,11 @@
 //!    host-нормализованным argv (контейнер argv НЕ переподаёт → закрыт TOCTOU approve-ls-run-rm).
 //!  - **report** (6c-2): контейнер шлёт исход → host финализирует ledger EXECUTED/FAILED.
 //!
-//! **6c-2c (текущий уровень):** реализованы `decide` (6c-1) + `execute` (redeem токена → ledger
-//! `APPROVED→EXECUTING` + host-authority `WireExecGo`, kill-switch last-moment); `HostExecServer` роутит
-//! `decide`+`execute`. `report` (фаза финализации) — зарезервирован → `invalid_params` (6c-2d).
-//! Контейнерный исполнитель (`exec_child`) + ProxyExec-шим + `serve_host`-проводка — 6c-2e/2f. host
-//! НИКОГДА не исполняет команду здесь.
+//! **6c-2d (текущий уровень):** реализован ВЕСЬ host-цикл — `decide` (6c-1) + `execute` (redeem токена →
+//! ledger `APPROVED→EXECUTING` + host-authority `WireExecGo`, kill-switch last-moment, 6c-2c) + `report`
+//! (консьюм `in_flight` → ledger `EXECUTING→EXECUTED|FAILED`, СТРУКТУРНЫЙ outcome БЕЗ сырого вывода).
+//! `HostExecServer` роутит все 3 фазы. Контейнерный исполнитель (`exec_child` — есть, 6c-2a) подключается
+//! ProxyExec-шимом + `serve_host`-проводкой (6c-2e/2f). host НИКОГДА не исполняет команду здесь.
 //!
 //! **6c-2 ОБЯЗАН (review hard-gates, флагнуто здесь чтобы инвариант не дрейфанул):**
 //!  1. ✅ `redeem` (execute, 6c-2c) КОНСЬЮМИТ токен из `pending` (одноразовость + кэп [`MAX_PENDING_EXEC`]
@@ -34,7 +34,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::actuator::audit::{self, STATE_APPROVED, STATE_EXECUTING};
+use crate::actuator::audit::{self, STATE_APPROVED, STATE_EXECUTED, STATE_EXECUTING, STATE_FAILED};
 use crate::actuator::{Action, ActionTarget};
 use crate::agent::connect::RpcError;
 
@@ -234,6 +234,21 @@ pub trait ExecBackend: Send + Sync {
     async fn execute(&self, _exec_token: &str) -> Result<WireExecGo, RpcError> {
         Err(RpcError::invalid_params())
     }
+
+    /// Фаза report (6c-2d): финализация исхода исполнения. КОНСЬЮМИТ `in_flight[token]` → ledger
+    /// `EXECUTING→EXECUTED|FAILED`. **Приватность**: в ledger пишется СТРУКТУРНОЕ резюме (exit + байт-
+    /// счётчики), НЕ сырой stdout/stderr. `undo_ref` принимается на проводе, но не персистится (→6c-2h).
+    /// По умолчанию `invalid_params` (мок/6c-1-уровень). Ошибка → `RpcError` (нет in_flight / replay / гонка).
+    async fn report(
+        &self,
+        _exec_token: &str,
+        _exit_code: i32,
+        _stdout_tail: &str,
+        _stderr_tail: &str,
+        _undo_ref: Option<&str>,
+    ) -> Result<WireExecResult, RpcError> {
+        Err(RpcError::invalid_params())
+    }
 }
 
 /// Host-обработчик `host/exec`. 6c-2c: маршрутизирует `decide`+`execute` (redeem) → `backend`;
@@ -287,8 +302,21 @@ impl<B: ExecBackend> HostExecServer<B> {
                 let go = self.backend.execute(&token).await?;
                 serde_json::to_value(go).map_err(|e| RpcError::internal(e.to_string()))
             }
-            // 6c-2d: report → финализация ledger (EXECUTING→EXECUTED|FAILED).
-            WireExecPhase::Report => Err(RpcError::invalid_params()),
+            WireExecPhase::Report => {
+                // fail-closed: report несёт exec_token + exit_code (+ tails/undo_ref); `action` → отказ.
+                if req.action.is_some() {
+                    return Err(RpcError::invalid_params());
+                }
+                let token = req.exec_token.ok_or_else(RpcError::invalid_params)?;
+                let exit_code = req.exit_code.ok_or_else(RpcError::invalid_params)?;
+                let stdout = req.stdout_tail.unwrap_or_default();
+                let stderr = req.stderr_tail.unwrap_or_default();
+                let result = self
+                    .backend
+                    .report(&token, exit_code, &stdout, &stderr, req.undo_ref.as_deref())
+                    .await?;
+                serde_json::to_value(result).map_err(|e| RpcError::internal(e.to_string()))
+            }
         }
     }
 }
@@ -473,6 +501,15 @@ impl DispatchExecBackend {
         self.in_flight.lock().expect("in_flight mutex").len()
     }
 
+    /// Ledger-строка по propose_key (для тестов: проверка state/outcome финализации + приватности).
+    #[cfg(test)]
+    async fn ledger_row(&self, propose_key: &str) -> Option<crate::actuator::audit::ActionRow> {
+        audit::lookup(&self.ctx.ledger.reader_handle(), propose_key)
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// Тест-хелпер: propose_key единственной висящей записи (проверка, что 6c-2b его сохранил).
     #[cfg(test)]
     fn only_pending_propose_key(&self) -> Option<String> {
@@ -611,6 +648,63 @@ impl ExecBackend for DispatchExecBackend {
         );
         // argv/env/cwd host-authority из СОХРАНЁННОГО действия (контейнер их не переподаёт).
         Ok(build_exec_go(&pending.action, &[]))
+    }
+
+    /// Фаза report (6c-2d): КОНСЬЮМИТ `in_flight[token]` (one-shot финализация) → ledger
+    /// `EXECUTING→EXECUTED|FAILED` (`exit_code==0` ⇒ EXECUTED). **Приватность**: ledger outcome —
+    /// СТРУКТУРНОЕ резюме (exit + байт-счётчики хвостов), сырой stdout/stderr НЕ персистится (зеркало
+    /// diff_summary). `undo_ref` пока не персистится (→6c-2h GitOp pre-op-ref). finish — CAS (outcome IS
+    /// NULL): replay/гонка → false → ошибка. Нет in_flight (нет execute / двойной report) → invalid_params.
+    async fn report(
+        &self,
+        exec_token: &str,
+        exit_code: i32,
+        stdout_tail: &str,
+        stderr_tail: &str,
+        _undo_ref: Option<&str>,
+    ) -> Result<WireExecResult, RpcError> {
+        // Консьюм in_flight (one-shot): отсутствует ⇒ нет execute / повторный report ⇒ fail-closed.
+        let in_flight = match self
+            .in_flight
+            .lock()
+            .expect("in_flight mutex")
+            .remove(exec_token)
+        {
+            Some(f) => f,
+            None => return Err(RpcError::invalid_params()),
+        };
+        let state = if exit_code == 0 {
+            STATE_EXECUTED
+        } else {
+            STATE_FAILED
+        };
+        // ПРИВАТНОСТЬ: только структурное резюме (exit + длины), НЕ сырой вывод (он — в ExecResult-событие
+        // 6c-2g для транзитного UI, не в долговечный ledger).
+        let outcome = format!(
+            "exec exit={exit_code} (stdout {}B, stderr {}B)",
+            stdout_tail.len(),
+            stderr_tail.len()
+        );
+        // undo пока None — undo_ref→UndoCols + exec-undo-handler приходят в 6c-2h (GitOp pre-op-ref).
+        let finalized = audit::finish(
+            &self.ctx.ledger.writer_handle(),
+            &in_flight.propose_key,
+            state,
+            &outcome,
+            None,
+        )
+        .await
+        .unwrap_or(false);
+        if !finalized {
+            // Строка уже терминальна (гонка/двойная финализация) — fail-closed.
+            return Err(RpcError::internal(
+                "exec: ledger финализация не применена (строка уже терминальна)",
+            ));
+        }
+        Ok(WireExecResult {
+            exit_code,
+            finalized: true,
+        })
     }
 }
 
@@ -1088,5 +1182,108 @@ mod tests {
             "после un-pause тот же токен ok"
         );
         assert_eq!(backend.in_flight_count(), 1);
+    }
+
+    // ── 6c-2d: report (finalize) ─────────────────────────────────────────────────────────────────
+    /// Approve→execute→захват propose_key→report. Helper: возвращает (backend, token, propose_key).
+    async fn approve_execute(action: Action) -> (TempDir, DispatchExecBackend, String, String) {
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(crate::actuator::BatchDecision::from_pairs([(
+            1,
+            ItemDecision::Approve,
+        )]))
+        .await
+        .unwrap();
+        let (dir, backend) = exec_gate(true, true, Arc::new(chan)).await;
+        let token = match backend.decide(&action).await {
+            WireExecDecision::Approved { exec_token, .. } => exec_token,
+            other => panic!("ожидался Approved, получено {other:?}"),
+        };
+        let propose_key = backend
+            .only_pending_propose_key()
+            .expect("propose_key до execute");
+        backend.execute(&token).await.expect("execute ok");
+        (dir, backend, token, propose_key)
+    }
+
+    /// report(exit=0): in_flight консьюмнут, ledger → EXECUTED.
+    #[tokio::test]
+    async fn report_finalizes_executed() {
+        let (_d, backend, token, pk) =
+            approve_execute(Action::shell_run(vec!["ls".into()], None)).await;
+        let res = backend
+            .report(&token, 0, "ok-output", "", None)
+            .await
+            .expect("report ok");
+        assert_eq!(res.exit_code, 0);
+        assert!(res.finalized);
+        assert_eq!(backend.in_flight_count(), 0, "in_flight консьюмнут");
+        let row = backend.ledger_row(&pk).await.expect("ledger-строка");
+        assert_eq!(row.state, STATE_EXECUTED);
+    }
+
+    /// report(exit!=0): ledger → FAILED.
+    #[tokio::test]
+    async fn report_finalizes_failed() {
+        let (_d, backend, token, pk) =
+            approve_execute(Action::shell_run(vec!["false".into()], None)).await;
+        backend
+            .report(&token, 1, "", "boom", None)
+            .await
+            .expect("report ok");
+        let row = backend.ledger_row(&pk).await.expect("ledger-строка");
+        assert_eq!(row.state, STATE_FAILED);
+    }
+
+    /// ПРИВАТНОСТЬ: сырой stdout/stderr НЕ попадает в ledger outcome (только exit + байт-счётчики).
+    #[tokio::test]
+    async fn report_does_not_persist_raw_tails() {
+        let secret = "SUPER-SECRET-TOKEN-abc123";
+        let (_d, backend, token, pk) =
+            approve_execute(Action::shell_run(vec!["cat".into()], None)).await;
+        backend
+            .report(&token, 0, secret, secret, None)
+            .await
+            .expect("report ok");
+        let row = backend.ledger_row(&pk).await.expect("ledger-строка");
+        let outcome = row.outcome.unwrap_or_default();
+        assert!(
+            !outcome.contains(secret),
+            "сырой хвост НЕ персистится в ledger: {outcome:?}"
+        );
+        assert!(
+            outcome.contains("exit=0"),
+            "структурное резюме: {outcome:?}"
+        );
+        // undo_ref пока не персистится (6c-2h).
+        assert!(row.undo_ref.is_none(), "undo не персистится в 6c-2d");
+    }
+
+    /// report без execute (нет in_flight) → invalid_params.
+    #[tokio::test]
+    async fn report_without_execute_fails() {
+        let (_d, backend) = exec_gate(true, true, Arc::new(PolicyDefault)).await;
+        assert!(
+            backend
+                .report("no-such-token", 0, "", "", None)
+                .await
+                .is_err(),
+            "report без execute → ошибка"
+        );
+    }
+
+    /// Повторный report тем же токеном → ошибка (in_flight консьюмнут first-call, one-shot финализация).
+    #[tokio::test]
+    async fn report_replay_fails() {
+        let (_d, backend, token, _pk) =
+            approve_execute(Action::shell_run(vec!["ls".into()], None)).await;
+        assert!(
+            backend.report(&token, 0, "", "", None).await.is_ok(),
+            "первый report ok"
+        );
+        assert!(
+            backend.report(&token, 0, "", "", None).await.is_err(),
+            "повторный report → ошибка (one-shot)"
+        );
     }
 }

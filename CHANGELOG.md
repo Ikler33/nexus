@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2d — `host/exec` фаза report (финализация ledger EXECUTING→EXECUTED|FAILED + приватность вывода)
+
+Четвёртый суб-срез исполнительной половины Фазы-3: host-СТОРОНА фазы `report` — финализация ledger по исходу исполнения, с приватным (структурным) outcome. Замыкает 3-актный host-цикл `decide→execute→report`. Контейнерный исполнитель + ProxyExec-шим + `serve_host`-проводка — 6c-2e/2f.
+
+- **`ExecBackend::report(exec_token, exit_code, stdout_tail, stderr_tail, undo_ref) -> WireExecResult`** (default `invalid_params`) + `HostExecServer` роутит фазу `Report` (кросс-фазовый fail-closed: `action`→отказ); все 3 фазы (decide/execute/report) теперь маршрутизируются.
+- **`DispatchExecBackend::report`**: КОНСЬЮМИТ `in_flight[token]` (one-shot финализация; отсутствует → `invalid_params`: нет execute / двойной report) → ledger `audit::finish` `EXECUTING→EXECUTED` (exit==0) | `FAILED` (CAS `outcome IS NULL` — replay/гонка → ошибка).
+- **ПРИВАТНОСТЬ (review hard-gate)**: в долговечный ledger outcome пишется ТОЛЬКО структурное резюме (`exec exit=N (stdout NB, stderr MB)`) — сырой stdout/stderr НЕ персистится (зеркало diff_summary; сырой вывод — в транзитное ExecResult-событие 6c-2g). `undo_ref` принимается на проводе, но НЕ персистится (→6c-2h GitOp pre-op-ref + exec-undo-handler атомарно).
+
+27 Tier-1 тестов exec_host (+5: report-finalizes-**executed**/**failed** + ledger-state; **report-does-not-persist-raw-tails** (секрет в хвостах НЕ в ledger outcome, undo None); report-without-execute→err; report-replay→err one-shot). clippy 0, fmt + node-lints зелёные. Инертен для контейнера (ProxyExec — 6c-2e).
+
 ### Агент · SANDBOX-6c-2c — `host/exec` фаза execute (redeem одноразового токена → ledger EXECUTING + WireExecGo)
 
 Третий суб-срез исполнительной половины Фазы-3: host-СТОРОНА фазы `execute` — redeem одноразового `exec_token` в host-authority сигнал «исполни», под write-before-act ledger-переходом + kill-switch. Контейнерный исполнитель + report-финализация — 6c-2d/2e.
