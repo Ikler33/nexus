@@ -621,6 +621,27 @@ export interface AiConfigDto {
   embedding: AiEndpoint | null;
   /** Утилитарная мелкая модель (`ai.fast`) — inline/судья/новости. */
   fast: AiEndpoint | null;
+  // Agent-флаги (Hermes-6/SYNC): конфиг ТОЛЬКО headless-агента (agentd). Десктоп их рантаймом не
+  // читает — выводятся тогглами для персиста в `.nexus/local.json`. См. AgentFlagsDto / setAgentFlags.
+  /** `ai.agent_autonomy` («confirm»|«auto»): дефолт-постура headless-коннектора. `null` → confirm. */
+  agentAutonomy: string | null;
+  /** `ai.sandbox_enabled`: мастер-свитч OS-песочницы (Linux-only). Предпосылка shell-exec. */
+  sandboxEnabled: boolean;
+  /** `ai.shell_enable`: host-exec в песочнице (Confirm, никогда Auto). Требует sandbox + Linux. */
+  shellEnable: boolean;
+  /** `ai.web.allow_public_fetch`: снимает allowlist с агентского `web.fetch` (публичный egress). */
+  webAllowPublicFetch: boolean;
+  /** Поддержана ли песочница/host-exec на ЭТОЙ платформе (Linux-only) — фронт дизейблит sandbox/shell. */
+  shellSupported: boolean;
+}
+
+/** Записываемый поднабор agent-флагов (зеркалит Rust `settings::AgentFlagsDto`). */
+export interface AgentFlagsDto {
+  /** «confirm»|«auto»; иное/`null` → дефолт confirm (ключ не пишется в local.json). */
+  agentAutonomy: string | null;
+  sandboxEnabled: boolean;
+  shellEnable: boolean;
+  webAllowPublicFetch: boolean;
 }
 /** Снимок политики эгресса ядра (зеркалит Rust `net::EgressState`; срез 2 net.md). */
 export interface EgressState {
@@ -1622,6 +1643,16 @@ export const tauriApi = {
     /** Проверка связи с LLM-эндпоинтом (пробный GET `/v1/models`). Резолвится = достижим; throw = нет. */
     testConnection: (url: string): Promise<void> =>
       isTauri() ? invoke<void>('test_ai_connection', { url }) : mockSettings.testConnection(url),
+
+    /**
+     * Персистит agent-флаги (агентд-only) в `.nexus/local.json`. В ОТЛИЧИЕ от setAiConfig — без
+     * hot-apply/egress-ресинка: эти флаги читает только headless-агентд при старте. Мгновенно.
+     * Возвращает нормализованный набор (невалидная autonomy → `null` = confirm).
+     */
+    setAgentFlags: (flags: AgentFlagsDto): Promise<AgentFlagsDto> =>
+      isTauri()
+        ? invoke<AgentFlagsDto>('set_agent_flags', { flags })
+        : mockSettings.setAgentFlags(flags),
   },
 };
 

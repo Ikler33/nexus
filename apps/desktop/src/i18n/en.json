@@ -196,6 +196,24 @@
       "consentWarn": "Web-search requests will go to {{host}}.",
       "saved": "Saved.",
       "saveError": "Not saved: {{msg}}"
+    },
+    "agent": {
+      "title": "Autonomous (server) agent",
+      "intro": "Settings for the autonomous agent run via the connector (e.g. the nexus-agentd server). Stored in .nexus/local.json. The desktop AI chat and agent panel are NOT affected — they pick autonomy per run and use the web settings above.",
+      "autonomy": "Connector autonomy",
+      "autonomyDesc": "Default posture for the headless connector. «Confirm» — every change is proposed for approval. «Auto» — the agent auto-applies low-risk changes; risky or large writes are still proposed.",
+      "autonomyOpts": { "confirm": "Confirm", "auto": "Auto" },
+      "autonomyWarn": "Auto: the server agent applies low-risk changes without asking. Risky or large writes are still proposed; everything is logged and reversible.",
+      "sandbox": "OS sandbox",
+      "sandboxDesc": "Run the agent inside an ephemeral rootless container with no network. Required for shell execution.",
+      "linuxOnly": "Linux-only (rootless Podman) — inert on this platform.",
+      "shell": "Shell execution",
+      "shellDesc": "Let the agent run shell/process/git commands inside the sandbox. Always under Confirm — never Auto.",
+      "shellReq": "Requires the OS sandbox (Linux). Enable the sandbox first.",
+      "shellWarn": "The server agent may execute commands inside the sandbox. Each run needs explicit approval (Confirm, never Auto); a kill-switch and audit log apply.",
+      "publicFetch": "Public web fetch",
+      "publicFetchDesc": "Allow the agent's web.fetch to reach ANY public URL, not just your SearXNG. Needs the agent's web tools enabled in local.json.",
+      "publicFetchWarn": "The server agent may fetch any public URL. Private/loopback addresses stay blocked (SSRF guard); every request is audited."
     }
   },
   "sidebar": {

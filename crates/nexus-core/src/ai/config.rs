@@ -100,9 +100,13 @@ pub struct AiConfig {
 }
 
 /// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct WebConfig {
-    /// База SearXNG (например `http://host:8888`). Пусто → web.search не поднимается.
+    /// База SearXNG (например `http://host:8888`). Пусто → web.search не поднимается. `#[serde(default)]`:
+    /// частичный `ai.web` (напр. только `allow_public_fetch` из тоггла настроек) парсится с пустым URL и
+    /// остаётся ИНЕРТНЫМ (агентд поднимает веб лишь при `enabled && !url.is_empty()`) — без этого
+    /// присутствие `ai.web` без `url` валило бы парс всего `local.json` (потеря chat/embedding-конфига).
+    #[serde(default)]
     pub url: String,
     /// Consent-флаг (ДЕФОЛТ false): без него веб-инструменты не регистрируются.
     #[serde(default)]
@@ -423,5 +427,47 @@ mod tests {
             .ai
             .fast
             .is_none());
+    }
+
+    /// Agent-флаги настроек (агентд-only): `agent_autonomy`/`sandbox_enabled`/`shell_enable` —
+    /// дефолты SAFE (None/false), явные значения парсятся. Эти поля выводятся тогглами Настроек→ИИ
+    /// в `local.json`, читаются headless-агентом (`nexus-agentd`).
+    #[test]
+    fn parses_agent_runtime_flags() {
+        // Пусто → дефолты safe.
+        let zc = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert!(zc.ai.agent_autonomy.is_none(), "autonomy None → confirm");
+        assert!(!zc.ai.sandbox_enabled);
+        assert!(!zc.ai.shell_enable);
+
+        // Явный opt-in.
+        let on = LocalConfig::parse(
+            r#"{"ai":{"agent_autonomy":"auto","sandbox_enabled":true,"shell_enable":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(on.ai.agent_autonomy.as_deref(), Some("auto"));
+        assert!(on.ai.sandbox_enabled);
+        assert!(on.ai.shell_enable);
+    }
+
+    /// SAFETY (тоггл `allow_public_fetch` в Настройках): частичный `ai.web` БЕЗ `url` (тоггл пишет лишь
+    /// `allow_public_fetch`, а `url`/`enabled` живут в отдельном `websearch.json` десктопа) обязан
+    /// ПАРСИТЬСЯ — иначе `WebConfig.url` без `#[serde(default)]` уронил бы весь `local.json`
+    /// (потеря chat/embedding-конфига). url пуст → веб ИНЕРТЕН (агентд требует `enabled && !url.empty`).
+    #[test]
+    fn partial_web_config_with_only_public_fetch_parses_and_is_inert() {
+        let cfg = LocalConfig::parse(r#"{"ai":{"web":{"allow_public_fetch":true}}}"#).unwrap();
+        let web = cfg.ai.web.expect("ai.web парсится без url (serde default)");
+        assert!(web.url.is_empty(), "url по умолчанию пуст");
+        assert!(!web.enabled, "enabled по умолчанию false → веб инертен");
+        assert!(web.allow_public_fetch, "флаг прочитан");
+
+        // chat/embedding в том же документе НЕ теряются (раньше парс падал бы целиком).
+        let mixed = LocalConfig::parse(
+            r#"{"ai":{"chat":{"url":"http://h:8080"},"web":{"allow_public_fetch":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(mixed.ai.chat.unwrap().url, "http://h:8080");
+        assert!(mixed.ai.web.unwrap().allow_public_fetch);
     }
 }
