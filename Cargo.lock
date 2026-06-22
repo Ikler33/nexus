@@ -2825,6 +2825,7 @@ dependencies = [
  "flate2",
  "futures",
  "getrandom 0.2.17",
+ "libc",
  "notify-debouncer-full",
  "pulldown-cmark",
  "reqwest 0.12.28",

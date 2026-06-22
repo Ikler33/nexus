@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX — `SO_PEERCRED` peer-uid гейт на per-run сокетах (закрывает §4.3.6 / §10.1 T8)
+
+Спека `docs/specs/agent-sandbox.md §4.3` инвариант 6 / §10.1 (T8) требовали `SO_PEERCRED`/uid-check на per-run AF_UNIX-листенерах прогона (egress/act/event, и будущий exec), чтобы egress/* и host/* RPC мог драйвить **ТОЛЬКО** спавненный контейнер (его run_as-uid). Инвариант был СПЕЦИФИЦИРОВАН, но НЕ реализован — защита держалась лишь на 0600-правах сокета + 0700 per-run каталога. Этот срез закрывает разрыв spec↔код.
+
+- **`peer_uid(stream) -> Option<u32>`** (`agent/connect/afunix.rs`, `pub(crate)`) — читает uid пира соединённого AF_UNIX-сокета через `getsockopt(SO_PEERCRED)` (Linux). Это **ядро-достоверный** credential: клиент не подделает его (в отличие от прикладных полей RPC). **Fail-closed:** сбой syscall / усечённый `ucred` → `None`. Под `#[cfg(target_os = "linux")]`; на иных ОС — стаб → `None` (sandbox — Linux-host-only, §9). Дека `libc` ТОЛЬКО под Linux (уже транзитивно в Cargo.lock — в дерево ничего не приходит).
+- **Гейт в accept-пути раннера** (`sandbox/runner.rs run()`): после `accept()` на КАЖДОМ из egress/act/event-сокетов соединение обслуживается, ТОЛЬКО если `peer_authorized(&stream, expected_uid)` — иначе дропается с `warn`. `expected_uid` = host-видимый uid контейнера (из `run_as`, фолбэк — владелец per-run каталога; при rootless-Podman + `--userns=keep-id` процесс контейнера виден хост-ядру под host-uid). Defense-in-depth ПОВЕРХ 0600/0700. **Тем же гейтом помечен к обёртыванию будущий `serve_exec` (exec.sock).**
+- **Fail-closed-матрица** (`uid_matches`): авторизуем ТОЛЬКО при достоверном равенстве; неизвестный ожидаемый ИЛИ нечитаемый peer-cred → отказ.
+
+**Тесты:** `uid_matches_is_fail_closed` (Tier-1, любая ОС — матрица отказа); `peer_authorized_accepts_same_uid_rejects_mismatch` (Tier-1, Linux — РЕАЛЬНАЯ пара `UnixListener`↔`UnixStream`: same-uid авторизован, заведомо-чужой `expected` и `None` отвергнуты). Кросс-uid РЕАЛЬНЫМ вторым пользователем — Tier-2 (нужны привилегии, §8.2 podman-gated). FFI-байндинг сверен с `libc` 0.2.186 (ucred/`SO_PEERCRED`=17/`SOL_SOCKET`=1 на arch/generic). clippy 0, fmt зелёный, 57 sandbox + 35 connect-тестов зелёные на macOS (Linux-путь — ubuntu-CI + Tier-2 .28).
+
 ### Агент · SANDBOX-6b — Фаза-3 exec-таргеты: `ShellRun`/`ProcessSpawn`/`GitOp` + classify never-Auto
 
 Расширение типизированной алгебры действий (`docs/specs/agent-sandbox.md §5.1/§5.3`, дизайн — мультиагентный Workflow «design-sandbox-6b»: гибрид Variant-A footprint + Variant-B chokepoints). 3 НОВЫХ `ActionTarget`: `ShellRun{argv,cwd_rel}`, `ProcessSpawn{program,args,cwd_rel}`, `GitOp{op,args}`. **БЕЗ нового рантайм-действия** (исполнение — host/exec, 6c): только типы + classify + все exhaustive-армы fail-closed + инвариант-тесты.
