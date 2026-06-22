@@ -118,10 +118,10 @@ async fn run_sandbox_child() -> Result<i32, String> {
     use nexus_core::sandbox::{CONTAINER_RUN_DIR, SOCKET_ACT, SOCKET_EGRESS, SOCKET_EVENT};
 
     let args: Vec<String> = std::env::args().skip(2).collect();
-    let [run_id, base_url, model, ctx_window, task] =
-        <[String; 5]>::try_from(args).map_err(|a| {
+    let [run_id, base_url, model, ctx_window, task, shell_enable] =
+        <[String; 6]>::try_from(args).map_err(|a| {
             format!(
-                "--sandbox-child: ожидалось 5 аргументов <run_id> <base_url> <model> <ctx_window> <task>, получено {}",
+                "--sandbox-child: ожидалось 6 аргументов <run_id> <base_url> <model> <ctx_window> <task> <shell_enable>, получено {}",
                 a.len()
             )
         })?;
@@ -131,6 +131,10 @@ async fn run_sandbox_child() -> Result<i32, String> {
     let context_window: usize = ctx_window
         .parse()
         .map_err(|e| format!("ctx_window не usize ({ctx_window:?}): {e}"))?;
+    // shell_enable: строгий парс bool (fail-closed — любое не-"true"/"false" → ошибка, не молчаливый OFF).
+    let shell_enable: bool = shell_enable
+        .parse()
+        .map_err(|e| format!("shell_enable не bool ({shell_enable:?}): {e}"))?;
 
     let dir = Path::new(CONTAINER_RUN_DIR);
     let egress = connect_unix(dir.join(SOCKET_EGRESS))
@@ -150,8 +154,8 @@ async fn run_sandbox_child() -> Result<i32, String> {
         model,
         temperature: None,
         context_window: Some(context_window),
-        // 6c-2f-2: exec-инструменты по умолчанию ВЫКЛ; проводка 6-го CLI-арга shell_enable — 6c-2f-3.
-        shell_enable: false,
+        // 6c-2f-3: из 6-го CLI-арга (host рендерит SandboxChildArgs::to_argv из config.shell_enable).
+        shell_enable,
     };
     let outcome = run_sandbox_child_session(&spec, egress, act, event).await;
     tracing::info!(?outcome, "--sandbox-child: прогон завершён");
@@ -176,6 +180,7 @@ async fn run_sandbox_host() -> Result<i32, String> {
     use nexus_core::agent::run_store;
     use nexus_core::net::{EgressFeature, GuardedClient};
     use nexus_core::sandbox::act::{DispatchActuatorBackend, HostActServer};
+    use nexus_core::sandbox::exec_host::{DispatchExecBackend, HostExecServer};
     use nexus_core::sandbox::proxy::{EgressBudget, GuardedClientBackend, GuardedProxy};
     use nexus_core::sandbox::runner::{SandboxChildArgs, SandboxRunner};
     use nexus_core::sandbox::{ResourceCaps, SandboxConfig, DEFAULT_SANDBOX_IMAGE};
@@ -244,7 +249,15 @@ async fn run_sandbox_host() -> Result<i32, String> {
         Arc::new(PolicyDefault),
         Arc::new(TracingEventSink::new()),
     );
-    let act_server = HostActServer::new(DispatchActuatorBackend::new(gate));
+    let act_server = HostActServer::new(DispatchActuatorBackend::new(gate.clone()));
+    // host/exec backend (6c-2f-3): ТОЛЬКО при shell_enable (default-OFF → None → serve_host отвечает
+    // host/exec method_not_found, fail-closed). Делит ТОТ ЖЕ GatedToolCtx (общий ledger/policy/kill-switch
+    // agent_paused через Clone) → exec и vault под единым гейтом. PolicyDefault headless → Confirm=DENY.
+    let exec_server: Option<HostExecServer<DispatchExecBackend>> = if cfg.ai.shell_enable {
+        Some(HostExecServer::new(DispatchExecBackend::new(gate)))
+    } else {
+        None
+    };
 
     // event.sock out: лог-транспорт (события агента в tracing; десктопа в one-shot нет).
     struct LogTransport;
@@ -282,10 +295,13 @@ async fn run_sandbox_host() -> Result<i32, String> {
                 model,
                 context_window,
                 task,
+                // host рендерит shell_enable в argv контейнера; зеркалит host exec_server-гейт.
+                shell_enable: cfg.ai.shell_enable,
             },
             proxy,
             act_server,
             event_out,
+            exec_server,
         )
         .await?;
     tracing::info!(?status, "sandbox-run: контейнер завершился");

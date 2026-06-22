@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2f-3 — host-проводка exec end-to-end (serve_host в SandboxRunner + agentd CLI/харнесс)
+
+Завершает 6c-2f: host теперь ОТВЕЧАЕТ на host/exec вживую (под `shell_enable`), замыкая полный exec-путь decide→execute→exec_child→report. Default-OFF сохранён двухуровнево (registry + serve_host). Завершает Фазу-3 host/exec в коде; остаются события (6c-2g), undo (6c-2h), live-валидация (6c-3).
+
+- **`SandboxRunner::run<Eb,Ab,Xb>`** +параметр `exec_server: Option<HostExecServer<Xb>>`: accept-таск act.sock зовёт **`serve_host`** (host/act+host/exec по методу на одном peer-gated соединении) вместо `serve_act`; `None` → host/exec `method_not_found` (fail-closed). serve_act остаётся (тест/act-only).
+- **`SandboxChildArgs.shell_enable`** + `to_argv` 6-й позиционный (`"true"`/`"false"`); agentd `--sandbox-child` парсит 6 аргументов (строгий bool-парс, fail-closed) → `SandboxChildSpec.shell_enable`.
+- **`run_sandbox_host` (`--sandbox-run`)**: строит `DispatchExecBackend`+`HostExecServer` ТОЛЬКО при `cfg.ai.shell_enable` (иначе `None`), деля ТОТ ЖЕ `GatedToolCtx` (общий ledger/policy/kill-switch `agent_paused` через `Clone`) с act-бэкендом → exec и vault под единым гейтом; `SandboxChildArgs.shell_enable` зеркалит host-гейт в argv контейнера.
+
+Tier-1: `child_argv_is_positional_and_safe` обновлён (6 аргументов вкл. shell_enable); serve_host-тесты (6c-2f-1) покрывают роутинг. 836 nexus-core, agentd компилируется, clippy 0, fmt + node-lints зелёные. Прод default-OFF (`ai.shell_enable=false` → exec не зарегистрирован И host/exec method_not_found). Live exec — 6c-3 (podman .28).
+
 ### Агент · SANDBOX-6c-2f-2 — регистрация exec-инструментов в песочном реестре (default-OFF gating, in-container)
 
 In-container проводка exec: контейнерный реестр получает 3 exec-инструмента ТОЛЬКО при `shell_enable`, деля act.sock с note-инструментами через `Arc`-транспорт. Host-сторона (serve_host в SandboxRunner.run + agentd CLI-арг) — 6c-2f-3.
