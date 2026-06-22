@@ -35,7 +35,7 @@
   width: 340px;
   height: 280px;
   background: radial-gradient(circle at 70% 35%, var(--color-accent-soft) 0%, transparent 60%);
-  opacity: 0.8;
+  opacity: 0.5;
   pointer-events: none;
 }
 .watermark {
@@ -54,10 +54,10 @@
 }
 .greeting {
   font-family: var(--font-headline);
-  font-size: 30px;
+  font-size: var(--display-lg);
   font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.15;
+  letter-spacing: -0.015em;
+  line-height: 1.04;
   color: var(--color-text);
 }
 .greetName {
@@ -149,11 +149,7 @@
   align-items: center;
   gap: var(--space-4);
   margin-bottom: var(--space-5);
-  background: linear-gradient(
-    105deg,
-    var(--color-bg-elevated),
-    color-mix(in oklch, var(--color-accent-soft) 55%, var(--color-bg-elevated))
-  );
+  background: var(--color-bg-elevated);
   border: 1px solid color-mix(in oklch, var(--color-accent) 26%, var(--color-border));
   border-radius: var(--radius-lg);
   padding: 18px 20px;
@@ -184,17 +180,18 @@
   margin-bottom: 7px;
 }
 .cTitle {
-  font-family: var(--font-serif);
-  font-size: 21px;
-  font-weight: 500;
+  font-family: var(--font-headline);
+  font-size: var(--display-sm);
+  font-weight: 600;
   color: var(--color-text);
-  line-height: 1.2;
+  line-height: 1.12;
   margin-bottom: 5px;
 }
 .cSnippet {
-  font-size: var(--text-sm);
+  font-family: var(--font-serif);
+  font-size: 15px;
   color: var(--color-text-muted);
-  line-height: 1.5;
+  line-height: 1.55;
   max-width: 62ch;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -263,7 +260,10 @@
   transform: scale(0.97);
 }
 .qa svg {
-  color: var(--color-accent);
+  color: var(--color-text-faint);
+}
+.qa:hover svg {
+  color: var(--color-text-muted);
 }
 .qa:disabled {
   opacity: 0.65;
@@ -536,8 +536,8 @@
   margin: 0 0 16px;
   padding: 11px 13px;
   border-radius: var(--radius-md);
-  background: var(--color-accent-soft);
-  border: 1px solid color-mix(in oklch, var(--color-accent) 24%, transparent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 .agIc {
   width: 30px;
@@ -545,8 +545,8 @@
   border-radius: 8px;
   display: grid;
   place-items: center;
-  background: var(--color-accent);
-  color: var(--color-on-accent);
+  background: var(--color-bg-elevated);
+  color: var(--color-accent);
   flex-shrink: 0;
 }
 .agText {

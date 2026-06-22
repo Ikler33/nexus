@@ -14,7 +14,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-4) var(--space-6) 14px;
   border-bottom: 1px solid var(--color-border);
   flex: 0 0 auto;
 }
@@ -22,23 +22,31 @@
 .titleWrap {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: 10px;
   color: var(--color-text);
+}
+/* Иконка заголовка — акцентная (как в дизайне Orvin). */
+.titleWrap > svg {
+  color: var(--color-accent);
 }
 
 .title {
-  font-size: 1.15rem;
-  font-weight: 650;
+  font-family: var(--font-headline);
+  font-size: 1.6rem;
+  font-weight: 700;
   margin: 0;
   letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 
 .total {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-accent-soft);
 }
 
 .errPill {
@@ -57,11 +65,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background: var(--color-bg-elevated);
   color: var(--color-text-muted);
   cursor: pointer;
   transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
@@ -78,32 +86,35 @@
 /* VIEW-1: сегментированный переключатель представления (канбан / список). */
 .viewToggle {
   display: inline-flex;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  background: var(--color-surface);
 }
 .viewBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 26px;
   border: none;
-  background: var(--color-surface);
+  border-radius: 6px;
+  background: none;
   color: var(--color-text-muted);
   cursor: pointer;
   transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
 }
-.viewBtn + .viewBtn {
-  border-left: 1px solid var(--color-border);
-}
 .viewBtn:hover {
-  background: var(--color-surface-hover);
   color: var(--color-text);
 }
 .viewActive {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  box-shadow: var(--elevation-1);
+}
+.viewActive:hover {
+  color: var(--color-text);
 }
 
 .headActions {
@@ -143,10 +154,13 @@
 .stalePanelHead {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.78rem;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
   font-weight: 600;
-  color: var(--color-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
   margin-bottom: var(--space-2);
 }
 .staleList {
@@ -185,8 +199,9 @@
 }
 .staleItemMeta {
   flex: 0 0 auto;
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--color-text-faint);
 }
 
 /* AI-2b: пилюля «План дня» — акцентная (фокус на сегодня). */
@@ -252,8 +267,10 @@
   text-align: center;
 }
 .emptyTitle {
-  font-size: 1rem;
-  font-weight: 600;
+  font-family: var(--font-headline);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--color-text);
   margin: 0;
 }
@@ -290,7 +307,7 @@
   min-height: 0;
   display: flex;
   gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
+  padding: 18px var(--space-6);
   overflow-x: auto;
   overflow-y: hidden;
   align-items: flex-start;
@@ -303,9 +320,9 @@
   flex-direction: column;
   min-height: 0;
   max-height: 100%;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 1px solid transparent;
   border-radius: var(--radius-lg);
+  transition: border-color var(--motion-fast, 120ms) var(--ease-out, ease);
 }
 
 /* BOARD-5: подсветка колонки-цели при перетаскивании карточки. */
@@ -317,33 +334,47 @@
 .colHead {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  gap: 8px;
+  padding: 4px 6px 11px;
+}
+/* Статус-точка перед меткой колонки (как в дизайне Orvin). */
+.colDot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-text-faint);
+}
+.colDotTodo {
+  background: var(--color-text-faint);
+}
+.colDotDoing {
+  background: var(--color-accent);
+}
+.colDotDone {
+  background: var(--color-success);
+}
+.colDotOther {
+  background: var(--color-border-strong);
 }
 .colTitle {
   font-size: 0.8rem;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-text-muted);
+  font-weight: 600;
+  color: var(--color-text);
 }
 .colCount {
-  font-size: 0.75rem;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
   color: var(--color-text-faint);
-  background: var(--color-bg);
-  border-radius: 999px;
-  min-width: 20px;
-  text-align: center;
-  padding: 1px 7px;
 }
 
 .colCards {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3);
+  padding: 2px;
   overflow-y: auto;
   min-height: 0;
 }
@@ -355,17 +386,18 @@
   padding: var(--space-4) var(--space-2);
 }
 
-/* Карточка задачи. */
+/* Карточка задачи — приподнятая, скруглённая (дизайн Orvin: 14px, elevation-1). */
 .card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
   text-align: left;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
+  padding: 12px 13px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
   background: var(--color-bg-elevated);
+  box-shadow: var(--elevation-1);
   color: var(--color-text);
   cursor: pointer;
   transition:
@@ -383,7 +415,7 @@
 /* Карточка, открытая в превью (BOARD-6). */
 .cardActive {
   border-color: var(--color-accent);
-  box-shadow: inset 0 0 0 1px var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
 }
 .card[draggable='true'] {
   cursor: grab;
@@ -393,9 +425,9 @@
 }
 
 .cardTitle {
-  font-size: 0.9rem;
-  font-weight: 550;
-  line-height: 1.35;
+  font-size: 0.84rem;
+  font-weight: 500;
+  line-height: 1.4;
   color: var(--color-text);
 }
 
@@ -403,50 +435,64 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 
+/* Бейдж приоритета — моно, капс, плотный (дизайн Orvin: .sc-prio). */
 .badge {
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
   border: 1px solid transparent;
 }
 .prioLow {
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   background: var(--color-surface);
-  border-color: var(--color-border);
 }
 .prioMedium {
   color: var(--color-link);
-  background: var(--color-accent-soft);
+  background: var(--color-link-soft);
 }
 .prioHigh {
   color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  background: color-mix(in oklch, var(--color-warning) 12%, transparent);
 }
 .prioUrgent {
   color: var(--color-danger);
   background: var(--color-danger-soft);
 }
 .prioOther {
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   background: var(--color-surface);
-  border-color: var(--color-border);
 }
 
-.due,
-.project {
+/* Дедлайн — моно-бейдж; проект — приглушённая мета (дизайн: .sc-badge / .sc-proj). */
+.due {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 0.74rem;
-  color: var(--color-text-muted);
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: 6px;
+  padding: 3px 7px;
 }
 .overdue {
   color: var(--color-danger);
+  background: var(--color-danger-soft);
   font-weight: 600;
+}
+.project {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--color-text-faint);
 }
 
 .tags {
@@ -455,9 +501,9 @@
   gap: 5px;
 }
 .tag {
-  font-size: 0.72rem;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  font-size: 0.66rem;
+  color: var(--color-tag);
+  background: var(--color-tag-soft);
+  border-radius: 5px;
+  padding: 2px 6px;
 }

@@ -1,4 +1,6 @@
-/* «Сегодня» (TODAY-1): утренний экран. Только токены тем (без hex). min-width:0 флоры (урок EP-3/Home). */
+/* «Сегодня» (TODAY-1): утренний экран. Hermes-6 «Orvin» рескин — карточная лента (elevated-cards 14px,
+   border-strong hover), серифный заголовок, mono-лейблы секций. Только токены тем (без hex). min-width:0
+   флоры (урок EP-3/Home). Разметка/пропсы/хендлеры/i18n/a11y сохранены — изменены только визуальные значения. */
 
 .today {
   display: flex;
@@ -9,13 +11,15 @@
   color: var(--color-text);
 }
 
+/* Шапка живёт в потоке прокрутки (по макету: без border-bottom, крупный серифный заголовок). */
 .head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-6) var(--space-6) var(--space-4);
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
   flex: 0 0 auto;
 }
 .titleWrap {
@@ -25,15 +29,23 @@
   min-width: 0;
   color: var(--color-text);
 }
+/* Иконка заголовка — акцент (по макету .sc-head .sc-ic). */
+.titleWrap svg {
+  color: var(--color-accent);
+  flex: 0 0 auto;
+  align-self: center;
+}
 .title {
-  font-size: 1.15rem;
-  font-weight: 650;
+  font-family: var(--font-headline, serif);
+  font-size: 1.875rem;
+  font-weight: 700;
   margin: 0;
   letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 .date {
-  font-size: 0.82rem;
-  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  color: var(--color-text-faint);
   text-transform: capitalize;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -43,12 +55,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
   flex: 0 0 auto;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background: var(--color-bg-elevated);
   color: var(--color-text-muted);
   cursor: pointer;
   transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
@@ -74,71 +87,86 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-4) var(--space-5);
+  padding: 0 var(--space-6) var(--space-8);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  max-width: 56rem;
+  gap: var(--space-5);
+  max-width: 760px;
   width: 100%;
+  margin: 0 auto;
 }
 
+/* Секция — обёртка-группа (карточность теперь на самих item'ах, не на секции). */
 .section {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-  padding: var(--space-3) var(--space-4);
   min-width: 0;
 }
+/* mono-лейбл секции (по макету .sc-sec-head). */
 .sectionHead {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 0.78rem;
+  gap: 9px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.1em;
   color: var(--color-text-muted);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: 0 2px;
 }
+/* Иконка лейбла секции — тусклая (по макету .sc-sec-head .sc-ic). */
+.sectionHead svg {
+  color: var(--color-text-faint);
+  flex: 0 0 auto;
+}
+/* Счётчик — акцент-soft pill (по макету .sc-count). */
 .count {
   margin-left: 2px;
-  font-size: 0.72rem;
+  font-family: var(--font-ui, sans-serif);
+  font-size: 0.6875rem;
   font-weight: 600;
-  color: var(--color-text-muted);
-  background: var(--color-bg);
-  border-radius: var(--radius-sm);
-  padding: 0 6px;
+  letter-spacing: 0;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
 }
 
 .list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 7px;
 }
+/* Карточная лента: плоские строки → elevated-карточки 14px (по макету .sc-item). */
 .item {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
   width: 100%;
   text-align: left;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 13px 15px;
   cursor: pointer;
   color: var(--color-text);
   min-width: 0;
-  transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
+  transition:
+    border-color var(--motion-fast, 150ms) var(--ease-out, ease),
+    background var(--motion-fast, 150ms) var(--ease-out, ease);
 }
 .item:hover {
-  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
 }
 .item:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
 }
 .itemTitle {
-  font-size: 0.88rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -147,18 +175,19 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
+/* mono-бейдж даты/статуса (по макету .sc-badge). */
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--radius-sm);
+  gap: 5px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65625rem;
+  padding: 3px 7px;
+  border-radius: 6px;
   white-space: nowrap;
 }
 .overdue {
@@ -169,22 +198,56 @@
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
-.prio,
+/* Приоритет — mono-чип (по макету .sc-prio.high → warning). */
+.prio {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.59375rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  background: var(--color-surface);
+  border-radius: 5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+/* Цвет по уровню приоритета (зеркало BoardView .prio*) — раньше амбер для всех уровней (ревью M1). */
+.prioLow {
+  color: var(--color-text-faint);
+  background: var(--color-surface);
+}
+.prioMedium {
+  color: var(--color-link);
+  background: var(--color-link-soft);
+}
+.prioHigh {
+  color: var(--color-warning);
+  background: color-mix(in oklch, var(--color-warning) 12%, transparent);
+}
+.prioUrgent {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
 .project {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 0.74rem;
-  color: var(--color-text-muted);
+  gap: 5px;
+  font-size: 0.71875rem;
+  color: var(--color-text-faint);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.project svg {
+  flex: 0 0 auto;
+}
 
 .episodeSummary {
-  font-size: 0.78rem;
+  font-size: 0.78125rem;
   color: var(--color-text-muted);
+  line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -193,61 +256,75 @@
 }
 
 .empty {
-  font-size: 0.84rem;
+  font-size: 0.84375rem;
   color: var(--color-text-muted);
   padding: 4px 2px;
 }
+/* Пустое действие — пунктирная surface-плашка (по макету .sc-empty-action). */
 .emptyAction {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  padding: 11px 14px;
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: 14px;
 }
 .inboxCount {
-  font-size: 0.88rem;
+  flex: 1;
+  font-size: 0.84375rem;
   color: var(--color-text);
 }
+/* Кнопка действия — акцент-soft (по макету .sc-action-btn). */
 .actionBtn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 0.8rem;
-  font-weight: 600;
+  gap: 6px;
+  font-size: 0.78125rem;
+  font-weight: 500;
   color: var(--color-accent);
-  background: var(--color-accent-soft, var(--color-surface));
-  border: 1px solid var(--color-border);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  padding: 4px 10px;
+  padding: 7px 12px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
 }
 .actionBtn:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
 }
+.actionBtn svg {
+  flex: 0 0 auto;
+}
 
+/* Заметка дня — elevated-карточка с серифным телом (по макету .sc-daily). */
 .dailyCard {
   display: block;
   width: 100%;
   text-align: left;
-  background: var(--color-bg);
+  background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
+  border-radius: 14px;
+  padding: 15px 17px;
   cursor: pointer;
   min-width: 0;
+  transition: border-color var(--motion-fast, 150ms) var(--ease-out, ease);
 }
 .dailyCard:hover {
-  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 .dailyBody {
   margin: 0;
-  font: inherit;
-  font-size: 0.84rem;
-  color: var(--color-text-muted);
+  font-family: var(--font-reading, serif);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text);
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 9rem;
+  max-height: 11rem;
   overflow: hidden;
 }
