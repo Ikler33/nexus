@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2e-1 — `ProxyExecDispatcher` (in-sandbox клиент host/exec) + `ExecDispatcher`-шов
+
+Пятый суб-срез исполнительной половины Фазы-3: IN-SANDBOX клиент, оркеструющий полный host/exec цикл `decide→execute→ЛОКАЛЬНОЕ исполнение→report`. Зеркало `ProxyActuator` для exec-таргетов. 3 exec-инструмента + регистрация при `shell_enable` — 6c-2e-2; `serve_host`-проводка — 6c-2f.
+
+- **`nexus-core::sandbox::exec_proxy`**: `ExecDispatcher`-шов (`dispatch_exec(action) -> ExecToolOutcome`) — exec-инструменты (6c-2e-2) держат `Arc<dyn ExecDispatcher>` → Tier-1-мок без транспорта/раннера. `ProxyExecDispatcher<T: Transport>` (in-sandbox реализация): поверх act.sock-транспорта + `Arc<dyn ExecRunner>` шлёт **decide** (Rejected/HardBlocked → `ExecToolOutcome`, агент видит отказ не ошибку; Approved → одноразовый токен) → **execute** (redeem host-side → host-authority `WireExecGo`, argv НЕ переподаём) → **ЛОКАЛЬНО `ExecRunner::run`** (in-container, ЕДИНСТВЕННОЕ место Command — `exec_child`) → **report** (host финализирует ledger). `ExecToolOutcome::{Executed,Rejected,HardBlocked}`.
+- **INV-CMD-SITE цел**: `exec_proxy.rs` НЕ конструирует Command (зовёт `ExecRunner`-трейт; реальный спавн — только в `exec_child.rs`) — `check-sandbox-exec.mjs` зелёный.
+
+6 Tier-1 тестов (channel_pair + mock-host + MockExecRunner): full-cycle-executed (раннер получил host-authority argv; report донёс exit+token, без action) · rejected-no-run · hardblocked-no-run · vault-target→ToolError (не уходит на провод) · dead-transport→ToolError · wire-exec-kind. clippy 0, fmt + node-lints зелёные. Инертен (вызыватель — exec-инструменты 6c-2e-2).
+
 ### Агент · SANDBOX-6c-2d — `host/exec` фаза report (финализация ledger EXECUTING→EXECUTED|FAILED + приватность вывода)
 
 Четвёртый суб-срез исполнительной половины Фазы-3: host-СТОРОНА фазы `report` — финализация ledger по исходу исполнения, с приватным (структурным) outcome. Замыкает 3-актный host-цикл `decide→execute→report`. Контейнерный исполнитель + ProxyExec-шим + `serve_host`-проводка — 6c-2e/2f.
