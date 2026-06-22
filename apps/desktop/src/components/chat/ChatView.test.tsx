@@ -215,9 +215,9 @@ describe('ChatView (Ф1-8)', () => {
     vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {}); // без асинхронного стрима
     render(<ChatView />);
     expect(screen.getByText('Спросите свои заметки')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Как устроен RAG в Qasr?' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Как устроен RAG в Orvin?' }));
     // отправка → появилось пользовательское сообщение с текстом пилюли (пустое состояние ушло)
-    expect(screen.getByText('Как устроен RAG в Qasr?')).toBeInTheDocument();
+    expect(screen.getByText('Как устроен RAG в Orvin?')).toBeInTheDocument();
     useChatStore.getState().stop();
   });
 

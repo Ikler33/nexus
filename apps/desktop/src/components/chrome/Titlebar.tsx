@@ -9,10 +9,11 @@ import {
   PanelRight,
   Scale,
   Search,
-  Sparkles,
+  MoonStar,
   Sun,
   Target,
 } from 'lucide-react';
+import { OrbitIcon } from './BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
 import { useThemeStore, type Theme } from '../../stores/theme';
@@ -33,7 +34,7 @@ function themeIcon(theme: Theme) {
     case 'dark':
       return <Moon size={16} aria-hidden />;
     case 'midnight':
-      return <Sparkles size={16} aria-hidden />;
+      return <MoonStar size={16} aria-hidden />;
     case 'platinum':
       return <HardDrive size={16} aria-hidden />;
     default:
@@ -121,7 +122,7 @@ export function Titlebar() {
             aria-expanded={aiMenu}
             aria-haspopup="menu"
           >
-            <Sparkles size={16} aria-hidden />
+            <OrbitIcon size={16} aria-hidden />
             <ChevronDown size={11} aria-hidden />
           </button>
           {aiMenu && (

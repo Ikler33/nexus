@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { Newspaper, RefreshCw, Sparkles, X } from 'lucide-react';
+import { Newspaper, RefreshCw, X } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -63,7 +64,7 @@ export function DigestPanel() {
             disabled={generating}
             title={t('digest.generate')}
           >
-            <Sparkles size={14} aria-hidden />
+            <OrbitIcon size={14} aria-hidden />
             <span>{generating ? t('digest.generating') : t('digest.generate')}</span>
           </button>
           <button

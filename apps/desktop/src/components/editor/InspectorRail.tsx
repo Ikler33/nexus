@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Link2, List, ScrollText, Sparkles, X } from 'lucide-react';
+import { useState, type ComponentType } from 'react';
+import { Link2, List, ScrollText, X } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import { BacklinksBar } from './BacklinksBar';
 import { NoteSummary } from './NoteSummary';
@@ -30,10 +31,14 @@ export function InspectorRail({
   const { t } = useTranslation();
   const [active, setActive] = useState<Section | null>(null);
 
-  const items: { key: Section; icon: typeof List; label: string }[] = [
+  const items: {
+    key: Section;
+    icon: ComponentType<{ size?: number; 'aria-hidden'?: boolean }>;
+    label: string;
+  }[] = [
     { key: 'outline', icon: List, label: t('inspector.outline') },
     { key: 'backlinks', icon: Link2, label: t('inspector.backlinks') },
-    { key: 'related', icon: Sparkles, label: t('inspector.related') },
+    { key: 'related', icon: OrbitIcon, label: t('inspector.related') },
     { key: 'summary', icon: ScrollText, label: t('inspector.summary') },
   ];
 

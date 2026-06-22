@@ -1,35 +1,25 @@
 import styles from './BrandMark.module.css';
 
 /**
- * Бренд-марк Qasr: «крепость из узлов» (citadel built of the knowledge graph) — треугольная
- * цитадель + узлы графа внутри терракотового squircle. Инлайн-SVG, белый на акцентном фоне.
- * Портирован из дизайн-хендоффа Qasr (icons.jsx BrandMark «fortress from nodes»).
+ * Бренд-знак Orvin: «узел на орбите» — кольцо с РАЗРЫВОМ под ember-точкой, спутник
+ * СИДИТ на орбите (точка на пути), а не камень над сплошным кольцом. Tile-less: кольцо
+ * в currentColor (подхватывает цвет текста титлбара/онбординга), спутник — Ember
+ * (`--color-accent`, единственная тёплая точка в UI). Геометрия из дизайн-хэндоффа
+ * Hermes-6 (`icons.jsx` BrandMark «node on the orbit», viewBox 32×32). App-icon-форма
+ * (белый знак на ember-плитке) — отдельная поверхность (favicon/app-icons), не здесь.
  */
 export function BrandMark({ size = 24 }: { size?: number }) {
   return (
-    <span className={styles.mark} style={{ width: size, height: size, borderRadius: size * 0.29 }}>
-      <svg viewBox="0 0 32 32" width={size * 0.74} height={size * 0.74} fill="none" aria-hidden>
-        {/* triangular citadel */}
+    <span className={styles.mark} style={{ width: size, height: size }}>
+      <svg viewBox="0 0 32 32" width={size} height={size} fill="none" aria-hidden>
         <path
-          d="M9 23 L16 8 L23 23 Z"
-          stroke="#fff"
-          strokeWidth={1.7}
+          d="M24.61 11.98 A9.5 9.5 0 1 1 20.02 7.39"
+          stroke="currentColor"
+          strokeWidth={2.4}
+          fill="none"
           strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity={0.92}
         />
-        {/* graph edges to the core */}
-        <g stroke="#fff" strokeWidth={1.5} strokeLinecap="round" opacity={0.6}>
-          <line x1={9} y1={23} x2={16} y2={17} />
-          <line x1={23} y1={23} x2={16} y2={17} />
-        </g>
-        {/* nodes */}
-        <g fill="#fff">
-          <circle cx={16} cy={8} r={2.7} />
-          <circle cx={9} cy={23} r={2.2} />
-          <circle cx={23} cy={23} r={2.2} />
-          <circle cx={16} cy={17} r={2} />
-        </g>
+        <circle cx={22.72} cy={9.28} r={3} fill="var(--color-accent)" />
       </svg>
     </span>
   );

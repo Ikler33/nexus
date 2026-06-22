@@ -5,11 +5,11 @@ import {
   HardDrive,
   History,
   RefreshCw,
-  Sparkles,
   SquarePen,
   WifiOff,
   X,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { logUi } from '../../lib/debug-log';
@@ -250,7 +250,7 @@ export function AiPanel({ variant = 'side' }: { variant?: 'side' | 'bottom' | 'o
       )}
       <header className={styles.head}>
         <span className={styles.headTitle}>
-          <Sparkles size={16} aria-hidden />
+          <OrbitIcon size={16} aria-hidden />
           {t('chat.title2')}
         </span>
         <span className={styles.headSpacer} />
