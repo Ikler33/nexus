@@ -50,7 +50,11 @@ import { dirname, resolve } from 'node:path';
 // → GuardedClient(EgressFeature::Web, allowlist) → SearXNG на VPS :8888 → результаты → финальный ответ;
 // нужны SearXNG + tool-capable модель; запуск `NEXUS_LIVE_CHAT=1 cargo test live_agent_web_search_on_rig
 // -- --ignored`).
-const EXPECTED = 27;
+// 27→28: + `sandbox::exec_it::tier2::podman_smoke_runs_trivial_container` (SANDBOX-6c-3a Tier-2 драйвер-
+// смоук: реальный `podman run --network=none <image> true`; linux + NEXUS_SANDBOX_IT=1 + podman, иначе
+// no-op; гоняется на .28 — podman нет ни локально, ни в CI). Следующие Tier-2 exec-тесты (6c-3b/c/e/f)
+// тоже лягут в exec_it и поднимут EXPECTED.
+const EXPECTED = 28;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src

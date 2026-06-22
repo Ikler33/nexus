@@ -57,6 +57,13 @@ pub mod child;
 #[cfg(unix)]
 pub mod runner;
 
+/// Tier-2 интеграционные тесты exec-песочницы (SANDBOX-6c-3), требующие РЕАЛЬНОГО Podman. Test-only:
+/// держит единый gate-предикат `podman_it_enabled` (тройной fail-closed lock) + podman-зависимые
+/// `ignore`-тесты ВНЕ unit-модулей exec_*. Чистые gate-/helper-юниты гоняются на любой ОС; podman-`ignore`
+/// тесты — только linux + явный `NEXUS_SANDBOX_IT=1` + реальный podman (иначе no-op).
+#[cfg(test)]
+mod exec_it;
+
 /// Образ песочницы по умолчанию (тот же, что у DEPLOY-3 `nexus deploy docker`).
 pub const DEFAULT_SANDBOX_IMAGE: &str = "nexus-agentd:local";
 /// Путь vault ВНУТРИ контейнера (`:ro`), = `NEXUS_VAULT` образа.

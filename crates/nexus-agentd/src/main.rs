@@ -778,6 +778,28 @@ async fn run() -> Result<(), String> {
         Err(e) => tracing::warn!(error = %e, "agent_run crash-recovery не удался"),
     }
 
+    // Crash-recovery НА УРОВНЕ ДЕЙСТВИЯ (SANDBOX-6c-3 §6): exec-строки `agent_actions`, застрявшие в
+    // 'executing' (контейнер исчез ПОСЛЕ redeem APPROVED→EXECUTING, но ДО report — in-memory in_flight-карта
+    // потеряна на рестарте), финализируются FAILED по TTL. НЕ requeue (exec не replay-safe: одноразовый
+    // токен консьюмнут, частичный эффект мог уже случиться). Рядом с requeue_stale_running — тот же
+    // канонический момент восстановления (старт, когда in_flight потеряна).
+    match nexus_core::actuator::reconcile_stale_executing(
+        db.writer(),
+        nexus_core::actuator::EXEC_STALE_TTL_SECS,
+        nexus_core::scheduler::now_secs(),
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            reaped = n,
+            "exec crash-recovery: зависшие executing-действия → failed (§6 TTL)"
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "exec crash-recovery (reconcile_stale_executing) не удался")
+        }
+    }
+
     // Воркер-луп ядра с no-op-хуками: interactive_busy=false (нет интерактивного LLM в skeleton),
     // jobs_changed=() (нет UI). Shutdown-канал — наш; дроп sender'а гасит петлю (как в десктопе).
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

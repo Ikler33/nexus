@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-3a — Tier-2 фундамент: podman-gate + crash-recovery reaper зависших exec
+
+Старт финального exec-слайса (Tier-2 live на Podman .28). Два куска фундамента, оба **pure-code/CI-green** (podman НЕТ ни локально, ни в CI → live-тесты `ignore`-гейтятся и гоняются только на .28).
+
+- **`sandbox::exec_it` (test-only модуль)** — ЕДИНЫЙ gate-предикат `podman_it_enabled()` (тройной fail-closed lock: `cfg(target_os="linux")` + `ignore`-атрибут + `NEXUS_SANDBOX_IT=1` И реальный `podman --version`); чистый комбинатор `it_gate` (юнит-тестируем без бинаря) + `is_safe_test_vault` (структурный отказ работать под `$HOME/.nexus` — Tier-2 только на TempDir/тест-vault, НИКОГДА прод). Один `ignore`-смоук `podman run --network=none <image> true`. Будущие Tier-2 матрицы (6c-3b/c/e) лягут сюда за тем же gate.
+- **`audit::reconcile_stale_executing` (crash-recovery reaper, §6 TTL)** — финализирует `FAILED` строки `agent_actions`, застрявшие в `EXECUTING` (`outcome IS NULL`) дольше `EXEC_STALE_TTL_SECS=600` (5× 120с exec-кэп): контейнер исчез ПОСЛЕ redeem но ДО report, in-memory `in_flight`-карта потеряна на рестарте. **MARK FAILED, НЕ requeue** (exec не replay-safe: одноразовый токен консьюмнут, частичный эффект мог случиться); reaped-строка без undo-хэндла ⇒ вне `actions_for_undo` (необратима); фенс `outcome IS NULL` ⇒ взаимоисключение с `finish` CAS (first-terminal-wins). Прокинут в agentd crash-recovery рядом с `requeue_stale_running` (старт = момент потери in_flight).
+
+Tier-1 (+8, итого 860 nexus-core, 0 failed): reaper — marks-stale-failed/skips-fresh/ignores-terminal-and-non-executing/idempotent-vs-finish (first-terminal-wins)/reaped-not-undoable; gate — requires-both-env-and-binary/disabled-without-env/test-vault-guard. CI-линты: `check-sandbox-exec` (podman-probe помечен маркером, exec_it НЕ whole-file-exempt) + `check-ignored` EXPECTED 27→28. Live killed-container reaper + containment-матрица — 6c-3b/c/f (gated). clippy 0, fmt зелёные.
+
 ### Агент · SANDBOX-6c-2h — обратимость exec: GitOp pre-op-ref undo (§5.5, data-plumbing)
 
 Завершает 6c-2 (exec в коде). Обратимость exec ТАМ, ГДЕ ВОЗМОЖНА (только GitOp): мутирующая git-операция несёт восстановимый pre-op git-ref в ledger ДО финализации; shell/process НЕОБРАТИМЫ (и classify их не Auto). Узкий скоуп: data-plumbing pre-op-ref + персист — реальный `git reset` отложен в 6c-3 (Tier-2 live) за документированным seam.
