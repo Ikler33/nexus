@@ -34,8 +34,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::actuator::audit::{self, STATE_APPROVED, STATE_EXECUTED, STATE_EXECUTING, STATE_FAILED};
-use crate::actuator::{Action, ActionTarget};
+use crate::actuator::audit::{
+    self, UndoCols, STATE_APPROVED, STATE_EXECUTED, STATE_EXECUTING, STATE_FAILED,
+};
+use crate::actuator::{Action, ActionTarget, UNDO_EXEC_GITREF};
 use crate::agent::connect::RpcError;
 
 /// JSON-RPC метод (на act.sock, ВТОРОЙ после `host/act`): исполнение exec-таргета.
@@ -333,9 +335,13 @@ struct PendingExec {
 
 /// Висящее ИСПОЛНЯЕМОЕ exec-действие (после redeem, ledger=EXECUTING). report (6c-2d) консьюмит и
 /// финализирует ledger по `propose_key`; `ledger_action_id` адресует [`AgentEvent::ExecResult`] (6c-2g).
+/// `undo_eligible` (6c-2h) — **host-authority над обратимостью**: вычислен из СОХРАНЁННОГО действия на
+/// execute (= это GitOp), НЕ из claim контейнера. report персистит `undo_ref` ТОЛЬКО при `undo_eligible`
+/// (контейнер не сделает shell/process «обратимым», подсунув undo_ref для не-GitOp).
 struct InFlightExec {
     propose_key: String,
     ledger_action_id: i64,
+    undo_eligible: bool,
 }
 
 /// Каноническая repr exec-действия для fingerprint токена (US-разделитель `\u{1f}`). vault-таргеты сюда не
@@ -366,6 +372,16 @@ fn exec_fingerprint(action: &Action) -> String {
 /// Зарезервированные env-ключи: ВСЕГДА из фиксированного безопасного набора, skill-passthrough их НЕ
 /// переопределяет (fail-closed — скилл не подменит PATH на writable-каталог с подброшенным бинарём).
 const RESERVED_ENV_KEYS: [&str; 3] = ["PATH", "LANG", "HOME"];
+
+/// Валиден ли `s` как git-ref для undo (§5.5, 6c-2h): непустой, ≤64 hex-символов (SHA-1=40/SHA-256=64).
+/// **HOST-AUTHORITY контроль**: ОБЯЗАН проверяться на ДОВЕРЕННОЙ стороне (host `report`) ПЕРЕД персистом в
+/// ledger — НЕ полагаться на in-container probe (`capture_pre_op_gitref` бежит на НЕдоверенной стороне:
+/// скомпрометированный контейнер мог бы прислать `report{undo_ref:"HEAD; rm -rf ~"}` мимо probe). Отвергает
+/// инъекц-/мусор-строки → `report` персистит `undo=None` (необратимо, fail-closed). Тот же предикат
+/// переиспользует probe (единый источник правила). Pure, проверяемо на любом хосте.
+pub(crate) fn is_git_sha(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
 
 /// Строит env exec-команды (§5.4) — fail-CLOSED: из ПУСТОГО + фиксированный безопасный набор
 /// (`PATH`/`LANG` + `HOME=scratch_home`) + явный per-skill `skill_passthrough` (КРОМЕ зарезервированных
@@ -638,12 +654,16 @@ impl ExecBackend for DispatchExecBackend {
                 "exec: ledger approved→executing не применён (не в состоянии approved)",
             ));
         }
-        // Шаг 4: запомнить для report (6c-2d) — финализация по propose_key.
+        // Шаг 4: запомнить для report (6c-2d/2h) — финализация по propose_key. undo_eligible вычислен из
+        // СОХРАНЁННОГО действия (host-authority над обратимостью): ТОЛЬКО GitOp обратим (pre-op git-ref);
+        // shell/process — нет (и classify их не Auto). Контейнер не переопределит это claim'ом undo_ref.
+        let undo_eligible = matches!(pending.action.target, ActionTarget::GitOp { .. });
         self.in_flight.lock().expect("in_flight mutex").insert(
             exec_token.to_string(),
             InFlightExec {
                 propose_key: pending.propose_key,
                 ledger_action_id: pending.ledger_action_id,
+                undo_eligible,
             },
         );
         // argv/env/cwd host-authority из СОХРАНЁННОГО действия (контейнер их не переподаёт).
@@ -653,15 +673,17 @@ impl ExecBackend for DispatchExecBackend {
     /// Фаза report (6c-2d): КОНСЬЮМИТ `in_flight[token]` (one-shot финализация) → ledger
     /// `EXECUTING→EXECUTED|FAILED` (`exit_code==0` ⇒ EXECUTED). **Приватность**: ledger outcome —
     /// СТРУКТУРНОЕ резюме (exit + байт-счётчики хвостов), сырой stdout/stderr НЕ персистится (зеркало
-    /// diff_summary). `undo_ref` пока не персистится (→6c-2h GitOp pre-op-ref). finish — CAS (outcome IS
-    /// NULL): replay/гонка → false → ошибка. Нет in_flight (нет execute / двойной report) → invalid_params.
+    /// diff_summary). `undo_ref` (6c-2h GitOp pre-op-ref) персистится как [`UndoCols`]`{kind:exec_gitref}`
+    /// ТОЛЬКО при `in_flight.undo_eligible` (host-authority: СОХРАНЁННОЕ действие — GitOp) — контейнер не
+    /// сделает shell/process «обратимым» claim'ом. finish — CAS (outcome IS NULL): replay/гонка → false →
+    /// ошибка. Нет in_flight (нет execute / двойной report) → invalid_params.
     async fn report(
         &self,
         exec_token: &str,
         exit_code: i32,
         stdout_tail: &str,
         stderr_tail: &str,
-        _undo_ref: Option<&str>,
+        undo_ref: Option<&str>,
     ) -> Result<WireExecResult, RpcError> {
         // Консьюм in_flight (one-shot): отсутствует ⇒ нет execute / повторный report ⇒ fail-closed.
         let in_flight = match self
@@ -685,13 +707,24 @@ impl ExecBackend for DispatchExecBackend {
             stdout_tail.len(),
             stderr_tail.len()
         );
-        // undo пока None — undo_ref→UndoCols + exec-undo-handler приходят в 6c-2h (GitOp pre-op-ref).
+        // 6c-2h: undo_ref→UndoCols{exec_gitref} ТОЛЬКО для host-классифицированного GitOp (undo_eligible) И
+        // валидного git-sha. shell/process (undo_eligible=false) ⇒ None (необратимы). **HOST-AUTHORITY над
+        // СОДЕРЖИМЫМ ref** (review MAJOR): host НЕ доверяет in-container probe — РЕ-валидирует ref сам
+        // ([`is_git_sha`]) на доверенной стороне ПЕРЕД персистом; мусор/инъекц-строка («HEAD; rm -rf ~») ⇒
+        // None (необратимо, fail-closed). Реальный `git reset` по этому ref — 6c-3 (песочница под апрувом).
+        let undo = match (in_flight.undo_eligible, undo_ref) {
+            (true, Some(r)) if is_git_sha(r) => Some(UndoCols {
+                kind: UNDO_EXEC_GITREF.to_string(),
+                reference: r.to_string(),
+            }),
+            _ => None,
+        };
         let finalized = audit::finish(
             &self.ctx.ledger.writer_handle(),
             &in_flight.propose_key,
             state,
             &outcome,
-            None,
+            undo,
         )
         .await
         .unwrap_or(false);
@@ -1376,6 +1409,83 @@ mod tests {
                 .is_err(),
             "report без execute → ошибка"
         );
+    }
+
+    // ── 6c-2h: GitOp pre-op-ref undo (host-authority над обратимостью) ───────────────────────────
+    /// GitOp report с undo_ref → ledger undo_kind=exec_gitref + undo_ref=sha (read-back = round-trip).
+    #[tokio::test]
+    async fn gitop_report_persists_gitref() {
+        let (_d, backend, token, pk) = approve_execute(Action::git_op("status", vec![])).await;
+        backend
+            .report(&token, 0, "", "", Some("abc1234def"))
+            .await
+            .expect("report ok");
+        let row = backend.ledger_row(&pk).await.expect("ledger-строка");
+        assert_eq!(row.state, STATE_EXECUTED);
+        assert_eq!(
+            row.undo_kind.as_deref(),
+            Some("exec_gitref"),
+            "GitOp → exec_gitref undo-дискриминант"
+        );
+        assert_eq!(
+            row.undo_ref.as_deref(),
+            Some("abc1234def"),
+            "pre-op ref восстановим из ledger (round-trip)"
+        );
+    }
+
+    /// HOST-AUTHORITY: shell.run report с undo_ref ИГНОРИРУЕТСЯ (не GitOp → необратимо). Контейнер НЕ
+    /// сделает shell «обратимым» claim'ом undo_ref — обратимость решает СОХРАНЁННОЕ действие host-side.
+    #[tokio::test]
+    async fn non_gitop_report_ignores_undo_ref() {
+        let (_d, backend, token, pk) =
+            approve_execute(Action::shell_run(vec!["ls".into()], None)).await;
+        backend
+            .report(&token, 0, "", "", Some("spoofed-ref"))
+            .await
+            .expect("report ok");
+        let row = backend.ledger_row(&pk).await.expect("ledger-строка");
+        assert!(
+            row.undo_kind.is_none(),
+            "shell необратим — undo_kind None даже при claim'е undo_ref"
+        );
+        assert!(
+            row.undo_ref.is_none(),
+            "claim undo_ref проигнорирован (host-authority над обратимостью)"
+        );
+    }
+
+    /// HOST-AUTHORITY над СОДЕРЖИМЫМ ref (review MAJOR): GitOp report с НЕ-hex undo_ref (инъекц-строка) →
+    /// host РЕ-валидирует сам ([`is_git_sha`]) → undo НЕ персистится. Скомпрометированный контейнер не
+    /// пронесёт `git reset --hard <инъекция>` в долговечный ledger мимо in-container probe.
+    #[tokio::test]
+    async fn gitop_report_rejects_nonhex_undo_ref() {
+        let (_d, backend, token, pk) = approve_execute(Action::git_op("status", vec![])).await;
+        backend
+            .report(&token, 0, "", "", Some("HEAD; rm -rf ~"))
+            .await
+            .expect("report ok");
+        let row = backend.ledger_row(&pk).await.expect("ledger-строка");
+        assert!(
+            row.undo_kind.is_none(),
+            "не-hex ref отвергнут host-side — undo_kind None (fail-closed)"
+        );
+        assert!(
+            row.undo_ref.is_none(),
+            "инъекц-строка НЕ персистится (host-authority над СОДЕРЖИМЫМ ref)"
+        );
+    }
+
+    /// [`is_git_sha`] — host-authority предикат валидности git-ref (непустой, ≤64 hex).
+    #[test]
+    fn is_git_sha_validates() {
+        assert!(is_git_sha("a1b2c3d4"));
+        assert!(is_git_sha(&"a".repeat(40)), "SHA-1");
+        assert!(is_git_sha(&"f".repeat(64)), "SHA-256");
+        assert!(!is_git_sha(""), "пусто");
+        assert!(!is_git_sha("HEAD; rm -rf ~"), "инъекция отвергнута");
+        assert!(!is_git_sha("not-hex-zz"), "не-hex отвергнут");
+        assert!(!is_git_sha(&"a".repeat(65)), "слишком длинно отвергнуто");
     }
 
     /// Повторный report тем же токеном → ошибка (in_flight консьюмнут first-call, one-shot финализация).

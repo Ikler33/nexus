@@ -52,11 +52,16 @@ pub enum UndoStatus {
     /// Откат не удался по иной причине (снапшот отсутствует/битый, IO записи/переноса, ledger). Диск НЕ
     /// изменён этим действием; строка НЕ помечается undone. `reason` — пояснение.
     Failed(String),
+    /// Откат РАСПОЗНАН, но ОТЛОЖЕН (SANDBOX-6c-2h): exec-GitOp несёт восстановимый pre-op git-ref, однако
+    /// реальный `git reset --hard <ref>` — доп. in-container exec под host-апрувом (6c-3, Tier-2 live).
+    /// Строка НЕ помечается undone (откат ещё не выполнен — 6c-3 завершит по тому же ref). `reason` несёт
+    /// ref-подсказку для UI/оператора. Отличён от `Failed` (это НЕ ошибка, а honest «пока не реализовано»).
+    Deferred(String),
 }
 
 impl UndoStatus {
     /// Засчитан ли откат состоявшимся (строку надо пометить `undone`). `Restored`/`AlreadyGone` — да;
-    /// `PathEscape`/`Failed` — нет (откат не выполнен, повтор позже допустим).
+    /// `PathEscape`/`Failed`/`Deferred` — нет (откат не выполнен/отложен, повтор/завершение позже допустимо).
     fn is_success(&self) -> bool {
         matches!(self, UndoStatus::Restored | UndoStatus::AlreadyGone)
     }
@@ -99,14 +104,29 @@ impl UndoOutcome {
             .count()
     }
 
-    /// Сколько действий НЕ удалось откатить (PathEscape|Failed).
+    /// Сколько действий НЕ удалось откатить (PathEscape|Failed) — настоящие провалы. `Deferred` сюда НЕ
+    /// входит (он не провал, а отложенный exec-GitOp откат — см. [`UndoOutcome::deferred`]). Считаем явно,
+    /// а не вычитанием, чтобы deferred не маскировался под failed.
     pub fn failed(&self) -> usize {
-        self.actions.len() - self.restored()
+        self.actions
+            .iter()
+            .filter(|a| matches!(a.status, UndoStatus::PathEscape | UndoStatus::Failed(_)))
+            .count()
     }
 
-    /// Полностью ли откачен прогон (ни одного провала). Пустой набор (нечего откатывать) — тоже `true`.
+    /// Сколько действий ОТЛОЖЕНО (Deferred): exec-GitOp с зафиксированным pre-op ref, реальный reset —
+    /// 6c-3. Не провал — honest «откат распознан, но ещё не выполнен».
+    pub fn deferred(&self) -> usize {
+        self.actions
+            .iter()
+            .filter(|a| matches!(a.status, UndoStatus::Deferred(_)))
+            .count()
+    }
+
+    /// Полностью ли откачен прогон: КАЖДОЕ действие успешно (ни провала, ни отложенного). Пустой набор
+    /// (нечего откатывать) — тоже `true`. Эквивалентно `restored() == actions.len()`.
     pub fn fully_undone(&self) -> bool {
-        self.failed() == 0
+        self.failed() == 0 && self.deferred() == 0
     }
 }
 
@@ -157,6 +177,16 @@ pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> Und
                 let rel = target_rel.clone().unwrap_or(trash_rel);
                 (uncreate_via_trash(canon_root, &rel).await, false)
             }
+            // exec-GitOp (6c-2h): pre-op ref ЗАФИКСИРОВАН, но реальный `git reset` — доп. in-container exec
+            // под host-апрувом (6c-3, Tier-2 live). Здесь SURFACING: показываем ref, НЕ помечаем undone
+            // (откат не выполнен — 6c-3 завершит). НЕ vault-write (ничего на диске vault не трогаем).
+            Some(UndoHandle::ExecGitRef { reference }) => (
+                UndoStatus::Deferred(format!(
+                    "exec-GitOp откат отложен (6c-3): восстановить можно `git reset --hard {reference}` \
+                     в репозитории — авто-откат через песочницу под апрувом приходит в Tier-2"
+                )),
+                false,
+            ),
             // Битый/неизвестный хэндл — откатить нечем (fail-closed). Не должно случаться (apply пишет
             // корректные), но не паникуем: помечаем Failed, идём дальше.
             None => (
@@ -364,6 +394,7 @@ mod tests {
     use super::*;
     use crate::actuator::action::Action;
     use crate::actuator::apply::{apply_action, ApplyOutcome};
+    use crate::actuator::UNDO_EXEC_GITREF;
     use crate::db::Database;
     use std::fs;
     use std::path::PathBuf;
@@ -710,6 +741,59 @@ mod tests {
             UndoStatus::AlreadyGone,
             "uncreate отсутствующего файла идемпотентен (AlreadyGone)"
         );
+    }
+
+    /// 6c-2h: exec-GitOp откат в undo_run — Deferred (pre-op ref зафиксирован, реальный `git reset` — 6c-3).
+    /// Строка НЕ помечается undone (6c-3 завершит); deferred()==1, НЕ провал, НЕ fully_undone; сообщение
+    /// несёт ref-подсказку.
+    #[tokio::test]
+    async fn exec_gitref_undo_is_deferred() {
+        let (_d, root, sink) = setup().await;
+        // Засеять executed exec-GitOp строку с undo_kind=exec_gitref НАПРЯМУЮ (для exec нет vault-apply).
+        let entry = audit::ActionEntry {
+            run_id: 1,
+            idempotency_key: "git-k".into(),
+            tool_name: "git_op".into(),
+            target_rel: None,
+            risk_tier: "confirm".into(),
+            state: audit::STATE_EXECUTING.into(),
+            content_hash: None,
+            diff_summary: None,
+        };
+        sink.record_before(entry).await.unwrap();
+        sink.finish(
+            "git-k",
+            audit::STATE_EXECUTED,
+            "exec exit=0",
+            Some(audit::UndoCols {
+                kind: UNDO_EXEC_GITREF.to_string(),
+                reference: "cafebabe".into(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let outcome = undo_run(1, &root, &sink).await;
+        assert_eq!(outcome.actions.len(), 1);
+        assert_eq!(outcome.deferred(), 1, "exec-GitOp откат отложен");
+        assert_eq!(outcome.failed(), 0, "deferred — НЕ провал");
+        assert_eq!(outcome.restored(), 0);
+        assert!(
+            !outcome.fully_undone(),
+            "отложенный откат — не fully_undone"
+        );
+        match &outcome.actions[0].status {
+            UndoStatus::Deferred(msg) => {
+                assert!(msg.contains("cafebabe"), "ref-подсказка в сообщении: {msg}")
+            }
+            other => panic!("ожидался Deferred, получено {other:?}"),
+        }
+        // Строка осталась executed (НЕ undone) — 6c-3 завершит реальный reset по тому же ref.
+        let row = audit::lookup(&sink.reader_handle(), "git-k")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "executed", "deferred НЕ помечает undone");
     }
 
     /// EMPTY RUN: прогон без откатываемых действий → undo_run no-op (пустой исход, fully_undone).

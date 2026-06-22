@@ -26,10 +26,10 @@ use async_trait::async_trait;
 
 use super::exec_child::ExecRunner;
 use super::exec_host::{
-    WireExecAction, WireExecDecision, WireExecGo, WireExecPhase, WireExecRequest, WireExecResult,
-    HOST_EXEC,
+    is_git_sha, WireExecAction, WireExecDecision, WireExecGo, WireExecPhase, WireExecRequest,
+    WireExecResult, HOST_EXEC,
 };
-use crate::actuator::Action;
+use crate::actuator::{Action, ActionTarget};
 use crate::agent::connect::{RpcMessage, Transport};
 use crate::agent::tool::ToolError;
 
@@ -130,6 +130,34 @@ impl<T: Transport> ProxyExecDispatcher<T> {
             _ => Err(ToolError::Exec("host/exec: ожидался Response".into())),
         }
     }
+
+    /// 6c-2h (§5.5): снять pre-op git-ref (`git rev-parse HEAD`) read-only-инвокацией через ТОТ ЖЕ confined
+    /// [`ExecRunner`] (тот же cwd/env/кэпы, что у одобренного `go`) — для обратимости GitOp. **Read-only**:
+    /// не мутирует. **Best-effort**: ненулевой код / пустой / не-hex вывод (не git-репо, detached HEAD,
+    /// ошибка) → `None` (действие помечается необратимым, НЕ падаем). Контейнер и так может гонять локальные
+    /// команды — host лишь ДОВЕРЯЕТ репортнутому ref как best-effort undo-подсказке (лживый ref → будущий
+    /// `git reset` 6c-3 просто не сработает, не больше). Вызывается ТОЛЬКО для GitOp (вызыватель проверяет).
+    async fn capture_pre_op_gitref(&self, go: &WireExecGo) -> Option<String> {
+        let probe = WireExecGo {
+            argv: vec!["git".into(), "rev-parse".into(), "HEAD".into()],
+            cwd: go.cwd.clone(),
+            env: go.env.clone(),
+            timeout_ms: go.timeout_ms,
+            output_cap_bytes: go.output_cap_bytes,
+        };
+        let res = self
+            .runner
+            .run(&probe, &self.scratch_root, &self.vault_ro_root)
+            .await;
+        let sha = res.stdout_tail.trim();
+        // Тот же предикат, что host-side [`is_git_sha`] (единый источник правила). Это best-effort
+        // ранний-выход — АВТОРИТЕТНАЯ проверка всё равно на host (он не доверяет контейнеру).
+        if res.exit_code == 0 && is_git_sha(sha) {
+            Some(sha.to_string())
+        } else {
+            None // не git-репо / detached / ошибка — необратимо (best-effort, не падаем)
+        }
+    }
 }
 
 #[async_trait]
@@ -172,13 +200,22 @@ impl<T: Transport> ExecDispatcher for ProxyExecDispatcher<T> {
             })
             .await?;
 
+        // 2.5 (6c-2h §5.5): для GitOp снять pre-op git-ref ДО мутации (read-only, ТОТ ЖЕ confined cwd) →
+        // undo_ref для обратимости. shell/process НЕОБРАТИМЫ (undo_ref=None; classify их и так не Auto).
+        let undo_ref = if matches!(action.target, ActionTarget::GitOp { .. }) {
+            self.capture_pre_op_gitref(&go).await
+        } else {
+            None
+        };
+
         // 3. ИСПОЛНЕНИЕ ЛОКАЛЬНО (in-container): ЕДИНСТВЕННОЕ место реального Command — exec_child.
         let result = self
             .runner
             .run(&go, &self.scratch_root, &self.vault_ro_root)
             .await;
 
-        // 4. report — host финализирует ledger (EXECUTED|FAILED). undo_ref=None (GitOp pre-op-ref — 6c-2h).
+        // 4. report — host финализирует ledger (EXECUTED|FAILED) + персистит undo_ref как UndoCols
+        // (host-authority: только если СОХРАНЁННОЕ действие — GitOp; см. exec_host.report).
         let _finalized: WireExecResult = self
             .rpc(WireExecRequest {
                 phase: WireExecPhase::Report,
@@ -187,7 +224,7 @@ impl<T: Transport> ExecDispatcher for ProxyExecDispatcher<T> {
                 exit_code: Some(result.exit_code),
                 stdout_tail: Some(result.stdout_tail.clone()),
                 stderr_tail: Some(result.stderr_tail.clone()),
-                undo_ref: None,
+                undo_ref,
             })
             .await?;
 
@@ -207,8 +244,50 @@ mod tests {
     use super::*;
     use crate::actuator::Action;
     use crate::agent::connect::{channel_pair, ChannelTransport, RpcError};
-    use crate::sandbox::exec_child::{ExecResult, MockExecRunner};
+    use crate::sandbox::exec_child::{ExecResult, ExecRunner, MockExecRunner};
     use crate::sandbox::exec_host::{ExecCwd, WireExecKind};
+    use async_trait::async_trait;
+
+    /// Тест-раннер 6c-2h: пишет argv КАЖДОГО вызова + скриптует rev-parse-исход (sha) ОТДЕЛЬНО от самого
+    /// op — чтобы доказать, что pre-op probe реально запущен (`git rev-parse HEAD`) ПЕРЕД мутацией.
+    struct RecordingRunner {
+        calls: Mutex<Vec<Vec<String>>>,
+        revparse_exit: i32,
+        revparse_stdout: String,
+    }
+
+    #[async_trait]
+    impl ExecRunner for RecordingRunner {
+        async fn run(
+            &self,
+            go: &WireExecGo,
+            _scratch: &std::path::Path,
+            _vault: &std::path::Path,
+        ) -> ExecResult {
+            self.calls.lock().unwrap().push(go.argv.clone());
+            let is_revparse = go.argv == ["git", "rev-parse", "HEAD"];
+            ExecResult {
+                exit_code: if is_revparse { self.revparse_exit } else { 0 },
+                stdout_tail: if is_revparse {
+                    self.revparse_stdout.clone()
+                } else {
+                    "op-output".into()
+                },
+                stderr_tail: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                timed_out: false,
+            }
+        }
+    }
+
+    fn recording(exit: i32, stdout: &str) -> Arc<RecordingRunner> {
+        Arc::new(RecordingRunner {
+            calls: Mutex::new(Vec::new()),
+            revparse_exit: exit,
+            revparse_stdout: stdout.into(),
+        })
+    }
 
     /// Мок-host: читает host/exec-запросы и отвечает по фазе из скрипта. Останавливается при закрытии
     /// транспорта. `decide` отдаёт заданное решение; execute — заданный WireExecGo; report — finalized.
@@ -436,6 +515,121 @@ mod tests {
                 .is_err(),
             "мёртвый транспорт → ToolError"
         );
+    }
+
+    /// 6c-2h: GitOp снимает pre-op git-ref ДО мутации (`git rev-parse HEAD` ПЕРВЫМ), затем сам op; trimmed
+    /// sha доносится в report как undo_ref.
+    #[tokio::test]
+    async fn gitop_captures_pre_op_ref() {
+        let (host_t, sbx_t) = channel_pair();
+        let last_report = Arc::new(Mutex::new(None));
+        let host = tokio::spawn(mock_host(
+            host_t,
+            WireExecDecision::Approved {
+                exec_token: "tok".into(),
+                ledger_action_id: 1,
+            },
+            go_echo(),
+            last_report.clone(),
+        ));
+        let runner = recording(0, "a1b2c3d4e5\n"); // hex sha + trailing newline (как реальный rev-parse)
+        let proxy = ProxyExecDispatcher::new(
+            sbx_t,
+            runner.clone(),
+            PathBuf::from("/tmp"),
+            PathBuf::from("/vault"),
+        );
+        proxy
+            .dispatch_exec(Action::git_op("status", vec![]))
+            .await
+            .expect("dispatch ok");
+        let calls = runner.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls.first().map(|c| c.as_slice()),
+            Some(["git".to_string(), "rev-parse".into(), "HEAD".into()].as_slice()),
+            "pre-op probe — rev-parse ПЕРВЫМ"
+        );
+        assert_eq!(calls.len(), 2, "probe + сам op");
+        let rep = last_report.lock().unwrap().clone().expect("report");
+        assert_eq!(
+            rep.undo_ref.as_deref(),
+            Some("a1b2c3d4e5"),
+            "trimmed sha донесён как undo_ref"
+        );
+        drop(proxy);
+        let _ = host.await;
+    }
+
+    /// 6c-2h best-effort: rev-parse падает (не git-репо/detached) → undo_ref None, dispatch НЕ падает.
+    #[tokio::test]
+    async fn gitop_rev_parse_failure_irreversible() {
+        let (host_t, sbx_t) = channel_pair();
+        let last_report = Arc::new(Mutex::new(None));
+        let host = tokio::spawn(mock_host(
+            host_t,
+            WireExecDecision::Approved {
+                exec_token: "tok".into(),
+                ledger_action_id: 1,
+            },
+            go_echo(),
+            last_report.clone(),
+        ));
+        let runner = recording(128, "fatal: not a git repository");
+        let proxy = ProxyExecDispatcher::new(
+            sbx_t,
+            runner,
+            PathBuf::from("/tmp"),
+            PathBuf::from("/vault"),
+        );
+        let outcome = proxy
+            .dispatch_exec(Action::git_op("status", vec![]))
+            .await
+            .expect("dispatch ok несмотря на провал probe");
+        assert!(matches!(outcome, ExecToolOutcome::Executed { .. }));
+        let rep = last_report.lock().unwrap().clone().expect("report");
+        assert!(
+            rep.undo_ref.is_none(),
+            "rev-parse fail → undo_ref None (необратимо)"
+        );
+        drop(proxy);
+        let _ = host.await;
+    }
+
+    /// 6c-2h: не-GitOp (shell.run) НЕ снимает pre-op ref (probe не запущен) → report.undo_ref None.
+    #[tokio::test]
+    async fn non_gitop_skips_pre_op_probe() {
+        let (host_t, sbx_t) = channel_pair();
+        let last_report = Arc::new(Mutex::new(None));
+        let host = tokio::spawn(mock_host(
+            host_t,
+            WireExecDecision::Approved {
+                exec_token: "tok".into(),
+                ledger_action_id: 1,
+            },
+            go_echo(),
+            last_report.clone(),
+        ));
+        let runner = recording(0, "deadbeef");
+        let proxy = ProxyExecDispatcher::new(
+            sbx_t,
+            runner.clone(),
+            PathBuf::from("/tmp"),
+            PathBuf::from("/vault"),
+        );
+        proxy
+            .dispatch_exec(Action::shell_run(vec!["ls".into()], None))
+            .await
+            .expect("dispatch ok");
+        let calls = runner.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "shell.run — только op, без probe");
+        assert!(
+            !calls.iter().any(|c| c == &["git", "rev-parse", "HEAD"]),
+            "нет rev-parse для не-GitOp"
+        );
+        let rep = last_report.lock().unwrap().clone().expect("report");
+        assert!(rep.undo_ref.is_none(), "shell необратим — undo_ref None");
+        drop(proxy);
+        let _ = host.await;
     }
 
     /// WireExecKind в проводе — sanity (decide шлёт exec-вид, не vault).
