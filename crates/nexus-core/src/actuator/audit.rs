@@ -301,6 +301,47 @@ pub async fn transition(writer: &WriteActor, key: &str, from: &str, to: &str) ->
         .await
 }
 
+/// TTL «зависшего» EXECUTING (SANDBOX-6c-3 §6 crash-recovery): 600с = 5× `DEFAULT_EXEC_TIMEOUT_MS` (120с).
+/// Один exec НЕ может легитимно превысить свой 120с-кэп (RealExecRunner kill'ит по таймауту), поэтому за 600с
+/// процесс гарантированно мёртв → строку безопасно финализировать FAILED. Owner-tunable (§12.5).
+pub const EXEC_STALE_TTL_SECS: i64 = 600;
+
+/// Crash-recovery РИПЕР зависших exec (SANDBOX-6c-3, спека §6 TTL): помечает `FAILED` строки `agent_actions`,
+/// застрявшие в `EXECUTING` (`outcome IS NULL`) дольше `older_than_secs` — контейнер исчез (краш/kill/OOM/
+/// host-restart) ПОСЛЕ redeem (`APPROVED→EXECUTING`) но ДО `report`, поэтому [`finish`] не сработал, а
+/// in-memory `in_flight`-карта (единственное, что могло бы финализировать) потеряна на рестарте host.
+///
+/// **MARK FAILED, НЕ requeue** (в отличие от [`crate::agent::requeue_stale_running`] для прогонов): exec НЕ
+/// replay-safe — одноразовый `exec_token` консьюмнут на redeem, а частичный `rm`/`git`/spawn мог уже
+/// произойти; повторный запуск небезопасен. Reaped-строка остаётся БЕЗ undo-хэндла ⇒ корректно вне
+/// [`actions_for_undo`] (необратима). Фенс `outcome IS NULL` делает рипер взаимно-исключающим с CAS [`finish`]:
+/// кто записал `outcome` первым — победил (поздний `report` после рипера → `finish`=false, FAILED-запись
+/// стоит — first-terminal-wins, согласовано с поглощающей семантикой `finish`). `now` ЯВНЫЙ (детерминизм
+/// тестов — единый источник с `cutoff`; прод передаёт [`crate::scheduler::now_secs`]). Возвращает число
+/// финализированных строк. Live-валидация (kill контейнера до report) — Tier-2 6c-3.
+pub async fn reconcile_stale_executing(
+    writer: &WriteActor,
+    older_than_secs: i64,
+    now: i64,
+) -> DbResult<usize> {
+    writer
+        .transaction(move |tx| {
+            let cutoff = now - older_than_secs;
+            tx.execute(
+                "UPDATE agent_actions SET state=?1, outcome=?2, updated_at=?3 \
+                 WHERE state=?4 AND outcome IS NULL AND updated_at < ?5",
+                params![
+                    STATE_FAILED,
+                    "exec: контейнер исчез до report (crash-recovery reaper §6 TTL)",
+                    now,
+                    STATE_EXECUTING,
+                    cutoff
+                ],
+            )
+        })
+        .await
+}
+
 /// Читает строку действия по idempotency_key (`None` — нет такой). Это и есть replay-check на уровне
 /// хранилища; [`replay_decision`] оборачивает его в ветвление по outcome.
 pub async fn lookup(reader: &ReadPool, key: &str) -> DbResult<Option<ActionRow>> {
@@ -475,6 +516,164 @@ mod tests {
         // Строка одна.
         let row = lookup(db.reader(), "dup").await.unwrap().unwrap();
         assert!(row.outcome.is_none(), "первая строка не тронута");
+    }
+
+    // ── SANDBOX-6c-3 §6: reconcile_stale_executing (crash-recovery reaper) ────────────────────────
+    fn entry_state(run_id: i64, key: &str, state: &str) -> ActionEntry {
+        ActionEntry {
+            state: state.to_string(),
+            ..entry(run_id, key)
+        }
+    }
+
+    /// Зависший EXECUTING (updated_at < cutoff) → FAILED + структурный outcome + undo None; returns 1.
+    #[tokio::test]
+    async fn reconcile_marks_stale_executing_failed() {
+        let (_d, db) = open().await;
+        record_before(db.writer(), entry(1, "stale")).await.unwrap();
+        let t = lookup(db.reader(), "stale")
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
+        // now далеко в будущем → cutoff > t → строка зависшая.
+        let n = reconcile_stale_executing(db.writer(), 1, t + 1000)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "одна зависшая строка финализирована");
+        let row = lookup(db.reader(), "stale").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_FAILED);
+        assert!(
+            row.outcome
+                .as_deref()
+                .unwrap_or("")
+                .contains("контейнер исчез"),
+            "структурный crash-outcome: {:?}",
+            row.outcome
+        );
+        assert!(
+            row.undo_kind.is_none(),
+            "reaped exec без undo-хэндла (необратим)"
+        );
+    }
+
+    /// Свежий EXECUTING (в пределах TTL) НЕ трогается — не риперим живой долгий exec.
+    #[tokio::test]
+    async fn reconcile_skips_fresh_executing() {
+        let (_d, db) = open().await;
+        record_before(db.writer(), entry(1, "fresh")).await.unwrap();
+        let t = lookup(db.reader(), "fresh")
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
+        // cutoff = (t+1) - 10000 < t → строка НЕ старше TTL.
+        let n = reconcile_stale_executing(db.writer(), 10_000, t + 1)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "свежий EXECUTING не реапится");
+        let row = lookup(db.reader(), "fresh").await.unwrap().unwrap();
+        assert_eq!(row.state, STATE_EXECUTING, "остаётся executing");
+        assert!(row.outcome.is_none());
+    }
+
+    /// Только EXECUTING+outcome-NULL: proposed/executed (терминал) НЕ трогаются даже будучи «старыми».
+    #[tokio::test]
+    async fn reconcile_ignores_non_executing_and_terminal() {
+        let (_d, db) = open().await;
+        record_before(db.writer(), entry(1, "exec")).await.unwrap();
+        record_before(db.writer(), entry(1, "done")).await.unwrap();
+        finish(db.writer(), "done", STATE_EXECUTED, "ок", None)
+            .await
+            .unwrap();
+        record_before(db.writer(), entry_state(1, "prop", STATE_PROPOSED))
+            .await
+            .unwrap();
+        let t = lookup(db.reader(), "exec")
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
+
+        let n = reconcile_stale_executing(db.writer(), 1, t + 1000)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "реапнут только зависший executing");
+        assert_eq!(
+            lookup(db.reader(), "exec").await.unwrap().unwrap().state,
+            STATE_FAILED
+        );
+        assert_eq!(
+            lookup(db.reader(), "done").await.unwrap().unwrap().state,
+            STATE_EXECUTED,
+            "терминал (executed) не тронут"
+        );
+        assert_eq!(
+            lookup(db.reader(), "prop").await.unwrap().unwrap().state,
+            STATE_PROPOSED,
+            "proposed не тронут"
+        );
+    }
+
+    /// Взаимоисключение с finish (outcome IS NULL фенс): finish первым → рипер no-op; рипер первым → поздний
+    /// finish=false (first-terminal-wins).
+    #[tokio::test]
+    async fn reconcile_idempotent_vs_finish() {
+        let (_d, db) = open().await;
+        // (a) finish первым → рипер не трогает.
+        record_before(db.writer(), entry(1, "a")).await.unwrap();
+        finish(db.writer(), "a", STATE_EXECUTED, "репортнут", None)
+            .await
+            .unwrap();
+        let ta = lookup(db.reader(), "a").await.unwrap().unwrap().updated_at;
+        assert_eq!(
+            reconcile_stale_executing(db.writer(), 1, ta + 1000)
+                .await
+                .unwrap(),
+            0,
+            "репортнутую (executed) рипер не трогает"
+        );
+        assert_eq!(
+            lookup(db.reader(), "a").await.unwrap().unwrap().state,
+            STATE_EXECUTED
+        );
+        // (b) рипер первым → поздний finish видит терминал → false, FAILED стоит.
+        record_before(db.writer(), entry(1, "b")).await.unwrap();
+        let tb = lookup(db.reader(), "b").await.unwrap().unwrap().updated_at;
+        assert_eq!(
+            reconcile_stale_executing(db.writer(), 1, tb + 1000)
+                .await
+                .unwrap(),
+            1
+        );
+        let late = finish(db.writer(), "b", STATE_EXECUTED, "поздний report", None)
+            .await
+            .unwrap();
+        assert!(
+            !late,
+            "поздний finish после рипера → false (first-terminal-wins)"
+        );
+        assert_eq!(
+            lookup(db.reader(), "b").await.unwrap().unwrap().state,
+            STATE_FAILED,
+            "FAILED от рипера стоит"
+        );
+    }
+
+    /// Reaped FAILED-строка без undo_kind ⇒ actions_for_undo её НЕ возвращает (необратима).
+    #[tokio::test]
+    async fn reconciled_row_not_undoable() {
+        let (_d, db) = open().await;
+        record_before(db.writer(), entry(5, "u")).await.unwrap();
+        let t = lookup(db.reader(), "u").await.unwrap().unwrap().updated_at;
+        reconcile_stale_executing(db.writer(), 1, t + 1000)
+            .await
+            .unwrap();
+        let undoable = actions_for_undo(db.reader(), 5).await.unwrap();
+        assert!(
+            undoable.is_empty(),
+            "reaped exec не в наборе отката (state=failed, undo None)"
+        );
     }
 
     /// finish ставит терминальный state+outcome; ПОГЛОЩАЮЩИЙ — второй finish с другим исходом no-op.

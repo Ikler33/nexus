@@ -44,8 +44,9 @@ pub use action::{Action, ActionTarget};
 // через `orchestrate::dispatch_action` (гейт автономии). Здесь реэкспортируем лишь типы исхода/леджера.
 pub use apply::{ApplyOutcome, AuditSink};
 pub use audit::{
-    actions_for_undo, canonical_args, idempotency_key, mark_undone, replay_decision, transition,
-    ActionEntry, ActionRow, ReplayDecision, UndoCols, STATE_UNDONE,
+    actions_for_undo, canonical_args, idempotency_key, mark_undone, reconcile_stale_executing,
+    replay_decision, transition, ActionEntry, ActionRow, ReplayDecision, UndoCols,
+    EXEC_STALE_TTL_SECS, STATE_UNDONE,
 };
 pub use classify::{classify, BlockReason, ClassifyCtx, ConfirmReason, RiskTier};
 pub use decision::{
