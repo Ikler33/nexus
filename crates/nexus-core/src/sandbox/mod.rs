@@ -36,6 +36,10 @@ pub mod exec_child;
 /// SANDBOX-6c-2e.
 pub mod exec_proxy;
 
+/// exec_tools — 3 exec-инструмента агента (shell.run/process.spawn/git.op) поверх `ExecDispatcher`.
+/// Регистрируются при `shell_enable` (6c-2f). SANDBOX-6c-2e-2.
+pub mod exec_tools;
+
 /// `ProxyToolProvider` — in-sandbox tool-capable провайдер (stream:false поверх GuardedProxy). SANDBOX-4a.
 pub mod provider;
 
