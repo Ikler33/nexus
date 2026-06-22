@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-1 — `host/exec` контракт + host-РЕШЕНИЕ по exec-таргетам (Tier-1, БЕЗ исполнения)
+
+Первый срез завершающей Фазы-3 (`docs/specs/agent-sandbox.md §5.2`; дизайн — мультиагент-Workflow «design-sandbox-6c»: гибрид no-4th-socket + executor-rigor). Host-СТОРОНА `host/exec`: классификация + решение + ledger + минт токена. **БЕЗ единого исполнения** (контейнерный executor + runner-routing + ProxyExec — 6c-2; live на .28 — 6c-3).
+
+- **Wire-контракт** (`nexus-core::sandbox::exec_host`): `host/exec` — ВТОРОЙ метод на act.sock (НЕ 4-й сокет). `WireExecAction` (exec-only, `TryFrom<&Action>` vault→Err — зеркало-противоположность `WireAction`; `WireExecKind` знает лишь 3 exec-вида → forge невозможен в обе стороны). 3-актный `WireExecRequest{phase: decide|execute|report}` (`deny_unknown_fields`) + `WireExecDecision` (Approved{exec_token,ledger_action_id}|Rejected|HardBlocked) + `WireExecGo`/`WireExecResult`/`ExecCwd` (контракт для 6c-2). `HostExecServer` маршрутизирует `decide`; `execute`/`report` зарезервированы → `invalid_params` (6c-2).
+- **host-РЕШЕНИЕ** (`actuator::dispatch_exec_decision` + `ExecDecision`): зеркалит decision-часть `propose_and_decide` БЕЗ apply — `classify_exec` (НИКОГДА Auto) → HardBlocked / под Confirm спрашивает `DecisionSource` (PolicyDefault=DENY headless; ChannelDecision=человек) → на Approve ledger PROPOSED→APPROVED (write-before-act intent) + kill-switch re-check → возвращает `ledger_action_id`. **Vault-apply (`apply_action`/`apply_now`) НЕ зовётся** (exec там fail-closed РУБЕЖ-0). НЕТ UI-Proposal (ExecProposal-событие — 6c-2).
+- **`DispatchExecBackend`** (real `ExecBackend`): держит per-run `GatedToolCtx` (единый policy-путь) + token-store. На Approve минтит ОДНОРАЗОВЫЙ `exec_token` = blake3(run_id|action_id|fingerprint|RANDOM-nonce) + СОХРАНЯЕТ действие (контейнер на execute предъявит ТОЛЬКО токен — argv не переподаёт → TOCTOU-замок approve-`ls`-run-`rm`; redeem/finalize — 6c-2).
+
+**Закалка по 2-линзовому adversarial-ревью (0 CRITICAL/MAJOR):** `dispatch_exec_decision` получил РАНТАЙМ fail-closed-guard `!is_exec()→Rejected` (был лишь `debug_assert`, компилируемый прочь в release — паритет с РУБЕЖ-0 `apply_now`); `host/exec decide` отвергает кросс-фазовые поля (`exec_token`/`exit`/`tails` в decide-запросе → `invalid_params`); `exec_token` несёт 16-байт RANDOM-nonce (`getrandom`) — непрогнозируем БЕЗ опоры на секретность run_id/action_id; `pending`-store получил fail-closed soft-cap `MAX_PENDING_EXEC`=64 (anti-рост до 6c-2 redeem); 3 обязательных 6c-2-инварианта (redeem-консьюм токена / env-allowlist-only / `serve_exec` SO_PEERCRED) зафиксированы в module-doc.
+
+11 Tier-1 тестов (wire round-trip / vault-not-on-host-exec / unknown-field / cross-phase-field-reject / decide-маппинг / execute-зарезервирован; + DispatchExecBackend на НАСТОЯЩЕМ vault+ledger: shell_enable=false→HardBlocked-без-токена / PolicyDefault→Rejected-без-токена / Approve→Approved+токен-сохранён / soft-cap→Rejected-без-добавления). 786 nexus-core тестов, clippy 0, fmt/egress/tooluse/dangling/ignored зелёные. Следом 6c-2: ProxyExec-шим + `exec_child` исполнитель ВНУТРИ контейнера + exec-инструменты + `serve_host` routing + adversarial-ревью.
+
 ### Агент · SANDBOX — `SO_PEERCRED` peer-uid гейт на per-run сокетах (закрывает §4.3.6 / §10.1 T8)
 
 Спека `docs/specs/agent-sandbox.md §4.3` инвариант 6 / §10.1 (T8) требовали `SO_PEERCRED`/uid-check на per-run AF_UNIX-листенерах прогона (egress/act/event, и будущий exec), чтобы egress/* и host/* RPC мог драйвить **ТОЛЬКО** спавненный контейнер (его run_as-uid). Инвариант был СПЕЦИФИЦИРОВАН, но НЕ реализован — защита держалась лишь на 0600-правах сокета + 0700 per-run каталога. Этот срез закрывает разрыв spec↔код.
