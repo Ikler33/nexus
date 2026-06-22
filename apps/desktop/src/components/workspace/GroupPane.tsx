@@ -3,7 +3,6 @@ import {
   BookOpen,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Columns2,
   FileText,
   History,
@@ -15,7 +14,6 @@ import { useTranslation } from 'react-i18next';
 import { EditorView } from '@codemirror/view';
 import { toggleTaskAtLine } from '../../lib/editor/format';
 import { getActiveEditorView } from '../../lib/editor/activeView';
-import { relTime } from '../../lib/time';
 import { formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import { useInlineAIStore } from '../../stores/inlineAI';
@@ -50,18 +48,13 @@ function isMarkdown(path: string): boolean {
   return /\.(md|markdown)$/i.test(path);
 }
 
-/** Слов в документе (для doc-meta строки превью). */
-function wordCount(doc: string): number {
-  return doc.split(/\s+/).filter(Boolean).length;
-}
-
 /**
  * Одна группа (сплит): floating-вкладки (DnD между панами, DP-3) + редактор/превью активной
  * вкладки (режим — в сторе, ⌘E / mode-float пилюля) + backlinks-бар. В режиме чтения хром
  * вкладок упрощается (App `.reading`).
  */
 export function GroupPane({ groupId }: { groupId: string }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const group = useWorkspaceStore((s) => s.groups.find((g) => g.id === groupId));
   const buffers = useWorkspaceStore((s) => s.buffers);
   const isActive = useWorkspaceStore((s) => s.activeGroupId === groupId);
@@ -358,26 +351,14 @@ export function GroupPane({ groupId }: { groupId: string }) {
               <FileViewer path={active.path} />
             ) : mdActive && (mode === 'preview' || reading) ? (
               <Suspense fallback={null}>
-                <div className={styles.docMeta}>
-                  {mtime != null && (
-                    <>
-                      <span>
-                        <Clock size={13} aria-hidden /> {relTime(mtime, i18n.language)}
-                      </span>
-                      <span>·</span>
-                    </>
-                  )}
-                  <span>{t('editor.metaWords', { count: wordCount(active.doc) })}</span>
-                  <span>·</span>
-                  <span>
-                    {t('editor.metaReading', {
-                      count: Math.max(1, Math.round(wordCount(active.doc) / 200)),
-                    })}
-                  </span>
-                </div>
+                {/* MASTHEAD-1: editorial-шапка (kicker/title/byline) + буквица ведущего абзаца —
+                    внутри MarkdownPreview (шапка и первый абзац должны быть соседями для буквицы).
+                    `mtime` (живое состояние GroupPane) и `reading` (⌘R) прокидываем; остальное —
+                    title/теги/слова — MarkdownPreview считает из источника сам. */}
                 <MarkdownPreview
                   source={active.doc}
                   notePath={active.path}
+                  masthead={{ mtime, reading }}
                   onOpenLink={(target) => void openLink(target)}
                   onOpenTag={openTagFilter}
                   onToggleTask={(line) => {

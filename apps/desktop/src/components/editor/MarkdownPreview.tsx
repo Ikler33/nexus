@@ -1,4 +1,5 @@
-import { createElement, useContext, useEffect, useMemo, useState } from 'react';
+import { createElement, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
@@ -7,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { isTaskLine } from '../../lib/editor/format';
+import { deriveMasthead, dropCapLetter } from '../../lib/editor/masthead';
 import { makeSlugger } from '../../lib/editor/slug';
 import { EmbedContext } from '../../lib/markdown/embed-context';
 import { extractFrontmatter, parseFrontmatterFields } from '../../lib/markdown/frontmatter';
@@ -19,6 +21,7 @@ import { remarkHighlight } from '../../lib/markdown/remarkHighlight';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
+import { relTime } from '../../lib/time';
 import { AppendLine } from './AppendLine';
 import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
@@ -146,6 +149,7 @@ export function MarkdownPreview({
   notePath,
   onAppendLine,
   fetchNotes,
+  masthead,
 }: {
   source: string;
   onOpenLink: (target: string) => void;
@@ -163,6 +167,11 @@ export function MarkdownPreview({
   onAppendLine?: (line: string) => void;
   /** Заметки по подстроке для `[[…` автокомплита AppendLine (тот же источник, что у CM6). */
   fetchNotes?: (query: string) => Promise<NoteRef[]>;
+  /** MASTHEAD-1 (Hermes-6 editor.jsx): editorial-шапка (kicker/title/byline) + буквица ведущего абзаца.
+   *  Задаётся ТОЛЬКО для top-level превью редактора (GroupPane, режим чтения/просмотра). Не задан
+   *  (embed/peek/доска) — шапки и буквицы нет (как у вложенных рендеров макета). `mtime` — для chip'а
+   *  «изменено» (живёт в GroupPane); `reading` — режим чтения ⌘R (центрированная шапка, крупнее буквица). */
+  masthead?: { mtime: number | null; reading?: boolean };
 }) {
   // Транклюзия: добавляем свой путь в множество предков (гард-цикл A→B→A). Мемо — стабильная
   // идентичность Set'а, иначе вложенный NoteEmbed перефетчивал бы на каждый ре-рендер родителя.
@@ -174,6 +183,44 @@ export function MarkdownPreview({
         : inheritedEmbed,
     [inheritedEmbed, notePath],
   );
+
+  const { t, i18n } = useTranslation();
+
+  // MASTHEAD-1: данные editorial-шапки. Считаем всегда (дёшево, мемо), используем только когда задан
+  // `masthead` (top-level превью). `body` — исходник с ОБНУЛЁННЫМ ведущим H1 (его текст ушёл в заголовок
+  // шапки): обнуление, а не удаление, сохраняет номера строк для тоггла тасков/оглавления (см. masthead.ts).
+  const md = useMemo(() => deriveMasthead(source, notePath), [source, notePath]);
+  const mastheadActive = masthead != null;
+  const body = mastheadActive ? md.body : source;
+  const words = useMemo(() => source.split(/\s+/).filter(Boolean).length, [source]);
+  const readingMinutes = Math.max(1, Math.round(words / 200));
+
+  // Буквица ведущего абзаца (порт dropcap.js): после коммита находим первый блок тела (первый ребёнок
+  // `.preview` ПОСЛЕ шапки и Properties-таблицы) и, если это абзац, штампуем его первую букву в `data-cap`
+  // (CSS тюнит оптический зазор по глифу) + маркер `data-dropcap`. Только в режиме шапки; иначе снимаем.
+  const previewRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    root.querySelectorAll('[data-dropcap]').forEach((el) => {
+      el.removeAttribute('data-dropcap');
+      el.removeAttribute('data-cap');
+    });
+    if (!mastheadActive) return;
+    let el: Element | null = root.firstElementChild;
+    while (el && (el.classList.contains(styles.docHead) || el.classList.contains(styles.properties))) {
+      el = el.nextElementSibling;
+    }
+    if (el && el.tagName === 'P') {
+      const cap = dropCapLetter(el.textContent ?? '');
+      if (cap) {
+        el.setAttribute('data-cap', cap);
+        el.setAttribute('data-dropcap', '');
+      }
+    }
+    // deps — примитивы (mastheadActive), а НЕ объект `masthead`: иначе свежий литерал {mtime,reading}
+    // на каждый ре-рендер GroupPane перезапускал бы эффект вхолостую. Штамповка зависит только от body.
+  }, [body, mastheadActive]);
 
   const sourceLines = onToggleTask ? source.split('\n') : null;
   const components: Components = {
@@ -279,6 +326,10 @@ export function MarkdownPreview({
   // HEADANCHOR-1: slug-id на заголовок (per-render дедуп) — якорь для `#heading`-навигации/сносок.
   // Новый slugger на каждый рендер (без утечки счётчиков между нотами/ре-рендерами).
   const slugger = makeSlugger();
+  // HEADANCHOR-1: ведущий H1 погашен в теле → его slug-id переносим на заголовок шапки, ПОТРЕБЛЯЯ slug
+  // первым (до рендера тела) — чтобы якорь `#slug-ведущего-H1` вёл к шапке И дедуп последующих одноимённых
+  // заголовков не сдвинулся. slugify сам срежет inline-разметку, поэтому передаём сырой h1Text.
+  const leadSlug = mastheadActive && md.h1Text != null ? slugger(md.h1Text) : null;
   // EDIT-7: помечаем заголовки исходной строкой (`data-outline-line`) — панель Outline скроллит к
   // ним в режиме чтения/превью (в source-режиме переход идёт через CM6). `node.position.start.line` —
   // тот же источник позиции, что у тасков (EDIT-5); атрибут невидимый, рендер заголовков не меняет.
@@ -392,11 +443,37 @@ export function MarkdownPreview({
     const fm = extractFrontmatter(source);
     return fm ? parseFrontmatterFields(fm.raw) : [];
   }, [source]);
+  // В режиме шапки title/tags вынесены в kicker/заголовок → не дублируем их в Properties-таблице (md.fields
+  // уже без них). Без шапки — полный набор полей (поведение embed/peek не меняем).
+  const tableFields = masthead ? md.fields : fmFields;
 
   return (
     <EmbedContext.Provider value={embedCtx}>
-      <div className={styles.preview}>
-        {fmFields.length > 0 && <PropertiesTable fields={fmFields} onOpenTag={onOpenTag} />}
+      <div className={masthead?.reading ? `${styles.preview} ${styles.reading}` : styles.preview} ref={previewRef}>
+        {masthead && (
+          <header className={styles.docHead}>
+            {md.tags.length > 0 && <div className={styles.docKicker}>{md.tags.join(' · ')}</div>}
+            {md.title && (
+              <h1
+                className={styles.docTitle}
+                id={leadSlug ?? undefined}
+                data-outline-line={md.h1Line ?? undefined}
+              >
+                {md.title}
+              </h1>
+            )}
+            <div className={styles.docByline}>
+              {masthead.mtime != null && (
+                <span className={styles.chip}>
+                  <Clock size={12} aria-hidden /> {relTime(masthead.mtime, i18n.language)}
+                </span>
+              )}
+              <span className={styles.chip}>{t('editor.metaWords', { count: words })}</span>
+              <span className={styles.chip}>{t('editor.metaReading', { count: readingMinutes })}</span>
+            </div>
+          </header>
+        )}
+        {tableFields.length > 0 && <PropertiesTable fields={tableFields} onOpenTag={onOpenTag} />}
         <ReactMarkdown
           // ПОРЯДОК ВАЖЕН: remarkFrontmatter/remarkComments — ПЕРВЫМИ (убрать frontmatter и вырезать
           // `%%…%%` до embed/callout/nexus). Оба чистят узлы по позиции/тексту, тело по строкам сохранено
@@ -407,7 +484,7 @@ export function MarkdownPreview({
           urlTransform={urlTransform}
           components={components}
         >
-          {source}
+          {body}
         </ReactMarkdown>
         {/* AppendLine — только у top-level превью редактора (onAppendLine задан); embed/peek/доска не передают. */}
         {onAppendLine && fetchNotes && (

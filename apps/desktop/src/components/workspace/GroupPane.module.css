@@ -312,19 +312,6 @@
     transform: none;
   }
 }
-.docMeta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  max-width: var(--editor-max-width, none);
-  margin: 0 auto;
-  padding: var(--space-4) var(--space-4) 0;
-  font-size: var(--text-sm);
-  color: var(--color-text-faint);
-  font-family: var(--font-ui);
-}
-
 /* SAFE-3: баннер guard'а внешнего изменения — файл правился на диске поверх несохранённого буфера. */
 .externalBanner {
   display: flex;

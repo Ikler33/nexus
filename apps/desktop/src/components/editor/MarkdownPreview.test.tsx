@@ -530,3 +530,101 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
     expect(container.querySelector('[class*=properties]')).toBeNull();
   });
 });
+
+describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', () => {
+  it('рисует kicker (теги) · display-title · byline; ведущий H1 не дублируется', () => {
+    const src = '---\ntags: [project, ai]\n---\n# Главный заголовок\n\nМного текста для буквицы.';
+    render(
+      <MarkdownPreview source={src} notePath="Notes/Test.md" onOpenLink={() => {}} masthead={{ mtime: null }} />,
+    );
+    // kicker — теги через « · »
+    expect(screen.getByText('project · ai')).toBeInTheDocument();
+    // заголовок — РОВНО один (H1 тела погашен, не задвоен)
+    const titles = screen.getAllByRole('heading', { name: 'Главный заголовок' });
+    expect(titles).toHaveLength(1);
+    // outline → H1 по-прежнему ведёт к шапке (строка исходного H1)
+    expect(titles[0]).toHaveAttribute('data-outline-line', '4');
+    // byline — слова и время чтения
+    expect(screen.getByText(/мин чтения/)).toBeInTheDocument();
+    // тело отрисовано
+    expect(screen.getByText('Много текста для буквицы.')).toBeInTheDocument();
+  });
+
+  it('заголовок из frontmatter title имеет приоритет; title/tags не дублируются в Properties', () => {
+    const src = '---\ntitle: Заголовок ФМ\ntags: [a]\nstatus: doing\n---\n# H1 тела\n\nтекст';
+    render(<MarkdownPreview source={src} notePath="f.md" onOpenLink={() => {}} masthead={{ mtime: null }} />);
+    expect(screen.getByRole('heading', { name: 'Заголовок ФМ' })).toBeInTheDocument();
+    expect(screen.getByText('a')).toBeInTheDocument(); // kicker
+    expect(screen.getByText('status')).toBeInTheDocument(); // прочее поле — в Properties
+    expect(screen.queryByText('title')).toBeNull(); // ключ title не дублируется
+    expect(screen.queryByText('tags')).toBeNull(); // ключ tags не дублируется
+  });
+
+  it('буквица: первая буква ведущего абзаца штампуется в data-cap', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Зачин\n\nМного текста для буквицы здесь.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('М');
+  });
+
+  it('буквица — ТОЛЬКО на абзаце-зачине: список первым блоком → буквицы нет', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# T\n\n- пункт один\n- пункт два'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(container.querySelector('[data-dropcap]')).toBeNull();
+  });
+
+  it('без masthead: нет ни шапки, ни буквицы (embed/peek/доска не меняются)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'# Заголовок\n\nМного текста.'} notePath="f.md" onOpenLink={() => {}} />,
+    );
+    expect(container.querySelector('[class*=docHead]')).toBeNull();
+    expect(container.querySelector('[data-dropcap]')).toBeNull();
+    // H1 тела рендерится как обычный markdown-заголовок (тело не тронуто)
+    expect(screen.getByRole('heading', { name: 'Заголовок' })).toBeInTheDocument();
+  });
+
+  it('HEADANCHOR-1: slug ведущего H1 переносится на заголовок шапки; дедуп одноимённых не сдвигается', () => {
+    // Ведущий H1 «Обзор» погашен → его slug 'обзор' уходит на заголовок шапки (и потребляется первым,
+    // поэтому второй «Обзор» в теле получает 'обзор-1', как было бы без шапки).
+    render(
+      <MarkdownPreview
+        source={'# Обзор\n\nтекст\n\n## Обзор'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const title = screen.getByRole('heading', { name: 'Обзор', level: 1 });
+    expect(title).toHaveAttribute('id', 'обзор');
+    expect(screen.getByRole('heading', { name: 'Обзор', level: 2 })).toHaveAttribute('id', 'обзор-1');
+  });
+
+  it('строки тела не сдвигаются: таск под погашенным H1 тоглится по верной строке', () => {
+    const onToggleTask = vi.fn();
+    // Строки: 1 `# H`, 2 пусто, 3 `- [ ] дело`.
+    render(
+      <MarkdownPreview
+        source={'# H\n\n- [ ] дело'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        onToggleTask={onToggleTask}
+        masthead={{ mtime: null }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onToggleTask).toHaveBeenCalledWith(3); // строка ПОЛНОГО исходника, не сдвинута погашением H1
+  });
+});
