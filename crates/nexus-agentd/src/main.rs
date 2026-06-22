@@ -1021,8 +1021,12 @@ fn maybe_spawn_connect_server(
         autonomy,
         "agent-connect: AF_UNIX коннектор ВКЛ (default-OFF; задан NEXUS_AGENTD_CONNECT_SOCKET)"
     );
+    // T8: ожидаемый peer контрол-сокета = ОПЕРАТОР (= uid этого процесса agentd), НЕ run_as контейнера.
+    // Linux → Some(getuid()) (fail-closed SO_PEERCRED-гейт); не-Linux → None (perms-only fallback).
+    let expected_uid = nexus_core::agent::connect::operator_uid();
     tokio::spawn(async move {
-        if let Err(e) = nexus_core::agent::connect::serve_unix_at(&socket, deps).await {
+        if let Err(e) = nexus_core::agent::connect::serve_unix_at(&socket, deps, expected_uid).await
+        {
             tracing::error!(error = %e, "agent-connect: AF_UNIX сервер упал");
         }
     });
