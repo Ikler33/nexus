@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState, type ComponentType } from 'react';
+import { useEffect, useReducer, useRef, useState, type ComponentType } from 'react';
 import {
   AlertCircle,
   Check,
@@ -21,7 +21,7 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
-import type { EgressState, WebSearchConfig } from '../../lib/tauri-api';
+import type { AgentFlagsDto, EgressState, WebSearchConfig } from '../../lib/tauri-api';
 import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useEpisodeStore } from '../../stores/episode';
 import { usePrefsStore } from '../../stores/prefs';
@@ -693,6 +693,7 @@ function AiSection() {
 
       <EgressBlock />
       <WebSearchBlock />
+      <HeadlessAgentBlock />
     </>
   );
 }
@@ -765,6 +766,141 @@ function WebSearchBlock() {
         value={cfg.enabled}
         onChange={(v) => persist({ ...cfg, url: url.trim(), enabled: v })}
       />
+      {saved && <span className={styles.okText}>{t('settings.web.saved')}</span>}
+      {err && <p className={styles.warnText}>{t('settings.web.saveError', { msg: err })}</p>}
+    </>
+  );
+}
+
+/**
+ * Настройки АВТОНОМНОГО (headless) агента — Hermes-6/SYNC follow-up. ⚠️ Эти тогглы конфигурируют
+ * ИСКЛЮЧИТЕЛЬНО серверный агент (`nexus-agentd` через коннектор): они персистятся в `.nexus/local.json`
+ * и читаются им при старте. Десктопный ИИ-чат/панель агента ИМИ НЕ управляются (десктоп берёт автономию
+ * прогона per-run в UI, а web — из отдельного `websearch.json`). Все по умолчанию OFF/confirm; опасные
+ * включения дают consent-предупреждение (зеркало WebSearchBlock). sandbox/shell — Linux-only: на не-Linux
+ * структурно инертны → тогглы disabled. shell зависит от sandbox (exec всегда Confirm, никогда Auto).
+ */
+function HeadlessAgentBlock() {
+  const { t } = useTranslation();
+  const [flags, setFlags] = useState<AgentFlagsDto | null>(null);
+  const [shellSupported, setShellSupported] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // Последний КОММИТНУТЫЙ набор — мерж patch'ей идёт от него, а не от замыкания рендера (иначе два
+  // быстрых тоггла разных контролов до ре-рендера затирали бы друг друга стейлом). seq отбрасывает
+  // устаревшие ответы бэка (out-of-order/flicker не клобберят свежий оптимистичный стейт).
+  const flagsRef = useRef<AgentFlagsDto | null>(null);
+  flagsRef.current = flags;
+  const seqRef = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    void tauriApi.settings
+      .getAiConfig()
+      .then((c) => {
+        if (!alive) return;
+        setFlags({
+          agentAutonomy: c.agentAutonomy,
+          sandboxEnabled: c.sandboxEnabled,
+          shellEnable: c.shellEnable,
+          webAllowPublicFetch: c.webAllowPublicFetch,
+        });
+        setShellSupported(c.shellSupported);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!flags) return null;
+  /** Применяет частичный patch к ПОСЛЕДНЕМУ набору и персистит. Когерентность shell↔sandbox держим и
+   * на фронте (зеркало бэка): shell не может быть true без песочницы. */
+  const persist = (patch: Partial<AgentFlagsDto>) => {
+    const base = flagsRef.current as AgentFlagsDto;
+    const next: AgentFlagsDto = { ...base, ...patch };
+    next.shellEnable = next.shellEnable && next.sandboxEnabled;
+    setSaved(false);
+    setErr(null);
+    setFlags(next); // оптимистично: тоггл откликается сразу
+    flagsRef.current = next;
+    const seq = ++seqRef.current;
+    void tauriApi.settings
+      .setAgentFlags(next)
+      .then((applied) => {
+        if (seq !== seqRef.current) return; // устаревший ответ — пришёл новее
+        setFlags(applied);
+        flagsRef.current = applied;
+        setSaved(true);
+      })
+      .catch((e: unknown) => {
+        if (seq === seqRef.current) setErr(String(e));
+      });
+  };
+
+  const autonomy = flags.agentAutonomy === 'auto' ? 'auto' : 'confirm';
+  // host-exec доступен лишь на Linux И при включённой песочнице (иначе exec → HardBlocked у агентд).
+  const shellAvailable = shellSupported && flags.sandboxEnabled;
+
+  return (
+    <>
+      <SectionHeader title={t('settings.agent.title')} sub={t('settings.agent.intro')} nested />
+
+      {/* Автономия headless-коннектора (confirm|auto). Десктопные прогоны выбирают её per-run отдельно. */}
+      <section className={styles.group}>
+        <div className={styles.rowText}>
+          <span className={styles.label}>{t('settings.agent.autonomy')}</span>
+          <span className={styles.rowDesc}>{t('settings.agent.autonomyDesc')}</span>
+        </div>
+        <div className={styles.seg}>
+          {(['confirm', 'auto'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`${styles.segBtn} ${autonomy === m ? styles.on : ''}`}
+              onClick={() => persist({ agentAutonomy: m })}
+              aria-pressed={autonomy === m}
+            >
+              {t(`settings.agent.autonomyOpts.${m}`)}
+            </button>
+          ))}
+        </div>
+      </section>
+      {autonomy === 'auto' && <p className={styles.warnText}>{t('settings.agent.autonomyWarn')}</p>}
+
+      {/* Песочница (мастер-свитч, Linux-only) — предпосылка для host-exec. */}
+      <EgressRow
+        label={t('settings.agent.sandbox')}
+        desc={shellSupported ? t('settings.agent.sandboxDesc') : t('settings.agent.linuxOnly')}
+        value={flags.sandboxEnabled}
+        // Выключая песочницу, persist сам сбрасывает shell (когерентность shell↔sandbox централизована).
+        onChange={(v) => persist({ sandboxEnabled: v })}
+        disabled={!shellSupported}
+      />
+
+      {/* Host-exec (shell/process/git) внутри песочницы. Требует sandbox + Linux; всегда Confirm. */}
+      <EgressRow
+        label={t('settings.agent.shell')}
+        desc={shellAvailable ? t('settings.agent.shellDesc') : t('settings.agent.shellReq')}
+        value={flags.shellEnable}
+        onChange={(v) => persist({ shellEnable: v })}
+        disabled={!shellAvailable}
+      />
+      {flags.shellEnable && shellAvailable && (
+        <p className={styles.warnText}>{t('settings.agent.shellWarn')}</p>
+      )}
+
+      {/* Публичный web.fetch агента (снимает allowlist). Эффективен лишь при настроенном ai.web. */}
+      <EgressRow
+        label={t('settings.agent.publicFetch')}
+        desc={t('settings.agent.publicFetchDesc')}
+        value={flags.webAllowPublicFetch}
+        onChange={(v) => persist({ webAllowPublicFetch: v })}
+      />
+      {flags.webAllowPublicFetch && (
+        <p className={styles.warnText}>{t('settings.agent.publicFetchWarn')}</p>
+      )}
+
       {saved && <span className={styles.okText}>{t('settings.web.saved')}</span>}
       {err && <p className={styles.warnText}>{t('settings.web.saveError', { msg: err })}</p>}
     </>

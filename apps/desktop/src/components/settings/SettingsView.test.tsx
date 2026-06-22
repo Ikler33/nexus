@@ -118,6 +118,107 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     expect(await screen.findByText(/перезапустите|restart/i)).toBeInTheDocument();
   });
 
+  // Hermes-6/SYNC: блок «Автономный (серверный) агент» — тогглы agentd-флагов (autonomy/sandbox/
+  // shell/public-fetch) персистятся через tauriApi.settings.setAgentFlags (вне Tauri — мок).
+  it('AI-секция: блок headless-агента — autonomy «Авто» зовёт setAgentFlags и показывает consent-warn', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const spy = vi.spyOn(tauriApi.settings, 'setAgentFlags');
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    // Блок загрузился (getAiConfig) → заголовок + сегмент автономии.
+    const autonomyLabel = await screen.findByText(/автономия коннектора|connector autonomy/i);
+    const row = autonomyLabel.closest('section') as HTMLElement;
+    const autoBtn = within(row).getByRole('button', { name: /^(авто|auto)$/i });
+    expect(autoBtn).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(autoBtn);
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ agentAutonomy: 'auto' }));
+    // Consent-warn появляется (оптимистично), сегмент перещёлкивается после ответа мока.
+    expect(await screen.findByText(/без спроса|without asking/i)).toBeInTheDocument();
+    await vi.waitFor(() => expect(autoBtn).toHaveAttribute('aria-pressed', 'true'));
+
+    // Вернуть «Подтверждать» (мок-состояние общее на сессию теста).
+    fireEvent.click(within(row).getByRole('button', { name: /подтверждать|^confirm$/i }));
+    await vi.waitFor(() => expect(autoBtn).toHaveAttribute('aria-pressed', 'false'));
+    spy.mockRestore();
+  });
+
+  it('AI-секция: песочница/shell — Linux-only → disabled на этой платформе (мок shellSupported=false)', async () => {
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    // Песочница: ряд есть, но сегмент Вкл/Выкл disabled (shellSupported=false в моке/браузере).
+    const sandboxLabel = await screen.findByText(/^(os-песочница|os sandbox)$/i);
+    const sandboxRow = sandboxLabel.closest('section') as HTMLElement;
+    expect(within(sandboxRow).getByRole('button', { name: /^вкл|^on$/i })).toBeDisabled();
+
+    // Shell тоже disabled (требует sandbox + Linux); виден поясняющий req-текст.
+    const shellLabel = await screen.findByText(/^(выполнение команд|shell execution)$/i);
+    const shellRow = shellLabel.closest('section') as HTMLElement;
+    expect(within(shellRow).getByRole('button', { name: /^вкл|^on$/i })).toBeDisabled();
+  });
+
+  it('AI-секция: публичный web.fetch — тоггл зовёт setAgentFlags и показывает consent-warn', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const spy = vi.spyOn(tauriApi.settings, 'setAgentFlags');
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    const label = await screen.findByText(/^(публичный web\.fetch|public web fetch)$/i);
+    const row = label.closest('section') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /^вкл|^on$/i }));
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ webAllowPublicFetch: true }));
+    // Consent-warn (только в нём упоминается SSRF — desc содержит «любой публичный URL», не путаем).
+    expect(await screen.findByText(/ssrf/i)).toBeInTheDocument();
+
+    // Вернуть выкл.
+    fireEvent.click(within(row).getByRole('button', { name: /^выкл|^off$/i }));
+    await vi.waitFor(() =>
+      expect(within(row).getByRole('button', { name: /^вкл|^on$/i })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      ),
+    );
+    spy.mockRestore();
+  });
+
+  // Регрессия стейл-замыкания: два тоггла РАЗНЫХ контролов в одном батче (до ре-рендера) не должны
+  // затирать друг друга. Старый код (`{...flags}` из замыкания) ронял autonomy при втором клике; новый
+  // (мерж patch'а от flagsRef) — нет. native .click() внутри act() батчит оба до flush.
+  it('AI-секция: быстрые тоггл autonomy+public-fetch в одном батче — оба сохраняются (ref, не стейл)', async () => {
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    const autonomyLabel = await screen.findByText(/автономия коннектора|connector autonomy/i);
+    const autoBtn = within(autonomyLabel.closest('section') as HTMLElement).getByRole('button', {
+      name: /^(авто|auto)$/i,
+    });
+    const pfLabel = await screen.findByText(/^(публичный web\.fetch|public web fetch)$/i);
+    const pfOn = within(pfLabel.closest('section') as HTMLElement).getByRole('button', {
+      name: /^вкл|^on$/i,
+    });
+
+    // Оба клика в одном act-батче (без промежуточного ре-рендера) — воспроизводит стейл-сценарий.
+    act(() => {
+      autoBtn.click();
+      pfOn.click();
+    });
+
+    // autonomy=auto НЕ затёрто вторым кликом, public-fetch=on тоже применился.
+    await vi.waitFor(() => expect(autoBtn).toHaveAttribute('aria-pressed', 'true'));
+    expect(pfOn).toHaveAttribute('aria-pressed', 'true');
+
+    // Вернуть дефолты (мок-состояние общее на сессию теста).
+    const { tauriApi } = await import('../../lib/tauri-api');
+    await tauriApi.settings.setAgentFlags({
+      agentAutonomy: 'confirm',
+      sandboxEnabled: false,
+      shellEnable: false,
+      webAllowPublicFetch: false,
+    });
+  });
+
   it('General (слайс 3): секция с переключателем языка RU/EN', () => {
     useUIStore.setState({ settingsSection: 'general' });
     render(<SettingsView />);

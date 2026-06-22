@@ -243,6 +243,7 @@ pub fn run() {
             commands::scheduler::clear_dead_jobs,
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
+            commands::settings::set_agent_flags,
             commands::settings::test_ai_connection,
             commands::plugin::list_plugins,
             commands::plugin::set_plugin_enabled,
