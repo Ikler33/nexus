@@ -8,7 +8,8 @@
 //!
 //! Хардненинг (спека §3.1): `--network=none` (нет NIC — единственный сетевой путь будет GuardedProxy по
 //! AF_UNIX, SANDBOX-2), `--read-only` rootfs + `--tmpfs /tmp`, `--cap-drop=ALL`,
-//! `--security-opt no-new-privileges`, `--userns=keep-id` (uid контейнера = host-uid владельца vault),
+//! `--security-opt no-new-privileges`, `--userns=keep-id` (host-uid маппится в себя) + `--user host-uid:gid`
+//! (процесс контейнера бежит под host-uid → владеет 0600-сокетами и читает `:ro`-vault; ставит `SandboxRunner`),
 //! ресурс-кэпы; vault bind **`:ro`**; per-run каталог сокетов — ОТДЕЛЬНЫЙ mount, НЕ под `:ro`-vault
 //! (спека §4.4, анти-footgun). Окружение хоста НЕ пробрасывается (нет `--env` — env-scrub fail-closed
 //! придёт в SANDBOX-6a; на этом срезе важно лишь, что секреты хоста физически не утекают в argv).
