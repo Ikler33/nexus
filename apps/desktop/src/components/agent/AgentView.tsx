@@ -14,10 +14,10 @@ import {
   Settings,
   Share2,
   ShieldCheck,
-  Sparkles,
   Square,
   X,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
@@ -543,7 +543,7 @@ function Changeset({ files, autonomy, awaiting, approving, onFile, onBulk, onApp
               <div className={styles.cfActs}>
                 {decision === 'applied' ? (
                   <span className={`${styles.cfBadge} ${styles.cfOk}`}>
-                    {auto ? <Sparkles size={12} aria-hidden /> : <Check size={12} aria-hidden />}
+                    {auto ? <OrbitIcon size={12} aria-hidden /> : <Check size={12} aria-hidden />}
                     {auto ? t('agent.changeset.autoMark') : t('agent.changeset.applied')}
                   </span>
                 ) : decision === 'rejected' ? (

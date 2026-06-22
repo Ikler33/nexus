@@ -17,11 +17,11 @@ import {
   RefreshCw,
   Search,
   Share2,
-  Sparkles,
   Star,
   Target,
   Trophy,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { openOrCreateDaily, openOrCreateInbox } from '../../lib/daily';
@@ -787,7 +787,7 @@ export function HomeView() {
         </div>
 
         <div className={styles.secLabel}>
-          <Sparkles size={11} aria-hidden style={{ marginRight: -6 }} />
+          <OrbitIcon size={11} aria-hidden style={{ marginRight: -6 }} />
         </div>
       </div>
     </main>

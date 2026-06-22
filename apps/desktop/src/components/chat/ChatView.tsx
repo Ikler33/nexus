@@ -7,7 +7,6 @@ import {
   Copy,
   FilePlus2,
   FileText,
-  Sparkles,
   Globe,
   Pin,
   Plus,
@@ -17,6 +16,7 @@ import {
   MessageSquare,
   History,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -231,7 +231,7 @@ export function ChatView() {
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
             <div className={styles.emptyGlyph} aria-hidden>
-              <Sparkles size={24} />
+              <OrbitIcon size={24} />
             </div>
             <div className={styles.emptyTitle}>{t('chat.emptyTitle')}</div>
             <p className={styles.empty}>{t('chat.empty')}</p>

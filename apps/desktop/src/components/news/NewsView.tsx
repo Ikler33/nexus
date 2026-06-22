@@ -11,10 +11,10 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
-  Sparkles,
   WifiOff,
   X,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi, type NewsItem } from '../../lib/tauri-api';
@@ -290,7 +290,7 @@ export function NewsView() {
             <div className={styles.digest}>
               <div className={styles.ndHead}>
                 <div className={styles.ndTitle}>
-                  <Sparkles size={16} aria-hidden />
+                  <OrbitIcon size={16} aria-hidden />
                   {t('news.digestTitle')}
                   <span className={styles.ndBadge}>AI</span>
                 </div>

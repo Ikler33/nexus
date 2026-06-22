@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import {
-  Bot,
   CalendarCheck,
   FileText,
   GitBranch,
@@ -12,6 +11,7 @@ import {
   Settings,
   Share2,
 } from 'lucide-react';
+import { CometIcon } from './BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import styles from './ActivityBar.module.css';
@@ -79,7 +79,7 @@ export function ActivityBar() {
           openBoard,
           boardOpen,
         )}
-        {btn(<Bot size={19} aria-hidden />, t('commands.view.agent'), openAgent, agentOpen)}
+        {btn(<CometIcon size={19} aria-hidden />, t('commands.view.agent'), openAgent, agentOpen)}
         {btn(
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),

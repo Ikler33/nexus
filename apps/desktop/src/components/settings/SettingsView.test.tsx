@@ -51,7 +51,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
   it('About (Qasr): показывает имя приложения и версию', () => {
     useUIStore.setState({ settingsSection: 'about' });
     render(<SettingsView />);
-    expect(screen.getByText(/^qasr$/i)).toBeInTheDocument(); // app.name
+    expect(screen.getByText(/^orvin$/i)).toBeInTheDocument(); // app.name
     expect(screen.getByText(/версия|version/i)).toBeInTheDocument();
   });
 

@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react';
+import { useEffect, useReducer, useState, type ComponentType } from 'react';
 import {
   AlertCircle,
   Check,
@@ -11,9 +11,9 @@ import {
   Pencil,
   RotateCcw,
   Settings as SettingsIcon,
-  Sparkles,
   X,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandMark } from '../chrome/BrandMark';
@@ -535,7 +535,7 @@ function AiSection() {
       <SectionHeader title={t('settings.ai')} sub={t('settings.aiSec.intro')} />
 
       <Endpoint
-        icon={Sparkles}
+        icon={OrbitIcon}
         title={t('settings.aiSec.chatTitle')}
         desc={t('settings.aiSec.chatDesc')}
         url={chatUrl}
@@ -874,7 +874,7 @@ function EgressRow(props: {
 }
 
 function Endpoint(props: {
-  icon: typeof Cpu;
+  icon: ComponentType<{ size?: number; className?: string; 'aria-hidden'?: boolean }>;
   title: string;
   desc: string;
   url: string;

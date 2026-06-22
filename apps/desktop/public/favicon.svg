@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Favicon Orvin: белый знак «узел-на-орбите» на ember-плитке (README §6 app-icon-форма). -->
+  <defs>
+    <radialGradient id="ember" cx="30%" cy="20%" r="120%">
+      <stop offset="0" stop-color="#D97A52" />
+      <stop offset="55%" stop-color="#C45B33" />
+      <stop offset="100%" stop-color="#B14F2C" />
+    </radialGradient>
+  </defs>
+  <rect width="32" height="32" rx="7.16" fill="url(#ember)" />
+  <g transform="translate(16 16) scale(0.62) translate(-16 -16)">
+    <path d="M24.61 11.98 A9.5 9.5 0 1 1 20.02 7.39" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" />
+    <circle cx="22.72" cy="9.28" r="3.4" fill="#fff" />
+  </g>
+</svg>

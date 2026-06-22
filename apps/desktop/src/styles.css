@@ -1,5 +1,5 @@
 /* ============================================================
-   Nexus — Design Tokens  (дизайн-система Qasr, см. docs/dev/design.md
+   Nexus — Design Tokens  (дизайн-система Orvin — Hermes-6, ранее Qasr; см. docs/dev/design.md
    и ~/Documents/Claude/qasr-design). Тёплый крем (light) · тёплый уголь
    (dark) · Onest + JetBrains Mono · editorial display Cormorant/Cinzel.
    Терракота/янтарь акцент · sage/amber статусы · WCAG AA.
@@ -111,6 +111,11 @@
   --color-warning: #B8862F;       /* amber */
   --color-danger: #B14A39;        /* clay */
   --color-danger-soft: rgba(177,74,57,0.12);
+
+  /* Hermes-6 foundation — аддитивный производный токен: мягкий фон «warning» (Board-карточки).
+     Определяется ОДИН раз; color-mix авто-адаптируется ко всем 13 темам через подстановку
+     var(--color-warning)/var(--color-surface) из текущей темы. */
+  --color-warning-soft: color-mix(in oklch, var(--color-warning) 14%, var(--color-surface));
 
   --elevation-1: 0 1px 2px rgba(60,48,32,0.05), 0 2px 8px rgba(60,48,32,0.05);
   --elevation-2: 0 8px 28px rgba(48,38,24,0.14), 0 1px 3px rgba(48,38,24,0.10);

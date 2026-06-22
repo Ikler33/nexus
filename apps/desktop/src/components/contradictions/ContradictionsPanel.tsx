@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { RefreshCw, Scale, Sparkles, X } from 'lucide-react';
+import { RefreshCw, Scale, X } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -70,7 +71,7 @@ export function ContradictionsPanel() {
               disabled={generating}
               title={t('contradictions.generate')}
             >
-              <Sparkles size={14} aria-hidden />
+              <OrbitIcon size={14} aria-hidden />
               <span>
                 {generating ? t('contradictions.generating') : t('contradictions.generate')}
               </span>

@@ -6,9 +6,9 @@ import {
   FilePlus2,
   Info,
   MessageSquare,
-  Sparkles,
   X,
 } from 'lucide-react';
+import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { logUi } from '../../lib/debug-log';
@@ -123,7 +123,7 @@ export function NewsReader(props: {
             onClick={summarize}
             disabled={summary === 'thinking'}
           >
-            <Sparkles size={15} aria-hidden />
+            <OrbitIcon size={15} aria-hidden />
             {t('news.reader.summarize')}
           </button>
           <button type="button" className={styles.readerAct} onClick={() => onToNote(item.id)}>
@@ -172,7 +172,7 @@ export function NewsReader(props: {
             <>
               <span>·</span>
               <span className={styles.rmTrans}>
-                <Sparkles size={11} aria-hidden />
+                <OrbitIcon size={11} aria-hidden />
                 {t('news.reader.translated')}
               </span>
             </>
@@ -183,14 +183,14 @@ export function NewsReader(props: {
 
         {summary === 'thinking' && (
           <div className={`${styles.readerSummary} ${styles.readerSummaryThinking}`}>
-            <Sparkles size={16} aria-hidden className={styles.thinkSpin} />
+            <OrbitIcon size={16} aria-hidden className={styles.thinkSpin} />
             <span>{t('news.reader.summarizing')}</span>
           </div>
         )}
         {Array.isArray(summary) && summary.length > 0 && (
           <div className={styles.readerSummary}>
             <div className={styles.rsHead}>
-              <Sparkles size={14} aria-hidden />
+              <OrbitIcon size={14} aria-hidden />
               {t('news.reader.brief')}
               <button
                 type="button"
@@ -216,7 +216,7 @@ export function NewsReader(props: {
 
         {article === 'loading' && (
           <div className={styles.readerLoading}>
-            <Sparkles size={15} aria-hidden className={styles.thinkSpin} />
+            <OrbitIcon size={15} aria-hidden className={styles.thinkSpin} />
             <span>{t('news.reader.loading')}</span>
           </div>
         )}

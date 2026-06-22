@@ -17,6 +17,16 @@
 - **`UNDO_EXEC_GITREF="exec_gitref"`** (`actuator/mod.rs`) — стабильный ledger-дискриминант отмены exec-GitOp объявлен здесь; персист `undo_ref`+exec-undo-ветка — 6c-2h.
 
 Tier-1 (+8, итого 843 nexus-core): `change_kind_classifies_exec` · `exec_proposal_summary_is_content_free` (плантованный секрет ОТСУТСТВУЕТ в summary) · `exec_proposal/result_is_struct_variant_roundtrip` (newtype-loss регресс-гард) · `map_agent_event_covers_exec_variants` · `exec_decide_emits_exec_proposal`/`exec_report_emits_exec_result` (CollectingSink) · `event_forward_relays_exec_result` (сквозной релей до десктопа). agentd компилируется, clippy 0, fmt + node-lints зелёные. Остаётся undo (6c-2h), live-валидация (6c-3).
+### Дизайн · Orvin/Castor foundation (Hermes-6) — бренд-знаки + ребренд + токен
+
+Фаза A эпика переноса дизайна Hermes-6 (бренд Qasr → **Orvin** app / **Castor** agent): серийный фундамент бренд-примитивов до фан-аута рескина вью. Лейаут вью НЕ меняется (рескин панелей/вью — отдельные срезы Фазы B).
+
+- **BrandMark** → Orvin «узел-на-орбите» (tile-less: кольцо `currentColor` + ember-точка `var(--color-accent)`, разрыв под спутником; README §6). **BrandThinking** + `motion.css` → орбита-спиннер (`bt-orbit/bt-ring/bt-sat` + `.idle` + reduced-motion) — атомарная пара (13 потребителей не трогаются).
+- **Бренд-глифы** `OrbitIcon`/`CometIcon` (drop-in для lucide): свопы `sparkles`→орбита (11 AI-афордансов) и `bot`→комета Castor (нав агента); Titlebar 'midnight'-тема → нейтральный `MoonStar` (трёхуровневый язык: орбита = AI-слой Orvin, комета = Castor, lucide = прочее).
+- **Ребренд** i18n Qasr→Orvin (`app.name` + onboarding/tree/chat/news, 7×2) + Castor (`agent.title`, `view.agent` в нав/палитре/шпаргалке, `who.agent`); окно Tauri + `<title>` + favicon (ember-плитка + белый Orbit-O). **БЕЗ** `s/nexus/` — тех-идентификаторы (`.nexus/`, `app.nexus.desktop`, `nexus.locale`) целы.
+- Аддитивный токен `--color-warning-soft` (`color-mix`, авто-адаптация ко всем 13 темам); mock home Qasr→Orvin.
+
+tsc · eslint · vitest 898/898 · vite build · node-чеки `test-all` — зелёные. Скриншот-верификация знаков (light+dark, @24/@76). Adversarial-ревью (5 линз) — 0 блокеров после фиксов.
 
 ### Агент · SANDBOX-6c-2f-3 — host-проводка exec end-to-end (serve_host в SandboxRunner + agentd CLI/харнесс)
 

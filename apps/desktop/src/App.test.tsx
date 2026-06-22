@@ -47,7 +47,7 @@ describe('App (Ф0-3 / Ф4-11 / DP-1)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /продолжить|continue/i }));
 
     // Шаг индексации: вход доступен сразу (vault уже открыт).
-    fireEvent.click(await screen.findByRole('button', { name: /открыть qasr|open qasr/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /открыть orvin|open orvin/i }));
     expect(useUIStore.getState().onboardingDone).toBe(true);
     // Приложение вошло: Home-лендинг с приветствием.
     expect(
