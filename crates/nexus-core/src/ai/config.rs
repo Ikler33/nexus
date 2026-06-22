@@ -97,6 +97,15 @@ pub struct AiConfig {
     /// env-scrub-allowlist рендера и будущий classify.
     #[serde(default)]
     pub shell_enable: bool,
+
+    /// **SANDBOX-6c-3d, OWNER-GATED, default None.** Опц. ПЕРСИСТЕНТНЫЙ writable git-worktree для РЕАЛЬНОГО
+    /// отката exec-GitOp (`git reset --hard <pre-op-ref>`, см. [`crate::actuator::UndoExecDriver`]). `None`
+    /// (ДЕФОЛТ) → exec-GitOp откат остаётся `Deferred` (vault `:ro`, scratch-tmpfs эфемерен — кросс-прогонный
+    /// reset невозможен). `Some(path)` → этот каталог монтируется ОТДЕЛЬНЫМ rw-маунтом (НИКОГДА не vault!) в
+    /// undo-контейнер, где и выполняется reset. **Новая security-поверхность** (writable repo в песочнице) —
+    /// включает ТОЛЬКО владелец явной конфигурацией; vault остаётся `:ro` всегда.
+    #[serde(default)]
+    pub git_worktree: Option<String>,
 }
 
 /// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
@@ -354,6 +363,22 @@ mod tests {
         assert!(on.ai.agent_actuator_enabled);
         assert_eq!(on.ai.agent_overwrite_threshold, Some(4096));
         assert_eq!(on.ai.agent_blast_radius_cap, Some(4));
+    }
+
+    /// SANDBOX-6c-3d: `ai.git_worktree` (owner-gated undo-worktree для реального exec-GitOp reset) по
+    /// умолчанию None (откат остаётся Deferred); парсится явно. Vault всегда `:ro` — это ОТДЕЛЬНЫЙ rw-mount.
+    #[test]
+    fn git_worktree_default_none_and_parses() {
+        assert!(
+            LocalConfig::parse(r#"{"ai":{}}"#)
+                .unwrap()
+                .ai
+                .git_worktree
+                .is_none(),
+            "git_worktree None по умолчанию (undo Deferred, safe)"
+        );
+        let on = LocalConfig::parse(r#"{"ai":{"git_worktree":"/srv/sbx-repo"}}"#).unwrap();
+        assert_eq!(on.ai.git_worktree.as_deref(), Some("/srv/sbx-repo"));
     }
 
     /// SKILL-2: `agent_skills_dir` по умолчанию None (агент без скиллов, без регрессии); парсится явно.

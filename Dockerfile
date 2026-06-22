@@ -18,8 +18,10 @@ RUN cargo build --release -p nexus-agentd
 
 FROM debian:bookworm-slim AS runtime
 # ca-certificates — для исходящего TLS агента (chat/embed/web через GuardedClient).
+# git — для exec-таргета GitOp агента ВНУТРИ песочницы (SANDBOX-6c) + pre-op-ref undo (6c-3); ~+15МБ.
+#   Без него `git.op`/реальный `git reset --hard` в контейнере структурно невозможны.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 # Непривилегированный системный пользователь (контейнер не бежит под root).
 RUN useradd --system --uid 10001 --create-home --home-dir /home/nexus nexus

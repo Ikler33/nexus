@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-3d-1 — образ +git, `ai.git_worktree` (owner-gated) + Tier-2 live-runbook/скрипт
+
+Разблокировка live-валидации Tier-2 на .28 + предпосылка для реального exec-GitOp отката. Малый CI-mergeable срез (entrypoint `--sandbox-undo` + прод `SandboxUndoExecDriver` — 6c-3d-2).
+
+- **Dockerfile +git** (~+15МБ): без git-бинаря в образе `git.op` И реальный `git reset --hard` (6c-3e undo) в контейнере СТРУКТУРНО невозможны. Валидируется существующим docker-smoke (paths-gated, срабатывает от касания Dockerfile).
+- **`ai.git_worktree: Option<String>` (config, OWNER-GATED, default None)**: опц. ПЕРСИСТЕНТНЫЙ writable git-worktree для реального отката exec-GitOp. `None` (дефолт) → откат остаётся `Deferred` (vault `:ro`, scratch эфемерен — кросс-прогонный reset невозможен). `Some` → ОТДЕЛЬНЫЙ rw-mount (НИКОГДА не vault) в undo-контейнер. Включает ТОЛЬКО владелец; vault всегда `:ro`.
+- **`docs/runbooks/sandbox-tier2.md` + `scripts/sandbox-tier2.sh`**: точный live-рецепт (.28, выделенный TEST-vault, НИКОГДА `~/.nexus/vault`; podman build образа → gated `cargo test exec_it -- --ignored` → reaper/undo/--sandbox-run шаги). Скрипт fail-closed отказывается целиться в живой `~/.nexus`.
+
+Tier-1: `git_worktree_default_none_and_parses` (config round-trip). clippy 0, fmt + node-lints зелёные. Образ с git строит docker-smoke. Live containment-матрица (6c-3a/b/c `#[ignore]`) теперь прогоняема на .28. `--sandbox-undo` entrypoint + реальный container-spin undo-драйвер — 6c-3d-2.
+
 ### Агент · SANDBOX-6c-3b/c — Tier-2 containment-матрица + always-CI edge-тесты exec-раннера
 
 Доказывает, что то, что Tier-1 мокал, реально enforced'ится — частью на УРОВНЕ ЯДРА контейнера (Tier-2, `#[ignore]` на .28), частью на реальном процессе БЕЗ podman (always-CI host-тесты).
