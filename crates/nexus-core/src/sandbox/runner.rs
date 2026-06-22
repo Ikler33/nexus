@@ -208,7 +208,12 @@ impl SandboxRunner {
             }
         };
 
-        // Serve-таски: каждый принимает ОДНО соединение контейнера и обслуживает реальным backend'ом.
+        // Serve-таски: каждый обслуживает ОДНО легитимное соединение контейнера реальным backend'ом.
+        // accept-LOOP, а не одиночный accept: отвергнутый по peer-uid импостор (защита-в-глубину на случай
+        // ослабленных 0600/0700) НЕ должен лишить легитимный контейнер сокета — продолжаем слушать. Выход:
+        // обслужили валидного пира (соединение закрылось) ЛИБО accept упал. Контейнер открывает РОВНО одно
+        // соединение на сокет → после serve выходим (break) — не виснем на повторном accept (teardown ждёт
+        // join с бюджетом; повторный accept не нужен).
         let egress_proxy = Arc::new(egress_proxy);
         let act_server = Arc::new(act_server);
         let event_srv = Arc::new(EventForwardServer::new(event_out));
@@ -216,36 +221,45 @@ impl SandboxRunner {
         let eg = {
             let p = egress_proxy.clone();
             tokio::spawn(async move {
-                if let Ok((s, _)) = egress_l.accept().await {
+                loop {
+                    let Ok((s, _)) = egress_l.accept().await else {
+                        break;
+                    };
                     if peer_authorized(&s, expected_uid) {
                         serve_egress(AfUnixTransport::new(s), &p).await;
-                    } else {
-                        tracing::warn!(socket = SOCKET_EGRESS, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
+                        break;
                     }
+                    tracing::warn!(socket = SOCKET_EGRESS, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
                 }
             })
         };
         let ac = {
             let s = act_server.clone();
             tokio::spawn(async move {
-                if let Ok((st, _)) = act_l.accept().await {
+                loop {
+                    let Ok((st, _)) = act_l.accept().await else {
+                        break;
+                    };
                     if peer_authorized(&st, expected_uid) {
                         serve_act(AfUnixTransport::new(st), &s).await;
-                    } else {
-                        tracing::warn!(socket = SOCKET_ACT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
+                        break;
                     }
+                    tracing::warn!(socket = SOCKET_ACT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
                 }
             })
         };
         let ev = {
             let s = event_srv.clone();
             tokio::spawn(async move {
-                if let Ok((st, _)) = event_l.accept().await {
+                loop {
+                    let Ok((st, _)) = event_l.accept().await else {
+                        break;
+                    };
                     if peer_authorized(&st, expected_uid) {
                         s.serve(AfUnixTransport::new(st)).await;
-                    } else {
-                        tracing::warn!(socket = SOCKET_EVENT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
+                        break;
                     }
+                    tracing::warn!(socket = SOCKET_EVENT, "sandbox: соединение отвергнуто — peer-uid != run_as-uid (SO_PEERCRED, спека §4.3.6)");
                 }
             })
         };

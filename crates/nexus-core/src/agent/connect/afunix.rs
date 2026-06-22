@@ -214,7 +214,16 @@ pub(crate) fn peer_uid(stream: &UnixStream) -> Option<u32> {
         )
     };
     if rc != 0 || len as usize != std::mem::size_of::<libc::ucred>() {
-        return None; // syscall-сбой / частично заполненный credential → fail-closed
+        // Отличаем «cred НЕЧИТАЕМ» (аномалия ядра/fd) от «uid НЕ СОВПАЛ» (логируется на call-site): для
+        // security-гейта это разные события в аудит-следе. Всё равно fail-closed → вызывающий дропнет.
+        tracing::warn!(
+            target: "agent::connect",
+            rc,
+            got_len = len,
+            want_len = std::mem::size_of::<libc::ucred>(),
+            "afunix: getsockopt(SO_PEERCRED) не прочёл peer-cred — fail-closed (соединение будет отвергнуто)"
+        );
+        return None;
     }
     Some(cred.uid)
 }
