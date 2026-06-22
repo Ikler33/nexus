@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-2f-2 — регистрация exec-инструментов в песочном реестре (default-OFF gating, in-container)
+
+In-container проводка exec: контейнерный реестр получает 3 exec-инструмента ТОЛЬКО при `shell_enable`, деля act.sock с note-инструментами через `Arc`-транспорт. Host-сторона (serve_host в SandboxRunner.run + agentd CLI-арг) — 6c-2f-3.
+
+- **`child::build_sandbox_registry<A: Transport>(act: Arc<A>, shell_enable)`**: note-инструменты (всегда, host/act) + при `shell_enable` — `ShellRunTool`/`ProcessSpawnTool`/`GitOpTool` поверх `ProxyExecDispatcher`(`RealExecRunner`, cwd-базы `CONTAINER_SCRATCH`/`CONTAINER_VAULT`). **DEFAULT-OFF**: при `false` exec-инструменты СТРУКТУРНО отсутствуют (агент их не назовёт). `act`-транспорт ОБЩИЙ (`Arc`-клоны) для host/act + host/exec → одно соединение (host-side `serve_host` роутит по методу, 6c-2f-1).
+- `SandboxChildSpec.shell_enable` (новое поле); `run_sandbox_child_session` оборачивает act в `Arc` и зовёт `build_sandbox_registry`. agentd `--sandbox-child` пока хардкодит `shell_enable=false` (6-й CLI-арг — 6c-2f-3).
+- INV-CMD-SITE цел: child.rs РЕФЕРЕНСИТ `RealExecRunner` (unit-структуру), но НЕ конструирует Command (реальный спавн — exec_child.rs) — `check-sandbox-exec.mjs` зелёный.
+
+Tier-1: `registry_gates_exec_tools_on_shell_enable` (shell_enable=false → exec-инструментов НЕТ, note есть; =true → все 4 есть). clippy 0, fmt + node-lints зелёные. Инертно для прод-пути (agentd shell_enable=false; serve_host-swap — 6c-2f-3).
+
 ### Агент · SANDBOX-6c-2f-1 — `serve_host` (host/act + host/exec на одном соединении) + `Arc<T>: Transport`
 
 Первый из двух суб-срезов проводки exec: host-side примитивы. `serve_host` — security-keystone (обе RPC на одном peer-gated канале) + sharing-примитив для контейнерных шимов. Сама проводка (runner.run/child.rs/agentd CLI) — 6c-2f-2.

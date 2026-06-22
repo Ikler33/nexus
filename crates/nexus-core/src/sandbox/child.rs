@@ -37,8 +37,36 @@ use crate::net::RunCtx;
 
 use super::act::ProxyActuator;
 use super::event::{drain_events, ProxyEventForwarder};
+use super::exec_child::RealExecRunner;
+use super::exec_proxy::{ExecDispatcher, ProxyExecDispatcher};
+use super::exec_tools::{GitOpTool, ProcessSpawnTool, ShellRunTool};
 use super::provider::ProxyToolProvider;
 use super::proxy::ProxyGuardedClient;
+
+/// Строит реестр инструментов песочного прогона: note-инструменты (всегда, host/act) + 3 exec-инструмента
+/// (`shell.run`/`process.spawn`/`git.op` — ТОЛЬКО при `shell_enable`; **default-OFF** → структурно
+/// отсутствуют, агент их не назовёт). `act`-транспорт ОБЩИЙ (`Arc`) для note (host/act) и exec (host/exec) —
+/// обе RPC на ОДНОМ act.sock через host-side `serve_host` (6c-2f). exec бежит ВНУТРИ контейнера через
+/// `RealExecRunner` (cwd-базы — контейнерные `CONTAINER_SCRATCH`/`CONTAINER_VAULT`).
+fn build_sandbox_registry<A: Transport + 'static>(act: Arc<A>, shell_enable: bool) -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    let dispatcher: Arc<dyn ActionDispatcher> = Arc::new(ProxyActuator::new(act.clone()));
+    registry.insert(Arc::new(NoteCreateTool::new(dispatcher.clone())));
+    registry.insert(Arc::new(NoteEditTool::new(dispatcher.clone())));
+    registry.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
+    if shell_enable {
+        let exec: Arc<dyn ExecDispatcher> = Arc::new(ProxyExecDispatcher::new(
+            act,
+            Arc::new(RealExecRunner),
+            std::path::PathBuf::from(super::CONTAINER_SCRATCH),
+            std::path::PathBuf::from(super::CONTAINER_VAULT),
+        ));
+        registry.insert(Arc::new(ShellRunTool::new(exec.clone())));
+        registry.insert(Arc::new(ProcessSpawnTool::new(exec.clone())));
+        registry.insert(Arc::new(GitOpTool::new(exec)));
+    }
+    registry
+}
 
 /// Плоские параметры песочного прогона (host передаёт их `--sandbox-child` через argv/env). Host-side
 /// deps гейта (canon_root/ledger/policy/decision) контейнеру НЕ нужны — их держит host за act.sock.
@@ -55,6 +83,10 @@ pub struct SandboxChildSpec {
     pub temperature: Option<f32>,
     /// Окно контекста модели (токены); None → консервативный дефолт [`ContextBudget`].
     pub context_window: Option<usize>,
+    /// Фаза-3: регистрировать ли exec-инструменты (`shell.run`/`process.spawn`/`git.op`). **Default-OFF**:
+    /// при `false` они СТРУКТУРНО отсутствуют в реестре (агент их не назовёт); host тоже fail-closed
+    /// (`serve_host` exec_server=None → host/exec method_not_found). SANDBOX-6c-2f.
+    pub shell_enable: bool,
 }
 
 /// Гонит один песочный прогон: собирает прокси-провайдер (egress.sock) + прокси-актуатор (act.sock) +
@@ -80,13 +112,11 @@ where
         spec.temperature,
     );
 
-    // Актуатор: файловые инструменты через act.sock (host dispatch_action, authoritative). ШОВ
-    // SANDBOX-4b-2a: тот же `NoteCreateTool` и пр., но диспетчер — `ProxyActuator`.
-    let dispatcher: Arc<dyn ActionDispatcher> = Arc::new(ProxyActuator::new(act));
-    let mut registry = ToolRegistry::new();
-    registry.insert(Arc::new(NoteCreateTool::new(dispatcher.clone())));
-    registry.insert(Arc::new(NoteEditTool::new(dispatcher.clone())));
-    registry.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
+    // Актуатор+exec: инструменты через act.sock (host dispatch_action/host-exec, authoritative). ШОВ
+    // SANDBOX-4b-2a/6c-2f: note-инструменты + (при shell_enable) exec-инструменты делят ОДИН act.sock
+    // через `Arc`-транспорт (host-side `serve_host` роутит host/act+host/exec по методу).
+    let act = Arc::new(act);
+    let registry = build_sandbox_registry(act, spec.shell_enable);
 
     // Форвардер: события хода → event.sock (host релей в десктоп). drain-таск маппит и шлёт.
     let (forwarder, rx) = ProxyEventForwarder::new();
@@ -278,6 +308,7 @@ mod tests {
             model: "qwen".into(),
             temperature: None,
             context_window: Some(8192),
+            shell_enable: false,
         };
         let outcome = run_sandbox_child_session(&spec, egress_c, act_c, event_c).await;
 
@@ -330,6 +361,7 @@ mod tests {
             model: "qwen".into(),
             temperature: None,
             context_window: Some(4096),
+            shell_enable: false,
         };
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -341,5 +373,37 @@ mod tests {
             matches!(outcome, LoopOutcome::Error(_)),
             "мёртвый egress → LoopOutcome::Error, получено {outcome:?}"
         );
+    }
+
+    /// 6c-2f-2 DEFAULT-OFF: exec-инструменты в реестре ТОЛЬКО при shell_enable; note-инструменты — всегда.
+    #[test]
+    fn registry_gates_exec_tools_on_shell_enable() {
+        use crate::agent::connect::channel_pair;
+        let names = |shell_enable: bool| -> Vec<String> {
+            let (act, _peer) = channel_pair();
+            build_sandbox_registry(Arc::new(act), shell_enable)
+                .specs()
+                .into_iter()
+                .map(|s| s.name)
+                .collect()
+        };
+        let off = names(false);
+        assert!(
+            off.iter().any(|n| n == "note.create"),
+            "note всегда: {off:?}"
+        );
+        for t in ["shell.run", "process.spawn", "git.op"] {
+            assert!(
+                !off.iter().any(|n| n == t),
+                "{t} ОТСУТСТВУЕТ при shell_enable=false: {off:?}"
+            );
+        }
+        let on = names(true);
+        for t in ["note.create", "shell.run", "process.spawn", "git.op"] {
+            assert!(
+                on.iter().any(|n| n == t),
+                "{t} есть при shell_enable=true: {on:?}"
+            );
+        }
     }
 }
