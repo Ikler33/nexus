@@ -41,6 +41,7 @@ use thiserror::Error;
 use crate::parser::split_frontmatter;
 
 pub mod capability;
+pub mod usage;
 pub use capability::{
     approval_default, forced_base, parse_capabilities as parse_typed_capabilities,
     resolve_capabilities, ApprovalDefault, Capability, CapabilityResolution, RiskClass, RunPolicy,

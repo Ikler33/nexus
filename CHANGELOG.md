@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SELF-LEARNING SL-1 — фундамент телеметрии/lifecycle скиллов (`agent_skill_usage`, миграция 023)
+
+Первый срез killer-фичи **самообучения** (порт hermes `skill_usage.py` + ядра `curator.py` на наш SQLite-идиом). ЧИСТЫЙ data-слой; проводки в tool-loop НЕТ (SL-2), `skill_save`/curator/UI — дальше. Всё инертно: ни одного вызова из прода (примитивы ждут SL-2+).
+
+- **Миграция 023 `agent_skill_usage`** (PK `skill_name`): счётчики use/view/save/patch + `last_*_at`, `created_at`, **`created_by` (curation-гейт)**, `state` (active/stale/archived, CHECK), `pinned`, `archived_at`; индекс `(created_by, state, last_used_at)` под скан curator'а. FK НЕ ставим (скиллы — FS-resident SKILL.md; orphan-строки подчищает GC). Замена JSON-sidecar'у Hermes: единственный `WriteActor` даёт атомарность/блокировку «бесплатно».
+- **`skills/usage.rs`** (free-fns по идиому `memory`/`audit`): телеметрия `bump_use/view/save/patch` (апсерт для ЛЮБОГО скилла, `created_at` ставится 1 раз); **lifecycle `set_state`/`archive`/`set_pinned` — NO-OP кроме `created_by='agent'`, enforce `WHERE created_by='agent'` в самом SQL** (curator структурно не трогает чужое); `mark_agent_created` **INSERT-only** (не промоутит телеметрию-NULL-строку в agent — keystone fail-closed); `forget_orphans(live_names)` **структурно orphan-only** (живой скилл снести нельзя); read-фн `get_record`/`ranked_overlay`/`agent_created_report` (ORDER BY = `max(last_*)` зеркало `last_activity()`); defense-in-depth валидация `skill_name`.
+- **Развязка происхождения (keystone)**: телеметрия пишется для всех скиллов (наблюдаемость), но управлять (архивировать/пинить) curator может ТОЛЬКО `created_by='agent'` — vendor/user неизменяемы.
+
+Tier-1: 11 тестов (телеметрия/created_at-стабильность · lifecycle no-op-кроме-agent · keystone-регрессия «телеметрия-NULL не промоутится» · provenance non-clobber · `last_activity` max+fallback · `ranked_overlay` порядок · `agent_created_report` max-семантика [adversarial-MAJOR] · `forget_orphans` orphan-only · invalid-name no-op · миграция применена). `test-all` зелёный (fmt/clippy 0/node-lints). Adversarial-ревью (3 линзы → 7 подтверждённых, 1 MAJOR — ВСЕ исправлены в срезе). Миграция 024 зарезервирована под субагентов.
+
 ### Агент · SANDBOX-6c-3d-2 — реальный exec-GitOp откат: `--sandbox-undo` + `SandboxUndoExecDriver` (gated/in-container)
 
 **Завершает 6c-3 в коде.** Превращает `UndoStatus::Deferred(ExecGitRef)` в РЕАЛЬНЫЙ `git reset --hard <pre-op-ref>` ВНУТРИ хардненного `--network=none` контейнера под host-апрувом. Инверсия §5.2 сохранена: host РЕШАЕТ (гейт/ledger), контейнер ИСПОЛНЯЕТ git (host git не спавнит).
