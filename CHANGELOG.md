@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SANDBOX-6c-3e — реальный exec-GitOp откат: `UndoExecDriver` seam (gated/ledgered, не raw-host)
+
+Превращает `UndoStatus::Deferred(ExecGitRef)` (6c-2h surfacing) в РЕАЛЬНУЮ обратимость — через шов, а не привилегированный путь. **CI-mergeable seam + Tier-1** (реальный sandboxed `git reset` гоняет прод-драйвер 6c-3d на .28). Default-inert: пока композиционный корень не подставил драйвер, поведение БАЙТ-в-байт как 6c-2h.
+
+- **`UndoExecDriver` trait** (`undo.rs`) + **`undo_run_with_driver(.., driver: Option<&dyn UndoExecDriver>)`**; `undo_run` — тонкая обёртка `(.., None)` ⇒ ВСЕ существующие vault-only вызыватели (handler/session/desktop/тесты) НЕ тронуты (INV-DEFAULT-INERT). ЦЕНТРАЛЬНЫЙ дизайн: откат GitOp — САМ мутирующий GitOp, поэтому RE-ENTER'ит тот же host/exec гейт (classify→decide→approve→in-container execute→report), НЕ ungated спец-путь.
+- **ExecGitRef-арм `undo_run`**: ре-валидирует ref host-side (`is_git_sha`) ПЕРЕД вызовом драйвера (defense-in-depth — ledger мог быть подменён; инъекц/мусор-ref ⇒ `Failed`, драйвер НЕ зовётся, никакого `git reset --hard <garbage>`); валидный ref + `Some(driver)` ⇒ реальный откат (`Restored` ⇒ исходную строку помечают executed→undone ТОЛЬКО после успеха; `Deferred`/`Failed` ⇒ строка остаётся, retry-safe); `None` ⇒ Deferred surfacing.
+- **Инварианты**: INV-UNDO-GATED (re-enter гейт, нет raw-host exec) · INV-UNDO-NO-HOST-GIT (reset ВНУТРИ контейнера — check-sandbox-exec зелёный) · INV-UNDO-HOST-AUTHORITY (ref из ledger, не от модели; ре-валидирован) · INV-UNDO-NEVER-AUTO (синтезированный reset Confirm-never-Auto ⇒ агент не само-апрувит свой undo) · INV-UNDO-MARKED-ON-VERIFY (undone только после reset EXECUTED) · INV-EXEC-IRREVERSIBLE (shell/process без ExecGitRef-хэндла ⇒ драйвер не зовётся).
+
+Tier-1 (+7, итого 867 nexus-core, 0 failed): no-driver-still-deferred · driver-restored-marks-undone · driver-rejected-stays-deferred · driver-failed-not-undone · invalid-ref-never-calls-driver (host-authority над ref) · shell-exec-has-no-undo-handle · undo-reset-action-gated-never-auto (git reset --hard под PolicyDefault → Rejected). clippy 0, fmt + node-lints зелёные. Прод `SandboxUndoExecDriver` (реальный container-spin) + `ai.exec.git_worktree` (owner-gated rw worktree, default OFF) + `--sandbox-undo` entrypoint — 6c-3d; реальный `git reset` round-trip — Tier-2 .28.
 ### Дизайн · Hermes-6 PR-C — app-shell (Titlebar): чат-пузырь AI-тоггл + `/`-разделитель языка
 
 Финальный хром-полиш по `app.jsx`: AI-панель тоггл `PanelRight` → `MessageCircle` (чат-пузырь, по брифу); разделитель RU/EN `·` → `/`. Прочий app-shell (ActivityBar/StatusBar/grid/splits/tabs/reading/scrim) уже совпадал с хэндоффом — не трогался. BrandMark-спутник остаётся `var(--color-accent)` (тема-реактивный, НЕ хардкод-hex). tsc·eslint·vitest — зелёные; DOM-верификация тоггла/разделителя.
