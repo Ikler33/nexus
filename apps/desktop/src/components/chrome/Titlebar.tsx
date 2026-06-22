@@ -4,9 +4,9 @@ import {
   ChevronDown,
   HardDrive,
   Moon,
+  MessageCircle,
   Newspaper,
   Palette,
-  PanelRight,
   Scale,
   Search,
   MoonStar,
@@ -163,7 +163,7 @@ export function Titlebar() {
           aria-label="Язык / Language"
         >
           <span className={lang === 'ru' ? styles.on : ''}>RU</span>
-          <span className={styles.sep}>·</span>
+          <span className={styles.sep}>/</span>
           <span className={lang === 'en' ? styles.on : ''}>EN</span>
         </button>
         <button
@@ -185,7 +185,7 @@ export function Titlebar() {
           aria-label={t('chrome.aiPanel')}
           aria-pressed={chatOpen}
         >
-          <PanelRight size={16} aria-hidden />
+          <MessageCircle size={16} aria-hidden />
         </button>
       </div>
     </div>

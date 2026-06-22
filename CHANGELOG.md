@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Дизайн · Hermes-6 PR-C — app-shell (Titlebar): чат-пузырь AI-тоггл + `/`-разделитель языка
+
+Финальный хром-полиш по `app.jsx`: AI-панель тоггл `PanelRight` → `MessageCircle` (чат-пузырь, по брифу); разделитель RU/EN `·` → `/`. Прочий app-shell (ActivityBar/StatusBar/grid/splits/tabs/reading/scrim) уже совпадал с хэндоффом — не трогался. BrandMark-спутник остаётся `var(--color-accent)` (тема-реактивный, НЕ хардкод-hex). tsc·eslint·vitest — зелёные; DOM-верификация тоггла/разделителя.
+
 ### Дизайн · Hermes-6 фан-аут PR-B — рескин read/nav-вью (Home/News/Today/Board/Sidebar/Graph/Палитра/Plugins)
 
 In-place CSS-рескин 8 поверхностей под `home.jsx`/`news.jsx`/`screens.jsx`(Today/Board)/`sidebar.jsx`/`graph.jsx`/`palette.jsx`/`plugins.jsx`:
