@@ -186,3 +186,5 @@ jobs:
       - run: node scripts/check-tooluse.mjs
       - run: node scripts/check-agent-memory.mjs
       - run: node scripts/check-dangling.mjs
+      # + INV-CMD-SITE (SANDBOX-6c-2): process::Command для exec агента только в sandbox/exec_child.rs.
+      - run: node scripts/check-sandbox-exec.mjs

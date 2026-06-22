@@ -266,6 +266,8 @@ impl SandboxRunner {
 
         // Spawn `podman run … --sandbox-child …` и ждать выхода контейнера (агент-loop завершился).
         let plan = sandbox_run_plan_with_cmd(&config, &child.to_argv());
+        // sandbox-exec-lint: allow podman-launch — ЗАПУСК САМОЙ ПЕСОЧНИЦЫ (podman), НЕ exec-команды агента
+        // (§5.2 инверсия: команды агента бегут ВНУТРИ контейнера, sandbox/exec_child.rs; host их не спавнит).
         let status_res = tokio::process::Command::new(&plan.argv[0])
             .args(&plan.argv[1..])
             .status()

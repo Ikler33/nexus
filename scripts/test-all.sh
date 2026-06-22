@@ -18,6 +18,7 @@ node scripts/check-egress.mjs
 node scripts/check-tooluse.mjs
 node scripts/check-agent-memory.mjs
 node scripts/check-dangling.mjs
+node scripts/check-sandbox-exec.mjs
 
 echo "── Rust: fmt · clippy · test ──"
 (
