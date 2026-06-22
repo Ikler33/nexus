@@ -234,7 +234,11 @@ async fn run_sandbox_host() -> Result<i32, String> {
             Some("auto"),
             OVERWRITE_THRESHOLD,
             nexus_core::ai::AiConfig::DEFAULT_BLAST_RADIUS_CAP,
-        ),
+        )
+        // Фаза-3 (6b): exec-флаги. shell_enable из конфига (default false → exec HardBlocked);
+        // sandbox_available=true — мы здесь ВНУТРИ host-раннера песочницы на Linux (#[cfg(unix)]).
+        // В 6b exec всё равно не исполняется (apply fail-closed); проводка демонстрирует паттерн для 6c.
+        .with_exec_flags(cfg.ai.shell_enable, true),
         Arc::new(PolicyDefault),
         Arc::new(TracingEventSink::new()),
     );

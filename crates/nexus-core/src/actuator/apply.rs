@@ -167,6 +167,17 @@ pub(in crate::actuator) async fn apply_action(
     ledger: &AuditSink,
     classify_hash: Option<&str>,
 ) -> ApplyOutcome {
+    // ── РУБЕЖ 0 (Фаза-3, ЕДИНЫЙ CHOKEPOINT): exec-таргет НЕ ПИШЕТСЯ vault-путём ──────────────────
+    // apply_action — единственный путь к диску. exec-таргеты (ShellRun/ProcessSpawn/GitOp) не vault-записи:
+    // их исполняет host/exec ВНУТРИ песочницы (Фаза-3 6c), НЕ apply. Здесь — top-guard fail-closed: даже
+    // если exec прошёл classify→Confirm→approve, apply его НЕ применяет (Failed). Это делает exec-армы в
+    // WRITE/success_summary ниже ПРОВАБЛИ-МЁРТВЫМИ (unreachable), а не per-arm fail-closed-кодом. Loud
+    // Failed > молчаливая псевдо-запись. Тест `exec_apply_is_fail_closed` пинит этот guard.
+    if action.target.is_exec() {
+        return ApplyOutcome::Failed(
+            "exec-таргет не применяется vault-путём apply (host/exec — Фаза-3 6c)".into(),
+        );
+    }
     let rel = action.target.rel().to_string();
 
     // ── РУБЕЖ 1: canonicalize/symlink RAMPART (2-й рубеж к лексическому classify) ──────────────
@@ -442,6 +453,14 @@ pub(in crate::actuator) async fn apply_action(
                 Err(e) => Err(format!("set_frontmatter_field: {e:?}")),
             }
         }
+        // ПРОВАБЛИ-МЁРТВО: exec-таргеты отсечены top-guard'ом РУБЕЖА 0 (return Failed до сюда). Арм есть
+        // только ради exhaustive-match (компилятор требует). Если top-guard когда-то уберут — это
+        // unreachable! ГРОМКО упадёт (loud > молчаливая запись); тест exec_apply_is_fail_closed пинит guard.
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => {
+            unreachable!("exec-таргет отсечён top-guard РУБЕЖА 0 в apply_action")
+        }
     };
 
     // ── РУБЕЖ 7: ledger FINISH (поглощающий) ──────────────────────────────────────────────────
@@ -609,6 +628,10 @@ fn action_payload(action: &Action) -> Option<&str> {
             action.content.as_deref()
         }
         ActionTarget::Frontmatter { .. } => action.value.as_deref(),
+        // exec не имеет content/value payload (и отсечён top-guard'ом до сюда) → None (безвредно).
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => None,
     }
 }
 
@@ -619,6 +642,14 @@ fn success_summary(action: &Action, rel: &str) -> String {
         ActionTarget::NoteEdit { .. } => format!("отредактирована заметка {rel}"),
         ActionTarget::Frontmatter { key, .. } => {
             format!("установлено свойство «{key}» в заметке {rel}")
+        }
+        // ПРОВАБЛИ-МЁРТВО: success_summary зовётся только на Executed-пути, exec туда не доходит (top-guard).
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => {
+            unreachable!(
+                "exec-таргет не доходит до success_summary (отсечён top-guard apply_action)"
+            )
         }
     }
 }
@@ -964,6 +995,8 @@ mod tests {
         let ctx = super::super::classify::ClassifyCtx {
             root: &root,
             overwrite_threshold: 64 * 1024,
+            shell_enable: false,
+            sandbox_available: false,
         };
         assert_eq!(
             super::super::classify::classify(&action, &ctx),
@@ -1396,5 +1429,35 @@ mod tests {
             snaps.is_empty(),
             "info-leak: НЕ должно быть снапшота внешнего содержимого, есть {snaps:?}"
         );
+    }
+
+    /// **Фаза-3 RUBEZH-0 (SANDBOX-6b):** `apply_action` отвергает exec-таргеты
+    /// (`ShellRun`/`ProcessSpawn`/`GitOp`) top-guard'ом ДО любого vault-IO → `Failed`, БЕЗ файла и БЕЗ
+    /// ledger-строки. ПИНИТ guard, от которого зависят `unreachable!()`-армы в WRITE/success_summary:
+    /// если guard уберут рефактором — этот тест покраснеет ДО того, как exec упрётся в panic. (Сегодня
+    /// exec и так HardBlocked на classify по умолчанию, но apply — единственный путь к диску, и его
+    /// defense-in-depth обязан быть зафиксирован.)
+    #[tokio::test]
+    async fn exec_apply_is_fail_closed() {
+        let (_d, root, sink) = setup().await;
+        for action in [
+            Action::shell_run(vec!["ls".into()], None),
+            Action::process_spawn("git", vec!["status".into()], None),
+            Action::git_op("status", vec![]),
+        ] {
+            let outcome = apply_action(&action, 1, &root, &sink, Some("")).await;
+            assert!(
+                matches!(outcome, ApplyOutcome::Failed(_)),
+                "exec {:?} должен быть Failed (RUBEZH-0), получено {outcome:?}",
+                action.target
+            );
+        }
+        // Ни одной заметки не создано (exec не пишет vault — top-guard вернул до РУБЕЖА 1).
+        let md_count = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+            .count();
+        assert_eq!(md_count, 0, "exec НЕ должен создавать файлы в vault");
     }
 }

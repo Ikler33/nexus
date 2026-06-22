@@ -400,6 +400,12 @@ pub struct DispatchPolicy {
     /// `DispatchPolicy::new` ставит сюда вечно-НЕвзведённый Arc (поведение без kill-switch); проводка
     /// прогона ([`crate::agent::AgentRunHandler`]) передаёт ОБЩИЙ process-global Arc через `with_paused`.
     pub agent_paused: Arc<AtomicBool>,
+    /// **Фаза-3 (6b):** `ai.shell_enable` прогона → питает `ClassifyCtx` exec-таргетов. DEFAULT false
+    /// (fail-safe; exec → HardBlocked(ShellDisabled)). Ставится через [`DispatchPolicy::with_exec_flags`].
+    pub shell_enable: bool,
+    /// **Фаза-3 (6b):** доступна ли песочница (`sandbox_enabled` И Linux) — ПРЕДвычислено корнем. DEFAULT
+    /// false (fail-safe; exec → HardBlocked(SandboxUnavailable)).
+    pub sandbox_available: bool,
 }
 
 impl DispatchPolicy {
@@ -427,6 +433,8 @@ impl DispatchPolicy {
             overwrite_threshold,
             token_bucket: bucket,
             agent_paused,
+            shell_enable: false,
+            sandbox_available: false,
         }
     }
 
@@ -442,7 +450,17 @@ impl DispatchPolicy {
             overwrite_threshold,
             token_bucket,
             agent_paused: Arc::new(AtomicBool::new(false)),
+            shell_enable: false,
+            sandbox_available: false,
         }
+    }
+
+    /// **Фаза-3 (6b):** проставить exec-флаги (`shell_enable` из конфига + `sandbox_available` =
+    /// `sandbox_enabled` И Linux, предвычислено корнем). Builder-стиль; DEFAULT обоих — false (fail-safe).
+    pub fn with_exec_flags(mut self, shell_enable: bool, sandbox_available: bool) -> Self {
+        self.shell_enable = shell_enable;
+        self.sandbox_available = sandbox_available;
+        self
     }
 
     /// Взведён ли kill-switch (пауза агента) — fail-safe: `true` ⇒ актуатор НЕ должен писать.
@@ -545,6 +563,11 @@ fn proposed_content(action: &Action, current: &str) -> String {
             crate::parser::set_frontmatter_field(current, key, &value)
                 .unwrap_or_else(|_| current.to_string())
         }
+        // Фаза-3 exec-таргеты — НЕ vault-запись, диффа нет (по этому пути не идут: classify→HardBlocked
+        // по умолчанию, Confirm-propose — 6c). Инертно "" (вызовётся лишь если 6c протащит exec в propose).
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => String::new(),
     }
 }
 
@@ -553,6 +576,10 @@ fn file_status(action: &Action) -> FileStatus {
     match &action.target {
         ActionTarget::NoteCreate { .. } => FileStatus::New,
         ActionTarget::NoteEdit { .. } | ActionTarget::Frontmatter { .. } => FileStatus::Edit,
+        // exec не порождает changeset-файл в 6b; инертно Edit (6c решит отдельный статус, если понадобится).
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => FileStatus::Edit,
     }
 }
 
@@ -562,6 +589,10 @@ fn change_kind(action: &Action) -> ChangeKind {
     match &action.target {
         ActionTarget::NoteCreate { .. } => ChangeKind::New,
         ActionTarget::NoteEdit { .. } | ActionTarget::Frontmatter { .. } => ChangeKind::Edit,
+        // exec инертно Edit (см. file_status; в 6b не доходит до журнала diff_summary).
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => ChangeKind::Edit,
     }
 }
 
@@ -616,19 +647,27 @@ pub async fn dispatch_action(
     canon_root: &Path,
 ) -> Result<DispatchOutcome, ToolError> {
     let rel = action.target.rel().to_string();
+    let is_exec = action.target.is_exec();
 
     // (1) Текущее содержимое цели IN-VAULT → classify_hash (токен на момент classify) + база диффа.
     // None (нет файла / побег) ⇒ classify_hash="" (конвенция apply Рубежа 3: on_disk_hash.unwrap_or("")).
-    let current = read_current_in_vault(canon_root, &rel).await;
+    // exec-таргеты НЕ vault-цели (rel=="") → НЕ читаем диск (нечего; classify их не зависит от content).
+    let current = if is_exec {
+        None
+    } else {
+        read_current_in_vault(canon_root, &rel).await
+    };
     let classify_hash: String = current
         .as_deref()
         .map(|c| crate::vault::content_hash(c.as_bytes()))
         .unwrap_or_default();
 
-    // (2) classify с порогом ИЗ КОНФИГА (не 64KiB-константа).
+    // (2) classify с порогом ИЗ КОНФИГА (не 64KiB-константа) + Фаза-3 exec-флаги из политики.
     let ctx = ClassifyCtx {
         root: canon_root,
         overwrite_threshold: policy.overwrite_threshold,
+        shell_enable: policy.shell_enable,
+        sandbox_available: policy.sandbox_available,
     };
     let tier = classify(action, &ctx);
 
@@ -720,6 +759,14 @@ async fn apply_now(
     classify_hash: &str,
     agent_paused: &Arc<AtomicBool>,
 ) -> DispatchOutcome {
+    // Фаза-3 defense-in-depth: exec-таргет СТРУКТУРНО не доходит сюда (classify_exec → Confirm/HardBlocked,
+    // НИКОГДА Auto; а apply_now — только Auto-путь). Но fail-closed на случай будущего рефактора: exec НЕ
+    // применяется vault-путём (его исполняет host/exec, 6c). Loud Failed > молчаливая псевдо-запись.
+    if action.target.is_exec() {
+        return DispatchOutcome::Failed(
+            "exec-таргет не применяется vault-путём (host/exec — Фаза-3 6c)".into(),
+        );
+    }
     // LAST-MOMENT kill-switch: пауза могла взвестись между проверкой вызывателя и этой записью (TOCTOU).
     // Читаем ПЕРЕД apply_action → под паузой НИ ОДНОЙ записи / ledger-executed-строки (no-op Rejected).
     if agent_paused.load(Ordering::Relaxed) {
@@ -883,13 +930,28 @@ async fn propose_and_decide(
 /// Ключ строки ПРЕДЛОЖЕНИЯ — отдельный от apply-ключа (префикс), чтобы не коллизировать с record_before
 /// самого apply. Стабилен по `(run_id, tool, args, classify_hash)` — то же предложение даёт тот же ключ.
 fn proposal_key(run_id: i64, action: &Action, classify_hash: &str) -> String {
-    let payload = match &action.target {
-        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => {
-            action.content.as_deref()
-        }
-        ActionTarget::Frontmatter { .. } => action.value.as_deref(),
+    // EXHAUSTIVE (без `_ =>`): payload-репрезентация на каждый вариант. exec-таргеты не имеют content/value
+    // → детерминированный payload из их полей (US-разделитель `\u{1f}`); tool_name() уже различает их.
+    let payload: Option<String> = match &action.target {
+        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => action.content.clone(),
+        ActionTarget::Frontmatter { .. } => action.value.clone(),
+        ActionTarget::ShellRun { argv, cwd_rel } => Some(format!(
+            "{}\u{1f}{}",
+            argv.join("\u{1f}"),
+            cwd_rel.as_deref().unwrap_or("")
+        )),
+        ActionTarget::ProcessSpawn {
+            program,
+            args,
+            cwd_rel,
+        } => Some(format!(
+            "{program}\u{1f}{}\u{1f}{}",
+            args.join("\u{1f}"),
+            cwd_rel.as_deref().unwrap_or("")
+        )),
+        ActionTarget::GitOp { op, args } => Some(format!("{op}\u{1f}{}", args.join("\u{1f}"))),
     };
-    let args = canonical_args(Some(action.target.rel()), payload);
+    let args = canonical_args(Some(action.target.rel()), payload.as_deref());
     let base = idempotency_key(run_id, action.target.tool_name(), &args, classify_hash);
     format!("propose:{base}")
 }

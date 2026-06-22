@@ -27,17 +27,52 @@ pub enum ActionTarget {
     /// Установить ОДИН плоский top-level frontmatter-ключ заметки. ЕДИНСТВЕННЫЙ fm-путь действия
     /// (хирургический, под snapshot-бэкап в более поздних срезах) — произвольный YAML-патч непредставим.
     Frontmatter { rel: String, key: String },
+
+    // ── Фаза-3 host exec-таргеты (SANDBOX-6b) ── ИСПОЛНЯЮТСЯ ВНУТРИ песочницы после host-апрува (6c),
+    // НИКОГДА не Auto, НИКОГДА не идут vault-путём apply/host-act. classify их режет HardBlocked при
+    // выключенном `shell_enable` / недоступной песочнице (см. classify + §5.3). В 6b — ТОЛЬКО типы +
+    // classify + fail-closed арм-ветки; рантайм-исполнение (host/exec) — 6c.
+    /// Запустить shell-команду `argv` (БЕЗ оболочки) в рабочем каталоге `cwd_rel` (vault-rel) ВНУТРИ
+    /// песочницы.
+    ShellRun {
+        argv: Vec<String>,
+        cwd_rel: Option<String>,
+    },
+    /// Запустить процесс `program` с аргументами `args` в `cwd_rel` ВНУТРИ песочницы.
+    ProcessSpawn {
+        program: String,
+        args: Vec<String>,
+        cwd_rel: Option<String>,
+    },
+    /// Git-операция `op` (+`args`) над vault-репозиторием ВНУТРИ песочницы.
+    GitOp { op: String, args: Vec<String> },
 }
 
 impl ActionTarget {
-    /// vault-rel путь цели (у всех текущих вариантов он есть). Используется classify для проверки
-    /// конфайнмента и ledger'ом как `target_rel`.
+    /// vault-rel путь цели. У vault-вариантов — реальный путь. У exec-таргетов vault-rel НЕТ → пустой
+    /// сентинел `""` (exec НЕ проходят vault-конфайнмент: classify режет их раньше по `is_exec`, а apply
+    /// фейлит на top-guard'е — пустой rel не должен дойти до `resolve_vault_path_for_write`). Пустая
+    /// строка к тому же fail-closed: попади она в path-конфайнмент — `EmptyPath`/HardBlock.
     pub fn rel(&self) -> &str {
         match self {
             ActionTarget::NoteCreate { rel }
             | ActionTarget::NoteEdit { rel }
             | ActionTarget::Frontmatter { rel, .. } => rel,
+            ActionTarget::ShellRun { .. }
+            | ActionTarget::ProcessSpawn { .. }
+            | ActionTarget::GitOp { .. } => "",
         }
+    }
+
+    /// `true` для Фаза-3 host exec-таргетов (`ShellRun`/`ProcessSpawn`/`GitOp`). Единая type-проверка:
+    /// classify/dispatch/apply ветвятся по ней (exec НЕ vault-действие — не идёт apply/host-act путём).
+    pub fn is_exec(&self) -> bool {
+        matches!(
+            self,
+            ActionTarget::ShellRun { .. }
+                | ActionTarget::ProcessSpawn { .. }
+                | ActionTarget::GitOp { .. }
+        )
     }
 
     /// Логическое имя инструмента (стабильный строковый дискриминант) — пишется в ledger
@@ -48,6 +83,9 @@ impl ActionTarget {
             ActionTarget::NoteCreate { .. } => "note_create",
             ActionTarget::NoteEdit { .. } => "note_edit",
             ActionTarget::Frontmatter { .. } => "frontmatter",
+            ActionTarget::ShellRun { .. } => "shell_run",
+            ActionTarget::ProcessSpawn { .. } => "process_spawn",
+            ActionTarget::GitOp { .. } => "git_op",
         }
     }
 }
@@ -97,6 +135,44 @@ impl Action {
             },
             content: None,
             value: Some(value.into()),
+        }
+    }
+
+    /// Конструктор Фаза-3: shell-команда `argv` в `cwd_rel`. payload не используется (exec — не vault).
+    pub fn shell_run(argv: Vec<String>, cwd_rel: Option<String>) -> Self {
+        Self {
+            target: ActionTarget::ShellRun { argv, cwd_rel },
+            content: None,
+            value: None,
+        }
+    }
+
+    /// Конструктор Фаза-3: процесс `program`+`args` в `cwd_rel`.
+    pub fn process_spawn(
+        program: impl Into<String>,
+        args: Vec<String>,
+        cwd_rel: Option<String>,
+    ) -> Self {
+        Self {
+            target: ActionTarget::ProcessSpawn {
+                program: program.into(),
+                args,
+                cwd_rel,
+            },
+            content: None,
+            value: None,
+        }
+    }
+
+    /// Конструктор Фаза-3: git-операция `op`+`args`.
+    pub fn git_op(op: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            target: ActionTarget::GitOp {
+                op: op.into(),
+                args,
+            },
+            content: None,
+            value: None,
         }
     }
 }
