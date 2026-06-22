@@ -166,7 +166,13 @@ export function TodayView() {
             <CalendarClock size={11} aria-hidden />
             {card.due} · {t(`today.${kind === 'overdue' ? 'overdue' : 'due'}`)}
           </span>
-          {kp && <span className={styles.prio}>{t(`board.priority.${kp}`)}</span>}
+          {kp && (
+            <span
+              className={`${styles.prio} ${kp === 'urgent' ? styles.prioUrgent : kp === 'high' ? styles.prioHigh : kp === 'medium' ? styles.prioMedium : styles.prioLow}`}
+            >
+              {t(`board.priority.${kp}`)}
+            </span>
+          )}
           {card.project && (
             <span className={styles.project}>
               <FolderClosed size={11} aria-hidden />

@@ -206,11 +206,28 @@
   font-size: 0.59375rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--color-warning);
-  background: var(--color-warning-soft);
+  color: var(--color-text-faint);
+  background: var(--color-surface);
   border-radius: 5px;
   padding: 2px 6px;
   white-space: nowrap;
+}
+/* Цвет по уровню приоритета (зеркало BoardView .prio*) — раньше амбер для всех уровней (ревью M1). */
+.prioLow {
+  color: var(--color-text-faint);
+  background: var(--color-surface);
+}
+.prioMedium {
+  color: var(--color-link);
+  background: var(--color-link-soft);
+}
+.prioHigh {
+  color: var(--color-warning);
+  background: color-mix(in oklch, var(--color-warning) 12%, transparent);
+}
+.prioUrgent {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
 }
 .project {
   display: inline-flex;
