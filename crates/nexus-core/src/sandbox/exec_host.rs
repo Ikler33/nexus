@@ -311,6 +311,11 @@ const RESERVED_ENV_KEYS: [&str; 3] = ["PATH", "LANG", "HOME"];
 /// fail-closed, не best-effort-скруб host-env). Denylist ЗАПРЕЩЁН by-design (fail-OPEN: секрет в
 /// креативно-названной переменной / в `HOME` утёк бы). `skill_passthrough` — типизированный шов, дефолт
 /// пуст (источник `SKILL.md::env_passthrough` ещё не в `GatedToolCtx` — отдельный skill-integration срез).
+///
+/// **Hard-gate для skill-integration (НЕ дрейфить):** когда `env_passthrough` оживёт, опасные dynamic-
+/// linker / shell-inject имена (`LD_PRELOAD`/`LD_LIBRARY_PATH`/`LD_AUDIT`/`IFS`/`BASH_ENV`/…) должны
+/// вето'аться НЕ fail-open-denylist'ом ЗДЕСЬ, а на уровне skill trust-gate/capability (вет источника
+/// passthrough), консистентно с allow-list-доктриной. Сейчас дыры нет — passthrough пуст by-construction.
 pub(crate) fn build_exec_env(
     scratch_home: &str,
     skill_passthrough: &[(String, String)],
@@ -339,6 +344,12 @@ pub(crate) fn build_exec_env(
 /// launch_failure). env — allow-list ([`build_exec_env`]); cwd — scratch-tmpfs (`cwd_rel` действия;
 /// `VaultRo` отложен — решит live 6c-3 по нужде `git.op`); таймаут/кэп — дефолты [`super`]. Вызывает redeem
 /// (6c-2c) — здесь плита под него + Tier-1-тесты.
+///
+/// **cwd-конфайнмент (hard-gate, НЕ дрейфить):** `cwd_rel` кладётся в `ScratchTmpfs{rel}` БЕЗ валидации
+/// ЗДЕСЬ намеренно — единственный чокпоинт конфайнмента — [`super::exec_child::resolve_cwd`] (6c-2a),
+/// который применяет `classify::path_confinement` (отвергает `..`/abs/backslash/dot → команда НЕ
+/// запускается) ВНУТРИ контейнера на exec. 6c-2c ОБЯЗАН гонять cwd ИМЕННО через `resolve_cwd`, не
+/// `scratch_base.join(rel)` напрямую (иначе `cwd_rel="../etc"` сбежал бы из tmpfs внутри контейнера).
 #[allow(dead_code)] // зовётся redeem-фазой (6c-2c); 6c-2b строит+тестирует
 pub(crate) fn build_exec_go(action: &Action, skill_passthrough: &[(String, String)]) -> WireExecGo {
     let (argv, cwd_rel) = match &action.target {
