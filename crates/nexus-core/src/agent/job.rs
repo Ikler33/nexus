@@ -283,6 +283,7 @@ impl AgentRunHandler {
             &self.agent_paused,
             &cancel,
             forwarder,
+            None, // top-level прогон (не субагент)
         )
         .await;
 

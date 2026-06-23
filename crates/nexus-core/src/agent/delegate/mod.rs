@@ -3,10 +3,13 @@
 //! (composition root) с изолированным контекстом (`memory=None`), подмножеством инструментов
 //! (child ⊆ parent) и ОБЩИМ анти-runaway бюджетом/kill-switch.
 //!
-//! Срез SUB-0 закладывает ТОЛЬКО safety-примитивы (без инструмента/спавна): [`DelegationBudget`]
-//! (глубина/спавны/дедлайн, fail-closed), `agent_runs.parent_run_id` (миграция 024, дерево прогонов —
-//! см. [`crate::agent::run_store::create_child_run`]) и конфиг [`crate::ai::config::DelegationConfig`]
-//! (default-OFF). Реестр-подмножество (SUB-1), события (SUB-2) и сам инструмент (SUB-3/4) — следующие срезы.
+//! Прогресс: SUB-0 — safety-примитивы [`DelegationBudget`] (глубина/спавны/дедлайн, fail-closed),
+//! `agent_runs.parent_run_id` (миграция 024, см. [`crate::agent::run_store::create_child_run`]), конфиг
+//! [`crate::ai::config::DelegationConfig`] (default-OFF). SUB-1 — [`build_child_registry`] (child ⊆ parent,
+//! set-intersection) + [`build_child_task`] (фокус-обрамление). SUB-2 — события плана/субагента
+//! (`crate::agent::event`). SUB-3a — шов субагента в `run_agent_session` ([`crate::agent::session::SubagentSpawn`]:
+//! сужение реестра до allowed + опц. общий dispatcher + skip skill.save). ДАЛЬШЕ: SUB-3b (`spawn_subagent` +
+//! `DelegateTool` fan-out поверх run_agent_session + JoinSet).
 
 pub mod budget;
 pub mod child_task;

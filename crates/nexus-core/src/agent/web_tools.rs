@@ -594,6 +594,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
         )
         .await;
         eprintln!("LIVE web outcome: {outcome:?}");

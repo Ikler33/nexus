@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-3a — шов субагента в `run_agent_session` (сужение реестра child⊆parent + общий gate)
+
+Плумбинг-шов для спавна субагента в ЕДИНОЙ композиции прогона. Без `delegate.run`-инструмента/спавна (SUB-3b) — нулевое изменение top-level поведения (новый параметр `None` у всех текущих вызовов).
+
+- **`SubagentSpawn`** (новый параметр `run_agent_session`, `None`=top-level): при `Some` (1) реестр ребёнка СУЖАЕТСЯ до `allowed` ПОСЛЕ полной сборки (actuator+skills+web) — **security keystone child ⊆ parent**, эскалация инструментом невозможна по построению; (2) при `dispatcher=Some` note-инструменты делят РОДИТЕЛЬСКИЙ actuator-gate (общий blast-radius/ledger/policy/pause — «запись через ОДИН gate»); (3) `skill.save` детям НЕ регистрируется.
+- **`ToolRegistry::names()`** (источник `parent_names` для `build_child_registry`) + **`ToolRegistry::retain(allowed)`** (удаляет имена вне набора — точка enforcement сужения).
+
+Tier-1 (+5 tests, 980 nexus-core): retain/names сужают до набора (пустой→пустой) · subagent=Some режет нерразрешённый инструмент (`UnknownTool` is_error) · разрешённый — вызывается · top-level (None) без регрессии (существующие session-тесты зелёные). `test-all` зелёный. Дальше: SUB-3b (`spawn_subagent` + `DelegateTool` fan-out + JoinSet + бюджет + cancel-проводка — ПОЛНЫЙ adversarial-ревью).
+
 ### Агент · SUBAGENTS SUB-2 — события плана/субагента (PlanProposed/PlanStepStatus/SubagentStatus) + wire ACP
 
 Контракт наблюдаемости ПЕРВЫМ (чтобы поздние срезы эмитили в стабильный шов). Реализованы зарезервированные в `event.rs` варианты + новый `SubagentStatus`. БЕЗ эмиттера (его дают SUB-3/RES-*).

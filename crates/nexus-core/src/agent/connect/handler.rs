@@ -276,6 +276,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 &deps.agent_paused, // ГЛОБАЛЬНЫЙ kill-switch (SIGUSR1/agent.json/agent.control)
                 &cancel,
                 forwarder,
+                None, // top-level прогон коннектора (не субагент)
             )
             .await;
             let (status, text) = outcome_to_finish(&outcome);

@@ -62,6 +62,20 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
+    /// Имена всех зарегистрированных инструментов (отсортированы — детерминизм). Источник `parent_names`
+    /// для [`crate::agent::delegate::build_child_registry`] (SUB-3: построение подмножества субагента).
+    pub fn names(&self) -> std::collections::BTreeSet<String> {
+        self.tools.keys().cloned().collect()
+    }
+
+    /// **SUB-3 (security keystone проводки): СУЖАЕТ реестр до `allowed`** — оставляет ТОЛЬКО инструменты,
+    /// чьё имя в наборе. Применяется к реестру СУБАГЕНТА после полной сборки (actuator+skills+web), где
+    /// `allowed` = [`crate::agent::delegate::build_child_registry`] (child ⊆ parent). Имя НЕ в `allowed`
+    /// УДАЛЯЕТСЯ — субагент физически не может вызвать инструмент сверх выданного (эскалация невозможна).
+    pub fn retain(&mut self, allowed: &std::collections::BTreeSet<String>) {
+        self.tools.retain(|name, _| allowed.contains(name));
+    }
+
     /// Спецификации всех инструментов — для тела запроса к модели (`tools[]`). Порядок не гарантирован
     /// (HashMap); провайдер/модель именами, не позицией.
     pub fn specs(&self) -> Vec<ToolSpec> {
@@ -191,5 +205,27 @@ mod tests {
         let evicted = reg.insert(Arc::new(EchoTool));
         assert!(evicted.is_some());
         assert_eq!(reg.len(), 2);
+    }
+
+    /// SUB-3: `names()` отдаёт все имена; `retain` СУЖАЕТ до набора (имя вне набора удаляется) — keystone
+    /// проводки субагента (child ⊆ parent). Пустой набор → пустой реестр.
+    #[test]
+    fn names_and_retain_narrow_to_allowed() {
+        let mut reg = ToolRegistry::new();
+        reg.insert(Arc::new(EchoTool)); // debug.echo
+        reg.insert(Arc::new(StrictTool)); // debug.strict
+        let names = reg.names();
+        assert!(names.contains("debug.echo") && names.contains("debug.strict"));
+
+        // retain до {debug.echo} → strict удалён, echo цел.
+        let allowed: std::collections::BTreeSet<String> =
+            ["debug.echo".to_string()].into_iter().collect();
+        reg.retain(&allowed);
+        assert_eq!(reg.len(), 1);
+        assert_eq!(reg.names(), allowed);
+
+        // Пустой набор → пустой реестр.
+        reg.retain(&std::collections::BTreeSet::new());
+        assert!(reg.is_empty());
     }
 }
