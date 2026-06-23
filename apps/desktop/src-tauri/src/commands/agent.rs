@@ -453,6 +453,7 @@ async fn drive_run(
         &cancel,
         forwarder,
         None, // top-level desktop-прогон (не субагент)
+        None, // delegation выкл в desktop-пути (как skills_learning) — owner-gated agentd-фича
     )
     .await
 }

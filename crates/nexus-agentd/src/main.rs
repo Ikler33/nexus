@@ -826,6 +826,12 @@ async fn run() -> Result<(), String> {
         .map(|c| c.ai.skills.learning_enabled)
         .unwrap_or(false);
     let curator_skills_root = agent_skills.as_ref().map(|s| s.skills_root().to_path_buf());
+    // SUB-3b-2b: owner-gated делегирование (ai.delegation, default-OFF). Один конфиг → AgentRunHandler +
+    // ConnectDeps (оба регистрируют delegate.run при enabled).
+    let agent_delegation = local_cfg
+        .as_ref()
+        .map(|c| c.ai.delegation.clone())
+        .unwrap_or_default();
 
     // EGR-AGENT-2: веб-инструменты (web.search/web.fetch). Включаются ТОЛЬКО при `ai.web.enabled` —
     // `enable_web_tools` включает `EgressFeature::Web` + allowlist хоста SearXNG и строит WebToolsConfig
@@ -869,6 +875,7 @@ async fn run() -> Result<(), String> {
         &agent_web,
         // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled, default false).
         skills_learning_enabled,
+        &agent_delegation, // SUB-3b-2b: owner-gated делегирование (ai.delegation)
         &agent_paused,
     );
 
@@ -890,6 +897,8 @@ async fn run() -> Result<(), String> {
             agent_web,
             // SL-7d: авторство навыков (skill.save) — owner-gated ai.skills.learning_enabled (default false).
             skills_learning_enabled,
+            // SUB-3b-2b: делегирование (delegate.run) — owner-gated ai.delegation (default disabled).
+            agent_delegation.clone(),
         )),
     );
     // SL-curator: фоновая гигиена жизненного цикла agent-навыков (active→stale→archive, ОБРАТИМО,
@@ -985,6 +994,27 @@ async fn run() -> Result<(), String> {
         ),
         Err(e) => {
             tracing::warn!(error = %e, "exec crash-recovery (reconcile_stale_executing) не удался")
+        }
+    }
+
+    // SUBAGENTS crash-recovery (SUB-3b-2b, фикс ревью #4): осиротевшие прогоны-ДЕТИ (`delegate.run`
+    // fan-out, аборнутый дропом фьючи родителя НА `.await` → строка застряла `running`) финализируются
+    // `error` по TTL. ЖЁСТКОЕ предусловие активации `delegate.run` — рядом с requeue_stale_running, тот же
+    // канонический момент восстановления. Дети НЕ возобновляемы (не `queued`, а терминал — нет per-child replay).
+    match nexus_core::agent::reconcile_orphan_child_runs(
+        db.writer(),
+        AGENT_RUN_STALE_TTL_SECS,
+        nexus_core::scheduler::now_secs(),
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            reaped = n,
+            "subagent crash-recovery: осиротевшие прогоны-дети → error (#4 TTL)"
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "subagent crash-recovery (reconcile_orphan_child_runs) не удался")
         }
     }
 
@@ -1243,6 +1273,7 @@ fn maybe_spawn_connect_server(
     skills: &Option<nexus_core::agent::SkillContext>,
     web: &Option<nexus_core::agent::WebToolsConfig>,
     skills_learning_enabled: bool,
+    delegation: &nexus_core::ai::DelegationConfig,
     agent_paused: &Arc<AtomicBool>,
 ) {
     let socket = match std::env::var("NEXUS_AGENTD_CONNECT_SOCKET") {
@@ -1270,6 +1301,7 @@ fn maybe_spawn_connect_server(
         skills: skills.clone(),
         web: web.clone(), // EGR-AGENT-2: те же веб-инструменты, что у scheduler-AgentRunHandler
         skills_learning_enabled, // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled)
+        delegation: delegation.clone(), // SUB-3b-2b: owner-gated делегирование (ai.delegation)
         agent_paused: agent_paused.clone(), // ТОТ ЖЕ kill-switch, что у AgentRunHandler (SIGUSR1/agent.json)
     });
     tracing::warn!(
@@ -1639,6 +1671,8 @@ async fn drive_actuator_gate_run(
         None,
         // SL-7d: actuator-gate smoke не про авторство навыков.
         false,
+        // SUB-3b-2b: actuator-gate smoke не про делегирование (default-OFF).
+        nexus_core::ai::DelegationConfig::default(),
     );
 
     let run_id = enqueue_agent_run(

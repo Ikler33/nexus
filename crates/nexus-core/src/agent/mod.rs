@@ -53,7 +53,7 @@ pub use job::{
 };
 pub use memory::{AgentMemory, VaultAgentMemory};
 pub use registry::{ToolRegistry, ToolResult};
-pub use run_store::{requeue_stale_running, AgentRun};
+pub use run_store::{reconcile_orphan_child_runs, requeue_stale_running, AgentRun};
 pub use runner::{run_agent_loop, BudgetKind, LoopBounds, LoopOutcome};
 pub use session::{run_agent_session, AgentEventForwarder, SessionSpec};
 pub use skill_tools::{
