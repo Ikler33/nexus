@@ -124,27 +124,8 @@ impl Tool for WebSearchTool {
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: SearchArgs =
             serde_json::from_str(args).map_err(|e| ToolError::BadArgs(e.to_string()))?;
-        let q = a.query.trim();
-        if q.is_empty() {
-            return Err(ToolError::BadArgs("пустой запрос".into()));
-        }
-        if looks_secretish(q) {
-            return Err(ToolError::Exec(
-                "запрос похож на секрет (токен/ключ) — НЕ отправлен в сеть".into(),
-            ));
-        }
-        let url = build_search_url(&self.searxng_url, q, a.fresh)
-            .map_err(|e| ToolError::Exec(format!("URL SearXNG: {e}")))?;
-        let resp = self
-            .client
-            .get(&url, EgressFeature::Web, self.ctx)
-            .await
-            .map_err(|e| ToolError::Exec(format!("egress: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(ToolError::Exec(format!("SearXNG HTTP {}", resp.status())));
-        }
-        let body = read_capped(resp, BODY_CAP).await.map_err(ToolError::Exec)?;
-        let results = parse_searx(&body).map_err(ToolError::Exec)?;
+        let results =
+            search_structured(&self.client, &self.searxng_url, self.ctx, &a.query, a.fresh).await?;
         if results.is_empty() {
             return Ok("(нет результатов)".into());
         }
@@ -156,6 +137,38 @@ impl Tool for WebSearchTool {
             .join("\n");
         Ok(text)
     }
+}
+
+/// СТРУКТУРИРОВАННЫЙ мета-поиск (RES-2): тот же путь, что `web.search`-инструмент, но возвращает
+/// `Vec<SearchResult>` вместо форматированного текста — чтобы deep-research-воркер мог дедупить/фетчить URL
+/// без хрупкого парсинга текста. Секрет/пусто-гарды ЦЕНТРАЛИЗОВАНЫ здесь (и инструмент, и воркер защищены).
+pub(crate) async fn search_structured(
+    client: &GuardedClient,
+    searxng_url: &str,
+    ctx: RunCtx,
+    query: &str,
+    fresh: bool,
+) -> Result<Vec<SearchResult>, ToolError> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err(ToolError::BadArgs("пустой запрос".into()));
+    }
+    if looks_secretish(q) {
+        return Err(ToolError::Exec(
+            "запрос похож на секрет (токен/ключ) — НЕ отправлен в сеть".into(),
+        ));
+    }
+    let url = build_search_url(searxng_url, q, fresh)
+        .map_err(|e| ToolError::Exec(format!("URL SearXNG: {e}")))?;
+    let resp = client
+        .get(&url, EgressFeature::Web, ctx)
+        .await
+        .map_err(|e| ToolError::Exec(format!("egress: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(ToolError::Exec(format!("SearXNG HTTP {}", resp.status())));
+    }
+    let body = read_capped(resp, BODY_CAP).await.map_err(ToolError::Exec)?;
+    parse_searx(&body).map_err(ToolError::Exec)
 }
 
 // ── web.fetch ─────────────────────────────────────────────────────────────────────────────────────
@@ -194,37 +207,47 @@ impl Tool for WebFetchTool {
     async fn invoke(&self, args: &str) -> Result<String, ToolError> {
         let a: FetchArgs =
             serde_json::from_str(args).map_err(|e| ToolError::BadArgs(e.to_string()))?;
-        let url = a.url.trim();
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return Err(ToolError::BadArgs("URL должен быть http(s)".into()));
-        }
-        // Креды в URL (`user:pass@`) — запрет (утечка в сеть/аудит, почти всегда ошибка модели).
-        if has_url_credentials(url) {
-            return Err(ToolError::BadArgs(
-                "URL с встроенными кредами (user:pass@) запрещён".into(),
-            ));
-        }
-        // Прочие секреты в URL (токены в query) → не отправляем (как web.search для запроса).
-        if looks_secretish(url) {
-            return Err(ToolError::Exec(
-                "URL похож на секрет (токен/ключ) — НЕ отправлен в сеть".into(),
-            ));
-        }
-        let resp = self
-            .client
-            .get(url, EgressFeature::Web, self.ctx)
-            .await
-            .map_err(|e| ToolError::Exec(format!("egress: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(ToolError::Exec(format!("HTTP {}", resp.status())));
-        }
-        let body = read_capped(resp, BODY_CAP).await.map_err(ToolError::Exec)?;
-        let text = html_to_text(&body);
+        let text = fetch_text(&self.client, self.ctx, &a.url).await?;
         if text.trim().is_empty() {
             return Ok("(пустой документ)".into());
         }
         Ok(text)
     }
+}
+
+/// Загрузка публичного URL → ОЧИЩЕННЫЙ текст (RES-2): тот же путь, что `web.fetch`-инструмент. Гарды
+/// (http(s)-схема, креды в URL, secretish) ЦЕНТРАЛИЗОВАНЫ здесь — и инструмент, и deep-research-воркер
+/// проходят одни проверки. Пустой документ → пустая строка (вызывающий решает, что делать).
+pub(crate) async fn fetch_text(
+    client: &GuardedClient,
+    ctx: RunCtx,
+    url: &str,
+) -> Result<String, ToolError> {
+    let url = url.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(ToolError::BadArgs("URL должен быть http(s)".into()));
+    }
+    // Креды в URL (`user:pass@`) — запрет (утечка в сеть/аудит, почти всегда ошибка модели).
+    if has_url_credentials(url) {
+        return Err(ToolError::BadArgs(
+            "URL с встроенными кредами (user:pass@) запрещён".into(),
+        ));
+    }
+    // Прочие секреты в URL (токены в query) → не отправляем (как web.search для запроса).
+    if looks_secretish(url) {
+        return Err(ToolError::Exec(
+            "URL похож на секрет (токен/ключ) — НЕ отправлен в сеть".into(),
+        ));
+    }
+    let resp = client
+        .get(url, EgressFeature::Web, ctx)
+        .await
+        .map_err(|e| ToolError::Exec(format!("egress: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(ToolError::Exec(format!("HTTP {}", resp.status())));
+    }
+    let body = read_capped(resp, BODY_CAP).await.map_err(ToolError::Exec)?;
+    Ok(html_to_text(&body))
 }
 
 // ── Хелперы (чистые, юнит-тестируемые) ──────────────────────────────────────────────────────────
@@ -264,12 +287,13 @@ struct SearxResult {
     content: String,
 }
 
-/// Нормализованный результат поиска для модели.
+/// Нормализованный результат поиска для модели. `pub(crate)` — переиспользуется deep-research-воркером
+/// (RES-2) через [`search_structured`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SearchResult {
-    title: String,
-    url: String,
-    snippet: String,
+pub(crate) struct SearchResult {
+    pub(crate) title: String,
+    pub(crate) url: String,
+    pub(crate) snippet: String,
 }
 
 /// Парсит JSON SearXNG → результаты (пустые url отбрасываем, обрезаем до [`MAX_RESULTS`]).

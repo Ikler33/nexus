@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · DEEP-RESEARCH RES-2 — read-only воркер (search→fetch→fence→extract) + quality-фильтр
+
+Воркер одного исследовательского запроса. **Web-only ПО КОНСТРУКЦИИ** (нет `ActionDispatcher` → запись в vault структурно невозможна; пишет только отчёт оркестратор RES-4). Контент страниц НЕДОВЕРЕН → фенсится `injection_marker` (I-5) ДО extract-промпта.
+
+- **`agent::research::worker`** — `research_query(web, provider, question, query, shared_urls, cfg, cancel, ctx) -> Vec<Finding>`: `search → дедуп URL против ОБЩЕГО набора (между воркерами) → конкурентно (bounded `concurrency` через `futures::buffer_unordered` + `Semaphore`) fetch → FENCE → LLM-extract → quality-фильтр`. Fail-soft (упавший поиск/фетч/extract = меньше находок). `ResearchWeb`-seam (search+fetch, мокается) + боевой `GuardedResearchWeb` поверх web-инструментов. url/title находки — АВТОРИТЕТНЫ из хита (не из ответа модели). `WorkerCfg` (max_urls/max_content_chars/concurrency) из `ai.research`.
+- **`agent::research::quality`** — `is_low_quality` (порт odysseus `LOW_QUALITY_MARKERS` + флор длины): пустой/короткий/boilerplate summary → отброс.
+- **Рефактор `web_tools`** — выделены `pub(crate)` `search_structured` (→ `Vec<SearchResult>`) и `fetch_text`; инструменты `web.search`/`web.fetch` теперь зовут их. Секрет-/cred-/SSRF-гарды ЦЕНТРАЛИЗОВАНЫ в этих функциях (и инструмент, и воркер проходят одни проверки). Поведение инструментов байт-в-байт (6 их тестов зелены).
+
+**Adversarial-ревью (Workflow, 3 линзы: concurrency/security/correctness, каждая находка верифицирована) → 7 дефектов ЗАКРЫТЫ в срезе:** **MAJOR** title/url из поиска (тоже из сети!) шли в extract-промпт СЫРЫМИ мимо фенса → обход анти-инъекции; фикс: title+url+контент в ОДНОМ `fence_observation`-блоке. **MAJOR** `is_low_quality` ложно отсекал легит-находки с общеграмматическими обрывками («does not contain»/«not relevant to»/«insufficient to» как ПРЕДМЕТ) → убраны из маркеров. MINOR: семафор был мёртвой подстраховкой под `buffer_unordered` (ширина = единственный ограничитель) → удалён; cancel не проверялся между fetch и дорогим extract → добавлен гейт; `normalize_url` был слеп к query/регистру хоста → канонизация через URL-парсер, ЕДИНЫЙ ключ для `shared_urls` и `dedup_findings_by_url`; JSON-пример в промпте мог быть сэхан моделью → формат описан прозой (нет литеральных `{…}`).
+
+Tier-1 (+19 тестов вкл. 5 регресс-тестов ревью): сбор находок + дедуп URL МЕЖДУ воркерами · low-quality отсев · контент+title фенсятся ДО extract · конкурентность ограничена `buffer_unordered` (пик ≤ concurrency, но > 1) · cancel короткозамыкает · `parse_finding` авторитетные url/title + fail-closed · `is_low_quality` (+легит-обрывки проходят) · `normalize_url` канонизация (trailing-slash/хост-регистр/query) · промпт без литерального JSON. `fmt`/`clippy` чисто.
+
 ### Агент · DEEP-RESEARCH RES-1 — промпты + толерантные парсеры plan/query/stop + дедуп источников (чистый субстрат, default-OFF)
 
 Старт эпика deep-research (порт odysseus `deep_research.py`) как ПАТТЕРНА делегирования поверх субагентов. RES-1 — чистый субстрат БЕЗ I/O/сети: всё тестируемо offline, LLM-вызовы и fan-out воркеров — RES-2/3.
