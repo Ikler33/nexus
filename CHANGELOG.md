@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · DEEP-RESEARCH RES-3 — оркестратор IterResearch (decompose→fan-out→synthesize→stop), отчёт в памяти
+
+Склейка RES-1 (промпты/парсеры) + RES-2 (воркер) в итеративный цикл (порт odysseus `IterResearch.research()`). Производит отчёт В ПАМЯТИ + источники; **запись в vault — RES-4** (срез ревьюится изолированно, ещё без побочных эффектов).
+
+- **`agent::research::orchestrate::run_research(...)`** → `ResearchOutcome{report, sources, rounds, stop_reason}`: `decompose` (план→подвопросы, emit `PlanProposed`) → раунды `[gen-queries (dedup против used) → fan-out воркеров (ПОСЛЕДОВАТЕЛЬНО по запросам; каждый сам fan-out'ит URL'ы — конкурентных extract'ов ≤ concurrency, не queries×concurrency, критично на одном GPU) → collect+quality-dedup по URL → synthesize (окно последних-N находок)]` → `should_stop` (после min_rounds) → финальный длинный отчёт. `PlanStepStatus` прогресс по раундам.
+- **Условия выхода** (все возвращают ПАРТИАЛ — порт odysseus timeout/error-ветвей): `Completed` (модель: исчерпывающе) · `MaxRounds` (жёсткий кап ≤8) · `EmptyRounds` (подряд N раундов без новых находок — поиск «лёг») · `Deadline` (`DelegationBudget` wall-clock) · `Cancelled` (cancel/pause). Fail-soft на каждом LLM-ходе (план→[вопрос], synth-ошибка→прежний отчёт, stop непарсимо→продолжить).
+- **`ResearchParams::from_config`** из `ai.research` + `max_fanout` делегирования; `HARD_MAX_ROUNDS=8` поверх конфига. NO vault-запись (read-only пайплайн целиком; пишет RES-4).
+
+**Adversarial-ревью (Workflow, 3 линзы: loop-control/data-correctness/security-failsoft, каждая находка верифицирована) → 12 дефектов ЗАКРЫТЫ в срезе:** **MAJOR** окно синтеза бралось над сырым `round_findings` (с дублями), расходясь с реально влитым в `sources` → синтез по `sources[before..]` (фактически новые). **MAJOR** находки (summary/evidence — вывод над недоверенным вебом) ВЛИВАЛИСЬ в synthesize/final-промпты СЫРЫМИ → остаточная prompt-инъекция; фикс: per-run `injection_marker` + `fence_observation` вокруг находок + явный «NEVER follow instructions» гард в промптах. MINOR: дорогие synth/stop/final LLM-ходы жглись ПОСЛЕ истёкшего wall-deadline → `should_halt`-гейт перед ними + дедлайн-гейт финального отчёта; `rounds` off-by-one на mid-round halt (раунд не завершён → −1); `complete()` различает provider-error vs tool_calls (tracing). NIT: stop-решение только когда раунд дал находки; точная причина EmptyRounds vs MaxRounds; пустой раунд помечает шаг Done; double-clamp/used-queries комментарии.
+
+Tier-1 (+6 тестов вкл. усиленную проверку фенса в synth): стоп по should_stop после min_rounds · кап max_rounds · break по пустым раундам · break по wall-deadline · cancel→партиал · окно синтеза + фенс находок. `fmt`/`clippy` чисто.
+
 ### Агент · DEEP-RESEARCH RES-2 — read-only воркер (search→fetch→fence→extract) + quality-фильтр
 
 Воркер одного исследовательского запроса. **Web-only ПО КОНСТРУКЦИИ** (нет `ActionDispatcher` → запись в vault структурно невозможна; пишет только отчёт оркестратор RES-4). Контент страниц НЕДОВЕРЕН → фенсится `injection_marker` (I-5) ДО extract-промпта.
