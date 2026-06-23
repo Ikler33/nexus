@@ -22,7 +22,9 @@ pub use chat::{
     ChatProvider, InlineMode, OpenAiChatProvider, ToolCallFn, ToolCallMsg, WebQueryPlan,
     FENCE_MAX_BYTES,
 };
-pub use config::{AiConfig, ChatConfig, DelegationConfig, EmbeddingConfig, LocalConfig};
+pub use config::{
+    AiConfig, ChatConfig, DelegationConfig, EmbeddingConfig, LocalConfig, ResearchConfig,
+};
 #[cfg(any(test, feature = "test-util"))]
 pub use embedder::MockEmbedder;
 pub use embedder::{default_prefixes, l2_normalize, EmbeddingProvider, OpenAiEmbedder};

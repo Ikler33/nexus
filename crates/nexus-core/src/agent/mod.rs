@@ -32,6 +32,7 @@ pub mod event;
 pub mod job;
 pub mod memory;
 pub mod registry;
+pub mod research;
 pub mod run_store;
 pub mod runner;
 pub mod session;

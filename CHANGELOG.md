@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · DEEP-RESEARCH RES-1 — промпты + толерантные парсеры plan/query/stop + дедуп источников (чистый субстрат, default-OFF)
+
+Старт эпика deep-research (порт odysseus `deep_research.py`) как ПАТТЕРНА делегирования поверх субагентов. RES-1 — чистый субстрат БЕЗ I/O/сети: всё тестируемо offline, LLM-вызовы и fan-out воркеров — RES-2/3.
+
+- **`agent::research`** (новый модуль): `prompts.rs` (порт RESEARCH_PLAN/QUERY_GEN/SYNTHESIZE/STOP/FINAL_REPORT + ЧИСТОЕ заземление в дате `current_date_preamble(now_secs)` через no-chrono `civil_from_unix` — инверсия Хиннанта, прецедент `home::stale::days_from_civil`; без неё локальная модель подставляет год обучения); `plan.rs` (`parse_plan` → подвопросы/темы/критерий, fail-closed fallback к `[вопрос]`, кап `max_fanout`); `query.rs` (`parse_queries` + `dedup_new_queries` против used-set, `normalize_query`); `stop.rs` (`parse_stop` YES/NO, fail-closed = ПРОДОЛЖАТЬ); `Finding` + `dedup_findings_by_url`.
+- **Толерантный парс** (общие хелперы `strip_thinking`/`strip_code_block`/`balanced_spans` — без `regex`-зависимости): снимают `<think>…</think>` и markdown-фенсы, берут ПОСЛЕДНИЙ сбалансированный JSON-спан (анти-эхо prompt-примера); любая неоднозначность → БЕЗОПАСНЫЙ результат, НИКОГДА не паника.
+- **`ai.research` Config default-OFF** (NON-Option, дефолт `enabled=false` + капы odysseus-tuned под один GPU: `max_rounds=3`, `max_urls_per_round=3`, `max_content_chars=15000`, `extraction_concurrency=3`, `wall_clock_secs=0`). `research.run`-инструмент появится в RES-4 (регистрация ТОЛЬКО при `enabled` И `delegation.enabled` И web).
+
+**Adversarial-ревью (skeptic-агент, panic/fail-open лензы) → 2 дефекта ЗАКРЫТЫ в срезе:** **CRITICAL** `strip_thinking` считал оффсеты по `to_lowercase()`-копии, а резал ОРИГИНАЛ — case-fold НЕ сохраняет длину (İ/ẞ/Kelvin) → паника на multibyte-границе враждебного UTF-8 (нарушение контракта «никогда не паникует»; распространялось на все 3 парсера) + тихая порча. Фикс: `find_ci_ascii` сканирует ОРИГИНАЛ (теги чисто ASCII → оффсет всегда на char-границе), без lowercased-копии. **MAJOR** `parse_stop` матчил `YES` как 3-символьный ПРЕФИКС без границы слова → «YESTERDAY…»/«YESolutely…» обрывали ресёрч (fail-OPEN). Фикс: `starts_token` (граница слова). Чистое (verified): `balanced_spans` UTF-8/вложенность/эскейпы, `civil_from_unix` round-trip 1.9M дней 0 расхождений, `stop` слайсы guarded `.get(..)`.
+
+Tier-1 (+25 тестов, вкл. 2 регресс-теста adversarial): извлечение плана из fenced-JSON · bad-JSON→fallback · кап подвопросов · анти-эхо примера · дедуп запросов нормализованно · стоп YES после think+markdown · fail-closed continue · граница слова (YESTERDAY≠YES) · `strip_thinking` без паники на İ/ẞ/Kelvin+multibyte · `civil_from_unix` (1970/2000/2026 + отбрасывание времени суток) · дедуп находок по URL. `fmt`/`clippy` чисто.
+
 ### Агент · SUBAGENTS SUB-3b-2b — проводка `delegate.run` (регистрация + reconcile-sweep) — делегирование LIVE end-to-end
 
 Финальная проводка субагентов: `delegate.run` регистрируется в top-level прогоне под owner-gated `ai.delegation.enabled` (default OFF). **🎉 In-process делегирование работает end-to-end** (родитель → `delegate.run` → fan-out детей → дерево `parent_run_id` → агрегат саммари).
