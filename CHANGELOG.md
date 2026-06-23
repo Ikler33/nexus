@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Агент · DEEP-RESEARCH RES-5a — `Report` AgentEvent + ПРОД-проводка `research.run` (agentd/connect)
+
+Делает `research.run` достижимым в проде (owner-gated `ai.research`) + поверхность отчёта в стриме.
+
+- **`AgentEvent::Report{run_id, title, path, sources_count, rounds}`** (реализует зарезервированный `Report(doc)`) + зеркало `AgentStreamEvent::Report` + экзаустивный `map_agent_event`-рукав (контракт desktop↔agentd не дрейфует). Конструктор `AgentEvent::report` клипует `title` (≤200). `ResearchTool` эмитит Report ПОСЛЕ успешной записи отчёта (если гейт вернул Err — события нет).
+- **Прод-проводка** (зеркало `ai.delegation`): `ai.research` → `agent_research` в agentd → `AgentRunHandler::new(+research)` (scheduler) И `ConnectDeps.research` (коннектор) → `run_agent_session(research=Some)`. Default-OFF сквозной: `research.run` появляется ТОЛЬКО при `research.enabled` И `delegation.enabled` И web И actuator И top-level (`should_register`). Desktop-путь и субагенты — `None` (как delegation/skills_learning).
+
+**Adversarial-ревью (focused-агент: default-OFF/flip-correctness/Report-контракт/arg-order) → CLEAN (0 CRIT/MAJOR/MINOR):** five-condition gate цел, флипнуты ровно job.rs+connect (desktop/субагенты/тесты — None), Report эмитится лишь на успешной записи + redaction-safe, ни один другой in-crate exhaustive-match на AgentEvent не пропущен. NIT закрыт: success-тест теперь через recording-форвардер проверяет, что `Report` реально эмитится с верным path.
+
+Tier-1 (+2 теста, 1020+ nexus-core): `Report` round-trip через wire (camelCase, клип title) · success-path эмитит Report. `fmt`/`clippy` чисто. **Прод-проводка ЕСТЬ, но `ai.research.enabled` дефолт false** — research.run инертен до owner-флипа (как learning/delegation); live-валидация — RES-5b.
+
 ### Агент · DEEP-RESEARCH RES-4 — инструмент `research.run` + запись отчёта ЧЕРЕЗ actuator-гейт (default-OFF)
 
 Завершает write-path ресёрча: оркестратор RES-3 → отчёт → vault ЧЕРЕЗ гейт (НИКОГДА не сырой `fs`).

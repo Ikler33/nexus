@@ -240,6 +240,42 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
     },
+    /// **RES-5: сгенерированный отчёт deep-research** (правый док / лента документов). Эмитится ПОСЛЕ
+    /// успешной записи заметки `research.run` через гейт. `path` — vault-rel путь; `title` (клип) — для
+    /// карточки; `sources_count`/`rounds` — мета. Реализует зарезервированный `Report(doc)` контракт.
+    /// Поля — явный camelCase (rename_all не каскадирует в struct-варианты enum).
+    Report {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        title: String,
+        path: String,
+        #[serde(rename = "sourcesCount")]
+        sources_count: usize,
+        rounds: usize,
+    },
+}
+
+/// Кап заголовка в [`AgentEvent::Report`] (карточка дока, не льём простыню).
+pub const REPORT_TITLE_MAX_CHARS: usize = 200;
+
+impl AgentEvent {
+    /// Конструктор [`AgentEvent::Report`] с клипом `title` ([`REPORT_TITLE_MAX_CHARS`]). Эмиттер (RES-4/5)
+    /// строит событие ТОЛЬКО так.
+    pub fn report(
+        run_id: i64,
+        title: &str,
+        path: &str,
+        sources_count: usize,
+        rounds: usize,
+    ) -> Self {
+        AgentEvent::Report {
+            run_id,
+            title: clip_chars(title, REPORT_TITLE_MAX_CHARS),
+            path: path.to_string(),
+            sources_count,
+            rounds,
+        }
+    }
 }
 
 impl AgentEvent {

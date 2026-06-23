@@ -195,6 +195,17 @@ pub enum AgentStreamEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
     },
+    /// Отчёт deep-research (RES-5): зеркало [`AgentEvent::Report`] — карточка дока правого дока. `runId`/
+    /// `sourcesCount` — явный camelCase.
+    Report {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        title: String,
+        path: String,
+        #[serde(rename = "sourcesCount")]
+        sources_count: usize,
+        rounds: usize,
+    },
 }
 
 /// Маппер `&AgentEvent` → [`AgentStreamEvent`] (контракт «бэкенд → клиент»). Возвращает `Option`: будущее
@@ -292,6 +303,19 @@ pub fn map_agent_event(ev: &AgentEvent) -> Option<AgentStreamEvent> {
             goal: goal.clone(),
             status: (*status).into(),
             summary: summary.clone(),
+        },
+        AgentEvent::Report {
+            run_id,
+            title,
+            path,
+            sources_count,
+            rounds,
+        } => AgentStreamEvent::Report {
+            run_id: *run_id,
+            title: title.clone(),
+            path: path.clone(),
+            sources_count: *sources_count,
+            rounds: *rounds,
         },
         // Матч НАМЕРЕННО экзаустивный (без `_`): wire.rs в `nexus-core` видит все варианты `AgentEvent`,
         // и новый вариант ядра ДОЛЖЕН уронить компиляцию здесь — чтобы его wire-маппинг решили явно
@@ -431,6 +455,30 @@ mod tests {
         let wire = map_agent_event(&ev).unwrap();
         let s = serde_json::to_string(&wire).unwrap();
         assert_eq!(serde_json::from_str::<AgentStreamEvent>(&s).unwrap(), wire);
+    }
+
+    /// RES-5: Report — STRUCT-вариант, camelCase {type, runId, title, path, sourcesCount, rounds};
+    /// маппится в `Some(...)`, round-trip сохраняет. Конструктор клипует длинный title.
+    #[test]
+    fn report_is_struct_variant_roundtrip() {
+        let ev = AgentEvent::report(7, "What is X?", "Research/what-is-x-2026-06-23.md", 4, 2);
+        let v = to_json(&ev);
+        assert_eq!(v["type"], "report");
+        assert_eq!(v["runId"], 7);
+        assert_eq!(v["title"], "What is X?");
+        assert_eq!(v["path"], "Research/what-is-x-2026-06-23.md");
+        assert_eq!(v["sourcesCount"], 4);
+        assert_eq!(v["rounds"], 2);
+        let wire = map_agent_event(&ev).unwrap();
+        let s = serde_json::to_string(&wire).unwrap();
+        assert_eq!(serde_json::from_str::<AgentStreamEvent>(&s).unwrap(), wire);
+        // конструктор клипует длинный title
+        let long = "t".repeat(500);
+        if let AgentEvent::Report { title, .. } = AgentEvent::report(1, &long, "p", 0, 0) {
+            assert!(title.chars().count() <= 201, "title клипнут (+…)");
+        } else {
+            panic!("not Report");
+        }
     }
 
     /// 6c-2g: map_agent_event МАПИТ exec-варианты в `Some(...)` (не молчаливый `None`) — экзаустивный

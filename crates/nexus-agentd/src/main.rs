@@ -832,6 +832,12 @@ async fn run() -> Result<(), String> {
         .as_ref()
         .map(|c| c.ai.delegation.clone())
         .unwrap_or_default();
+    // RES-5: owner-gated deep-research (ai.research, default-OFF). Один конфиг → AgentRunHandler + ConnectDeps
+    // (research.run регистрируется лишь при research+delegation+web+actuator+top-level).
+    let agent_research = local_cfg
+        .as_ref()
+        .map(|c| c.ai.research.clone())
+        .unwrap_or_default();
 
     // EGR-AGENT-2: веб-инструменты (web.search/web.fetch). Включаются ТОЛЬКО при `ai.web.enabled` —
     // `enable_web_tools` включает `EgressFeature::Web` + allowlist хоста SearXNG и строит WebToolsConfig
@@ -876,6 +882,7 @@ async fn run() -> Result<(), String> {
         // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled, default false).
         skills_learning_enabled,
         &agent_delegation, // SUB-3b-2b: owner-gated делегирование (ai.delegation)
+        &agent_research,   // RES-5: owner-gated deep-research (ai.research)
         &agent_paused,
     );
 
@@ -899,6 +906,8 @@ async fn run() -> Result<(), String> {
             skills_learning_enabled,
             // SUB-3b-2b: делегирование (delegate.run) — owner-gated ai.delegation (default disabled).
             agent_delegation.clone(),
+            // RES-5: deep-research (research.run) — owner-gated ai.research (default disabled).
+            agent_research.clone(),
         )),
     );
     // SL-curator: фоновая гигиена жизненного цикла agent-навыков (active→stale→archive, ОБРАТИМО,
@@ -1274,6 +1283,7 @@ fn maybe_spawn_connect_server(
     web: &Option<nexus_core::agent::WebToolsConfig>,
     skills_learning_enabled: bool,
     delegation: &nexus_core::ai::DelegationConfig,
+    research: &nexus_core::ai::ResearchConfig,
     agent_paused: &Arc<AtomicBool>,
 ) {
     let socket = match std::env::var("NEXUS_AGENTD_CONNECT_SOCKET") {
@@ -1302,6 +1312,7 @@ fn maybe_spawn_connect_server(
         web: web.clone(), // EGR-AGENT-2: те же веб-инструменты, что у scheduler-AgentRunHandler
         skills_learning_enabled, // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled)
         delegation: delegation.clone(), // SUB-3b-2b: owner-gated делегирование (ai.delegation)
+        research: research.clone(), // RES-5: owner-gated deep-research (ai.research)
         agent_paused: agent_paused.clone(), // ТОТ ЖЕ kill-switch, что у AgentRunHandler (SIGUSR1/agent.json)
     });
     tracing::warn!(
@@ -1673,6 +1684,8 @@ async fn drive_actuator_gate_run(
         false,
         // SUB-3b-2b: actuator-gate smoke не про делегирование (default-OFF).
         nexus_core::ai::DelegationConfig::default(),
+        // RES-5: actuator-gate smoke не про deep-research (default-OFF).
+        nexus_core::ai::ResearchConfig::default(),
     );
 
     let run_id = enqueue_agent_run(

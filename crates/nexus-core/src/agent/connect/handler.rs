@@ -102,6 +102,9 @@ pub struct ConnectDeps {
     /// **SUBAGENTS (SUB-3b-2b), OWNER-GATED, default disabled** (`ai.delegation`). `enabled` →
     /// прогоны коннектора регистрируют `delegate.run` (fan-out субагентов). Выключено → без регрессии.
     pub delegation: crate::ai::DelegationConfig,
+    /// **DEEP-RESEARCH (RES-5), OWNER-GATED, default disabled** (`ai.research`). `enabled` (+ delegation +
+    /// web + actuator) → прогоны коннектора регистрируют `research.run`. Выключено → без регрессии.
+    pub research: crate::ai::ResearchConfig,
 }
 
 /// [`AgentEventForwarder`] → асинхронный [`Transport`]. Синхронный `forward` кладёт событие в ОГРАНИЧЕННЫЙ
@@ -289,7 +292,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 forwarder,
                 None, // top-level прогон коннектора (не субагент)
                 delegation_deps.as_ref(),
-                None, // research (RES-4): default-OFF; прод-проводка в RES-5
+                Some(&deps.research), // RES-5: research.run (default-OFF; регистрируется при всех условиях)
             )
             .await;
             let (status, text) = outcome_to_finish(&outcome);
@@ -464,6 +467,7 @@ mod tests {
             web: None,
             skills_learning_enabled: false,
             delegation: crate::ai::DelegationConfig::default(),
+            research: crate::ai::ResearchConfig::default(),
             agent_paused: Arc::new(AtomicBool::new(false)),
         })
     }
