@@ -13,8 +13,9 @@ use serde::Deserialize;
 use super::orchestrate::{run_research, ResearchParams};
 use super::prompts::civil_from_unix;
 use super::worker::ResearchWeb;
-use super::write::write_report;
+use super::write::{report_path, write_report};
 use crate::actuator::ActionDispatcher;
+use crate::agent::event::AgentEvent;
 use crate::agent::session::AgentEventForwarder;
 use crate::agent::tool::{Tool, ToolError, ToolSpec};
 use crate::ai::tools::ToolCapableProvider;
@@ -148,6 +149,7 @@ impl Tool for ResearchTool {
             ));
         }
 
+        let path = report_path(question, &date_ymd);
         let gate_summary = write_report(
             self.ctx.dispatcher.as_ref(),
             question,
@@ -156,6 +158,16 @@ impl Tool for ResearchTool {
             &date_ymd,
         )
         .await?;
+
+        // RES-5: отчёт записан через гейт → событие Report (карточка дока правого дока). Эмитим ПОСЛЕ
+        // успешной записи (если гейт вернул Err — `?` выше уже вышел, события нет).
+        self.ctx.forwarder.forward(&AgentEvent::report(
+            self.ctx.run_id,
+            question,
+            &path,
+            outcome.sources.len(),
+            outcome.rounds,
+        ));
 
         Ok(format!(
             "Ресёрч завершён ({:?}): {} источник(ов), {} раунд(ов). {}",
@@ -247,6 +259,14 @@ mod tests {
         fn forward(&self, _ev: &AgentEvent) {}
     }
 
+    #[derive(Default)]
+    struct RecordingFwd(Mutex<Vec<AgentEvent>>);
+    impl AgentEventForwarder for RecordingFwd {
+        fn forward(&self, ev: &AgentEvent) {
+            self.0.lock().unwrap().push(ev.clone());
+        }
+    }
+
     fn ctx(disp: Arc<RecordingDispatcher>) -> ResearchContext {
         ResearchContext {
             web: Arc::new(MockWeb),
@@ -276,7 +296,10 @@ mod tests {
     #[tokio::test]
     async fn report_written_via_dispatch_action_with_frontmatter() {
         let disp = Arc::new(RecordingDispatcher(Mutex::new(None)));
-        let tool = ResearchTool::new(ctx(disp.clone()));
+        let fwd = Arc::new(RecordingFwd::default());
+        let mut c = ctx(disp.clone());
+        c.forwarder = fwd.clone();
+        let tool = ResearchTool::new(c);
         let out = tool
             .invoke("{\"question\": \"What is Rust async?\"}")
             .await
@@ -291,6 +314,15 @@ mod tests {
             "frontmatter provenance: {dbg}"
         );
         assert!(dbg.contains("sources_count: 1"), "sources_count: {dbg}");
+        // ревью NIT: Report-событие эмитится на УСПЕШНОЙ записи (path совпадает с записанным)
+        let evs = fwd.0.lock().unwrap();
+        let report = evs
+            .iter()
+            .find(|e| matches!(e, AgentEvent::Report { .. }))
+            .expect("Report event forwarded");
+        if let AgentEvent::Report { path, .. } = report {
+            assert!(path.starts_with("Research/"), "report path: {path}");
+        }
     }
 
     #[tokio::test]

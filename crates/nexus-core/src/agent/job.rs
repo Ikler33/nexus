@@ -126,6 +126,10 @@ pub struct AgentRunHandler {
     /// собирает `DelegationDeps` и регистрирует `delegate.run` (fan-out субагентов) в top-level прогоне.
     /// Выключено (дефолт) → инструмента нет (без регрессии).
     delegation: crate::ai::DelegationConfig,
+    /// **DEEP-RESEARCH (RES-5), OWNER-GATED, default disabled** (`ai.research`). `enabled` (+ delegation +
+    /// web + actuator) → drive регистрирует `research.run` (многораундовый веб-ресёрч с записью отчёта через
+    /// гейт). Выключено (дефолт) → инструмента нет (без регрессии).
+    research: crate::ai::ResearchConfig,
     /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** Process-global `Arc<AtomicBool>` (взведён ⇒
     /// fail-safe останов). Проверяется на ТРЁХ слоях: (1) `drive` ДО старта (взведён ⇒ прогон остаётся
     /// queued, ре-кьюится); (2) пробрасывается в `run_agent_loop` (мид-ран останов → `Paused`);
@@ -166,6 +170,7 @@ impl AgentRunHandler {
         web: Option<WebToolsConfig>,
         skills_learning_enabled: bool,
         delegation: crate::ai::DelegationConfig,
+        research: crate::ai::ResearchConfig,
     ) -> Self {
         Self {
             writer,
@@ -183,6 +188,7 @@ impl AgentRunHandler {
             web,
             skills_learning_enabled,
             delegation,
+            research,
         }
     }
 
@@ -300,7 +306,7 @@ impl AgentRunHandler {
             forwarder,
             None, // top-level прогон (не субагент)
             delegation_deps.as_ref(),
-            None, // research (RES-4): default-OFF; прод-проводка в RES-5
+            Some(&self.research), // RES-5: research.run (default-OFF; регистрируется лишь при всех условиях)
         )
         .await;
 
@@ -579,6 +585,7 @@ mod tests {
             None,  // EGR-AGENT-2: без веба
             false, // SL-7d: тест не про авторство навыков
             crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
+            crate::ai::ResearchConfig::default(), // RES-5: тест не про ресёрч
         )
     }
 
@@ -605,6 +612,7 @@ mod tests {
             None,                                   // EGR-AGENT-2: без веба
             false,                                  // SL-7d: тест не про авторство навыков
             crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
+            crate::ai::ResearchConfig::default(),   // RES-5: тест не про ресёрч
         )
     }
 
@@ -656,6 +664,7 @@ mod tests {
             None,  // EGR-AGENT-2: без веба
             false, // SL-7d: тест не про авторство навыков
             crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
+            crate::ai::ResearchConfig::default(), // RES-5: тест не про ресёрч
         )
     }
 
@@ -1207,6 +1216,7 @@ mod tests {
             None,                                   // EGR-AGENT-2: без веба
             false,                                  // SL-7d: тест не про авторство навыков
             crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
+            crate::ai::ResearchConfig::default(),   // RES-5: тест не про ресёрч
         )
     }
 
