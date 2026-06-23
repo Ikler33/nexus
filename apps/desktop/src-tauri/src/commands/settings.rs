@@ -198,6 +198,81 @@ fn apply_agent_flags(doc: &mut serde_json::Value, flags: &AgentFlagsDto) -> Resu
     Ok(())
 }
 
+/// W-3: зеркалит web-consent (`enabled` + `url`) в `ai.web` local.json. Веб-инструменты АГЕНТА
+/// (`agent_run` читает `ai.web.enabled`+`url`) включаются ТЕМ ЖЕ тогглом, что Home/chat-веб
+/// (`websearch.json`) — иначе тоггл писал только websearch.json, а у агента `ai.web` оставался пуст
+/// (баг ST-C3/ST-G4: «найти в сети» не работало). Сохраняет прочие ключи `ai.web` (в т.ч.
+/// `allow_public_fetch` из `set_agent_flags`). Чистая — тестируется без `State`.
+pub(crate) fn apply_web_endpoint(
+    doc: &mut serde_json::Value,
+    enabled: bool,
+    url: &str,
+) -> Result<(), String> {
+    if !doc.get("ai").map(|v| v.is_object()).unwrap_or(false) {
+        doc["ai"] = serde_json::json!({});
+    }
+    let ai = doc
+        .get_mut("ai")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai не объект")?;
+    if !ai.get("web").map(|v| v.is_object()).unwrap_or(false) {
+        ai.insert("web".into(), serde_json::json!({}));
+    }
+    let web = ai
+        .get_mut("web")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai.web не объект")?;
+    web.insert("enabled".into(), serde_json::Value::Bool(enabled));
+    web.insert("url".into(), serde_json::Value::String(url.to_string()));
+    Ok(())
+}
+
+/// W-3: нужно ли зеркалить web-consent в `ai.web` vault (skip-if-equal — без лишних атомарных
+/// записей при каждом открытии vault). `cur` = текущее `(enabled, url)` из vault local.json
+/// (`None` = секции `ai.web` ещё нет). Пишем, если значения расходятся ИЛИ секции нет, но
+/// глобальный consent непустой (web включён / задан url).
+pub(crate) fn web_needs_mirror(
+    cur: Option<(bool, &str)>,
+    want_enabled: bool,
+    want_url: &str,
+) -> bool {
+    match cur {
+        Some((en, url)) => en != want_enabled || url != want_url,
+        None => want_enabled || !want_url.is_empty(),
+    }
+}
+
+/// W-3: применяет web-endpoint к vault `local.json` (read-modify-atomic-write, как `set_ai_config`).
+/// Нет открытого vault → тихий no-op (агенту всё равно нужен открытый vault). Зовётся из
+/// `set_websearch_config` — один тоггл «Веб» кормит и Home/chat (websearch.json), и агента (ai.web).
+pub(crate) async fn mirror_web_to_vault(
+    state: &AppState,
+    enabled: bool,
+    url: &str,
+) -> AppResult<()> {
+    let root = match state.vault().await {
+        Ok(v) => v.root.clone(),
+        Err(_) => return Ok(()),
+    };
+    let dir = root.join(".nexus");
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join("local.json");
+    let raw = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    let mut doc: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&raw).map_err(|e| AppError::Msg(format!("local.json не JSON: {e}")))?
+    };
+    apply_web_endpoint(&mut doc, enabled, url)?;
+    let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
+    let path2 = path.clone();
+    let bytes = pretty.into_bytes();
+    tokio::task::spawn_blocking(move || crate::vault::atomic_write_io(&path2, &bytes))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
+    Ok(())
+}
+
 /// Текущая AI-конфигурация (из `.nexus/local.json`) — для префилла формы настроек.
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto> {
@@ -638,6 +713,80 @@ mod tests {
         assert!(web.url.is_empty(), "url пуст → web инертен");
         assert!(web.allow_public_fetch);
         assert_eq!(cfg.ai.chat.unwrap().url, "http://h:8080", "chat не потерян");
+    }
+
+    /// W-3: `apply_web_endpoint` зеркалит web-consent в `ai.web` — агент получает тот же url+enabled,
+    /// что Home/chat-веб. Сохраняет `allow_public_fetch` и прочие ключи `ai`.
+    #[test]
+    fn apply_web_endpoint_mirrors_and_preserves_other_keys() {
+        let mut doc = serde_json::json!({
+            "sync": { "remote": "x" },
+            "ai": {
+                "chat": { "url": "http://h:8080" },
+                "web": { "allow_public_fetch": true }
+            }
+        });
+        apply_web_endpoint(&mut doc, true, "http://192.168.0.28:8888").unwrap();
+        assert_eq!(doc.pointer("/ai/web/enabled").unwrap(), true);
+        assert_eq!(
+            doc.pointer("/ai/web/url").unwrap(),
+            "http://192.168.0.28:8888"
+        );
+        // allow_public_fetch и прочие ключи целы.
+        assert_eq!(doc.pointer("/ai/web/allow_public_fetch").unwrap(), true);
+        assert_eq!(doc.pointer("/ai/chat/url").unwrap(), "http://h:8080");
+        assert_eq!(doc.pointer("/sync/remote").unwrap(), "x");
+
+        // Round-trip: агент-конфиг видит web с url+enabled (значит enable_web_tools включится).
+        let pretty = serde_json::to_string(&doc).unwrap();
+        let cfg = crate::ai::LocalConfig::parse(&pretty).unwrap();
+        let web = cfg.ai.web.unwrap();
+        assert!(web.enabled);
+        assert_eq!(web.url, "http://192.168.0.28:8888");
+        assert!(web.allow_public_fetch);
+    }
+
+    /// Пустой документ → `apply_web_endpoint` создаёт `ai.web`. Выключение пишет `enabled=false`
+    /// (агент теряет веб-инструмент тем же тогглом).
+    #[test]
+    fn apply_web_endpoint_creates_section_and_can_disable() {
+        let mut doc = serde_json::json!({});
+        apply_web_endpoint(&mut doc, true, "http://searx:8888").unwrap();
+        assert_eq!(doc.pointer("/ai/web/enabled").unwrap(), true);
+
+        // Выключаем — enabled=false, url остаётся (history), агент инертен по enabled.
+        apply_web_endpoint(&mut doc, false, "http://searx:8888").unwrap();
+        assert_eq!(doc.pointer("/ai/web/enabled").unwrap(), false);
+        let cfg = crate::ai::LocalConfig::parse(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(!cfg.ai.web.unwrap().enabled);
+    }
+
+    /// W-3 (skip-if-equal на открытии vault): зеркалить только при расхождении или отсутствии секции
+    /// с непустым consent. Совпадение / (нет секции + пустой выключенный consent) → НЕ писать.
+    #[test]
+    fn web_needs_mirror_skips_equal_and_writes_on_drift() {
+        // Совпадение — не пишем.
+        assert!(!web_needs_mirror(
+            Some((true, "http://s:8888")),
+            true,
+            "http://s:8888"
+        ));
+        // Расхождение url / enabled — пишем.
+        assert!(web_needs_mirror(
+            Some((true, "http://old")),
+            true,
+            "http://new"
+        ));
+        assert!(web_needs_mirror(
+            Some((false, "http://s")),
+            true,
+            "http://s"
+        ));
+        // Секции нет, но глобальный consent активен (enabled или непустой url) — пишем.
+        assert!(web_needs_mirror(None, true, ""));
+        assert!(web_needs_mirror(None, false, "http://s:8888"));
+        // Секции нет и consent пустой/выключенный — НЕ пишем (нет шум-записи на каждое открытие).
+        assert!(!web_needs_mirror(None, false, ""));
     }
 
     /// AC-EGR-6: probe «Проверить связь» идёт через guarded с `Feature::Probe` — url вне политики

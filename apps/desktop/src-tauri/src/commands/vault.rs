@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::OptionalExtension;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::ai::{
     self, AIClient, ChatConfig, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
@@ -44,6 +44,14 @@ pub async fn open_vault(
 
     // Конфиг `.nexus/local.json` парсим ОДИН раз (раньше — дважды: build_rag + build_chat), кросс-план #8.
     let local_cfg = load_local_config(&root).await;
+
+    // W-3: глобальный web-consent (`websearch.json`) грузим ЗАРАНЕЕ (пока `app` не перемещён) — в конце
+    // зеркалим его в `ai.web` ЭТОГО vault (см. ниже).
+    let web_consent = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|d| crate::websearch::config::load(&d.join("websearch.json")));
 
     // Авто-allowlist эгресса (ADR-005-ext E4): хосты явных `ai.*.url` из local.json. Нет конфига →
     // пусто (fail-closed для публичных хостов; LAN/loopback живут как `is_private_host`).
@@ -529,6 +537,30 @@ pub async fn open_vault(
             scheduler_worker: std::sync::Mutex::new(scheduler_worker),
         },
     });
+    // W-3: зеркалим ГЛОБАЛЬНЫЙ web-consent (`websearch.json`) → `ai.web` ИМЕННО ЭТОГО vault, чтобы
+    // веб-инструменты агента включались и в только что открытом vault (а не только в том, где жали
+    // тоггл) — иначе UI (глобальный) показывал бы «Веб ВКЛ», а у агента в этом vault веба нет
+    // (рассинхрон consent/UI, ревью W-3 major). Симметрично синку egress-политики из consent-файлов
+    // на старте (lib.rs). skip-if-equal — без лишних атомарных записей на каждое открытие. `ai.web`
+    // не влияет на уже построенные chat/rag (агент читает local.json заново per-run), поэтому после.
+    if let Some(web_cfg) = web_consent {
+        let cur = local_cfg
+            .as_ref()
+            .and_then(|c| c.ai.web.as_ref())
+            .map(|w| (w.enabled, w.url.as_str()));
+        if crate::commands::settings::web_needs_mirror(cur, web_cfg.enabled, &web_cfg.url) {
+            if let Err(e) = crate::commands::settings::mirror_web_to_vault(
+                &state,
+                web_cfg.enabled,
+                &web_cfg.url,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "open_vault: не удалось синхронизировать ai.web из websearch.json");
+            }
+        }
+    }
+
     tracing::info!(vault = %info.root, "opened vault");
     Ok(info)
 }

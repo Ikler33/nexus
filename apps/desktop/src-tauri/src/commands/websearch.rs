@@ -36,5 +36,9 @@ pub async fn set_websearch_config(
     websearch::config::save(&path, &config)
         .map_err(|e| AppError::Msg(format!("websearch.json не записан: {e}")))?;
     websearch::config::sync_egress_policy(&state.egress_policy, &config);
+    // W-3: тем же тогглом включаем веб-инструменты АГЕНТА — зеркалим url+enabled в `ai.web`
+    // (`.nexus/local.json`), который читает `agent_run`. Без этого «найти в сети» у агента не
+    // работало (ST-G4): тоггл писал только websearch.json. Нет открытого vault → no-op.
+    crate::commands::settings::mirror_web_to_vault(&state, config.enabled, &config.url).await?;
     Ok(config)
 }

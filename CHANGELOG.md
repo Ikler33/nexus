@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · W-3 — веб-инструменты включаются тем же тогглом «Веб» 🔴 BETA
+
+Репорт владельца: «веб у агента не подключён». Корень — ДВА web-конфига: `websearch.json` (app-global, Home/chat web-режим) и `ai.web` в `.nexus/local.json` (его читает `agent_run` для `web.search`/`web.fetch`). Тоггл «Веб» писал только `websearch.json`, а `ai.web` никто не заполнял → у агента не было веб-инструмента.
+
+- **backend** (`commands/settings.rs`): `apply_web_endpoint` (чистая) зеркалит `enabled`+`url` в `ai.web`, СОХРАНЯЯ `allow_public_fetch` и прочие ключи; `mirror_web_to_vault` (read-modify-atomic-write local.json; нет vault → no-op).
+- **тоггл** (`commands/websearch.rs`): `set_websearch_config` теперь и сохраняет `websearch.json` (Home/chat + egress-синк), и зеркалит в `ai.web` — один тоггл кормит обе поверхности.
+- **на открытии vault** (`commands/vault.rs`, фикс ревью-major): `open_vault` зеркалит глобальный web-consent → `ai.web` ИМЕННО этого vault (skip-if-equal `web_needs_mirror`), симметрично синку egress-политики на старте — иначе мульти-vault дрейф: UI показывает «Веб ВКЛ», а у агента в другом vault веба нет (рассинхрон consent/UI).
+- Агент строит ИЗОЛИРОВАННУЮ EgressPolicy из `ai.web.url` (SSRF/deny_private/audit) — мирроринг не расширяет egress сверх consent (url = consent).
+- Adversarial-ревью (3 измерения × verify, 9 находок / 1 подтверждено — мульти-vault gap, исправлен в этом срезе). Гейт: fmt/clippy -D warnings/`cargo test` 188-0 (+3 web-теста).
+
 ### Редактор · W-1 — закрытие 2-го пейна (сплита) 🔴 BETA
 
 Репорт владельца (23.06): «крестик уехал, окно не закрывается, дублируется бесконечно». Корень — у сплита (`splitRight`, кнопка Columns2) НЕ было крестика закрытия пейна: X есть только на вкладке (и тот скрыт при dirty → точка), так что 2-й пейн нельзя было убрать, а сплиты копились.
