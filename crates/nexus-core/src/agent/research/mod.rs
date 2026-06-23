@@ -17,16 +17,20 @@
 
 pub mod plan;
 pub mod prompts;
+pub mod quality;
 pub mod query;
 pub mod stop;
+pub mod worker;
 
 pub use plan::{parse_plan, ResearchPlan};
 pub use prompts::{
     build_final_report_prompt, build_plan_prompt, build_query_prompt, build_stop_prompt,
     build_synthesize_prompt, civil_from_unix, current_date_preamble,
 };
+pub use quality::is_low_quality;
 pub use query::dedup_new_queries;
 pub use stop::{parse_stop, StopDecision};
+pub use worker::{research_query, GuardedResearchWeb, ResearchWeb, WebHit, WorkerCfg};
 
 /// Одна находка воркера-ресёрчера (RES-2 заполняет через fenced-JSON; RES-1 определяет форму + дедуп).
 /// Поля свободного текста — НЕДОВЕРЕННЫЙ контент веб-страниц; RES-2 обрамит их `injection_marker` перед
@@ -39,14 +43,37 @@ pub struct Finding {
     pub evidence: String,
 }
 
+/// Канонический дедуп-ключ URL — ЕДИНЫЙ для воркера (`shared_urls`, RES-2) и [`dedup_findings_by_url`]
+/// (ревью: два слоя дедупа должны мерить URL ОДИНАКОВО). Парсит URL → нормализует регистр схемы/хоста
+/// (даёт парсер) + срезает хвостовые `/` пути; query СОХРАНЯЕТ (так `…/a/?q` == `…/a?q`). Непарсимый →
+/// trim + срез хвостового `/` (fallback). Пустой → `""`.
+pub(crate) fn normalize_url(url: &str) -> String {
+    let t = url.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    match reqwest::Url::parse(t) {
+        Ok(mut u) => {
+            let path = u.path().to_string();
+            if path.len() > 1 {
+                u.set_path(path.trim_end_matches('/'));
+            }
+            let s = u.as_str();
+            // косметика рутового слеша: `http://a/` → `http://a` (query/непустой путь не трогаем)
+            s.strip_suffix('/').unwrap_or(s).to_string()
+        }
+        Err(_) => t.trim_end_matches('/').to_string(),
+    }
+}
+
 /// Дедуп находок по URL: первое вхождение выигрывает, исходный порядок сохранён (порт odysseus
-/// `_extract_sources` дедуп). URL нормализуется только тримом (точное сравнение — RES-2 нормализует
-/// строже при сборе). Пустой URL отбрасывается (мусорная находка).
+/// `_extract_sources` дедуп). Ключ — [`normalize_url`] (тот же, что у воркера → слои согласованы). В самой
+/// `Finding.url` остаётся СЫРОЙ URL (для отображения/цитат). Пустой URL отбрасывается (мусорная находка).
 pub fn dedup_findings_by_url(findings: Vec<Finding>) -> Vec<Finding> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(findings.len());
     for f in findings {
-        let key = f.url.trim().to_string();
+        let key = normalize_url(&f.url);
         if key.is_empty() {
             continue;
         }
@@ -232,5 +259,24 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].url, "http://a");
         assert_eq!(out[1].url, "http://b");
+    }
+
+    /// РЕГРЕССИЯ (ревью #5/#6): нормализация — ЕДИНЫЙ ключ; trailing-slash/регистр-хоста/query учтены.
+    #[test]
+    fn normalize_url_canonicalizes() {
+        assert_eq!(normalize_url(" http://a/ "), "http://a");
+        assert_eq!(normalize_url("http://a"), "http://a");
+        assert_eq!(normalize_url("http://A.COM/Path/"), "http://a.com/Path"); // хост ↓регистр, путь сохр
+        assert_eq!(normalize_url("http://a/b/?q=1"), "http://a/b?q=1"); // query сохранён, слеш пути срезан
+        assert_eq!(normalize_url(""), "");
+        // дедуп по нормали: `http://a` и `http://a/` — один источник
+        let f = |u: &str| Finding {
+            url: u.into(),
+            title: "t".into(),
+            summary: "s".into(),
+            evidence: "e".into(),
+        };
+        let out = dedup_findings_by_url(vec![f("http://a"), f("http://a/")]);
+        assert_eq!(out.len(), 1, "trailing-slash вариант — тот же источник");
     }
 }
