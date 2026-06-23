@@ -17,9 +17,9 @@
 // starting_questions) тоже в ядре — ре-экспортим, чтобы `crate::memory::…`/`crate::eval::…`/… по
 // приложению (commands::memory/episode/contradictions, …) резолвились без правки call-site.
 pub use nexus_core::{
-    ai, chat_log, chunker, contradictions, db, episode, eval, graph, indexer, memory, net, parser,
-    plugin, redact, relation_reasons, search, starting_questions, suggest, tagger, tags, vault,
-    vector, watcher,
+    ai, backup, chat_log, chunker, contradictions, db, episode, eval, graph, indexer, memory, net,
+    parser, plugin, redact, relation_reasons, search, starting_questions, suggest, tagger, tags,
+    vault, vector, watcher,
 };
 
 /// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
@@ -167,6 +167,8 @@ pub fn run() {
             commands::agent::agent_resume,
             commands::agent::agent_cancel,
             commands::agent::agent_undo,
+            commands::backup::backup_export_json,
+            commands::backup::backup_import_json,
             commands::chat_sessions::chat_sessions_list,
             commands::chat_sessions::chat_search,
             commands::chat_sessions::chat_session_messages,

@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Данные · Backup/Restore (#59) — портабельный экспорт/импорт «второго мозга» с дедупом (← odysseus)
+
+Пропущенная дешёвая фича из ресёрча: один JSON-бэкап durable-состояния агента и импорт обратно без дублей. Бэкенд. Покрывает то, что НЕ восстановить из vault: факты памяти (MEM), всю переписку (сессии+сообщения), LLM-саммари эпизодов (EP), телеметрию/lifecycle ТОЛЬКО агент-созданных скиллов. Заметки `.md`, vector/FTS-индексы и audit-журналы намеренно вне бэкапа (vault/git-sync + reconcile/rebuild на открытии).
+
+- **`nexus_core::backup`** — самодостаточный версионируемый `BackupEnvelope` (DTO с `Serialize+Deserialize`, маркер формата `nexus-backup-v1`, штамп `schema_version`=`PRAGMA user_version`). `export_backup(reader, app_version)` собирает 5 таблиц read-only (agent-скиллы фильтруются `created_by='agent'`). `import_backup(writer, envelope)` АТОМАРНО (одна транзакция) с дедупом по естественным ключам: факты — UNIQUE(text); сессии — (title, created_at) с ремапом old→new id; сообщения — (session_id, role, content, created_at); эпизоды — UNIQUE(session_id), `last_msg_id` пересчитан под новые id; скиллы — PK(skill_name). Возвращает `ImportReport` (added/skipped/orphaned/reused + schema-mismatch).
+- **tauri** `backup_export_json` (pretty-JSON) / `backup_import_json` (дедуп, отчёт). UI-кнопки — отдельным срезом (как SL-ui).
+
+**Adversarial-ревью (Workflow, 3 линзы: дедуп/идемпотентность · атомарность/целостность · security/контракт) → 0 CRITICAL; security-линза 0 дефектов (нет SQLi — всё через `params!`; нет эскалации провенанса скиллов — `created_by='agent'`+`INSERT OR IGNORE`; нет cross-vault-утечки; atomicity держит).** Закрыто в срезе (3 MAJOR + observability): (1) **коллизия ключа сессий ВНУТРИ прогона** (две сессии одного бэкапа с совпавшим (title, created_at) сливались, теряя эпизод по UNIQUE) → трекинг id, вставленных этим прогоном (reuse только реально-преждесущих); (2) **forward-compat** — импорт бэкапа НОВЕЕ приложения (`schema_version > current`) теперь hard-stop `ImportError::SchemaTooNew` ДО записи (новый формат мог нести неизвестные колонки/NOT NULL → тихая потеря/краш); (3) **anti-DoS** — потолки `MAX_BACKUP_BYTES` (512 МиБ, до `serde_json`) + `MAX_IMPORT_ROWS` (5M, до транзакции); (4) отдельные счётчики `messages_orphaned`/`episodes_orphaned` (не маскируют потерю под «дедуп»).
+
+Tier-1 (+7 тестов, 1050+ nexus-core): export-собирает-всё (vendor-скилл исключён) · round-trip-в-пустую (ремап id, пересчёт watermark) · идемпотентный ре-импорт (0 added) · коллизия-не-сливает · schema-too-new-без-записи · bad-format-без-записи · total_rows. `fmt`/`clippy -D warnings` чисто, полный `test-all` зелёный.
+
 ### Переписка · Session-search (#58) — полнотекстовый поиск по чату + саммари эпизода (← hermes)
 
 Пропущенная дешёвая фича из ресёрча: искать по истории диалогов, а не только по заметкам. Бэкенд.
