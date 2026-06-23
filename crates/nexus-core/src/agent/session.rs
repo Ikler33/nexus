@@ -137,6 +137,7 @@ pub async fn run_agent_session(
     forwarder: Arc<dyn AgentEventForwarder>,
     subagent: Option<&SubagentSpawn<'_>>,
     delegation: Option<&DelegationDeps>,
+    research: Option<&crate::ai::ResearchConfig>,
 ) -> LoopOutcome {
     // Начальный контекст: [system преамбул] + [recall памяти] + [меню скиллов] + [задача]. recall —
     // только чтение, никогда не ошибка (деградирует в пусто); None память → пусто (без регрессии).
@@ -287,6 +288,45 @@ pub async fn run_agent_session(
         }
     }
 
+    // RES-4: регистрация `research.run` — ТОЛЬКО top-level (`subagent.is_none()`) + `ai.research.enabled`
+    // + `ai.delegation.enabled` (берём Arc-провайдера/капы оттуда) + web включён + actuator (нужен gate для
+    // записи отчёта). Воркеры (RES-2) read-only по конструкции; пишет лишь оркестратор через ТОТ ЖЕ
+    // parent_dispatcher (общий ledger/blast-cap/undo/kill-switch). Любое условие false → инструмента нет.
+    // SECURITY-ИНВАРИАНТ (ревью #2): убрать любой из 4 `Some(..)`-байндингов = регрессия default-OFF
+    // (web/gate presence — структурная часть truth-table; компилятор ловит дроп, т.к. все 4 ниже исп.).
+    if let (Some(rcfg), Some(deleg), Some(web_cfg), Some(disp)) =
+        (research, delegation, web, parent_dispatcher.as_ref())
+    {
+        if crate::agent::research::tool::should_register(
+            rcfg.enabled,
+            deleg.config.enabled,
+            subagent.is_none(),
+        ) {
+            let web_seam: Arc<dyn crate::agent::research::ResearchWeb> =
+                Arc::new(crate::agent::research::worker::GuardedResearchWeb::new(
+                    web_cfg.clone(),
+                    RunCtx::run(spec.run_id),
+                    false,
+                ));
+            let rctx = crate::agent::research::ResearchContext {
+                web: web_seam,
+                provider: deleg.provider.clone(),
+                dispatcher: disp.clone(),
+                forwarder: forwarder.clone(),
+                params: crate::agent::research::ResearchParams::from_config(
+                    rcfg,
+                    deleg.config.max_fanout,
+                ),
+                budget_config: deleg.config.clone(),
+                wall_clock: bounds.wall_clock,
+                paused: paused.clone(),
+                cancel: cancel.clone(),
+                run_id: spec.run_id,
+            };
+            registry.insert(Arc::new(crate::agent::research::ResearchTool::new(rctx)));
+        }
+    }
+
     // on_event: КАЖДОЕ событие цикла → форвардер (тот же, что у гейта). Запись шага/стрим/лог — забота
     // форвардера (path-specific). Синхронный (как требует `run_agent_loop`).
     let mut on_event = |e: AgentEvent| forwarder.forward(&e);
@@ -414,6 +454,7 @@ mod tests {
             fwd.clone(),
             None,
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
 
@@ -474,6 +515,7 @@ mod tests {
             fwd.clone(),
             Some(&sa),
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         let evs = fwd.events.lock().unwrap();
@@ -537,6 +579,7 @@ mod tests {
             fwd.clone(),
             Some(&sa),
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         let evs = fwd.events.lock().unwrap();
@@ -588,6 +631,7 @@ mod tests {
             fwd.clone(),
             None,
             None, // delegation выкл
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         let evs = fwd.events.lock().unwrap();
@@ -652,6 +696,7 @@ mod tests {
             fwd.clone(),
             None,
             Some(&deps),
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         // Извлекаем ToolResult в блоке → guard дропается ДО await ниже (clippy await_holding_lock).
@@ -722,6 +767,7 @@ mod tests {
             fwd.clone(),
             None,
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -812,6 +858,7 @@ mod tests {
             fwd.clone(),
             None,
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -912,6 +959,7 @@ mod tests {
             fwd.clone(),
             None,
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         eprintln!("LIVE outcome: {outcome:?}");

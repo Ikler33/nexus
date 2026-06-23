@@ -21,7 +21,9 @@ pub mod prompts;
 pub mod quality;
 pub mod query;
 pub mod stop;
+pub mod tool;
 pub mod worker;
+pub mod write;
 
 pub use orchestrate::{run_research, ResearchOutcome, ResearchParams, StopReason};
 pub use plan::{parse_plan, ResearchPlan};
@@ -32,6 +34,7 @@ pub use prompts::{
 pub use quality::is_low_quality;
 pub use query::dedup_new_queries;
 pub use stop::{parse_stop, StopDecision};
+pub use tool::{ResearchContext, ResearchTool};
 pub use worker::{research_query, GuardedResearchWeb, ResearchWeb, WebHit, WorkerCfg};
 
 /// Одна находка воркера-ресёрчера (RES-2 заполняет через fenced-JSON; RES-1 определяет форму + дедуп).

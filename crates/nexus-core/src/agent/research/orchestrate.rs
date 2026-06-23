@@ -41,8 +41,11 @@ pub enum StopReason {
     EmptyRounds,
     /// Истёк wall-deadline бюджета.
     Deadline,
-    /// Отмена/пауза прогона (возвращён партиал).
+    /// Отмена прогона (возвращён партиал).
     Cancelled,
+    /// Пауза прогона kill-switch'ем (возвращён партиал; отличаем от Cancelled — ревью #6, зеркало
+    /// `BudgetKind::Paused` основного цикла).
+    Paused,
 }
 
 /// Итог ресёрча В ПАМЯТИ (RES-4 запишет `report` в vault через actuator-гейт).
@@ -102,7 +105,11 @@ fn should_halt(
     paused: &Arc<AtomicBool>,
     budget: &DelegationBudget,
 ) -> Option<StopReason> {
-    if cancel.load(Ordering::Relaxed) || paused.load(Ordering::Relaxed) {
+    // Пауза (kill-switch) и отмена различаются (ревью #6): паузу проверяем первой.
+    if paused.load(Ordering::Relaxed) {
+        return Some(StopReason::Paused);
+    }
+    if cancel.load(Ordering::Relaxed) {
         return Some(StopReason::Cancelled);
     }
     if budget.deadline_exceeded() {
@@ -764,6 +771,28 @@ mod tests {
         )
         .await;
         assert_eq!(out.stop_reason, StopReason::Cancelled);
+        assert_eq!(out.rounds, 0);
+    }
+
+    #[tokio::test]
+    async fn paused_halts_loop_distinct_from_cancel() {
+        // ревью #6: пауза kill-switch'ем → Paused (не Cancelled)
+        let web = MockWeb {
+            per_query: 3,
+            empty: false,
+        };
+        let prov = MockProvider::new(3, usize::MAX);
+        let p = params(5);
+        let out = run(
+            &web,
+            &prov,
+            &p,
+            &big_budget(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await;
+        assert_eq!(out.stop_reason, StopReason::Paused);
         assert_eq!(out.rounds, 0);
     }
 
