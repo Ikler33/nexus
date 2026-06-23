@@ -116,6 +116,13 @@ pub struct AiConfig {
     /// есть, дефолт-OFF): отсутствие `ai.delegation` в конфиге = `enabled=false` + консервативные капы.
     #[serde(default)]
     pub delegation: DelegationConfig,
+
+    /// **DEEP-RESEARCH (RES-1), SAFE BY DEFAULT + OWNER-GATED.** Многораундовый веб-ресёрч (план→fan-out
+    /// read-only воркеров→синтез→отчёт-в-vault через гейт). NON-Option (всегда есть, дефолт-OFF): отсутствие
+    /// `ai.research` = `enabled=false` + консервативные капы. Инструмент `research.run` регистрируется ТОЛЬКО
+    /// при `enabled` И `ai.delegation.enabled` И включённом web (RES-4) — структурно инертен иначе.
+    #[serde(default)]
+    pub research: ResearchConfig,
 }
 
 /// Конфиг самообучения навыкам (SELF-LEARNING). Дефолт-OFF: пустой `ai.skills` → `learning_enabled=false`.
@@ -157,6 +164,45 @@ impl Default for DelegationConfig {
             max_depth: 1,
             max_fanout: 3,
             max_total_spawns: 8,
+        }
+    }
+}
+
+/// Конфиг deep-research (DEEP-RESEARCH, RES-1). Дефолт-OFF + консервативные капы (odysseus-tuned, под один
+/// локальный GPU): отсутствие `ai.research` = `enabled=false`, `max_rounds=3`, `max_urls_per_round=3`,
+/// `max_content_chars=15000`, `extraction_concurrency=3`, `wall_clock_secs=0` (0 → дефолт раннера). Капы
+/// НЕнулевые → ручной `impl Default`. `#[serde(default)]` на контейнере → частичный конфиг падает в дефолты
+/// полей. `max_rounds` — мягкий потолок ~8 форсит RES-3-оркестратор (здесь только сериализуемое значение).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ResearchConfig {
+    /// **OWNER-GATED, ДЕФОЛТ false.** Гейт deep-research: инструмент `research.run` регистрируется ТОЛЬКО
+    /// при `true` (И `ai.delegation.enabled` И включённом web — RES-4). `false` → ресёрча нет (инструмент
+    /// структурно отсутствует, без регрессии).
+    pub enabled: bool,
+    /// Макс. РАУНДОВ итеративного ресёрча (decompose→fan-out→synthesize→stop). Дефолт 3; жёсткий потолок
+    /// (~8) применяет оркестратор (RES-3). 0 НЕ допускается логикой — clamp в RES-3 к минимум 1.
+    pub max_rounds: u8,
+    /// Макс. URL, забираемых за ОДИН раунд (анти-токен-флуд + анти-эгресс на одном GPU). odysseus-дефолт 3.
+    pub max_urls_per_round: usize,
+    /// Кэп символов извлекаемого контента страницы перед подачей в экстракт-промпт (анти-OOM/токен-флуд).
+    pub max_content_chars: usize,
+    /// Параллелизм извлечения (Semaphore-backpressure воркеров) — критично на одном локальном GPU. Дефолт 3.
+    pub extraction_concurrency: usize,
+    /// Стен-таймаут durable-джобы ресёрча (RES-5), секунды. 0 → дефолт раннера; clamp 60..86400 применяет
+    /// джоба (здесь только сырое значение конфига).
+    pub wall_clock_secs: u64,
+}
+
+impl Default for ResearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_rounds: 3,
+            max_urls_per_round: 3,
+            max_content_chars: 15000,
+            extraction_concurrency: 3,
+            wall_clock_secs: 0,
         }
     }
 }
@@ -596,5 +642,27 @@ mod tests {
             "незаданный кап → дефолт, не 0"
         );
         assert_eq!(on.ai.delegation.max_total_spawns, 8);
+    }
+
+    /// RES-1: `ai.research` дефолт-OFF + консервативные капы; частичный конфиг падает в дефолты полей.
+    #[test]
+    fn research_config_defaults_off() {
+        let zc = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert!(!zc.ai.research.enabled, "нет ai.research → enabled false");
+        assert_eq!(zc.ai.research.max_rounds, 3);
+        assert_eq!(zc.ai.research.max_urls_per_round, 3);
+        assert_eq!(zc.ai.research.max_content_chars, 15000);
+        assert_eq!(zc.ai.research.extraction_concurrency, 3);
+        assert_eq!(zc.ai.research.wall_clock_secs, 0);
+
+        // Явный opt-in + частичная секция: enabled читается, незаданные капы — дефолты (не 0).
+        let on =
+            LocalConfig::parse(r#"{"ai":{"research":{"enabled":true,"max_rounds":5}}}"#).unwrap();
+        assert!(on.ai.research.enabled);
+        assert_eq!(on.ai.research.max_rounds, 5, "явный кап прочитан");
+        assert_eq!(
+            on.ai.research.max_urls_per_round, 3,
+            "незаданный кап → дефолт, не 0"
+        );
     }
 }
