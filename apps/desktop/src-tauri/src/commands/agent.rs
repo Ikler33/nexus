@@ -20,9 +20,13 @@
 //!
 //! # Границы (СОХРАНЕНЫ)
 //! - Actuator default OFF — дефолт НЕ меняется (флаг конфига, как в agentd).
-//! - Эгресс/актуатор — через существующие гейты (`GuardedClient`/`dispatch_action`). НЕТ новых
-//!   egress-путей (tool-провайдер строит `nexus_core::ai::tools::build_agent_tool_provider` — тот же
-//!   `GuardedClient::for_chat` + `EgressFeature::Chat`, что и chat).
+//! - Эгресс/актуатор — через существующие гейты (`GuardedClient`/`dispatch_action`). chat: tool-провайдер
+//!   строит `nexus_core::ai::tools::build_agent_tool_provider` — тот же `GuardedClient::for_chat` +
+//!   `EgressFeature::Chat`, что и обычный chat.
+//! - AGENT-0.2: web-инструменты агента (`web.search`/`web.fetch`) — default-OFF (`ai.web.enabled`);
+//!   тот же `enable_web_tools`/`GuardedClient::for_web`/SSRF-гейт, что у agentd, НО на ИЗОЛИРОВАННОЙ
+//!   `EgressPolicy` (делит лишь offline-kill-switch) — согласие агент-web НЕ протекает в Home-websearch/
+//!   новости (общий глобальный policy). skills — read-only каталог из `ai.agent_skills_dir`.
 //! - Переиспользуем ядро: `AgentRunHandler`-композицию (реестр/бюджет/токенайзер/память),
 //!   `run_agent_loop`, `undo_run`, `DecisionSource`/`BatchDecision` — НЕ копируем логику.
 
@@ -215,6 +219,69 @@ pub async fn agent_run(
         .and_then(|c| c.ai.chat.as_ref())
         .and_then(|c| c.context_window);
 
+    // AGENT-0.2: веб-инструменты агента (web.search/web.fetch). ВКЛ только при `ai.web.enabled` И
+    // непустом url. Default-OFF: нет секции / enabled=false / пустой url → None (агент без веб, без
+    // регрессии). Строим ДО спавна (нужен `state.egress_*`, не `Send`), результат (Arc внутри) → в задачу.
+    //
+    // ВАЖНО (отличие от agentd): `enable_web_tools` МУТИРУЕТ переданный policy (scope "web" allowlist +
+    // `web_allow_public` + feature `Web`). В agentd policy ничего больше не трогает (sync раз на старте).
+    // В десктопе ТОТ ЖЕ глобальный `state.egress_policy` используют Home-websearch и новости (через
+    // `*::sync_egress_policy`, тоже scope "web"/feature Web). Чтобы ВКЛ агент-web НЕ протекал в их
+    // согласие (не клобберил хост, не оставлял Web/allow_public глобально ВКЛ) — строим веб-клиент агента
+    // на ОТДЕЛЬНОЙ `EgressPolicy`, разделяющей лишь offline-kill-switch. Тот же SSRF/deny_private/resolver
+    // (дефолтный, как у глобальной) + общий durable-audit. Изоляция согласия агента от Home-веба.
+    let agent_web = cfg
+        .as_ref()
+        .and_then(|c| c.ai.web.as_ref())
+        .filter(|w| w.enabled && !w.url.trim().is_empty())
+        .and_then(|w| {
+            let web_policy = Arc::new(crate::net::EgressPolicy::new(state.egress_offline.clone()));
+            nexus_core::agent::enable_web_tools(
+                &web_policy,
+                &state.egress_audit,
+                &w.url,
+                std::time::Duration::from_secs(20),
+                w.allow_public_fetch,
+            )
+        });
+
+    // AGENT-0.2: навыки (SKILL.md) из `ai.agent_skills_dir` (относительный путь — от корня vault).
+    // Канонизируем КАТАЛОГ (fail-closed: недоступен → None); пустой каталог → None (агент без навыков).
+    // `usage_writer` = телеметрия использования (SL-2). Зеркало agentd `build_skill_context`.
+    let agent_skills = cfg
+        .as_ref()
+        .and_then(|c| c.ai.agent_skills_dir.as_deref())
+        .and_then(|dir| {
+            let p = std::path::Path::new(dir);
+            let abs = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                root.join(p)
+            };
+            let canon = abs.canonicalize().ok()?;
+            let catalog = nexus_core::skills::discover_skills(&canon);
+            if !catalog.errors().is_empty() {
+                tracing::warn!(
+                    count = catalog.errors().len(),
+                    "skills: часть SKILL.md не распарсилась — пропущены (см. errors)"
+                );
+            }
+            if catalog.is_empty() {
+                return None;
+            }
+            Some(
+                nexus_core::agent::SkillContext::new(std::sync::Arc::new(catalog), canon)
+                    .with_usage_writer(writer.clone()),
+            )
+        });
+
+    // SL-7: авторство навыков (skill.save) — ТОЛЬКО при `ai.skills.learning_enabled` (owner-gated,
+    // default-OFF). Влияет на регистрацию skill.save внутри сессии.
+    let skills_learning_enabled = cfg
+        .as_ref()
+        .map(|c| c.ai.skills.learning_enabled)
+        .unwrap_or(false);
+
     // Создаём строку прогона (queued) — источник run_id для UI/корреляции/ledger.
     let run_id = run_store::create_run(
         &writer,
@@ -275,6 +342,9 @@ pub async fn agent_run(
             overwrite_threshold,
             blast_cap,
             context_window,
+            agent_web,
+            agent_skills,
+            skills_learning_enabled,
             decision_source,
             agent_memory,
             canon_root,
@@ -399,6 +469,9 @@ async fn drive_run(
     overwrite_threshold: usize,
     blast_cap: u32,
     context_window: Option<usize>,
+    web: Option<nexus_core::agent::WebToolsConfig>,
+    skills: Option<nexus_core::agent::SkillContext>,
+    skills_learning_enabled: bool,
     decision_source: Arc<dyn DecisionSource>,
     memory: Arc<dyn AgentMemory>,
     canon_root: PathBuf,
@@ -437,15 +510,15 @@ async fn drive_run(
         blast_cap,
         context_window,
         canon_root,
-        // SL-7d: desktop пока без скиллов (skills=None ниже) → авторство навыков выключено.
-        skills_learning_enabled: false,
+        // SL-7: авторство навыков (skill.save) — только при ai.skills.learning_enabled (AGENT-0.2).
+        skills_learning_enabled,
     };
     run_agent_session(
         &spec,
         provider.as_ref(),
         Some(memory.as_ref()),
-        None, // skills (desktop без скиллов пока)
-        None, // EGR-AGENT web-инструменты — активация в отдельном срезе
+        skills.as_ref(), // AGENT-0.2: навыки из ai.agent_skills_dir (None если не задан/пуст)
+        web.as_ref(),    // AGENT-0.2: web.search/web.fetch при ai.web.enabled (None если выкл)
         decision_source,
         writer,
         reader,
@@ -453,8 +526,8 @@ async fn drive_run(
         &cancel,
         forwarder,
         None, // top-level desktop-прогон (не субагент)
-        None, // delegation выкл в desktop-пути (как skills_learning) — owner-gated agentd-фича
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        None, // delegation выкл в desktop-пути — AGENT-0.3
+        None, // research (RES-4) — AGENT-0.3
     )
     .await
 }
@@ -633,6 +706,9 @@ mod tests {
             64 * 1024,
             16,
             Some(32768),
+            None,  // web (AGENT-0.2): тест без веб-инструментов
+            None,  // skills (AGENT-0.2): тест без навыков
+            false, // skills_learning_enabled
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -683,6 +759,9 @@ mod tests {
             64 * 1024,
             16,
             Some(32768),
+            None,  // web (AGENT-0.2): тест без веб-инструментов
+            None,  // skills (AGENT-0.2): тест без навыков
+            false, // skills_learning_enabled
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -760,6 +839,9 @@ mod tests {
             64 * 1024,
             16,
             Some(32768),
+            None,  // web (AGENT-0.2): тест без веб-инструментов
+            None,  // skills (AGENT-0.2): тест без навыков
+            false, // skills_learning_enabled
             decision,
             empty_memory(&db),
             canon.clone(),
@@ -808,6 +890,9 @@ mod tests {
             64 * 1024,
             16,
             Some(32768),
+            None,  // web (AGENT-0.2): тест без веб-инструментов
+            None,  // skills (AGENT-0.2): тест без навыков
+            false, // skills_learning_enabled
             decision,
             empty_memory(&db),
             canon.clone(),
