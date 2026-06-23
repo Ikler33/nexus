@@ -146,3 +146,10 @@
   color: var(--color-danger, oklch(0.6 0.2 25));
   font-weight: 500;
 }
+
+/* W-20: версия сборки (ветка @ хеш) — приглушённый моноширинный хвост right-блока. */
+.build {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+  max-width: 220px;
+}

@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Статусбар · W-20 — баннер версии (ветка @ хеш) 🔴 BETA (анти-рецидив)
+
+После кризиса доверия 2026-06-24: версии «разъезжались», было неясно, ЧТО реально запущено (баннер `ветка @ хеш` печатал только лаунчер в консоль). Теперь версия сборки видна в самом приложении — в правом блоке статусбара.
+
+- **build-time** (`src-tauri/build.rs`): захватывает `git rev-parse --abbrev-ref HEAD` / `--short HEAD` / `status --porcelain` → `rustc-env` `NEXUS_GIT_BRANCH/HASH/DIRTY`; `rerun-if-changed` на `HEAD`/`logs/HEAD` (пере-захват при checkout/reset/commit). Git недоступен / релиз без `.git` → пустые строки (не падает). Работает в dev и в бандле.
+- **backend** (`lib.rs`): команда `app_build_info` → `{ version, branch, hash, dirty }`.
+- **frontend** (`StatusBar`): рисует `ветка @ хеш` (+`*` для грязного дерева) в right-блоке, tooltip = версия; вне Tauri (браузер-превью) — отметка `dev`. TS-`BuildInfo` зеркалит Rust.
+- Гейт: `fmt`/`clippy -D warnings`/`cargo test` 185-0 (+`build_info`-тест) / typecheck / eslint / vitest 15-0 (+тест баннера). Adversarial-ревью (3 измерения × verify): 7 находок поднято, 0 подтверждено.
+
 ### Настройки → ИИ · AGENT-0.6 — тоггл «Действия агента в vault» (включение actuator из UI) 🔴 BETA
 
 Раньше мастер-свитч реальных vault-действий агента (`ai.agent_actuator_enabled`) можно было включить ТОЛЬКО руками в `.nexus/local.json` — из коробки агент «немой» (инструменты записи = заглушки). Добавили тоггл в Настройки → ИИ → агент (рядом с песочницей/shell/web), default-OFF, с consent-предупреждением.

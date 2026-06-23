@@ -909,7 +909,8 @@
     "conflict": "Conflict",
     "conflicts_one": "{{count}} conflict",
     "conflicts_other": "{{count}} conflicts",
-    "indexing": "Indexing {{done}}/{{total}}"
+    "indexing": "Indexing {{done}}/{{total}}",
+    "versionTooltip": "Version {{version}} · {{branch}} @ {{hash}}"
   },
   "deadJobs": {
     "title": "Background tasks",

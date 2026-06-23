@@ -36,6 +36,14 @@ export interface FileEntry {
   sizeBytes: number;
 }
 
+/** Git-версия сборки (W-20, зеркалит Rust `BuildInfo`). */
+export interface BuildInfo {
+  version: string;
+  branch: string;
+  hash: string;
+  dirty: boolean;
+}
+
 /** Сведения об открытом vault (зеркалит Rust `vault::VaultInfo`). */
 export interface VaultInfo {
   root: string;
@@ -738,6 +746,15 @@ export const tauriApi = {
   app: {
     /** Версия нативного приложения (Rust-команда `app_version`). */
     version: () => (isTauri() ? invoke<string>('app_version') : Promise.resolve('dev')),
+    /**
+     * Git-версия сборки (W-20): `{ version, branch, hash, dirty }`, захвачена `build.rs` на
+     * компиляции. Статусбар рисует `ветка @ хеш`, чтобы видеть, ЧТО запущено. Вне Tauri
+     * (браузер-превью) — отметка `dev`.
+     */
+    buildInfo: (): Promise<BuildInfo> =>
+      isTauri()
+        ? invoke<BuildInfo>('app_build_info')
+        : Promise.resolve({ version: 'dev', branch: 'dev', hash: '', dirty: false }),
   },
 
   external: {

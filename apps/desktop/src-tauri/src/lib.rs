@@ -60,6 +60,27 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Git-версия сборки (W-20): ветка, короткий хеш, флаг «грязного» дерева + версия пакета.
+/// Значения захвачены `build.rs` на этапе компиляции (см. `NEXUS_GIT_*`). Статусбар рисует
+/// `ветка @ хеш`, чтобы в самом приложении было видно, ЧТО запущено.
+#[derive(serde::Serialize)]
+struct BuildInfo {
+    version: String,
+    branch: String,
+    hash: String,
+    dirty: bool,
+}
+
+#[tauri::command]
+fn app_build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        branch: env!("NEXUS_GIT_BRANCH").to_string(),
+        hash: env!("NEXUS_GIT_HASH").to_string(),
+        dirty: env!("NEXUS_GIT_DIRTY") == "1",
+    }
+}
+
 /// Guard non-blocking-писателя файлового лога: живёт до конца процесса (дроп = потеря хвоста лога).
 static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
     std::sync::OnceLock::new();
@@ -128,6 +149,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            app_build_info,
             commands::egress::get_egress_state,
             commands::egress::set_egress_offline,
             commands::egress::set_egress_feature,
@@ -278,6 +300,15 @@ mod tests {
     #[test]
     fn app_version_matches_cargo_pkg_version() {
         assert_eq!(app_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn build_info_carries_version_and_git_fields() {
+        let bi = app_build_info();
+        assert_eq!(bi.version, env!("CARGO_PKG_VERSION"));
+        // branch/hash берутся из build.rs; в CI/локально это git-репо → непустые. Если git
+        // недоступен (релиз без .git) — пустые строки допустимы, поэтому проверяем лишь тип/наличие.
+        assert_eq!(bi.dirty, env!("NEXUS_GIT_DIRTY") == "1");
     }
 
     /// AC-SEC-5 (каркас): строгий CSP без unsafe-inline/eval + минимальные capabilities

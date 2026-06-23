@@ -137,6 +137,19 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
     expect(screen.getByText(/через 10 мин|in 10 min/)).toBeInTheDocument();
   });
 
+  // W-20: баннер версии (ветка @ хеш) в right-блоке — видно, ЧТО запущено.
+  it('баннер версии: рисует «ветка @ хеш» + «*» для грязного дерева', async () => {
+    vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
+    vi.spyOn(tauriApi.app, 'buildInfo').mockResolvedValue({
+      version: '0.0.0',
+      branch: 'main',
+      hash: '9d14665',
+      dirty: true,
+    });
+    render(<StatusBar />);
+    await waitFor(() => expect(screen.getByText(/main @ 9d14665\*/)).toBeInTheDocument());
+  });
+
   it('прогресс скана (vault:index-progress): реальный бар «Индексация N/M», финиш гасит', async () => {
     vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
     vi.spyOn(tauriApi.vault, 'notesCount').mockResolvedValue(10);

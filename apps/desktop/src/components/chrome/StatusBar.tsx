@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check, Clock, GitMerge, HardDrive } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { tauriApi } from '../../lib/tauri-api';
+import { tauriApi, type BuildInfo } from '../../lib/tauri-api';
 import { useJobsStore } from '../../stores/jobs';
 import { useSyncStore } from '../../stores/sync';
 import { useUIStore } from '../../stores/ui';
@@ -40,6 +40,21 @@ export function StatusBar() {
   const [indexProg, setIndexProg] = useState<{ done: number; total: number } | null>(null);
   // Модалка деталей dead-джоб (клик по «⚠ N» — отчёт владельца 2026-06-11: ошибки нечем посмотреть).
   const [deadOpen, setDeadOpen] = useState(false);
+  // W-20: версия сборки (ветка @ хеш) — видно в самом приложении, ЧТО запущено (анти-рецидив).
+  const [build, setBuild] = useState<BuildInfo | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    tauriApi.app
+      .buildInfo()
+      .then((b) => {
+        if (alive) setBuild(b);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let off = () => {};
@@ -192,6 +207,21 @@ export function StatusBar() {
         </span>
         <span className={styles.item}>UTF-8</span>
         <span className={styles.item}>Markdown</span>
+        {build && (build.branch || build.hash) && (
+          <span
+            className={`${styles.item} ${styles.build}`}
+            title={t('status.versionTooltip', {
+              version: build.version,
+              branch: build.branch || '—',
+              hash: build.hash || '—',
+            })}
+          >
+            <GitMerge size={11} aria-hidden />
+            {build.branch}
+            {build.hash ? ` @ ${build.hash}` : ''}
+            {build.dirty ? '*' : ''}
+          </span>
+        )}
       </div>
     </div>
   );

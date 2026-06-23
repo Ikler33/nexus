@@ -924,7 +924,8 @@
     "conflicts_one": "{{count}} конфликт",
     "conflicts_few": "{{count}} конфликта",
     "conflicts_many": "{{count}} конфликтов",
-    "indexing": "Индексация {{done}}/{{total}}"
+    "indexing": "Индексация {{done}}/{{total}}",
+    "versionTooltip": "Версия {{version}} · {{branch}} @ {{hash}}"
   },
   "deadJobs": {
     "title": "Фоновые задачи",
