@@ -57,7 +57,9 @@ import { dirname, resolve } from 'node:path';
 // 28→30: + SANDBOX-6c-3b/c Tier-2 containment-матрица в `exec_it::tier2`: `real_vault_write_is_erofs`
 // (kernel EROFS на :ro-vault) + `no_network_route_inside_exec` (--network=none, /proc/net/route пуст).
 // (always-CI host-тесты форк-внук/output-cap в exec_child.rs — НЕ #[ignore], в счётчик не идут.)
-const EXPECTED = 30;
+// 30→31: + RES-5b `research::tool::tests::live_research_pipeline` (LIVE Tier-2 deep-research: весь
+// пайплайн RES-1..4 против реального Qwen :8080 + SearXNG; env-gated NEXUS_LIVE_CHAT=1, на .28).
+const EXPECTED = 31;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // CORE-1: часть #[ignore]-тестов (live-серверные ai/chat, ai/embedder) переехала в crates/nexus-core/src

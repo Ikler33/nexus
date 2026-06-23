@@ -886,6 +886,28 @@ async fn run() -> Result<(), String> {
         &agent_paused,
     );
 
+    // RES-5b: durable deep-research джоба (KIND_DEEP_RESEARCH). Те же deps, что agent_run; decision_source
+    // и agent_web КЛОНИРУЕМ — AgentRunHandler::new ниже их перемещает. Default-OFF: handle финиширует error,
+    // пока ai.research.enabled+web+actuator не выставлены. Сам прогон ставится enqueue_deep_research (триггер
+    // — будущий UI/CLI/коннектор; сейчас kind зарегистрирован, ничего не энкьюит автоматически).
+    registry.insert(
+        nexus_core::agent::research::KIND_DEEP_RESEARCH.to_string(),
+        Arc::new(nexus_core::agent::research::DeepResearchHandler::new(
+            db.writer().clone(),
+            db.reader().clone(),
+            ai_client.clone(),
+            root.clone(),
+            actuator_enabled,
+            overwrite_threshold,
+            blast_cap,
+            decision_source.clone(),
+            agent_paused.clone(),
+            agent_web.clone(),
+            agent_research.clone(),
+            agent_delegation.clone(),
+        )),
+    );
+
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
         Arc::new(nexus_core::agent::AgentRunHandler::new(

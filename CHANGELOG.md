@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · DEEP-RESEARCH RES-5b — durable `KIND_DEEP_RESEARCH` джоба + live Tier-2 (🎉 ЭПИК ЗАВЕРШЁН)
+
+Последний срез deep-research: СТАНДАЛОН фоновый ресёрч как durable scheduler-джоба (порт odysseus research_handler) + сквозная live-валидация.
+
+- **`agent::research::job`** — `DeepResearchHandler` (impl `JobHandler`, `KIND_DEEP_RESEARCH`): строит per-run gate (как `run_agent_session` внутри) + `ResearchContext` и зовёт `ResearchTool` напрямую (без agent-loop). `enqueue_deep_research(question, autonomy)` → строка `agent_runs` + джоба. **Partial-save наследуется** (`run_research` отдаёт партиал на deadline/cancel → `ResearchTool` пишет непустой отчёт). Fail-closed: предусловия (research+web+actuator+provider) не выполнены → прогон `error`, джоба чистая. `defer_under_interactive=true` (уступает чату). KILL-SWITCH чек-пойнт #1 (пауза → пере-кью). wall-clock из `ai.research.wall_clock_secs` (0→дефолт 1800, clamp 60..86400).
+- **agentd регистрирует `KIND_DEEP_RESEARCH`** (deps как agent_run; `decision_source`/`web` клонируются ДО move в AgentRunHandler). Crash-recovery: `requeue_stale_running` лишь флипает статус (НЕ мис-роутит в agent_run); re-claim kind-scoped (`claim_next_handled`). Триггер enqueue (UI/CLI/коннектор) — позже; kind зарегистрирован, авто-энкью нет.
+- **LIVE Tier-2 `#[ignore]`** `live_research_pipeline`: весь пайплайн RES-1..4 против реального Qwen (.28) + SearXNG (VPS) → отчёт записан в temp-vault через РЕАЛЬНЫЙ гейт (auto). Запуск на .28 (env-gated, как live_agent_web).
+
+**Adversarial-ревью (focused: fail-closed/gate-parity/crash-recovery/registration/live) → 0 CRIT/MAJOR.** Гейт стандалон-джобы байт-в-байт с тем, что строит `run_agent_session` (confirm→Proposal auto-DENY, auto→ledger/undo); precond fail-closed; `requeue_stale_running` лишь флипает статус (НЕ мис-роутит); регистрация без use-after-move. Закрыто: live-тест теперь через `with_paused` (упражняет kill-switch-проводку гейта); doc крэш-семантики (re-run-not-resume, без дублей/data-loss); autonomy fail-safe на уровне политики.
+
+🎉 **ЭПИК DEEP-RESEARCH ЗАВЕРШЁН (RES-1..5).** Tier-1 (+3 job-теста, 54 research / 1020+ nexus-core): precond-fail→error · enqueue создаёт run+джобу · defer_under_interactive. `fmt`/`clippy` чисто. `ai.research.enabled` дефолт false → инертно до owner-флипа; live-RUN на .28 + флип — owner-gated (как learning/delegation).
+
 ### Агент · DEEP-RESEARCH RES-5a — `Report` AgentEvent + ПРОД-проводка `research.run` (agentd/connect)
 
 Делает `research.run` достижимым в проде (owner-gated `ai.research`) + поверхность отчёта в стриме.
