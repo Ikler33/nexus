@@ -38,6 +38,31 @@ pub trait FeedFetcher: Send + Sync {
 /// tauri-событием `news:progress`, UI показывает живой статус вместо немого «Собираю…».
 pub type NewsProgress = dyn Fn(&str, usize, usize) + Send + Sync;
 
+/// W-2: строка об недоступности LLM-оценки для `errors[]`, двухуровневая (чтобы НЕ врать «лента не
+/// обновится» при частичном/транзиентном сбое одного батча из многих, ревью W-2):
+/// - `items_new == 0` → эндпоинт фактически недоступен весь прогон (тотально, лента пуста);
+/// - `items_new > 0`  → часть батчей прошла, лента обновлена частично (мягкая формулировка).
+///
+/// Тотальная строка начинается с «Анализатор новостей недоступен» — по этому префиксу фронт
+/// поднимает верхний баннер (частичную — только в раскрываемом списке ошибок прогона, без тревоги).
+fn llm_unavailable_msg(endpoint: Option<&str>, llm_failed: i64, items_new: i64) -> String {
+    let ep = endpoint
+        .map(|u| u.trim())
+        .filter(|u| !u.is_empty())
+        .unwrap_or("(эндпоинт ИИ не задан)");
+    if items_new == 0 {
+        format!(
+            "Анализатор новостей недоступен: {ep} — {llm_failed} зап. не оценены; лента не обновится, \
+             пока эндпоинт не починить (Настройки → ИИ)"
+        )
+    } else {
+        format!(
+            "ИИ-анализатор частично недоступен: {ep} — {llm_failed} зап. не оценены в этот прогон \
+             (повтор при следующем обновлении); остальные новости добавлены"
+        )
+    }
+}
+
 /// Полный прогон ленты. Вызывающий гарантирует `cfg.enabled` (хендлер гейтит до вызова).
 /// 8 аргументов: пайплайн собирает независимые зависимости (фетчер/LLM/БД/конфиг/время/отмена/
 /// прогресс) — группировка в структуру дала бы один одноразовый тип без выигрыша в ясности.
@@ -51,6 +76,8 @@ pub async fn run_news_pipeline(
     now: i64,
     cancel: &Arc<AtomicBool>,
     progress: &NewsProgress,
+    // W-2: URL LLM-эндпоинта оценки (для видимой ошибки при недоступности). `None` → не назван.
+    chat_endpoint: Option<&str>,
 ) -> DbResult<NewsRun> {
     let sources = cfg.active_sources();
     let keywords = cfg.effective_keywords();
@@ -100,6 +127,9 @@ pub async fn run_news_pipeline(
     let llm_done = std::sync::atomic::AtomicUsize::new(0);
     progress("llm", 0, total_entries);
     let mut llm_failed = 0i64;
+    // W-2: батчи, чей ВЫЗОВ упал (эндпоинт недоступен) — отличаем от парс-фейлов отдельных записей,
+    // чтобы баннер «анализатор недоступен» не загорался на паре кривых JSON при живом эндпоинте.
+    let mut batch_errors = 0usize;
     let mut rows: Vec<NewRow> = Vec::new();
     for lang_ru in [false, true] {
         let group: Vec<NewsEntry> = entries
@@ -117,6 +147,7 @@ pub async fn run_news_pipeline(
         })
         .await;
         llm_failed += report.failed as i64;
+        batch_errors += report.batch_errors;
         rows.extend(report.items.into_iter().map(|ev| NewRow {
             source_id: ev.entry.source_id.clone(),
             url: ev.entry.url.clone(),
@@ -161,6 +192,17 @@ pub async fn run_news_pipeline(
 
     let items_new = super::insert_items(writer, rows, now).await? as i64;
     super::retention_gc(writer, now).await?;
+
+    // W-2: сбой ВЫЗОВА LLM-оценки (мёртвый/недоступный эндпоинт — дрейф .31 вместо .28) раньше был
+    // лишь счётчиком `llm_failed`, невидимым в errors[]/dead-jobs → новости «не грузились» без причины.
+    // Делаем ВИДИМЫМ одной строкой в errors[], называющей эндпоинт. Двухуровнево (после insert_items,
+    // когда известно items_new), чтобы НЕ врать «лента не обновится» при ЧАСТИЧНОМ/транзиентном сбое
+    // одного батча из многих (ревью W-2): items_new==0 → эндпоинт фактически недоступен весь прогон;
+    // items_new>0 → часть прошла, лента обновлена частично. Неоценённые url не пишутся → повтор на
+    // следующем прогоне, когда эндпоинт оживёт (graceful degrade без dedup-«вечно неоценено»).
+    if batch_errors > 0 {
+        errors.push(llm_unavailable_msg(chat_endpoint, llm_failed, items_new));
+    }
 
     let run = NewsRun {
         run_at: now,
@@ -240,6 +282,8 @@ pub struct NewsFeedHandler {
     pub config_path: std::path::PathBuf,
     /// Сток этапного прогресса (`news:progress` для UI); тестам — no-op.
     pub progress: Arc<NewsProgress>,
+    /// W-2: URL LLM-эндпоинта оценки (ai.fast/ai.chat) — для видимой ошибки при недоступности.
+    pub chat_endpoint: Option<String>,
 }
 
 #[async_trait]
@@ -260,6 +304,7 @@ impl JobHandler for NewsFeedHandler {
             crate::scheduler::now_secs(),
             &cancel,
             &*self.progress,
+            self.chat_endpoint.as_deref(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -339,6 +384,23 @@ mod tests {
         }
     }
 
+    /// Мок-LLM с мёртвым эндпоинтом: любой вызов оценки → ошибка (имитация недоступного .31/.28).
+    struct DeadChat;
+    #[async_trait]
+    impl ChatProvider for DeadChat {
+        async fn stream_chat(
+            &self,
+            _messages: &[ChatMessage],
+            _on_token: &mut (dyn FnMut(String) + Send),
+            _cancel: &Arc<AtomicBool>,
+        ) -> AiResult<String> {
+            Err(crate::ai::AiError::Http("connection refused".into()))
+        }
+        fn model_id(&self) -> &str {
+            "dead"
+        }
+    }
+
     async fn open() -> (TempDir, Database) {
         let dir = TempDir::new().unwrap();
         let db = Database::open(dir.path().join("nexus.db")).await.unwrap();
@@ -387,6 +449,7 @@ mod tests {
             1_800_000_000,
             &cancel,
             &|_, _, _| {},
+            None,
         )
         .await
         .unwrap();
@@ -414,6 +477,7 @@ mod tests {
             1_800_000_100,
             &cancel,
             &|_, _, _| {},
+            None,
         )
         .await
         .unwrap();
@@ -431,6 +495,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(items.len(), 4);
+    }
+
+    /// W-2: мёртвый LLM-эндпоинт = ВИДИМЫЙ сбой, а не молчаливо пустая лента. Прогон остаётся `Ok`
+    /// (DB-save/record_run проходят), но: (a) `llm_failed` = числу записей; (b) errors[] содержит
+    /// ОДНУ строку, называющую эндпоинт; (c) записи НЕ сохранены (повтор оживёт на починке).
+    #[tokio::test]
+    async fn dead_llm_endpoint_is_visible_not_silent() {
+        let (_d, db) = open().await;
+        let fetcher = MockFetcher {
+            bodies: HashMap::from([(
+                "https://openai.com/news/rss.xml",
+                include_str!("fixtures/openai_rss.xml"),
+            )]),
+            calls: AtomicUsize::new(0),
+        };
+        let chat: Arc<dyn ChatProvider> = Arc::new(DeadChat);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cfg = cfg_two_sources();
+
+        let run = run_news_pipeline(
+            &fetcher,
+            &chat,
+            db.writer(),
+            db.reader(),
+            &cfg,
+            1_800_000_000,
+            &cancel,
+            &|_, _, _| {},
+            Some("http://192.168.0.31:8084"),
+        )
+        .await
+        .expect("прогон не падает при мёртвом LLM (Ok-путь, DB save/record_run проходят)");
+
+        // (a) фид всё равно опрошен; (b) ничего не сохранено (нечего показать без оценки); (c) счётчик.
+        assert_eq!(
+            run.sources_ok, 1,
+            "фид openai опрошен несмотря на мёртвый LLM"
+        );
+        assert_eq!(
+            run.items_new, 0,
+            "неоценённые записи НЕ сохранены (повтор оживёт)"
+        );
+        assert!(
+            run.llm_failed >= 4,
+            "все записи фикстуры посчитаны как failed"
+        );
+
+        // Главное: сбой ВИДИМ и НАЗЫВАЕТ эндпоинт — ровно одна такая строка (без спама по батчам).
+        let named: Vec<&String> = run
+            .errors
+            .iter()
+            .filter(|e| e.contains("Анализатор новостей недоступен"))
+            .collect();
+        assert_eq!(named.len(), 1, "ровно одна ошибка-аналайзер (не по батчам)");
+        assert!(
+            named[0].contains("192.168.0.31:8084"),
+            "ошибка называет недостижимый эндпоинт: {}",
+            named[0]
+        );
+
+        // Лента действительно пуста (UI покажет баннер + причину, не молчаливый «нет новостей»).
+        let items = super::super::list_items(db.reader(), None, false, 50, 0)
+            .await
+            .unwrap();
+        assert!(items.is_empty());
+    }
+
+    /// W-2 (ревью): двухуровневая формулировка — НЕ врём «лента не обновится» при частичном сбое.
+    #[test]
+    fn llm_unavailable_msg_is_two_tier() {
+        // Тотально (ничего не сохранено) — префикс «Анализатор новостей недоступен» (фронт → баннер).
+        let total = llm_unavailable_msg(Some("http://192.168.0.31:8084"), 12, 0);
+        assert!(total.starts_with("Анализатор новостей недоступен"));
+        assert!(total.contains("192.168.0.31:8084"));
+        assert!(total.contains("лента не обновится"));
+        // Частично (часть сохранена) — мягкая формулировка, НЕ обещает, что лента не обновилась.
+        let partial = llm_unavailable_msg(Some("http://h:8084"), 3, 110);
+        assert!(partial.starts_with("ИИ-анализатор частично недоступен"));
+        assert!(!partial.contains("лента не обновится"));
+        assert!(partial.contains("остальные новости добавлены"));
+        // Эндпоинт не задан — плейсхолдер вместо пустоты.
+        assert!(llm_unavailable_msg(None, 1, 0).contains("эндпоинт ИИ не задан"));
+        assert!(llm_unavailable_msg(Some("   "), 1, 0).contains("эндпоинт ИИ не задан"));
     }
 
     /// AC-NF-6/7: выключенная фича → хендлер штатно no-op (Ok, не failed) и ничего не фетчит.
@@ -452,6 +599,7 @@ mod tests {
             reader: db.reader().clone(),
             config_path,
             progress: Arc::new(|_, _, _| {}),
+            chat_endpoint: None,
         };
         let job = Job {
             id: 1,
@@ -508,6 +656,7 @@ mod tests {
             1_800_000_000,
             &cancel,
             &|_, _, _| {},
+            None,
         )
         .await
         .unwrap();
@@ -589,6 +738,7 @@ mod tests {
             1_800_000_000,
             &cancel,
             &|_, _, _| {},
+            None,
         )
         .await
         .unwrap();

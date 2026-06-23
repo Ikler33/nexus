@@ -252,6 +252,14 @@ pub async fn open_vault(
                 writer: db.writer().clone(),
                 reader: db.reader().clone(),
                 config_path: config_path.clone(),
+                // W-2: эндпоинт оценки новостей = ai.fast (с фолбэком ai.chat) — для видимой ошибки
+                // в сводке прогона при недостижимости (дрейф .31/.28). Зеркалит выбор news_chat.
+                chat_endpoint: local_cfg.as_ref().and_then(|c| {
+                    c.ai.fast
+                        .as_ref()
+                        .map(|f| f.url.clone())
+                        .or_else(|| c.ai.chat.as_ref().map(|ch| ch.url.clone()))
+                }),
                 progress: {
                     // Этапы прогона → UI (фидбэк 11.06: живой статус «Опрашиваю источники 7/16»
                     // вместо немого «Собираю…»). Best-effort, как jobs:changed.

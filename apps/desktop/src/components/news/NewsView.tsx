@@ -216,6 +216,10 @@ export function NewsView() {
           return topic && !head.includes(topic) ? [...head, topic] : head;
         })();
   const runFailed = run !== null && run.sourcesOk === 0 && run.errors.length > 0;
+  // W-2: эндпоинт ОЦЕНКИ недоступен — backend кладёт ОДНУ строку «Анализатор новостей недоступен:
+  // <url> …» в errors[] (только при сбое ВЫЗОВА, не на паре кривых JSON). Баннер ключуем на её
+  // наличие (а НЕ на llmFailed>0, который растёт и от обычных парс-фейлов отдельных записей).
+  const llmError = run?.errors.find((e) => e.startsWith('Анализатор новостей недоступен'));
 
   const card = (it: NewsItem) => (
     <div key={it.id} className={`${styles.card} ${it.read ? styles.cardRead : ''}`}>
@@ -282,6 +286,15 @@ export function NewsView() {
           <div className={styles.errBanner}>
             <AlertTriangle size={15} aria-hidden />
             {error === 'stalled' ? t('news.stalled') : error}
+          </div>
+        )}
+        {/* W-2: анализатор новостей недоступен — видимый баннер с названным эндпоинтом (не молчаливо
+            пустая лента). Показываем независимо от items.length. Строка из backend errors[] —
+            операционная, RU (как и прочие news-ошибки в списке). */}
+        {llmError && (
+          <div className={styles.errBanner}>
+            <AlertTriangle size={15} aria-hidden />
+            {llmError}
           </div>
         )}
 
@@ -497,7 +510,9 @@ export function NewsView() {
             <div className={styles.nsTitle}>{t('news.caughtUpTitle')}</div>
             <div className={styles.nsSub}>{t('news.caughtUpSub')}</div>
           </div>
-        ) : items.length === 0 && runFailed ? (
+        ) : items.length === 0 && (runFailed || llmError) ? (
+          // W-2: пустая лента при недоступном анализаторе (llmError) → состояние ОШИБКИ (а не «свежих
+          // новостей нет»), согласованное с красным баннером выше (ревью W-2: иначе противоречие).
           <div className={styles.state}>
             <div className={`${styles.nsGlyph} ${styles.nsGlyphDanger}`}>
               <AlertTriangle size={24} aria-hidden />
@@ -513,7 +528,7 @@ export function NewsView() {
               {t('news.retry')}
             </button>
           </div>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && !llmError ? (
           <div className={styles.state}>
             <div className={styles.nsGlyph}>
               <Newspaper size={24} aria-hidden />

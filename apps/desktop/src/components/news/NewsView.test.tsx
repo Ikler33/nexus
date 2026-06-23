@@ -221,6 +221,78 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     );
   });
 
+  // W-2: мёртвый LLM-эндпоинт — ВИДИМЫЙ баннер (с названным эндпоинтом из errors[]), при этом
+  // существующие статьи всё равно показаны (баннер + список, не «или/или»).
+  it('LLM недоступен: баннер с эндпоинтом + список статей рендерятся оба', async () => {
+    const items = [
+      {
+        id: 1,
+        sourceId: 'openai',
+        url: 'https://e.com/1',
+        titleRu: 'Старая статья из прошлого прогона',
+        summaryRu: 'резюме',
+        topic: 'Модели',
+        langRu: false,
+        publishedAt: 1_700_000_000,
+        read: false,
+        commentsUrl: null,
+      },
+    ];
+    const run = {
+      runAt: 1_700_000_000,
+      digestRu: '',
+      itemsNew: 0,
+      sourcesOk: 1,
+      sourcesTotal: 1,
+      llmFailed: 7,
+      errors: [
+        'Анализатор новостей недоступен: http://192.168.0.31:8084 — 7 зап. не оценены; лента не обновится, пока эндпоинт не починить (Настройки → ИИ)',
+      ],
+    };
+    const spy = vi
+      .spyOn(tauriApi.news, 'page')
+      .mockResolvedValue({ items, topics: ['Модели'], run });
+
+    render(<NewsView />);
+    // Баннер виден и НАЗЫВАЕТ эндпоинт (строка из errors[]).
+    expect(await screen.findByText(/Анализатор новостей недоступен/)).toBeInTheDocument();
+    expect(screen.getByText(/192\.168\.0\.31:8084/)).toBeInTheDocument();
+    // При этом статья из прошлого прогона всё равно показана (не пустой экран).
+    expect(screen.getByText('Старая статья из прошлого прогона')).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  // W-2 (ревью): пустая лента + анализатор недоступен → состояние ОШИБКИ, а НЕ «свежих новостей нет»
+  // (иначе под красным баннером висело бы противоречивое «всё хорошо, заходите завтра»).
+  it('LLM недоступен + лента пуста: ошибка-состояние, не «свежих новостей нет»', async () => {
+    const run = {
+      runAt: 1_700_000_000,
+      digestRu: '',
+      itemsNew: 0,
+      sourcesOk: 1,
+      sourcesTotal: 1,
+      llmFailed: 5,
+      errors: [
+        'Анализатор новостей недоступен: http://192.168.0.28:8084 — 5 зап. не оценены; лента не обновится, пока эндпоинт не починить (Настройки → ИИ)',
+      ],
+    };
+    const spy = vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run });
+    render(<NewsView />);
+    expect(await screen.findByText(/Анализатор новостей недоступен/)).toBeInTheDocument();
+    // НЕ показываем благостное «свежих новостей нет».
+    expect(screen.queryByText(/Свежих новостей нет|No fresh news/)).toBeNull();
+    // Показываем состояние ошибки сбора ленты (с «Повторить»).
+    expect(screen.getByText(/Не удалось собрать ленту|Couldn.t fetch the feed/i)).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  // W-2 регрессия: здоровый прогон (llmFailed=0) → баннера нет (без ложной тревоги).
+  it('LLM в норме: баннер недоступности не показывается', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+    expect(screen.queryByText(/Анализатор новостей недоступен|News analyzer unavailable/)).toBeNull();
+  });
+
   // Чипы тем — серверный фильтр: выбор темы перезапрашивает страницу и оставляет одну рубрику.
   it('фильтр темы: чип сужает ленту до рубрики', async () => {
     render(<NewsView />);

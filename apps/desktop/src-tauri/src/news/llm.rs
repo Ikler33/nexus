@@ -39,6 +39,9 @@ pub struct EvalReport {
     pub failed: usize,
     /// Модель пометила нерелевантными (отброшены by design).
     pub irrelevant: usize,
+    /// W-2: число батчей, чей ВЫЗОВ упал (сеть/недоступность эндпоинта), а не парс ответа. Отличает
+    /// «эндпоинт мёртв» (надо показать баннер с именем хоста) от «модель вернула пару кривых JSON».
+    pub batch_errors: usize,
 }
 
 /// Ожидаемый элемент JSON-ответа модели.
@@ -75,6 +78,8 @@ pub async fn evaluate_entries(
             Err(e) => {
                 tracing::warn!(error = %e, n = batch.len(), "news: LLM-батч не оценён");
                 report.failed += batch.len();
+                // W-2: это сбой ВЫЗОВА (эндпоинт недоступен), не парса — отдельный счётчик.
+                report.batch_errors += 1;
             }
         }
     }
