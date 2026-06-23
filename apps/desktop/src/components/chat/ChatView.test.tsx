@@ -275,11 +275,23 @@ describe('ChatView (Ф1-8)', () => {
     { id: 'a1' as const, role: 'assistant' as const, content },
   ];
 
-  it('P6-AR: под готовым ответом есть «Копировать» и «Вставить в заметку»', () => {
+  // W-5: действия спрятаны под кнопку-меню «⋯» — открываем её перед кликом по пункту.
+  const openMsgMenu = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Действия с сообщением' }));
+
+  it('P6-AR/W-5: действия под кнопкой-меню «⋯»; до открытия пунктов нет, после — есть', () => {
     useChatStore.setState({ messages: assistantMsg('Ответ ИИ'), streaming: false });
     render(<ChatView />);
-    expect(screen.getByRole('button', { name: 'Копировать' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Вставить в заметку' })).toBeInTheDocument();
+    // Кебаб виден; пункты скрыты до открытия (не висят в ряд — запрос владельца).
+    expect(screen.getByRole('button', { name: 'Действия с сообщением' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Копировать' })).toBeNull();
+    openMsgMenu();
+    expect(screen.getByRole('menuitem', { name: 'Копировать' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Вставить в заметку' })).toBeInTheDocument();
+    // W-5 (ревью): меню — ПОРТАЛ у body, чтобы не обрезалось overflow ленты и не уходило под
+    // соседнее сообщение (transform-stacking виртуализатора). Контейнер role=menu вне .feed.
+    const menuEl = screen.getByRole('menu');
+    expect(menuEl.closest('[class*="feed"]')).toBeNull();
   });
 
   it('P6-AR: «Копировать» кладёт ответ в буфер обмена + тост', async () => {
@@ -287,7 +299,8 @@ describe('ChatView (Ф1-8)', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     useChatStore.setState({ messages: assistantMsg('Текст ответа'), streaming: false });
     render(<ChatView />);
-    fireEvent.click(screen.getByRole('button', { name: 'Копировать' }));
+    openMsgMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Копировать' }));
     expect(writeText).toHaveBeenCalledWith('Текст ответа');
     await vi.waitFor(() =>
       expect(useToastStore.getState().toasts.some((t) => t.message === 'Ответ скопирован')).toBe(true),
@@ -299,7 +312,8 @@ describe('ChatView (Ф1-8)', () => {
     useWorkspaceStore.getState().reset(); // нет активной вкладки
     useChatStore.setState({ messages: assistantMsg('Текст'), streaming: false });
     render(<ChatView />);
-    fireEvent.click(screen.getByRole('button', { name: 'Вставить в заметку' }));
+    openMsgMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Вставить в заметку' }));
     expect(
       useToastStore.getState().toasts.some((t) => t.message === 'Откройте заметку для вставки'),
     ).toBe(true);
@@ -380,7 +394,8 @@ describe('ChatView (Ф1-8)', () => {
     });
     useChatStore.setState({ messages: assistantMsg('Текст'), streaming: false });
     render(<ChatView />);
-    fireEvent.click(screen.getByRole('button', { name: 'Вставить в заметку' }));
+    openMsgMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Вставить в заметку' }));
     expect(
       useToastStore.getState().toasts.some((t) => t.message === 'Переключитесь в режим редактирования'),
     ).toBe(true);
@@ -397,7 +412,8 @@ describe('ChatView (Ф1-8)', () => {
     vi.spyOn(activeView, 'getActiveEditorView').mockReturnValue(fakeView);
     useChatStore.setState({ messages: assistantMsg('ВСТАВКА'), streaming: false });
     render(<ChatView />);
-    fireEvent.click(screen.getByRole('button', { name: 'Вставить в заметку' }));
+    openMsgMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Вставить в заметку' }));
     expect(dispatch).toHaveBeenCalledWith({
       changes: { from: 3, to: 3, insert: 'ВСТАВКА' },
       selection: { anchor: 3 + 'ВСТАВКА'.length },
@@ -416,9 +432,14 @@ describe('ChatView (Ф1-8)', () => {
       streaming: false,
     });
     render(<ChatView />);
-    // одна кнопка регенерации — у последнего ответа.
-    expect(screen.getAllByRole('button', { name: 'Перегенерировать' })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Перегенерировать' }));
+    // По кебабу на каждый ответ; «Перегенерировать» — только в меню ПОСЛЕДНЕГО.
+    const kebabs = screen.getAllByRole('button', { name: 'Действия с сообщением' });
+    expect(kebabs).toHaveLength(2);
+    fireEvent.click(kebabs[0]); // меню старого ответа — без регенерации
+    expect(screen.queryByRole('menuitem', { name: 'Перегенерировать' })).toBeNull();
+    fireEvent.click(kebabs[1]); // закрывает первое, открывает меню последнего
+    expect(screen.getByRole('menuitem', { name: 'Перегенерировать' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Перегенерировать' }));
     // последний обмен убран, переспрошен q2 (вопрос на месте, ответ новый/стримится) — асинхронно.
     await vi.waitFor(() => {
       const msgs = useChatStore.getState().messages;
@@ -436,7 +457,7 @@ describe('ChatView (Ф1-8)', () => {
       streaming: true,
     });
     render(<ChatView />);
-    expect(screen.queryByRole('button', { name: 'Копировать' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Копировать' })).not.toBeInTheDocument();
   });
 
   // P6-PIN: чипы закреплённых заметок над композером.

@@ -10,6 +10,7 @@ import {
   FilePlus2,
   FileText,
   Globe,
+  MoreHorizontal,
   Pin,
   Plus,
   RefreshCw,
@@ -19,6 +20,7 @@ import {
   MessageSquare,
   History,
 } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
@@ -575,6 +577,45 @@ function MessageActions({
   const { t } = useTranslation();
   const captureFromMessage = useChatStore((s) => s.captureFromMessage);
   const capturing = useChatStore((s) => s.capturingId === messageId);
+  // W-5: действия ответа спрятаны под одну кнопку-меню «⋯» (запрос владельца — не висят в ряд).
+  // Меню рендерим ПОРТАЛОМ у `document.body` (fixed-позиция): лента (`.feed`) — `overflow:auto` +
+  // строки виртуализатора имеют `transform` (свой stacking-context), поэтому абсолютное меню внутри
+  // строки ОБРЕЗАЛОСЬ бы лентой и РИСОВАЛОСЬ под следующим сообщением (ревью W-5, 3 major). Портал
+  // обходит и clip, и stacking. Флип вверх, если снизу мало места; закрытие на скролл/ресайз.
+  const [menu, setMenu] = useState<{ top: number; left: number; up: boolean } | null>(null);
+  const kebabRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const openMenu = () => {
+    const r = kebabRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const EST_H = 170; // оценка высоты меню до рендера — для выбора направления
+    const up = r.bottom + EST_H > window.innerHeight;
+    setMenu({ top: up ? r.top - 4 : r.bottom + 4, left: r.left, up });
+  };
+  const closeMenu = () => setMenu(null);
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (kebabRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeMenu();
+    };
+    // Меню — fixed у тела: при скролле ленты/ресайзе оно отвязалось бы от кебаба → закрываем.
+    const onMove = () => closeMenu();
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onMove);
+    window.addEventListener('scroll', onMove, true); // capture: ловим скролл вложенной ленты
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('scroll', onMove, true);
+    };
+  }, [menu]);
 
   // MEM-5: «В память» — извлечь и СОХРАНИТЬ факт из этого обмена (явное действие = согласие). Все исходы
   // (Запомнил/уже в памяти/нечего сохранять/ошибка) показывает единый эффект savedFact в ChatView.
@@ -613,30 +654,79 @@ function MessageActions({
     useToastStore.getState().addToast(t('chat.inserted'), { kind: 'success' });
   };
 
+  // Действие закрывает меню ПЕРЕД выполнением. Важно для insert: closeMenu лишь снимает портал, фокус
+  // редактора (getActiveEditorView — последний сфокусированный CM6) не трогается, кебаб фокус не крал.
+  const run = (fn: () => void) => () => {
+    closeMenu();
+    fn();
+  };
+
   return (
     <div className={styles.msgActions}>
-      <button type="button" className={styles.msgAct} onClick={copy}>
-        <Copy size={13} aria-hidden /> {t('chat.copy')}
-      </button>
-      <button type="button" className={styles.msgAct} onClick={insert}>
-        <FilePlus2 size={13} aria-hidden /> {t('chat.insert')}
-      </button>
       <button
+        ref={kebabRef}
         type="button"
-        className={styles.msgAct}
-        onClick={capture}
-        disabled={capturing}
-        title={t('chat.memoryCaptureHint')}
+        className={styles.msgKebab}
+        onClick={() => (menu ? closeMenu() : openMenu())}
+        aria-haspopup="menu"
+        aria-expanded={!!menu}
+        aria-label={t('chat.actionsMenu')}
+        title={t('chat.actionsMenu')}
       >
-        <Brain size={13} aria-hidden className={capturing ? styles.memoryCapturing : undefined} />{' '}
-        {t(capturing ? 'chat.memoryCapturingLabel' : 'chat.memoryCapture')}
+        <MoreHorizontal size={15} aria-hidden />
       </button>
-      {isLast && (
-        // P6-RGN: регенерация только у ПОСЛЕДНЕГО ответа (тот же вопрос → свежий ответ).
-        <button type="button" className={styles.msgAct} onClick={onRegenerate}>
-          <RefreshCw size={13} aria-hidden /> {t('chat.regenerate')}
-        </button>
-      )}
+      {menu &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className={styles.msgMenu}
+            role="menu"
+            style={{
+              top: menu.top,
+              left: menu.left,
+              transform: menu.up ? 'translateY(-100%)' : undefined,
+            }}
+          >
+            <button type="button" role="menuitem" className={styles.msgMenuItem} onClick={run(copy)}>
+              <Copy size={14} aria-hidden /> {t('chat.copy')}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.msgMenuItem}
+              onClick={run(insert)}
+            >
+              <FilePlus2 size={14} aria-hidden /> {t('chat.insert')}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.msgMenuItem}
+              onClick={run(capture)}
+              disabled={capturing}
+              title={t('chat.memoryCaptureHint')}
+            >
+              <Brain
+                size={14}
+                aria-hidden
+                className={capturing ? styles.memoryCapturing : undefined}
+              />{' '}
+              {t(capturing ? 'chat.memoryCapturingLabel' : 'chat.memoryCapture')}
+            </button>
+            {isLast && (
+              // P6-RGN: регенерация только у ПОСЛЕДНЕГО ответа (тот же вопрос → свежий ответ).
+              <button
+                type="button"
+                role="menuitem"
+                className={styles.msgMenuItem}
+                onClick={run(onRegenerate)}
+              >
+                <RefreshCw size={14} aria-hidden /> {t('chat.regenerate')}
+              </button>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

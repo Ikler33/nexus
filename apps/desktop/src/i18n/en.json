@@ -628,6 +628,7 @@
     "copy": "Copy",
     "insert": "Insert into note",
     "regenerate": "Regenerate",
+    "actionsMenu": "Message actions",
     "copied": "Answer copied",
     "copyFailed": "Couldn't copy",
     "inserted": "Inserted into note",

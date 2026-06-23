@@ -641,33 +641,73 @@
 }
 
 /* P6-AR: ряд действий под ответом ИИ (копировать / вставить в заметку). */
+/* W-5: действия ответа спрятаны под одну кнопку-меню «⋯» (не висят в ряд). Контейнер — anchor
+   для абсолютного выпадающего меню. */
 .msgActions {
-  display: flex;
-  gap: 6px;
+  position: relative;
   margin-top: 8px;
 }
-.msgAct {
+/* Кнопка-кебаб «⋯» — компактная, ненавязчивая (как прочий хром чата). */
+.msgKebab {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: var(--text-xs);
-  font-family: inherit;
-  padding: 3px 9px;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
   border-radius: var(--radius-sm, 6px);
   background: transparent;
   border: 1px solid transparent;
   color: var(--color-text-faint);
   cursor: pointer;
 }
-.msgAct:hover {
+.msgKebab:hover,
+.msgKebab[aria-expanded='true'] {
   background: var(--color-surface);
   border-color: var(--color-border);
   color: var(--color-text);
 }
-.msgAct svg {
-  color: var(--color-ai);
+.msgKebab:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
-.msgAct:disabled {
+/* Выпадающее меню действий. Рендерится ПОРТАЛОМ у `document.body` (см. MessageActions): `fixed`,
+   координаты — инлайном; так меню не обрезается `overflow` ленты и не уходит под соседнее сообщение
+   (transform-stacking виртуализатора). `up`-флип — через inline `transform: translateY(-100%)`. */
+.msgMenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.22));
+}
+.msgMenuItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  border: none;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.msgMenuItem:hover {
+  background: var(--color-hover, color-mix(in oklch, var(--color-text) 8%, transparent));
+}
+.msgMenuItem svg {
+  color: var(--color-ai);
+  flex: 0 0 auto;
+}
+.msgMenuItem:disabled {
   opacity: 0.6;
   cursor: default;
 }
