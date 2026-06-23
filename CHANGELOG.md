@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Переписка · Session-search (#58) — полнотекстовый поиск по чату + саммари эпизода (← hermes)
+
+Пропущенная дешёвая фича из ресёрча: искать по истории диалогов, а не только по заметкам. Бэкенд.
+
+- **Миграция 025** — external-content FTS5 `fts_chat_messages` над `chat_messages.content` (зеркало проверенного паттерна `fts_chunks`/002) + триггеры ai/ad/au (синхрон индекса при INSERT/UPDATE/DELETE, в т.ч. `delete_last_exchange` чистит FTS) + одноразовый бэкфилл уже накопленной переписки.
+- **`chat_log::search_chat(reader, query, limit)`** — BM25-ранжированный MATCH, санитизация запроса через ОБЩИЙ `search::fts_query` (теперь `pub(crate)`: токены в кавычках через OR, спецсинтаксис FTS нейтрализован, стоп-слова отброшены), `snippet()`-подсветка `[...]`, JOIN заголовка сессии, LEFT JOIN `chat_episodes` для **саммари эпизода (EP)** — это и есть «+LLM-саммари»; dismissed-эпизоды дают `summary=NULL` (приватность EP соблюдена); `session_id UNIQUE` → JOIN не множит строки; `limit` клампится 1..=200. `ChatSearchHit` DTO + tauri-команда `chat_search`.
+- **`rebuild_chat_fts` + поле `Migration::rebuild_chat_fts`** — симметрия ремонта с `rebuild_fts` для chunks: при рассинхроне (будущая схемо-миграция переписки / появление delete-session-пути, где каскад НЕ дёргает AD-триггер при `recursive_triggers=OFF`) FTS переписки пересобирается из `chat_messages` без сноса `.nexus`.
+
+**Adversarial-ревью (Workflow, 3 линзы: FTS5/SQL-корректность · migration-safety · security/API; каждая находка верифицирована) → 0 CRITICAL/HIGH.** FTS-линза и security-линза — 0 дефектов (инъекция MATCH невозможна — токены только алфанумерик в кавычках; cross-vault-утечки нет — читается активный vault; нет panic-путей; snippet-колонка корректна). Migration-линза: 1 MEDIUM (нет примитива ремонта FTS переписки — паритет с chunks) + 1 LOW (бэкфилл одним стейтментом) + forward-caveat (каскад-delete не дёргает AD-триггер) — **ВСЕ закрыты в срезе** (`rebuild_chat_fts` + тест восстановления из delete-all; комментарии в 025 про осознанный single-shot бэкфилл и caveat будущего delete-session).
+
+Tier-1 (+2 теста, 1044+ nexus-core): `search_chat` (match/snippet/EP-summary/empty-query/FTS-операторы-как-литералы) · `rebuild_chat_fts_restores_index`. `fmt`/`clippy -D warnings` чисто, полный `test-all` зелёный. UI-поверхность (поле поиска в истории AI-панели) — отдельно, как SL-ui (нужна сверка вида с дизайном).
+
 ### Агент · DEEP-RESEARCH RES-5b — durable `KIND_DEEP_RESEARCH` джоба + live Tier-2 (🎉 ЭПИК ЗАВЕРШЁН)
 
 Последний срез deep-research: СТАНДАЛОН фоновый ресёрч как durable scheduler-джоба (порт odysseus research_handler) + сквозная live-валидация.

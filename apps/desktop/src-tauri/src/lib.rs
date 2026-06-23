@@ -168,6 +168,7 @@ pub fn run() {
             commands::agent::agent_cancel,
             commands::agent::agent_undo,
             commands::chat_sessions::chat_sessions_list,
+            commands::chat_sessions::chat_search,
             commands::chat_sessions::chat_session_messages,
             commands::chat_sessions::chat_log_exchange,
             commands::chat_sessions::chat_delete_last_exchange,

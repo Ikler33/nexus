@@ -224,7 +224,8 @@ fn is_stopword(t: &str) -> bool {
 /// границам, юникод — кириллица сохраняется) в кавычках (фразы, нейтрализуют спецсинтаксис),
 /// через `OR` (recall). Стоп-слова отбрасываются (N3); если после фильтра пусто (запрос целиком из
 /// стоп-слов) — берём исходные токены (лучше шумный FTS, чем потеря лексики). `None` — токенов нет.
-fn fts_query(raw: &str) -> Option<String> {
+/// `pub(crate)`: переиспользуется session-search (#58, `chat_log::search_chat`) — одна санитизация MATCH.
+pub(crate) fn fts_query(raw: &str) -> Option<String> {
     let all: Vec<&str> = raw
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
