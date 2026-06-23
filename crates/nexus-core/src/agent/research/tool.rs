@@ -187,6 +187,7 @@ mod tests {
     use crate::agent::research::worker::WebHit;
     use crate::agent::research::WorkerCfg;
     use crate::agent::tool::ToolSpec as _ToolSpec;
+    use crate::agent::web_tools::WebToolsConfig;
     use crate::ai::tools::ToolTurn;
     use crate::ai::ChatMessage;
     use std::sync::Mutex;
@@ -383,5 +384,122 @@ mod tests {
             .invoke("{\"question\": \"q\", \"bogus\": 1}")
             .await
             .is_err());
+    }
+
+    /// RES-5b LIVE Tier-2: ВЕСЬ deep-research пайплайн (RES-1..4) вживую против реального Qwen (.28) +
+    /// SearXNG (VPS) → отчёт записан в ВРЕМЕННЫЙ vault через РЕАЛЬНЫЙ actuator-гейт (auto). Доказывает
+    /// plan→fan-out→fetch→fence→extract→synthesize→stop→final→note.create end-to-end. Env-gated, в CI
+    /// пропускается (как live_agent_web). Запуск на .28:
+    /// `NEXUS_LIVE_CHAT=1 cargo test -p nexus-core --lib agent::research::tool::tests::live_research_pipeline -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "live: нужны Qwen :8080 + SearXNG (NEXUS_LIVE_CHAT=1, NEXUS_LIVE_CHAT_URL/MODEL, NEXUS_LIVE_SEARX_URL)"]
+    async fn live_research_pipeline() {
+        use crate::actuator::{
+            AuditSink, DispatchPolicy, GatedToolCtx, PolicyDefault, TracingEventSink,
+        };
+        use crate::ai::tools::OpenAiToolProvider;
+        use crate::db::Database;
+        use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        if std::env::var("NEXUS_LIVE_CHAT").ok().as_deref() != Some("1") {
+            eprintln!("SKIP: NEXUS_LIVE_CHAT!=1");
+            return;
+        }
+        let chat_url =
+            std::env::var("NEXUS_LIVE_CHAT_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+        let model =
+            std::env::var("NEXUS_LIVE_CHAT_MODEL").unwrap_or_else(|_| "qwen3.6-27b-mtp".into());
+        let searx = std::env::var("NEXUS_LIVE_SEARX_URL")
+            .unwrap_or_else(|_| "http://89.127.211.153:8888".into());
+        let searx_host = reqwest::Url::parse(&searx)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .expect("searx host");
+
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        policy.set_feature_enabled(EgressFeature::Chat, true);
+        policy.set_feature_enabled(EgressFeature::Web, true);
+        policy.set_scoped_allowlist("web", [searx_host]);
+        let audit = Arc::new(EgressAudit::default());
+        let gc = GuardedClient::for_chat(policy, audit, Duration::from_secs(30)).unwrap();
+        let provider: Arc<dyn ToolCapableProvider> = Arc::new(OpenAiToolProvider::new(
+            &gc,
+            EgressFeature::Chat,
+            &chat_url,
+            &model,
+            Some(0.2),
+        ));
+        let web = WebToolsConfig {
+            client: gc.clone(),
+            searxng_url: Some(searx),
+        };
+
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join("t.db")).await.unwrap();
+        let canon = dir.path().to_path_buf();
+        // with_paused (как durable-джоба/прод-гейт), не new — упражняем kill-switch-проводку гейта.
+        let gate = GatedToolCtx::new(
+            canon.clone(),
+            AuditSink::new(db.writer().clone(), db.reader().clone()),
+            1,
+            DispatchPolicy::with_paused(
+                Some("auto"),
+                64 * 1024,
+                64,
+                Arc::new(AtomicBool::new(false)),
+            ),
+            Arc::new(PolicyDefault),
+            Arc::new(TracingEventSink::new()),
+        );
+        let ctx = ResearchContext {
+            web: Arc::new(crate::agent::research::worker::GuardedResearchWeb::new(
+                web,
+                RunCtx::run(1),
+                false,
+            )),
+            provider,
+            dispatcher: Arc::new(gate),
+            forwarder: Arc::new(NoopFwd),
+            params: ResearchParams {
+                max_rounds: 2,
+                min_rounds: 1,
+                max_empty_rounds: 2,
+                max_fanout: 2,
+                synthesis_window: 8,
+                worker: WorkerCfg {
+                    max_urls: 2,
+                    max_content_chars: 8000,
+                    concurrency: 2,
+                },
+            },
+            budget_config: DelegationConfig {
+                enabled: true,
+                max_fanout: 2,
+                ..Default::default()
+            },
+            wall_clock: Duration::from_secs(300),
+            paused: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_id: 1,
+        };
+        let out = ResearchTool::new(ctx)
+            .invoke("{\"question\": \"What is the Rust borrow checker and why does it matter?\"}")
+            .await
+            .unwrap();
+        eprintln!("LIVE research outcome: {out}");
+        // отчёт записан в Research/ временного vault'а
+        let research_dir = canon.join("Research");
+        let wrote = std::fs::read_dir(&research_dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().is_some_and(|x| x == "md"))
+            })
+            .unwrap_or(false);
+        assert!(
+            wrote,
+            "отчёт .md записан в {research_dir:?}; summary: {out}"
+        );
     }
 }

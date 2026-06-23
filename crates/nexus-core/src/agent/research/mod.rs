@@ -15,6 +15,7 @@
 //! ручное сканирование сбалансированных JSON-спанов (порт odysseus `_parse_json_array`/`_parse_json_object`
 //! «keep last balanced span» против эхо-примеров).
 
+pub mod job;
 pub mod orchestrate;
 pub mod plan;
 pub mod prompts;
@@ -25,6 +26,7 @@ pub mod tool;
 pub mod worker;
 pub mod write;
 
+pub use job::{enqueue_deep_research, DeepResearchHandler, KIND_DEEP_RESEARCH};
 pub use orchestrate::{run_research, ResearchOutcome, ResearchParams, StopReason};
 pub use plan::{parse_plan, ResearchPlan};
 pub use prompts::{
