@@ -437,6 +437,8 @@ async fn drive_run(
         blast_cap,
         context_window,
         canon_root,
+        // SL-7d: desktop пока без скиллов (skills=None ниже) → авторство навыков выключено.
+        skills_learning_enabled: false,
     };
     run_agent_session(
         &spec,

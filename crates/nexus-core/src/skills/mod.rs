@@ -363,7 +363,9 @@ fn scalar_field(fm: &str, target: &str) -> Option<String> {
 /// Проверяет, что `name` — безопасный идентификатор скилла. Отклоняет path-separators (`/`, `\`),
 /// traversal (`..`), а также control-символы (в т.ч. перевод строки/таб) — чтобы имя нельзя было
 /// использовать как путь или сломать вывод. Длину ограничиваем (анти-«huge»).
-fn validate_name(name: &str) -> Result<(), SkillError> {
+/// `pub`: SL-7d `SkillSaveTool` валидирует им имя агент-авторского навыка ДО формирования rel (тот же
+/// СИЛЬНЫЙ предикат, что и загрузчик — `usage::valid_skill_name` слабее: пропускает `/`/`..`).
+pub fn validate_name(name: &str) -> Result<(), SkillError> {
     // `scalar_field` уже отсёк пустое, но перестрахуемся.
     if name.is_empty() {
         return Err(SkillError::MissingName);

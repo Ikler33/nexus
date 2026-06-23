@@ -42,11 +42,12 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::agent::{Tool, ToolError, ToolSpec};
+use crate::db::WriteActor;
 
 use super::action::Action;
 use super::apply::AuditSink;
 use super::decision::DecisionSource;
-use super::orchestrate::{dispatch_action, DispatchPolicy, EventSink};
+use super::orchestrate::{dispatch_action, dispatch_skill_save, DispatchPolicy, EventSink};
 
 /// Порог «крупной перезаписи» (байт) по умолчанию для NoteEdit → Confirm(LargeOverwrite). РАЗУМНЫЙ
 /// ДЕФОЛТ конфига (`ai.chat`/run-policy задаёт реальный порог). Гейт получает порог из
@@ -278,6 +279,175 @@ impl Tool for SetFrontmatterTool {
         let a: FrontmatterArgs = parse_args(args)?;
         self.dispatcher
             .apply(Action::frontmatter(a.path, a.key, a.value))
+            .await
+    }
+}
+
+// ── SELF-LEARNING SL-7d: skill.save (авторство навыков агентом) ──────────────────────────────────
+
+/// Имя первого сегмента rel `<name>/SKILL.md` (для провенанса usage). Пусто, если формат неожиданный
+/// (defense; classify/tool это уже не пропустят).
+fn skill_name_from_rel(rel: &str) -> String {
+    rel.split('/').next().unwrap_or("").to_string()
+}
+
+/// **ШОВ навыка** (SL-7d, зеркало [`GatedToolCtx`], но через [`dispatch_skill_save`] под **skills_root**).
+/// Несёт deps `dispatch_skill_save` + опц. писатель телеметрии для ПРОВЕНАНСА. На РЕАЛЬНОМ применении
+/// (`DispatchOutcome::Applied`) проставляет `created_by='agent'` (`mark_agent_created` ПЕРВЫМ — INSERT-only)
+/// и инкрементит `save_count` (`bump_save`) — порядок load-bearing (SL-1: mark до телеметрии, иначе навык
+/// останется неуправляемым curator'ом). Rejected/Failed/HardBlocked провенанс НЕ пишут.
+#[derive(Clone)]
+pub struct SkillSaveCtx {
+    /// КАНОНИЧЕСКИЙ корень skills (конфайн-база записи навыка; НЕ vault).
+    pub skills_root: Arc<PathBuf>,
+    pub ledger: Arc<AuditSink>,
+    pub run_id: i64,
+    /// Политика прогона (делит token-bucket/паузу с note-инструментами — общий blast-radius).
+    pub policy: DispatchPolicy,
+    pub decision_source: Arc<dyn DecisionSource>,
+    pub events: Arc<dyn EventSink>,
+    /// Писатель телеметрии навыков (провенанс). `None` → провенанс не пишется (навык не станет
+    /// curator-управляемым; редкий путь без БД).
+    pub recorder: Option<WriteActor>,
+}
+
+impl SkillSaveCtx {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        skills_root: PathBuf,
+        ledger: AuditSink,
+        run_id: i64,
+        policy: DispatchPolicy,
+        decision_source: Arc<dyn DecisionSource>,
+        events: Arc<dyn EventSink>,
+        recorder: Option<WriteActor>,
+    ) -> Self {
+        Self {
+            skills_root: Arc::new(skills_root),
+            ledger: Arc::new(ledger),
+            run_id,
+            policy,
+            decision_source,
+            events,
+            recorder,
+        }
+    }
+}
+
+#[async_trait]
+impl ActionDispatcher for SkillSaveCtx {
+    async fn apply(&self, action: Action) -> Result<String, ToolError> {
+        let (outcome, real_write) = dispatch_skill_save(
+            &action,
+            self.run_id,
+            &self.policy,
+            &self.decision_source,
+            self.events.as_ref(),
+            self.ledger.as_ref(),
+            self.skills_root.as_path(),
+        )
+        .await?;
+        // ПРОВЕНАНС ТОЛЬКО при РЕАЛЬНОЙ записи (`real_write` = Executed, НЕ AlreadyDone-replay; ревью SL-7d:
+        // иначе in-run повтор байт-идентичного skill.save раздул бы save_count). Порядок: mark_agent_created
+        // (INSERT-only) → bump_save (SL-1 keystone). Ошибки телеметрии глотаем (не роняют результат).
+        if real_write {
+            if let Some(w) = &self.recorder {
+                let name = skill_name_from_rel(action.target.rel());
+                if !name.is_empty() {
+                    let _ = crate::skills::usage::mark_agent_created(w, &name).await;
+                    let _ = crate::skills::usage::bump_save(w, &name).await;
+                }
+            }
+        }
+        outcome.into_tool_result()
+    }
+}
+
+/// Аргументы [`SkillSaveTool`]: имя навыка + однострочное описание + тело-инструкции. `deny_unknown_fields`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillSaveArgs {
+    /// Имя навыка (станет каталогом `<name>/`); валидируется `skills::validate_name`.
+    name: String,
+    /// Однострочное назначение (frontmatter `description`).
+    description: String,
+    /// Тело-инструкции навыка (markdown после frontmatter).
+    body: String,
+}
+
+/// Свернуть управляющие символы (вкл. `\n`/`\r`/`\t`) в пробел + обрезать края — `description` обязан
+/// быть ОДНОЙ строкой (иначе многострочное значение «протекло» бы в тело frontmatter и сломало парс).
+fn collapse_ws(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// `skill.save` (SL-7d) — агент СОЗДАЁТ/перезаписывает СВОЙ навык `<name>/SKILL.md` под skills_root через
+/// гейт (Confirm-НИКОГДА-Auto). Капабилити-потолок ПО ПОСТРОЕНИЮ: инструмент сам формирует frontmatter
+/// (ТОЛЬКО `name`+`description`) — агент НЕ может объявить `capabilities`/`allowed-tools` (нет такого
+/// аргумента; тело идёт ПОСЛЕ frontmatter, парсер берёт ПЕРВЫЙ блок). Регистрируется ТОЛЬКО при
+/// `ai.skills.learning_enabled` + сконфигурированном skills_root + `agent_actuator_enabled` (default-OFF).
+pub struct SkillSaveTool {
+    dispatcher: Arc<dyn ActionDispatcher>,
+}
+
+impl SkillSaveTool {
+    pub fn new(dispatcher: Arc<dyn ActionDispatcher>) -> Self {
+        Self { dispatcher }
+    }
+}
+
+#[async_trait]
+impl Tool for SkillSaveTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "skill.save".into(),
+            description: "Сохраняет НАВЫК агента: создаёт/перезаписывает `<name>/SKILL.md` (инструкция, \
+                          которую ты сможешь активировать позже). Имя — простой идентификатор (без `/`, \
+                          `..`). Требует подтверждения (никогда не применяется автоматически)."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Имя навыка (каталог), напр. pdf-tools" },
+                    "description": { "type": "string", "description": "Однострочное назначение навыка" },
+                    "body": { "type": "string", "description": "Инструкции навыка (markdown)" }
+                },
+                "required": ["name", "description", "body"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn invoke(&self, args: &str) -> Result<String, ToolError> {
+        let a: SkillSaveArgs = parse_args(args)?;
+        // СИЛЬНАЯ валидация имени (как загрузчик): без `/`/`\`/`..`/control/пусто/огромное.
+        crate::skills::validate_name(&a.name)
+            .map_err(|e| ToolError::BadArgs(format!("недопустимое имя навыка: {e}")))?;
+        // `vendor/` зарезервирован под hash-pinned вендоринг — агент туда не пишет (classify тоже режет).
+        if a.name == crate::skills::VENDOR_DIR {
+            return Err(ToolError::BadArgs(
+                "имя `vendor` зарезервировано (вендоренные навыки неизменяемы)".into(),
+            ));
+        }
+        let rel = format!("{}/SKILL.md", a.name);
+        // frontmatter формирует ИНСТРУМЕНТ (только name+description) → агент не объявит capabilities.
+        let content = format!(
+            "---\nname: {}\ndescription: {}\n---\n{}",
+            a.name,
+            collapse_ws(&a.description),
+            a.body
+        );
+        // Round-trip-фенс (defense; apply_skill_save проверит ещё раз): навык обязан перезагружаться.
+        // Ловит непредставимое description (ведущая `[`/`{` после edge-stripper) — модель поправит.
+        crate::skills::parse_skill(&content, &rel).map_err(|e| {
+            ToolError::BadArgs(format!("SKILL.md невалиден ({e}) — поправь описание/тело"))
+        })?;
+        self.dispatcher
+            .apply(Action::skill_save(rel, content))
             .await
     }
 }
@@ -537,6 +707,156 @@ mod tests {
             create.invoke("not json").await,
             Err(ToolError::BadArgs(_))
         ));
+    }
+
+    // ── SL-7d: skill.save (авторство навыков) ───────────────────────────────────────────────────
+    const VALID_BODY: &str = "Делай то-то и то-то по шагам.";
+
+    /// SkillSaveCtx с learning ON + ChannelDecision(approve) + recorder. skills_root — отдельный temp.
+    /// Возвращает (tool, skills_root, reader) для проверки файла + провенанса.
+    async fn skill_tool(
+        autonomy: Option<&str>,
+        learning: bool,
+        decision: Arc<dyn DecisionSource>,
+    ) -> (
+        SkillSaveTool,
+        TempDir,
+        crate::db::ReadPool,
+        crate::db::WriteActor,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let skills_root = dir.path().canonicalize().unwrap();
+        let db = Database::open(skills_root.join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        let sink = AuditSink::new(db.writer().clone(), db.reader().clone());
+        let reader = db.reader().clone();
+        let writer = db.writer().clone();
+        std::mem::forget(db);
+        let policy = DispatchPolicy::new(autonomy, T, CAP).with_skills_flags(learning, true);
+        let ctx = SkillSaveCtx::new(
+            skills_root.clone(),
+            sink,
+            1,
+            policy,
+            decision,
+            Arc::new(CollectingSink::new()),
+            Some(writer.clone()),
+        );
+        (SkillSaveTool::new(Arc::new(ctx)), dir, reader, writer)
+    }
+
+    /// learning ON + Approve → навык записан под skills_root + провенанс (created_by=agent, save_count=1).
+    #[tokio::test]
+    async fn skill_save_tool_approve_writes_and_provenance() {
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(BatchDecision::from_pairs([(1, ItemDecision::Approve)]))
+            .await
+            .unwrap();
+        let (t, dir, reader, _w) = skill_tool(Some("confirm"), true, Arc::new(chan)).await;
+        let args =
+            format!(r#"{{"name":"pdf-tools","description":"Работа с PDF","body":"{VALID_BODY}"}}"#);
+        let res = t.invoke(&args).await.unwrap();
+        assert!(res.contains("навык"), "резюме: {res}");
+        let abs = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("pdf-tools/SKILL.md");
+        assert!(abs.exists(), "SKILL.md записан");
+        let content = std::fs::read_to_string(&abs).unwrap();
+        assert!(content.contains("name: pdf-tools") && content.contains(VALID_BODY));
+        // Провенанс: строка created_by='agent', save_count инкрементнут.
+        let rec = crate::skills::usage::get_record(&reader, "pdf-tools")
+            .await
+            .unwrap()
+            .expect("usage-строка создана провенансом");
+        assert_eq!(rec.created_by.as_deref(), Some("agent"), "created_by=agent");
+        assert_eq!(rec.save_count, 1, "save_count инкрементнут");
+    }
+
+    /// Регрессия (ревью SL-7d): повтор БАЙТ-идентичного skill.save в одном прогоне → 2-й = AlreadyDone
+    /// (диск не тронут) → `save_count` НЕ инкрементится повторно (== число РЕАЛЬНЫХ записей = 1).
+    #[tokio::test]
+    async fn skill_save_tool_replay_does_not_double_count() {
+        // ChannelDecision на 2 апрува: emit1 (file отсутствует → propose action_id=1), emit2 (file есть,
+        // classify_hash иной → propose action_id=2). Оба одобряем; apply emit2 → AlreadyDone.
+        let (chan, tx) = ChannelDecision::new(2);
+        tx.send(BatchDecision::from_pairs([(1, ItemDecision::Approve)]))
+            .await
+            .unwrap();
+        tx.send(BatchDecision::from_pairs([(2, ItemDecision::Approve)]))
+            .await
+            .unwrap();
+        let (t, _dir, reader, _w) = skill_tool(Some("confirm"), true, Arc::new(chan)).await;
+        let args = format!(r#"{{"name":"dup","description":"d","body":"{VALID_BODY}"}}"#);
+        t.invoke(&args).await.unwrap(); // реальная запись (Executed) → save_count=1
+        t.invoke(&args).await.unwrap(); // байт-идентично → AlreadyDone → НЕ бьём save_count
+
+        let rec = crate::skills::usage::get_record(&reader, "dup")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rec.save_count, 1,
+            "save_count == число РЕАЛЬНЫХ записей (replay не раздувает)"
+        );
+        assert_eq!(rec.created_by.as_deref(), Some("agent"));
+    }
+
+    /// learning OFF → classify HardBlocked(LearningDisabled) → Err, файл НЕ записан, провенанса нет.
+    #[tokio::test]
+    async fn skill_save_tool_learning_disabled_blocked() {
+        let (t, dir, reader, _w) =
+            skill_tool(Some("confirm"), false, Arc::new(PolicyDefault)).await;
+        let args = format!(r#"{{"name":"x","description":"d","body":"{VALID_BODY}"}}"#);
+        let res = t.invoke(&args).await;
+        assert!(
+            matches!(res, Err(ToolError::Exec(_))),
+            "learning off → Err: {res:?}"
+        );
+        assert!(!dir.path().join("x").exists(), "навык НЕ записан");
+        assert!(
+            crate::skills::usage::get_record(&reader, "x")
+                .await
+                .unwrap()
+                .is_none(),
+            "провенанса нет (не Applied)"
+        );
+    }
+
+    /// Reject (PolicyDefault) при learning ON → Rejected (Ok-резюме), файл НЕ записан, провенанса НЕТ
+    /// (провенанс ТОЛЬКО на Applied).
+    #[tokio::test]
+    async fn skill_save_tool_reject_no_provenance() {
+        let (t, dir, reader, _w) = skill_tool(Some("confirm"), true, Arc::new(PolicyDefault)).await;
+        let args = format!(r#"{{"name":"y","description":"d","body":"{VALID_BODY}"}}"#);
+        let res = t.invoke(&args).await.unwrap();
+        assert!(res.contains("отклонено"), "Reject под PolicyDefault: {res}");
+        assert!(
+            !dir.path().join("y").exists(),
+            "отклонённый навык не записан"
+        );
+        assert!(
+            crate::skills::usage::get_record(&reader, "y")
+                .await
+                .unwrap()
+                .is_none(),
+            "Rejected → провенанс НЕ пишется"
+        );
+    }
+
+    /// Невалидное имя (slash / vendor) → BadArgs ДО гейта (файл/строка не создаются).
+    #[tokio::test]
+    async fn skill_save_tool_bad_name_rejected() {
+        let (t, _dir, _r, _w) = skill_tool(Some("confirm"), true, Arc::new(PolicyDefault)).await;
+        for bad in ["a/b", "..", "vendor"] {
+            let args = format!(r#"{{"name":"{bad}","description":"d","body":"{VALID_BODY}"}}"#);
+            assert!(
+                matches!(t.invoke(&args).await, Err(ToolError::BadArgs(_))),
+                "имя {bad:?} → BadArgs"
+            );
+        }
     }
 
     /// Имена инструментов — дотированные kinds (идут в AgentEvent ToolCall.kind).
