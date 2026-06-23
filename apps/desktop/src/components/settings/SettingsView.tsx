@@ -801,6 +801,7 @@ function HeadlessAgentBlock() {
         if (!alive) return;
         setFlags({
           agentAutonomy: c.agentAutonomy,
+          agentActuatorEnabled: c.agentActuatorEnabled,
           sandboxEnabled: c.sandboxEnabled,
           shellEnable: c.shellEnable,
           webAllowPublicFetch: c.webAllowPublicFetch,
@@ -867,6 +868,18 @@ function HeadlessAgentBlock() {
         </div>
       </section>
       {autonomy === 'auto' && <p className={styles.warnText}>{t('settings.agent.autonomyWarn')}</p>}
+
+      {/* AGENT-0.6: мастер-свитч реальных действий агента в vault (создать/править заметку через
+          approval-гейт). OFF (дефолт) → инструменты-заглушки. Читает и десктоп-агент, и agentd. */}
+      <EgressRow
+        label={t('settings.agent.actuator')}
+        desc={t('settings.agent.actuatorDesc')}
+        value={flags.agentActuatorEnabled}
+        onChange={(v) => persist({ agentActuatorEnabled: v })}
+      />
+      {flags.agentActuatorEnabled && (
+        <p className={styles.warnText}>{t('settings.agent.actuatorWarn')}</p>
+      )}
 
       {/* Песочница (мастер-свитч, Linux-only) — предпосылка для host-exec. */}
       <EgressRow

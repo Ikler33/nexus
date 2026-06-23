@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Настройки → ИИ · AGENT-0.6 — тоггл «Действия агента в vault» (включение actuator из UI) 🔴 BETA
+
+Раньше мастер-свитч реальных vault-действий агента (`ai.agent_actuator_enabled`) можно было включить ТОЛЬКО руками в `.nexus/local.json` — из коробки агент «немой» (инструменты записи = заглушки). Добавили тоггл в Настройки → ИИ → агент (рядом с песочницей/shell/web), default-OFF, с consent-предупреждением.
+
+- **backend** (`commands/settings.rs`): `agent_actuator_enabled` добавлен в `AgentFlagsDto` (запись) + `AiConfigDto` (чтение); `apply_agent_flags` пишет `ai.agent_actuator_enabled`, `get_ai_config` читает. Round-trip-тест.
+- **frontend**: тоггл в `SettingsView` (зеркало sandbox/shell) + consent-warn; TS-DTO + мок + i18n ru/en (`settings.agent.actuator*`).
+- Исправлен устаревший комментарий «десктоп агент-флаги рантаймом не читает» — после AGENT-0.2 десктоп-`agent_run` ЧИТАЕТ `agent_actuator_enabled`/`ai.web`/`ai.agent_skills_dir`; тоггл управляет И десктоп-агентом Castor, И headless agentd.
+
+Гейт: `fmt`/`clippy -D warnings`/полный `test-all` зелёный (7 settings-тестов вкл. actuator-round-trip; 14 SettingsView; i18n-парити ru/en; 931 FE). Покрытие — компонент-тест (реальный рендер AI-секции) + backend-round-trip. Теперь у агента есть полный путь: мультитёрн (0.1) + инструменты (0.2) + включение записи из UI (0.6).
+
 ### Агент-вкладка · AGENT-0.2 — web-инструменты + навыки в десктоп-агенте 🔴 BETA
 
 Десктоп-`agent_run` передавал web/skills/delegation/research в `run_agent_session` как `None` — агент был «немой» (только чат+vault, без инструментов). Протянули **web-инструменты** (`web.search`/`web.fetch`) и **навыки** (read-only каталог SKILL.md), зеркаля agentd; default-OFF, gated конфигом.

@@ -35,12 +35,16 @@ pub struct AiConfigDto {
     /// Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B) — inline/судья/сводка reasoning/новости.
     pub fast: Option<EndpointDto>,
 
-    // --- Agent-флаги (Hermes-6/SYNC follow-up). ВАЖНО: десктоп их РАНТАЙМОМ НЕ ЧИТАЕТ — это конфиг
-    // ИСКЛЮЧИТЕЛЬНО headless-агента (`nexus-agentd` через коннектор). Десктоп выбирает автономию
-    // прогона per-run в UI (`stores/agent.ts`), а свой web-режим берёт из отдельного `websearch.json`.
-    // Тогглы Настроек→ИИ лишь ПЕРСИСТЯТ эти ключи в `.nexus/local.json` для серверного агента.
+    // --- Agent-флаги в `.nexus/local.json`. ПОСЛЕ AGENT-0.2/0.6 десктопный `agent_run` ЧИТАЕТ часть из
+    // них рантаймом (`agent_actuator_enabled` / `ai.web` / `ai.agent_skills_dir`) — тогглы управляют И
+    // десктоп-агентом вкладки Castor, И headless `nexus-agentd`. Автономию прогона десктоп всё ещё берёт
+    // per-run из UI (`stores/agent.ts`); `ai.agent_autonomy` — дефолт-постура headless-коннектора.
     /// `ai.agent_autonomy` (`"confirm"`|`"auto"`): дефолт-постура headless-коннектора. `None` → confirm.
     pub agent_autonomy: Option<String>,
+    /// `ai.agent_actuator_enabled`: мастер-свитч РЕАЛЬНЫХ действий агента в vault (создать/править
+    /// заметку через approval-гейт). OFF (дефолт) → инструменты-заглушки, vault не трогается. Читается
+    /// и десктоп-agent_run, и agentd.
+    pub agent_actuator_enabled: bool,
     /// `ai.sandbox_enabled`: мастер-свитч OS-песочницы (Linux-only). Предпосылка для shell-exec.
     pub sandbox_enabled: bool,
     /// `ai.shell_enable`: host-exec в песочнице (Confirm, НИКОГДА Auto). Требует sandbox_enabled + Linux.
@@ -58,6 +62,8 @@ pub struct AiConfigDto {
 pub struct AgentFlagsDto {
     /// `"confirm"`|`"auto"`; иное/`None` → ключ не пишется (дефолт confirm у агентд).
     pub agent_autonomy: Option<String>,
+    /// `ai.agent_actuator_enabled`: мастер-свитч реальных vault-действий агента (default-OFF).
+    pub agent_actuator_enabled: bool,
     pub sandbox_enabled: bool,
     pub shell_enable: bool,
     pub web_allow_public_fetch: bool,
@@ -156,6 +162,11 @@ fn apply_agent_flags(doc: &mut serde_json::Value, flags: &AgentFlagsDto) -> Resu
             ai.remove("agent_autonomy");
         }
     }
+    // Мастер-свитч реальных vault-действий агента (default-OFF). Читает и десктоп-agent_run, и agentd.
+    ai.insert(
+        "agent_actuator_enabled".into(),
+        serde_json::Value::Bool(flags.agent_actuator_enabled),
+    );
     ai.insert(
         "sandbox_enabled".into(),
         serde_json::Value::Bool(flags.sandbox_enabled),
@@ -216,6 +227,7 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
             model: f.model,
         }),
         agent_autonomy: cfg.ai.agent_autonomy.clone(),
+        agent_actuator_enabled: cfg.ai.agent_actuator_enabled,
         sandbox_enabled: cfg.ai.sandbox_enabled,
         shell_enable: cfg.ai.shell_enable,
         web_allow_public_fetch: cfg
@@ -414,6 +426,7 @@ pub async fn set_agent_flags(
             Some("confirm") | Some("auto") => flags.agent_autonomy.clone(),
             _ => None,
         },
+        agent_actuator_enabled: flags.agent_actuator_enabled,
         sandbox_enabled: flags.sandbox_enabled,
         shell_enable: flags.shell_enable && flags.sandbox_enabled,
         web_allow_public_fetch: flags.web_allow_public_fetch,
@@ -501,10 +514,31 @@ mod tests {
     ) -> AgentFlagsDto {
         AgentFlagsDto {
             agent_autonomy: autonomy.map(str::to_string),
+            agent_actuator_enabled: false, // отдельный тест ниже проверяет actuator-ключ
             sandbox_enabled: sandbox,
             shell_enable: shell,
             web_allow_public_fetch: public_fetch,
         }
+    }
+
+    /// AGENT-0.6: `apply_agent_flags` пишет `ai.agent_actuator_enabled` (мастер-свитч записи агента),
+    /// СОХРАНЯЯ прочие ключи. Round-trip через `LocalConfig` (нет коррапта).
+    #[test]
+    fn apply_agent_flags_writes_actuator_flag() {
+        let mut doc = serde_json::json!({ "ai": { "chat": { "url": "http://h:8080" } } });
+        let f = AgentFlagsDto {
+            agent_autonomy: None,
+            agent_actuator_enabled: true,
+            sandbox_enabled: false,
+            shell_enable: false,
+            web_allow_public_fetch: false,
+        };
+        apply_agent_flags(&mut doc, &f).unwrap();
+        assert_eq!(doc["ai"]["agent_actuator_enabled"], serde_json::json!(true));
+        // chat сохранён; итог валиден для LocalConfig.
+        assert_eq!(doc["ai"]["chat"]["url"], serde_json::json!("http://h:8080"));
+        let parsed = LocalConfig::parse(&doc.to_string()).unwrap();
+        assert!(parsed.ai.agent_actuator_enabled);
     }
 
     /// apply_agent_flags пишет 4 флага, СОХРАНЯЯ chat/sync; `web.allow_public_fetch` мержится в
