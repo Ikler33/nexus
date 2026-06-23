@@ -14,7 +14,9 @@
 pub mod budget;
 pub mod child_task;
 pub mod registry;
+pub mod spawn;
 
 pub use budget::{BudgetError, DelegationBudget};
 pub use child_task::build_child_task;
 pub use registry::{build_child_registry, DELEGATE_RUN_TOOL, RESEARCH_RUN_TOOL, SKILL_SAVE_TOOL};
+pub use spawn::{spawn_subagent, SubagentContext, SubagentResult};
