@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-3b-2a — `DelegateTool` (`delegate.run`: конкурентный fan-out субагентов)
+
+Инструмент делегирования (порт hermes `delegate_task`). Родитель зовёт `delegate.run` с батчем задач → КОНКУРЕНТНЫЙ fan-out [`spawn_subagent`] по каждой, агрегат `[{index,status,summary}]`. Сам инструмент (логика fan-out); регистрация под `ai.delegation.enabled` + проводка хендлов — SUB-3b-2b (БЕЗ неё `delegate.run` ещё не активен).
+
+- **`delegate::tool::DelegateTool`** (impl Tool, `delegate.run`): args `{tasks:[{goal, context?, tools?}]}` (`deny_unknown_fields`, I-4); пустой/лишнее → `BadArgs`; батч > `max_fanout` → `BadArgs` (модель уменьшит). Fan-out через `tokio::JoinSet` + `Semaphore(max_fanout)` (backpressure на одном GPU); сбор ПО ИНДЕКСУ (порядок батча сохранён); **один упавший ребёнок НЕ валит батч** (его запись `status:"failed"`). `max_fanout` клампится `1..=16` (hard ceiling defense-in-depth). Родитель видит ТОЛЬКО саммари (изоляция из SUB-3b-1).
+- Анти-runaway СТРУКТУРНО: каждый спавн внутри `spawn_subagent` fail-closed списывает общий `DelegationBudget` (исчерпан → `failed`-запись без спавна); рекурсия исключена (дети не получают `delegate.run`).
+
+**Adversarial-ревью (concurrency/security-скептик → CAS/aggregation/output ЧИСТЫ; 1 MAJOR обезврежен + MINOR/NIT):** **#4 abort-on-drop** — дроп фьючи `delegate.run` (отмена/таймаут родителя) аборнул бы детей `JoinSet`'а НА `.await` → осиротевшие `running`-строки. Добавлен **`run_store::reconcile_orphan_child_runs`** (стартап-sweep: застрявший `running`-ребёнок `parent_run_id IS NOT NULL` → терминал `error`«прервано»; дети не возобновляемы — в отличие от `requeue_stale_running`→`queued`). **ЖЁСТКОЕ предусловие SUB-3b-2b**: agentd зовёт его на старте ДО регистрации `delegate.run`. Плюс: семафор-deadweight удалён (`max_fanout` сам = кап батча И конкурентности, дефолт 3); паника задачи теперь логируется (`tracing::error`).
+
+Tier-1 (+5 tests, 985 nexus-core): 2 таска→агрегат(2 done)+дерево parent_run_id · батч>cap→BadArgs(0 спавнов) · пустой/лишнее→BadArgs · **гонка бюджета (cap=1, 2 конкурентных таска) → один done/один failed, батч НЕ оборван** · **reconcile сирот-детей→error (top-level/done не тронуты)**. `test-all` зелёный. Дальше: SUB-3b-2b (регистрация `delegate.run` под `ai.delegation.enabled` + reconcile-sweep на старте + DelegationDeps-проводка job/connect/agentd).
+
 ### Агент · SUBAGENTS SUB-3b-1 — `spawn_subagent` (примитив порождения ОДНОГО субагента)
 
 Строительный блок субагента: вложенный `run_agent_session` с изоляцией + сужением + общим kill-switch. БЕЗ `delegate.run`-инструмента/fan-out (SUB-3b-2) — нулевое top-level изменение.

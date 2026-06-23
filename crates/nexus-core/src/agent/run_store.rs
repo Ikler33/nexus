@@ -252,6 +252,39 @@ pub async fn requeue_stale_running(
         .await
 }
 
+/// **SUBAGENTS (SUB-3b-2a, фикс ревью #4): реконсиляция ОСИРОТЕВШИХ прогонов-ДЕТЕЙ.** Прогон-ребёнок
+/// (`parent_run_id IS NOT NULL`) создаётся/гоняется ИНЛАЙН в `delegate.run` через `JoinSet`; при ДРОПЕ
+/// фьючи инструмента (отмена/таймаут родителя) tokio аборнет дочерние задачи НА `.await` — строка
+/// остаётся в `running` НАВСЕГДА (терминал `finish_run` не достигнут). В отличие от top-level прогонов
+/// ([`requeue_stale_running`] → `queued` для re-claim джобой), ДЕТИ НЕ возобновляемы (нет джобы, нет
+/// per-child replay) → застрявших переводим в ТЕРМИНАЛ `error` («прервано»). Запускается на СТАРТЕ
+/// (как [`requeue_stale_running`]/`reconcile_stale_executing`) — **ЖЁСТКОЕ предусловие регистрации
+/// `delegate.run` (SUB-3b-2b).** `older_than_secs` ДОЛЖЕН превышать макс. время жизни ребёнка (дети
+/// ограничены тем же `LoopBounds.wall_clock`, что и top-level → тот же TTL безопасен). Возвращает число
+/// реконсилированных. `now` явный → детерминированные тесты.
+pub async fn reconcile_orphan_child_runs(
+    writer: &WriteActor,
+    older_than_secs: i64,
+    now: i64,
+) -> DbResult<usize> {
+    writer
+        .transaction(move |tx| {
+            let cutoff = now - older_than_secs;
+            tx.execute(
+                "UPDATE agent_runs SET status=?1, outcome=?2, updated_at=?3 \
+                 WHERE status=?4 AND parent_run_id IS NOT NULL AND updated_at < ?5",
+                params![
+                    STATUS_ERROR,
+                    "прервано (осиротевший субагент)",
+                    now,
+                    STATUS_RUNNING,
+                    cutoff
+                ],
+            )
+        })
+        .await
+}
+
 /// Маппинг строки результата в [`AgentRun`] (порядок колонок фиксирован SELECT'ами выше).
 fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRun> {
     Ok(AgentRun {
@@ -456,5 +489,48 @@ mod tests {
     async fn get_run_missing_is_none() {
         let (_d, db) = open().await;
         assert!(get_run(db.reader(), 9999).await.unwrap().is_none());
+    }
+
+    /// SUB-3b-2a фикс #4: reconcile_orphan_child_runs переводит ЗАСТРЯВШИЙ `running` ПРОГОН-РЕБЁНКА
+    /// (parent_run_id set) в ТЕРМИНАЛ `error`; top-level `running` (parent NULL) и `done`-ребёнок — НЕ
+    /// трогает.
+    #[tokio::test]
+    async fn reconcile_orphan_child_runs_terminates_only_stale_children() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        // top-level running (parent NULL) — НЕ должен быть тронут.
+        let top = create_run(w, "родитель", None, None).await.unwrap();
+        mark_running(w, top).await.unwrap();
+        // осиротевший running ребёнок — должен стать error.
+        let orphan = create_child_run(w, "ребёнок-сирота", None, None, top)
+            .await
+            .unwrap();
+        mark_running(w, orphan).await.unwrap();
+        // завершённый ребёнок — НЕ должен быть тронут (не running).
+        let done = create_child_run(w, "ребёнок-готов", None, None, top)
+            .await
+            .unwrap();
+        mark_running(w, done).await.unwrap();
+        finish_run(w, done, STATUS_DONE, Some("ок")).await.unwrap();
+
+        // now далеко в будущем + older_than=0 → cutoff в будущем, все running «старые».
+        let reconciled = reconcile_orphan_child_runs(w, 0, now_secs() + 10_000)
+            .await
+            .unwrap();
+        assert_eq!(reconciled, 1, "реконсилирован ровно один сирота-ребёнок");
+
+        let o = get_run(db.reader(), orphan).await.unwrap().unwrap();
+        assert_eq!(o.status, STATUS_ERROR, "сирота → error");
+        assert!(o.outcome.as_deref().unwrap_or("").contains("прервано"));
+        assert_eq!(
+            get_run(db.reader(), top).await.unwrap().unwrap().status,
+            STATUS_RUNNING,
+            "top-level (parent NULL) НЕ тронут"
+        );
+        assert_eq!(
+            get_run(db.reader(), done).await.unwrap().unwrap().status,
+            STATUS_DONE,
+            "завершённый ребёнок НЕ тронут"
+        );
     }
 }
