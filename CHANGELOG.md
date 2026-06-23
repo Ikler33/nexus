@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Документация · THREAT_MODEL.md приведён в соответствие с кодом (product-completeness P0)
+
+Док устарел с #369 (T7 shell/host «НЕ СУЩЕСТВУЕТ», T3 env-scrub «не реализовано» — оба давно построены; ноль покрытия subagents/research/self-learning/backup). Освежён из **code-accurate gather (Workflow, 6 подсистем, file:symbol-доказательства)** + **adversarial accuracy-review (2 линзы: over-claim vs код / under-state риска)** → 0 CRITICAL, без ложных security-свойств.
+
+- Исправлены устаревшие claims: **T3** env-scrub теперь ✅ (fail-closed `build_exec_env`, build-up из пустого, reserved-ключи immutable); **T7** host/exec теперь 🔒 ПОСТРОЕНО default-OFF (rootless Podman `--network=none`/EROFS-vault/cap-drop/userns + 3 AF_UNIX SO_PEERCRED + ledger-FSM/one-shot-token/host-authority-argv/last-moment-kill-switch; Tier-2 containment валидирован на .28); **T8** AF_UNIX+SO_PEERCRED.
+- Добавлены T9 (субагенты: child⊆parent, blocked-tools, общий kill-switch/бюджет, lineage), T10 (deep-research: read-only воркеры + per-run injection_marker/fence + отчёт через гейт), T11 (self-learning: skill.save через гейт never-Auto, capability-потолок, curator never-delete, vendor hash-pin), T12 (backup: format/schema-too-new/anti-DoS/params/created_by-гейт/атомарность), T13 (доступность indexer).
+- Honesty-добивки ревью: redaction выборочна (не compile-time), latency/approval-таймаут консистентность (write-before-act+reconcile), autonomy-дефолт `confirm`, fail-closed approval-канал, plugin-audit durability. Все default-OFF/owner-gated помечены; §4 фаза-гейты обновлены (включение exec = THREAT_MODEL + live + прод-проводка + флаги).
+
 ### Данные · Backup/Restore (#59) — портабельный экспорт/импорт «второго мозга» с дедупом (← odysseus)
 
 Пропущенная дешёвая фича из ресёрча: один JSON-бэкап durable-состояния агента и импорт обратно без дублей. Бэкенд. Покрывает то, что НЕ восстановить из vault: факты памяти (MEM), всю переписку (сессии+сообщения), LLM-саммари эпизодов (EP), телеметрию/lifecycle ТОЛЬКО агент-созданных скиллов. Заметки `.md`, vector/FTS-индексы и audit-журналы намеренно вне бэкапа (vault/git-sync + reconcile/rebuild на открытии).
