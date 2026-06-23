@@ -566,6 +566,12 @@ export type ChatStreamEvent =
  *  ждёт аппрува человека; `auto` — Auto-тир применяется под blast-radius-кэпом без аппрува. */
 export type AgentAutonomy = 'confirm' | 'auto';
 
+/** W-4: элемент истории переписки агента (мультитёрн), зеркалит Rust `HistoryMsg`. */
+export interface AgentHistoryMsg {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 /** Статус файла changeset'а (зеркало Rust `AgentFileStatus`): `new` — новая заметка; `edit` — правка. */
 export type AgentFileStatus = 'new' | 'edit';
 
@@ -1564,11 +1570,14 @@ export const tauriApi = {
       task: string,
       autonomy: AgentAutonomy,
       onEvent: (event: AgentStreamEvent) => void,
+      // W-4: история прошлых ходов сессии (мультитёрн) — чтобы follow-up продолжал работу прошлого
+      // хода и снова предлагал правки через гейт. Пусто для первого хода.
+      history: AgentHistoryMsg[] = [],
     ): Promise<number> => {
-      if (!isTauri()) return mockAgent.run(task, autonomy, onEvent);
+      if (!isTauri()) return mockAgent.run(task, autonomy, onEvent, history);
       const channel = new Channel<AgentStreamEvent>();
       channel.onmessage = onEvent;
-      return invoke<number>('agent_run', { task, autonomy, channel }).catch((e: unknown) => {
+      return invoke<number>('agent_run', { task, autonomy, history, channel }).catch((e: unknown) => {
         onEvent({ type: 'error', message: String(e) });
         throw e;
       });

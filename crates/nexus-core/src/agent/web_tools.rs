@@ -600,6 +600,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(32768),
             canon_root: dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));

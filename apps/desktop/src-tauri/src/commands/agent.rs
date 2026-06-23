@@ -46,6 +46,7 @@ use nexus_core::agent::{
     run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, LoopOutcome,
     SessionSpec, VaultAgentMemory,
 };
+use nexus_core::ai::ChatMessage;
 
 use crate::error::{AppError, AppResult};
 use crate::state::{AgentRunEntry, AppState};
@@ -148,14 +149,37 @@ fn normalize_autonomy(autonomy: &str) -> &'static str {
 /// Композиция зеркалит agentd / [`agent::AgentRunHandler`]: tool-провайдер из `ai.chat`, токенайзер/
 /// бюджет, реестр (стабы при выключенном актуаторе [дефолт], гейтнутые инструменты при ВКЛ), память
 /// (recall + Add-only запись), UI-DecisionSource, per-run kill-switch.
+/// W-4: элемент истории переписки из десктоп-чата (мультитёрн). `role` — `"assistant"` → assistant-
+/// сообщение, иначе user. Фронт шлёт прошлые ходы, чтобы follow-up продолжал работу, см. SessionSpec.
+#[derive(serde::Deserialize)]
+pub struct HistoryMsg {
+    pub role: String,
+    pub text: String,
+}
+
 #[tauri::command]
 pub async fn agent_run(
     state: State<'_, AppState>,
     task: String,
     autonomy: String,
+    // W-4: история прошлых ходов сессии (из стора `turns[]`); фронт всегда шлёт (пустой массив для
+    // первого хода).
+    history: Vec<HistoryMsg>,
     channel: Channel<AgentStreamEvent>,
 ) -> AppResult<i64> {
     let autonomy = normalize_autonomy(&autonomy);
+    // W-4: история в ChatMessage (пустые пропускаем); вставится перед текущей задачей в run_agent_session.
+    let history: Vec<ChatMessage> = history
+        .into_iter()
+        .filter(|m| !m.text.trim().is_empty())
+        .map(|m| {
+            if m.role == "assistant" {
+                ChatMessage::assistant(m.text)
+            } else {
+                ChatMessage::user(m.text)
+            }
+        })
+        .collect();
 
     // Снимаем нужное из контекста vault и отпускаем read-гард ДО долгого спавна (как chat.rs). Берём
     // ТОЛЬКО нужные хендлы (AIClient не `Clone` — клонируем поля точечно).
@@ -336,6 +360,7 @@ pub async fn agent_run(
         let outcome = drive_run(
             run_id,
             task,
+            history,
             autonomy,
             provider,
             actuator_enabled,
@@ -463,6 +488,8 @@ pub async fn agent_undo(state: State<'_, AppState>, run_id: i64) -> AppResult<us
 async fn drive_run(
     run_id: i64,
     task: String,
+    // W-4: история прошлых ходов сессии (мультитёрн) — в начальный контекст перед текущей задачей.
+    history: Vec<ChatMessage>,
     autonomy: &'static str,
     provider: Option<Arc<dyn nexus_core::ai::tools::ToolCapableProvider>>,
     actuator_enabled: bool,
@@ -510,6 +537,8 @@ async fn drive_run(
         blast_cap,
         context_window,
         canon_root,
+        // W-4: история прошлых ходов сессии (десктоп-чат мультитёрный поверх one-shot прогонов).
+        history,
         // SL-7: авторство навыков (skill.save) — только при ai.skills.learning_enabled (AGENT-0.2).
         skills_learning_enabled,
     };
@@ -700,6 +729,7 @@ mod tests {
         let outcome = drive_run(
             1,
             "smoke: позови echo".into(),
+            vec![],
             "auto",
             Some(provider),
             false, // actuator ВЫКЛ → стабы (vault не трогается)
@@ -753,6 +783,7 @@ mod tests {
         let outcome = drive_run(
             run_id,
             "t".into(),
+            vec![],
             "auto",
             None,
             false,
@@ -833,6 +864,7 @@ mod tests {
         let outcome = drive_run(
             1,
             "создай заметку".into(),
+            vec![],
             "confirm", // confirm-прогон → даже Auto-тир note.create предлагается
             Some(provider),
             true, // actuator ВКЛ (go-live, тестовый temp-vault)
@@ -884,6 +916,7 @@ mod tests {
         let outcome = drive_run(
             1,
             "создай заметку".into(),
+            vec![],
             "confirm",
             Some(provider),
             true,

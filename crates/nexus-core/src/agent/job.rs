@@ -281,6 +281,7 @@ impl AgentRunHandler {
             blast_cap: self.blast_cap,
             context_window: self.context_window,
             canon_root: self.canon_root.clone(),
+            history: Vec::new(), // scheduler-джоба: задача-one-shot (мультитёрн — только десктоп-чат)
             skills_learning_enabled: self.skills_learning_enabled,
         };
         // SUB-3b-2b: delegate.run в top-level прогоне ТОЛЬКО при `ai.delegation.enabled`. Провайдер как Arc

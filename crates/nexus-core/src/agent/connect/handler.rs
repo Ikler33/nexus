@@ -267,6 +267,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 blast_cap: deps.blast_cap,
                 context_window: deps.context_window,
                 canon_root: deps.canon_root.clone(),
+                history: Vec::new(), // headless-коннектор: задача-one-shot (мультитёрн — десктоп-чат)
                 skills_learning_enabled: deps.skills_learning_enabled,
             };
             let _ = run_store::mark_running(&deps.writer, run_id).await;

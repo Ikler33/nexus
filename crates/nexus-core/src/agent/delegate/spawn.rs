@@ -199,6 +199,7 @@ pub async fn spawn_subagent(
         blast_cap: ctx.blast_cap,
         context_window: ctx.context_window,
         canon_root: ctx.canon_root.clone(),
+        history: Vec::new(), // дети — свежий one-shot подзадачи (без истории родителя)
         skills_learning_enabled: false, // дети навыки не авторствуют
     };
     let sa = SubagentSpawn {

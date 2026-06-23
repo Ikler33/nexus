@@ -65,6 +65,12 @@ pub struct SessionSpec {
     pub run_id: i64,
     /// Задача пользователя (становится финальным `user`-сообщением начального контекста).
     pub task: String,
+    /// W-4: история переписки ПРЕДЫДУЩИХ ходов сессии (user-задачи + assistant-ответы), вставляется
+    /// между меню скиллов и текущей задачей. Десктоп-чат мультитёрный (`turns[]`), но прогон агента —
+    /// one-shot per `run_id`; без истории follow-up-ход («теперь добавь раздел») не помнил, что прошлый
+    /// ход правил заметку → модель отвечала прозой, write-tool не вызывался → не было changeset-гейта
+    /// (ST-G3). Пусто (top-level/agentd/первый ход) → поведение без регрессии.
+    pub history: Vec<ChatMessage>,
     /// Автономия прогона (`confirm`|`auto`|`None`→confirm в политике). Эффект только при `actuator_enabled`.
     pub autonomy: Option<String>,
     /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT.** `false` → только стабы (vault не трогается); `true`
@@ -150,10 +156,15 @@ pub async fn run_agent_session(
     let skill_menu: Option<ChatMessage> = skills
         .and_then(|sk| sk.catalog_block(&injection_marker()))
         .map(ChatMessage::user);
-    let mut messages = Vec::with_capacity(recalled.len() + 2 + usize::from(skill_menu.is_some()));
+    let mut messages = Vec::with_capacity(
+        recalled.len() + spec.history.len() + 2 + usize::from(skill_menu.is_some()),
+    );
     messages.push(ChatMessage::system(AGENT_PREAMBLE));
     messages.extend(recalled);
     messages.extend(skill_menu);
+    // W-4: история прошлых ходов сессии ПЕРЕД текущей задачей — чтобы follow-up продолжал работу
+    // прошлого хода (и снова предлагал правки через гейт), а не отвечал прозой с нуля.
+    messages.extend(spec.history.iter().cloned());
     messages.push(ChatMessage::user(&spec.task));
 
     let bounds = LoopBounds::default();
@@ -436,6 +447,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
@@ -491,6 +503,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
@@ -553,6 +566,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
@@ -613,6 +627,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
@@ -671,6 +686,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let deps = DelegationDeps {
@@ -749,6 +765,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
@@ -840,6 +857,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(8192),
             canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
@@ -878,6 +896,78 @@ mod tests {
         assert!(
             tools.iter().any(|t| t == READ_SKILL_RESOURCE_TOOL),
             "read_skill_resource должен быть зарегистрирован: {tools:?}"
+        );
+    }
+
+    /// W-4: `spec.history` (прошлые ходы мультитёрн-сессии) попадает в начальный контекст ПЕРЕД
+    /// текущей задачей. Без этого follow-up-ход не помнил контекст и не предлагал правки (ST-G3).
+    #[tokio::test]
+    async fn history_threaded_into_context_before_task() {
+        let (_dir, db) = open_db().await;
+        let provider = RecordingProvider {
+            seen_msgs: Mutex::new(Vec::new()),
+            seen_tools: Mutex::new(Vec::new()),
+        };
+        let fwd = Arc::new(CollectingForwarder::default());
+        let spec = SessionSpec {
+            run_id: 7,
+            task: "теперь добавь раздел про кэш".into(),
+            autonomy: None,
+            actuator_enabled: false,
+            overwrite_threshold: 100,
+            blast_cap: 10,
+            context_window: Some(8192),
+            canon_root: _dir.path().to_path_buf(),
+            history: vec![
+                Msg::user("создай заметку про оплату"),
+                Msg::assistant("Создал черновик заметки «Оплата»."),
+            ],
+            skills_learning_enabled: false,
+        };
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let outcome = run_agent_session(
+            &spec,
+            &provider,
+            None,
+            None,
+            None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(matches!(outcome, LoopOutcome::Final(_)));
+
+        let msgs = provider.seen_msgs.lock().unwrap();
+        // История ОБОИХ ролей и текущая задача — все в контексте.
+        assert!(
+            msgs.iter().any(|m| m.contains("создай заметку про оплату")),
+            "history user-ход в контексте: {msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("черновик заметки")),
+            "history assistant-ход в контексте: {msgs:?}"
+        );
+        // Порядок: последний элемент = ТЕКУЩАЯ задача (история строго ПЕРЕД ней).
+        let last = msgs.last().cloned().unwrap_or_default();
+        assert!(
+            last.contains("добавь раздел про кэш"),
+            "текущая задача — последняя: {last}"
+        );
+        let idx_hist = msgs
+            .iter()
+            .position(|m| m.contains("создай заметку про оплату"))
+            .unwrap();
+        assert!(
+            idx_hist < msgs.len() - 1,
+            "история строго перед текущей задачей"
         );
     }
 
@@ -940,6 +1030,7 @@ mod tests {
             blast_cap: 16,
             context_window: Some(32768),
             canon_root: canon.clone(),
+            history: Vec::new(),
             skills_learning_enabled: false,
         };
         let fwd = Arc::new(CollectingForwarder::default());

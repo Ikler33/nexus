@@ -7,6 +7,7 @@ import type {
   AgentApprovalDecision,
   AgentAutonomy,
   AgentFileStatus,
+  AgentHistoryMsg,
   AgentStreamEvent,
 } from '../lib/tauri-api';
 
@@ -164,6 +165,29 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // Новый ХОД дописывается в ленту (НЕ стираем прошлые ходы — фикс стирания переписки).
     const turnKey = last ? last.key + 1 : 0;
     const myEpoch = ++agentEpochSeq;
+    // W-4: история прошлых ходов → бэкенд (иначе follow-up не помнит контекст и не предлагает правки →
+    // не было changeset-гейта, ST-G3). Берём до добавления нового хода. Защиты (ревью W-4):
+    //  • КАЖДЫЙ ход даёт user+assistant (пустой ответ errored/cancelled → плейсхолдер) — строгая
+    //    альтернация ролей (часть OpenAI-серверов 400-ит на двух подряд user/assistant);
+    //  • кап по ходам И по символам (огромный отчёт иначе раздул бы контекст → hard-fail прогона);
+    //  • усечение одного сообщения; набираем с КОНЦА (свежее важнее), всегда ≥ последний ход.
+    const HISTORY_TURNS_CAP = 8;
+    const HISTORY_CHAR_BUDGET = 12000;
+    const PER_MSG_CHARS = 4000;
+    const trunc = (s: string) => (s.length > PER_MSG_CHARS ? `${s.slice(0, PER_MSG_CHARS)}…` : s);
+    const recent = get().turns.slice(-HISTORY_TURNS_CAP);
+    const built: AgentHistoryMsg[] = [];
+    let budget = HISTORY_CHAR_BUDGET;
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const tn = recent[i];
+      const user = trunc(tn.task);
+      const answer = trunc((tn.report ?? tn.assistantText ?? '').trim() || '(нет ответа)');
+      // Всегда оставляем хотя бы самый свежий ход; иначе обрезаем по бюджету.
+      if (built.length > 0 && budget - (user.length + answer.length) < 0) break;
+      budget -= user.length + answer.length;
+      built.push({ role: 'assistant', text: answer }, { role: 'user', text: user });
+    }
+    const history: AgentHistoryMsg[] = built.reverse();
     set((s) => ({
       turns: [
         ...s.turns,
@@ -269,7 +293,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     };
 
     void tauriApi.agent
-      .run(q, autonomy, onEvent)
+      .run(q, autonomy, onEvent, history)
       .then((id) => {
         const tn = get().turns.find((t) => t.key === turnKey);
         // Тот же ход (epoch), не отменён синхронным потоком до резолва id — иначе не привязываем runId.

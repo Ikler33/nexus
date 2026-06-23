@@ -12,7 +12,12 @@
 // - `pause/resume` — тоггл паузы (стрим замирает/продолжается). `cancel` — обрывает стрим (как cancel-флаг).
 // - `undo(runId)` — число «откаченных» действий (мок: количество применённых файлов прогона).
 
-import type { AgentApprovalDecision, AgentAutonomy, AgentStreamEvent } from '../tauri-api';
+import type {
+  AgentApprovalDecision,
+  AgentAutonomy,
+  AgentHistoryMsg,
+  AgentStreamEvent,
+} from '../tauri-api';
 
 /** Файлы демо-changeset'а (зеркало `proposal.files` контракта). `actionId` — синтетический адрес
  *  решения (как id строки `agent_actions`); approve адресует именно его. */
@@ -73,7 +78,11 @@ export function run(
   task: string,
   autonomy: AgentAutonomy,
   onEvent: (event: AgentStreamEvent) => void,
+  // W-4: история мультитёрна — мок поведением её не использует (proposal детерминирован per-run),
+  // но принимает для соответствия контракту команды `agent_run`.
+  history: AgentHistoryMsg[] = [],
 ): Promise<number> {
+  void history; // принимаем по контракту; детерминированный мок-proposal от истории не зависит
   const runId = nextRunId++;
   const files: MockFile[] = [
     { path: 'RMS-B2B/Идея — кэш контекста.md', add: 8, del: 0, status: 'new', actionId: runId * 100 + 1 },
