@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-3b-1 — `spawn_subagent` (примитив порождения ОДНОГО субагента)
+
+Строительный блок субагента: вложенный `run_agent_session` с изоляцией + сужением + общим kill-switch. БЕЗ `delegate.run`-инструмента/fan-out (SUB-3b-2) — нулевое top-level изменение.
+
+- **`delegate::spawn::spawn_subagent(ctx, goal, context, requested)`**: (1) fail-closed списание `DelegationBudget` (исчерпан → `Failed` БЕЗ строки прогона); (2) `create_child_run(parent_run_id)` (дерево) + `mark_running`; (3) реестр child = `build_child_registry` (child⊆parent минус блок-лист); (4) вложенный `run_agent_session(memory=None, SubagentSpawn{allowed, dispatcher})`; (5) свёртка `LoopOutcome`→краткое саммари, `finish_run`, терминальный `SubagentStatus`. `SubagentContext` (владеемые Arc/клоны — fan-out 3b-2 клонирует в задачи) + `SubagentResult`.
+- **Инварианты (доказаны тестами)**: дерево `parent_run_id` персистится; `paused` (ТОТ ЖЕ Arc) → ребёнок `Paused`; бюджет fail-closed → строка не создаётся; рекурсия структурно-стоп (внук не порождается — `delegate.run` вырезан из реестра ребёнка); `skills_learning_enabled=false` (дети не авторствуют навыки).
+- **Adversarial-ревью (security-скептик 8 линз → 1 MAJOR исправлен)**: **изоляция контекста** — ребёнок делил родительский форвардер, и его АНОНИМНЫЕ события (`AssistantToken`/`ToolCall`/`ToolResult`/`Final`/…) без `run_id` приписывались бы РОДИТЕЛЮ как его ходы/финал (нарушение «родитель видит ТОЛЬКО саммари»). **Фикс**: `SubagentForwarder` глушит анонимные ходы ребёнка, пропуская лишь id-несущие (gate/plan/status); +тест «анонимные ходы не протекают». (#5 budget-leak на create-fail — fail-safe, оставлен; live-cancel + общий dispatcher для tree-global blast-radius — в SUB-3b-2.)
+
+Tier-1 (+4 tests, 980 nexus-core). `test-all` зелёный. Дальше: SUB-3b-2 (`DelegateTool` `delegate.run` + JoinSet fan-out + регистрация под `ai.delegation.enabled` — ПОЛНЫЙ multi-lens adversarial-ревью).
+
 ### Агент · SUBAGENTS SUB-3a — шов субагента в `run_agent_session` (сужение реестра child⊆parent + общий gate)
 
 Плумбинг-шов для спавна субагента в ЕДИНОЙ композиции прогона. Без `delegate.run`-инструмента/спавна (SUB-3b) — нулевое изменение top-level поведения (новый параметр `None` у всех текущих вызовов).
