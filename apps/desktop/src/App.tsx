@@ -15,6 +15,7 @@ import { useWorkspaceStore } from './stores/workspace';
 import { ActivityBar } from './components/chrome/ActivityBar';
 import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
+import { SelfCheck } from './components/chrome/SelfCheck';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { EditorArea } from './components/workspace/EditorArea';
 import { BoardView } from './components/board/BoardView';
@@ -316,6 +317,8 @@ export function App() {
       </div>
       <InlineAria />
       <StatusBar />
+      {/* W-21: dev self-check (пинг LLM + конфиг) — только в dev-сборке, аид разработки. */}
+      {import.meta.env.DEV && <SelfCheck />}
 
       <CommandPalette />
       <QuickCapture />

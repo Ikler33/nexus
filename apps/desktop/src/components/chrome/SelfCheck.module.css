@@ -1,0 +1,132 @@
+/* W-21 dev self-check — плавающая карточка слева снизу, над статусбаром. Не модальная (role=status). */
+.card {
+  position: fixed;
+  left: var(--space-3);
+  bottom: calc(var(--space-6, 24px) + 18px);
+  z-index: 60;
+  width: min(420px, calc(100vw - 2 * var(--space-3)));
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.25));
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  overflow: hidden;
+}
+.cardWarn {
+  border-color: color-mix(in oklch, var(--color-warning) 60%, var(--color-border));
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  background: var(--color-chrome);
+  border-bottom: 1px solid var(--color-border);
+}
+/* Проблема — заметнее: тёплый фон шапки + жирнее (review W-21: green/broken почти неразличимы). */
+.headWarn {
+  background: color-mix(in oklch, var(--color-warning) 16%, var(--color-chrome));
+  border-bottom-color: color-mix(in oklch, var(--color-warning) 45%, var(--color-border));
+}
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.headWarn .title {
+  color: var(--color-warning);
+}
+.iconOk {
+  color: var(--color-success);
+}
+.iconWarn {
+  color: var(--color-warning);
+}
+.actions {
+  display: inline-flex;
+  gap: 2px;
+}
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 3px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+}
+.iconBtn:hover {
+  background: var(--color-hover, color-mix(in oklch, var(--color-text) 8%, transparent));
+  color: var(--color-text);
+}
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.spin {
+  animation: selfcheck-spin 0.9s linear infinite;
+}
+@keyframes selfcheck-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 6px var(--space-3) 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.row {
+  display: grid;
+  grid-template-columns: 16px auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+}
+.badge {
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.badge_ok {
+  color: var(--color-success);
+}
+.badge_fail {
+  color: var(--color-danger);
+}
+.badge_unset,
+.badge_checking {
+  color: var(--color-text-muted);
+}
+.rowLabel {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.rowMeta {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowErr {
+  grid-column: 2 / -1;
+  color: var(--color-danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

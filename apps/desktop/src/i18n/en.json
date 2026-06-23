@@ -912,6 +912,16 @@
     "indexing": "Indexing {{done}}/{{total}}",
     "versionTooltip": "Version {{version}} · {{branch}} @ {{hash}}"
   },
+  "selfCheck": {
+    "title": "Self-check (dev)",
+    "chat": "Chat",
+    "embedding": "Embedding",
+    "fast": "Fast",
+    "recheck": "Re-check",
+    "dismiss": "Dismiss",
+    "unsetRequired": "not configured",
+    "unsetOptional": "not set (falls back to chat)"
+  },
   "deadJobs": {
     "title": "Background tasks",
     "hint": "These tasks ran out of retries. Fix the cause (usually the model URL in Settings → AI / Models) and hit “Retry”, or clear the list.",
