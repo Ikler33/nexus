@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент-вкладка · AGENT-0.2 — web-инструменты + навыки в десктоп-агенте 🔴 BETA
+
+Десктоп-`agent_run` передавал web/skills/delegation/research в `run_agent_session` как `None` — агент был «немой» (только чат+vault, без инструментов). Протянули **web-инструменты** (`web.search`/`web.fetch`) и **навыки** (read-only каталог SKILL.md), зеркаля agentd; default-OFF, gated конфигом.
+
+- **web** (`ai.web.enabled` + непустой url): строится через `enable_web_tools` (тот же `GuardedClient::for_web`/SSRF/deny_private/audit, что у agentd). **Отличие от agentd (фикс adversarial-ревью, MAJOR):** в десктопе глобальный `EgressPolicy` делят Home-websearch и новости (scope «web»/feature `Web`/`web_allow_public`), а `enable_web_tools` МУТИРУЕТ policy — поэтому веб агента строится на **ИЗОЛИРОВАННОЙ** `EgressPolicy` (делит лишь offline-kill-switch), чтобы ВКЛ агент-web не протекал в согласие Home-веба/новостей.
+- **skills** (`ai.agent_skills_dir`): каталог через `discover_skills` (канон fail-closed, path-escape-guard, битые SKILL.md логируются и пропускаются), `usage_writer` для телеметрии (SL-2). `ai.skills.learning_enabled` → `SessionSpec.skills_learning_enabled` (skill.save owner-gated).
+- delegation/research остаются `None` — следующий срез AGENT-0.3.
+
+**Adversarial-ревью (скептик-агент) → поймал MAJOR (утечка egress-согласия в Home-websearch/новости) + MINOR (нет лога битых скиллов) — ОБА закрыты в срезе** (изолированная policy + warn-лог). default-OFF проверен (нет секции/enabled=false/пустой url → None); no-egress-bypass подтверждён; Send/move корректны; path-safety ок. fmt/clippy `-D warnings`/полный `test-all` зелёный (egress-chokepoint-линт пройден; 4 desktop-agent-теста + 931 FE). NB: live «агент реально ищет в вебе» требует настроенного vault (`ai.web.enabled`+SearXNG) и LLM — проверка владельца; wiring зеркалит live-валидированный на .28 agentd-путь.
+
 ### Агент-вкладка · AGENT-0.1 — мультитёрн (фикс «переписка исчезает на 2-м сообщении») 🔴 BETA
 
 Владелец 2026-06-23 поймал: десктоп-агент стирал всю переписку на втором сообщении. Корень — `stores/agent.ts run()` делал `set({...INITIAL})` на КАЖДЫЙ ввод (одно-оборотная модель). Перевели вкладку на **мультитёрн: сессия = одна задача + лента ходов** (`turns: AgentTurn[]`); каждое сообщение пушит НОВЫЙ ход, прошлое НЕ стирается; «Новая сессия» очищает ленту.
