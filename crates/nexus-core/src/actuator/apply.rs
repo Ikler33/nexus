@@ -507,9 +507,7 @@ pub(in crate::actuator) async fn apply_action(
 /// Snapshot (history под skills_root) — ДО записи; снапшот не записался ⇒ Failed без записи (fail-closed).
 /// `pub(in crate::actuator)` — вызывается ТОЛЬКО из `dispatch_skill_save` (нет ungated-пути), как
 /// `apply_action`. classify-гейт (Confirm-never-Auto + skills_root/vendor/форма) — у вызывателя.
-// SL-7c: прод-вызыватель (`dispatch_skill_save` ← `SkillSaveTool`) появляется в SL-7d; до тех пор путь
-// существует и ПОКРЫТ Tier-1-тестами, но из не-test сборки не вызывается. allow снимется в SL-7d.
-#[allow(dead_code)]
+// Прод-путь (SL-7d): `dispatch_skill_save` ← `SkillSaveCtx::apply` ← зарегистрированный `SkillSaveTool`.
 pub(in crate::actuator) async fn apply_skill_save(
     action: &Action,
     run_id: i64,

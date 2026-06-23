@@ -61,8 +61,8 @@ pub use orchestrate::{
     DEFAULT_REFILL_PER, DEFAULT_REFILL_TOKENS,
 };
 pub use tools::{
-    ActionDispatcher, GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool,
-    OVERWRITE_THRESHOLD,
+    ActionDispatcher, GatedToolCtx, NoteCreateTool, NoteEditTool, SetFrontmatterTool, SkillSaveCtx,
+    SkillSaveTool, OVERWRITE_THRESHOLD,
 };
 pub use undo::{
     undo_run, undo_run_full, undo_run_with_driver, ActionUndo, UndoExecDriver, UndoOutcome,

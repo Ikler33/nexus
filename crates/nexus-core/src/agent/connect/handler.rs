@@ -86,6 +86,10 @@ pub struct ConnectDeps {
     pub context_window: Option<usize>,
     /// Контекст скиллов (SKILL-2); `None` → без меню/инструментов скиллов.
     pub skills: Option<SkillContext>,
+    /// **SELF-LEARNING SL-7d, OWNER-GATED, default false** (`ai.skills.learning_enabled`). `true` +
+    /// `actuator_enabled` + `skills=Some` → регистрируется `skill.save` (агент авторствует навыки через
+    /// гейт). default-OFF: поведение без регрессии.
+    pub skills_learning_enabled: bool,
     /// **EGR-AGENT-2: веб-инструменты** (`web.search`/`web.fetch`); `None` → без веба. Эгресс через
     /// `GuardedClient`/`EgressFeature::Web` (composition root собирает через `enable_web_tools`).
     pub web: Option<WebToolsConfig>,
@@ -257,6 +261,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 blast_cap: deps.blast_cap,
                 context_window: deps.context_window,
                 canon_root: deps.canon_root.clone(),
+                skills_learning_enabled: deps.skills_learning_enabled,
             };
             let _ = run_store::mark_running(&deps.writer, run_id).await;
             let outcome = run_agent_session(
@@ -291,7 +296,12 @@ impl ConnectHandler for ConnectAgentHandler {
         let run_id: i64 = p.run_id.parse().map_err(|_| RpcError::invalid_params())?;
         // ledger над тем же writer/reader, что и прогон — undo_run читает executed-строки прогона.
         let ledger = AuditSink::new(self.deps.writer.clone(), self.deps.reader.clone());
-        let outcome = actuator::undo_run(run_id, &self.deps.canon_root, &ledger).await;
+        // SL-7d: skills_root для отката строк навыков (skill.save → Snapshot/Trash под skills_root, НЕ
+        // vault). None → строки навыка не откатятся (fail-closed), но note/exec идут под canon_root.
+        let skills_root = self.deps.skills.as_ref().map(|s| s.skills_root());
+        let outcome =
+            actuator::undo_run_full(run_id, &self.deps.canon_root, skills_root, &ledger, None)
+                .await;
         Ok(UndoResult {
             restored: outcome.restored() as u32,
         })
@@ -438,6 +448,7 @@ mod tests {
             context_window: Some(32768),
             skills: None,
             web: None,
+            skills_learning_enabled: false,
             agent_paused: Arc::new(AtomicBool::new(false)),
         })
     }

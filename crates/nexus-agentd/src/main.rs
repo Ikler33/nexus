@@ -858,6 +858,11 @@ async fn run() -> Result<(), String> {
         agent_context_window,
         &agent_skills,
         &agent_web,
+        // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled, default false).
+        local_cfg
+            .as_ref()
+            .map(|c| c.ai.skills.learning_enabled)
+            .unwrap_or(false),
         &agent_paused,
     );
 
@@ -877,6 +882,11 @@ async fn run() -> Result<(), String> {
             agent_paused.clone(),
             agent_skills,
             agent_web,
+            // SL-7d: авторство навыков (skill.save) — owner-gated ai.skills.learning_enabled (default false).
+            local_cfg
+                .as_ref()
+                .map(|c| c.ai.skills.learning_enabled)
+                .unwrap_or(false),
         )),
     );
     let registry = Arc::new(registry);
@@ -1160,6 +1170,7 @@ fn maybe_spawn_connect_server(
     context_window: Option<usize>,
     skills: &Option<nexus_core::agent::SkillContext>,
     web: &Option<nexus_core::agent::WebToolsConfig>,
+    skills_learning_enabled: bool,
     agent_paused: &Arc<AtomicBool>,
 ) {
     let socket = match std::env::var("NEXUS_AGENTD_CONNECT_SOCKET") {
@@ -1186,6 +1197,7 @@ fn maybe_spawn_connect_server(
         context_window,
         skills: skills.clone(),
         web: web.clone(), // EGR-AGENT-2: те же веб-инструменты, что у scheduler-AgentRunHandler
+        skills_learning_enabled, // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled)
         agent_paused: agent_paused.clone(), // ТОТ ЖЕ kill-switch, что у AgentRunHandler (SIGUSR1/agent.json)
     });
     tracing::warn!(
@@ -1553,6 +1565,8 @@ async fn drive_actuator_gate_run(
         None,
         // EGR-AGENT-2: actuator-gate smoke не про веб → без веб-инструментов.
         None,
+        // SL-7d: actuator-gate smoke не про авторство навыков.
+        false,
     );
 
     let run_id = enqueue_agent_run(

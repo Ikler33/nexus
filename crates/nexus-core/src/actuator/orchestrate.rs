@@ -1013,9 +1013,8 @@ async fn propose_and_decide(
 /// не Auto → ветки Auto тут нет (HardBlocked→Err / Confirm→propose). Дублирование propose/decide
 /// осознанно (ревью SL-7: «factor так, чтобы дельта = корень+apply-fn»; здесь дельта явная и
 /// тестируемая). KILL-SWITCH-инвариант сохранён: re-check паузы ПОСЛЕ decide и ПЕРЕД transition/apply.
-// SL-7c: прод-вызыватель (`SkillSaveTool`) появляется в SL-7d; до тех пор путь ПОКРЫТ Tier-1, но из
-// не-test сборки не вызывается. allow снимется в SL-7d.
-#[allow(dead_code, clippy::too_many_arguments)]
+// Прод-путь (SL-7d): зовётся `SkillSaveCtx::apply` ← зарегистрированный `SkillSaveTool`.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::actuator) async fn dispatch_skill_save(
     action: &Action,
     run_id: i64,
@@ -1024,7 +1023,13 @@ pub(in crate::actuator) async fn dispatch_skill_save(
     events: &dyn EventSink,
     ledger: &AuditSink,
     skills_root: &Path,
-) -> Result<DispatchOutcome, ToolError> {
+) -> Result<(DispatchOutcome, bool), ToolError> {
+    // Возврат: (DispatchOutcome, real_write). `real_write=true` ТОЛЬКО при `ApplyOutcome::Executed`
+    // (реальная запись на диск) — НЕ при `AlreadyDone` (идемпотентный replay, диск не тронут). SL-7d
+    // SkillSaveCtx бьёт `bump_save` ТОЛЬКО при real_write (save_count == число реальных записей; ревью
+    // SL-7d: иначе in-run повтор байт-идентичного skill.save раздул бы save_count). `mark_agent_created`
+    // идемпотентен и бьётся на любом Applied (но SkillSaveCtx гейтит его тем же флагом — provenance уже
+    // записан первой записью).
     // Defense-in-depth: только SkillSave (вызывается из SkillSaveTool, SL-7d).
     if !matches!(action.target, ActionTarget::SkillSave { .. }) {
         return Err(ToolError::Exec(
@@ -1048,8 +1053,11 @@ pub(in crate::actuator) async fn dispatch_skill_save(
         RiskTier::HardBlocked(reason) => return Err(ToolError::Exec(block_message(reason))),
         // SkillSave недопустимо Auto (classify_skill_save это гарантирует). Defense-in-depth fail-closed.
         RiskTier::Auto => {
-            return Ok(DispatchOutcome::Failed(
-                "SkillSave недопустимо Auto — внутренняя ошибка классификации".into(),
+            return Ok((
+                DispatchOutcome::Failed(
+                    "SkillSave недопустимо Auto — внутренняя ошибка классификации".into(),
+                ),
+                false,
             ))
         }
         RiskTier::Confirm(r) => r.clone(),
@@ -1103,8 +1111,11 @@ pub(in crate::actuator) async fn dispatch_skill_save(
         Err(_) => match audit::lookup_id(&ledger_reader(ledger), &propose_key).await {
             Some(id) => id,
             None => {
-                return Ok(DispatchOutcome::Failed(
-                    "ledger: не удалось записать строку предложения навыка".into(),
+                return Ok((
+                    DispatchOutcome::Failed(
+                        "ledger: не удалось записать строку предложения навыка".into(),
+                    ),
+                    false,
                 ))
             }
         },
@@ -1143,9 +1154,12 @@ pub(in crate::actuator) async fn dispatch_skill_save(
             // KILL-SWITCH (AGENT-5): даже одобренное НЕ пишется под паузой. Re-check ПОСЛЕ decide и ПЕРЕД
             // transition/apply (строку оставляем proposed → можно одобрить снова на un-pause).
             if policy.is_paused() {
-                return Ok(DispatchOutcome::Rejected(format!(
-                    "навык {rel}: агент на паузе (kill-switch) — запись подавлена (предложение остаётся)"
-                )));
+                return Ok((
+                    DispatchOutcome::Rejected(format!(
+                        "навык {rel}: агент на паузе (kill-switch) — запись подавлена (предложение остаётся)"
+                    )),
+                    false,
+                ));
             }
             let promoted = audit::transition(
                 &ledger_writer(ledger),
@@ -1156,9 +1170,12 @@ pub(in crate::actuator) async fn dispatch_skill_save(
             .await
             .unwrap_or(false);
             if !promoted {
-                return Ok(DispatchOutcome::Failed(format!(
-                    "навык {rel}: одобрение не применено (строка не в proposed) — запись отменена"
-                )));
+                return Ok((
+                    DispatchOutcome::Failed(format!(
+                        "навык {rel}: одобрение не применено (строка не в proposed) — запись отменена"
+                    )),
+                    false,
+                ));
             }
             // apply-делта: skills_root-confined обратимая запись. classify_hash → drift-фенс в apply.
             let ch = if classify_hash.is_empty() {
@@ -1166,6 +1183,8 @@ pub(in crate::actuator) async fn dispatch_skill_save(
             } else {
                 Some(classify_hash.as_str())
             };
+            // real_write=true ТОЛЬКО для Executed (реальная запись); AlreadyDone — идемпотентный replay
+            // (диск не тронут) → save_count НЕ бьём (ревью SL-7d).
             Ok(
                 match super::apply::apply_skill_save(
                     action,
@@ -1177,12 +1196,17 @@ pub(in crate::actuator) async fn dispatch_skill_save(
                 )
                 .await
                 {
-                    ApplyOutcome::Executed { summary, .. } => DispatchOutcome::Applied(summary),
-                    ApplyOutcome::AlreadyDone(o) => DispatchOutcome::Applied(o),
-                    ApplyOutcome::PathEscape => DispatchOutcome::Failed(format!(
-                        "навык {rel}: путь вне skills_root — запись отклонена"
-                    )),
-                    ApplyOutcome::Failed(e) => DispatchOutcome::Failed(e),
+                    ApplyOutcome::Executed { summary, .. } => {
+                        (DispatchOutcome::Applied(summary), true)
+                    }
+                    ApplyOutcome::AlreadyDone(o) => (DispatchOutcome::Applied(o), false),
+                    ApplyOutcome::PathEscape => (
+                        DispatchOutcome::Failed(format!(
+                            "навык {rel}: путь вне skills_root — запись отклонена"
+                        )),
+                        false,
+                    ),
+                    ApplyOutcome::Failed(e) => (DispatchOutcome::Failed(e), false),
                 },
             )
         }
@@ -1191,7 +1215,7 @@ pub(in crate::actuator) async fn dispatch_skill_save(
             let _ = ledger
                 .finish(&propose_key, STATE_REJECTED, &outcome, None)
                 .await;
-            Ok(DispatchOutcome::Rejected(outcome))
+            Ok((DispatchOutcome::Rejected(outcome), false))
         }
     }
 }
@@ -2414,7 +2438,7 @@ mod tests {
         let pol = policy(Some("confirm")).with_skills_flags(true, true);
         let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
 
-        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
+        let (out, _real) = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
             .await
             .unwrap();
         assert!(matches!(out, DispatchOutcome::Applied(_)), "out={out:?}");
@@ -2442,7 +2466,7 @@ mod tests {
         let pol = policy(Some("confirm")).with_skills_flags(true, true);
         let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
 
-        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
+        let (out, _real) = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
             .await
             .unwrap();
         assert!(matches!(out, DispatchOutcome::Rejected(_)), "out={out:?}");
@@ -2479,7 +2503,7 @@ mod tests {
             .with_skills_flags(true, true);
         let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
 
-        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
+        let (out, _real) = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
             .await
             .unwrap();
         assert!(

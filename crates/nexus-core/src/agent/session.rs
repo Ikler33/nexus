@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::actuator::{
     ActionDispatcher, AuditSink, DecisionSource, DispatchPolicy, EventSink, GatedToolCtx,
-    NoteCreateTool, NoteEditTool, SetFrontmatterTool,
+    NoteCreateTool, NoteEditTool, SetFrontmatterTool, SkillSaveCtx, SkillSaveTool,
 };
 use crate::ai::tools::ToolCapableProvider;
 use crate::ai::{injection_marker, ChatMessage, ContextBudget, QwenTokenizer};
@@ -78,6 +78,11 @@ pub struct SessionSpec {
     pub context_window: Option<usize>,
     /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие гейта/apply). Нужен только при `actuator_enabled`.
     pub canon_root: PathBuf,
+    /// **SELF-LEARNING SL-7d, OWNER-GATED, default false** (`ai.skills.learning_enabled`). `true` И
+    /// `actuator_enabled` И сконфигурированный skills-каталог (`skills=Some`) → регистрируется `skill.save`
+    /// (агент авторствует навыки через гейт Confirm-never-Auto) + откат прогона идёт `undo_run_full` со
+    /// skills_root. `false` → инструмента нет, classify режет `SkillSave` HardBlocked (поведение без регрессии).
+    pub skills_learning_enabled: bool,
 }
 
 /// Гонит один прогон агента: собирает начальный контекст ([system преамбул] + [recall памяти] +
@@ -129,13 +134,35 @@ pub async fn run_agent_session(
     // `paused` в политику (KILL-SWITCH чек-пойнт #3: НЕ пишет под паузой даже мид-инструмент).
     let mut registry = if spec.actuator_enabled {
         let ledger = AuditSink::new(writer.clone(), reader.clone());
+        // SL-7d: skills-флаги в политику → classify_skill_save видит learning/root (иначе SkillSave всегда
+        // HardBlocked). skills_root_configured = есть ли SkillContext (skills=Some). Note/exec не затронуты.
         let policy = DispatchPolicy::with_paused(
             spec.autonomy.as_deref(),
             spec.overwrite_threshold,
             spec.blast_cap,
             paused.clone(),
-        );
+        )
+        .with_skills_flags(spec.skills_learning_enabled, skills.is_some());
         let events: Arc<dyn EventSink> = Arc::new(ForwardingEventSink(forwarder.clone()));
+        let mut reg = ToolRegistry::new();
+        // SL-7d: `skill.save` (авторство навыков) — ТОЛЬКО при `skills_learning_enabled` + сконфигурированном
+        // skills-каталоге (`skills=Some`). Делит policy(token-bucket/паузу)/ledger/decision_source/events с
+        // note-инструментами (общий blast-radius/kill-switch); пишет под skills_root; провенанс через writer.
+        // Флаг выкл (default) → инструмента НЕТ, а classify_skill_save и так режет SkillSave HardBlocked.
+        if spec.skills_learning_enabled {
+            if let Some(sk) = skills {
+                let skill_ctx = SkillSaveCtx::new(
+                    sk.skills_root().to_path_buf(),
+                    ledger.clone(),
+                    spec.run_id,
+                    policy.clone(),
+                    decision_source.clone(),
+                    events.clone(),
+                    Some(writer.clone()),
+                );
+                reg.insert(Arc::new(SkillSaveTool::new(Arc::new(skill_ctx))));
+            }
+        }
         let gate = GatedToolCtx::new(
             spec.canon_root.clone(),
             ledger,
@@ -147,7 +174,6 @@ pub async fn run_agent_session(
         // ШОВ актуатора (SANDBOX-4b-2): инструменты держат `Arc<dyn ActionDispatcher>`. In-process путь —
         // `GatedToolCtx` (локальный `dispatch_action`). Песочница подставит `ProxyActuator` (host/act RPC).
         let dispatcher: Arc<dyn ActionDispatcher> = Arc::new(gate);
-        let mut reg = ToolRegistry::new();
         reg.insert(Arc::new(NoteCreateTool::new(dispatcher.clone())));
         reg.insert(Arc::new(NoteEditTool::new(dispatcher.clone())));
         reg.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
@@ -285,6 +311,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -328,6 +355,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(4096),
             canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -415,6 +443,7 @@ mod tests {
             blast_cap: 10,
             context_window: Some(8192),
             canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
         };
         let paused = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -511,6 +540,7 @@ mod tests {
             blast_cap: 16,
             context_window: Some(32768),
             canon_root: canon.clone(),
+            skills_learning_enabled: false,
         };
         let fwd = Arc::new(CollectingForwarder::default());
         let paused = Arc::new(AtomicBool::new(false));

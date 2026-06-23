@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Агент · SELF-LEARNING SL-7d — `skill.save` инструмент + провенанс (авторство навыков END-TO-END, owner-gated)
+
+**Завершает SELF-LEARNING write-path: агент теперь может СОЗДАВАТЬ/перезаписывать свои навыки** — через гейт (Confirm-НИКОГДА-Auto), под owner-gated `ai.skills.learning_enabled` (default false). Без флага — инструмента нет, `classify` режет `SkillSave` HardBlocked (поведение без регрессии).
+
+- **`SkillSaveTool` (`skill.save`)**: args `{name, description, body}` → СИЛЬНАЯ валидация имени (`skills::validate_name`, теперь `pub`; `vendor` зарезервирован) → frontmatter формирует ИНСТРУМЕНТ (только name+description → **капабилити-потолок по построению**: агент не объявит `capabilities`) → round-trip `parse_skill` (невалидный → BadArgs, модель поправит) → `Action::skill_save` через шов.
+- **`SkillSaveCtx`** (`ActionDispatcher`, зеркало `GatedToolCtx` но через `dispatch_skill_save` под skills_root): на `Applied` пишет **провенанс — `mark_agent_created` ПЕРВЫМ (INSERT-only), затем `bump_save`** (порядок load-bearing SL-1: иначе навык остался бы неуправляемым curator'ом). Rejected/Failed/HardBlocked провенанс НЕ пишут.
+- **Gated-регистрация** в `run_agent_session`: `skill.save` появляется ТОЛЬКО при `actuator_enabled` + `skills_learning_enabled` + сконфигурированном skills-каталоге; делит policy(token-bucket/паузу)/ledger/decision_source/events с note-инструментами. `SessionSpec.skills_learning_enabled` проброшен через `AgentRunHandler`/`ConnectDeps` ← `ai.skills.learning_enabled` (agentd); desktop = false (без скиллов). `SkillContext::skills_root()` accessor.
+- **Undo навыков прод-доступен**: connect-handler `agent/undo` → `undo_run_full` со skills_root (строки навыка восстанавливаются под skills_root). Снят `#[allow(dead_code)]` с apply/dispatch (есть прод-вызыватель).
+
+**Adversarial-ревью (3 линзы → 1 MINOR, исправлен):** `dispatch_skill_save` теперь возвращает `(DispatchOutcome, real_write)`; `bump_save` бьётся ТОЛЬКО при `real_write` (Executed), НЕ при `AlreadyDone`-replay (иначе in-run повтор байт-идентичного skill.save раздувал бы advisory `save_count`). `mark_agent_created` тоже под этим флагом (provenance уже записан первой записью).
+
+Tier-1 (+5 tools, 935 nexus-core): approve→запись+провенанс(created_by=agent/save_count=1) · **replay→save_count НЕ удваивается** · learning-off→HardBlocked-Err · reject→без-провенанса · bad-name(slash/`..`/vendor)→BadArgs. `test-all` зелёный. **🎉 SELF-LEARNING write-path (SL-1/2/7a-d) ЗАВЕРШЁН end-to-end.** Дальше: SL-curator (lifecycle-джоба) + SL-ui.
+
 ### Агент · SELF-LEARNING SL-7c — `apply_skill_save` + `dispatch_skill_save` (реальная обратимая запись SKILL.md)
 
 Data-путь авторства навыков: атомарная ОБРАТИМАЯ запись `<name>/SKILL.md` под **skills_root** через actuator-гейт. По-прежнему default-OFF (нет инструмента-эмиттера — SL-7d; гейт `learning_enabled` дефолт false). Зеркалит проверенные рубежи `apply_action`/`propose_and_decide`, дельта = корень (skills_root, НЕ vault) + apply-fn.

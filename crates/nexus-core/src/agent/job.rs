@@ -118,6 +118,10 @@ pub struct AgentRunHandler {
     /// **EGR-AGENT-2: веб-инструменты прогона.** `Some` ⇔ `ai.web.enabled` — drive регистрирует read-only
     /// `web.search`/`web.fetch` (эгресс через `GuardedClient`/`EgressFeature::Web`). `None` → без веба.
     web: Option<WebToolsConfig>,
+    /// **SELF-LEARNING SL-7d, OWNER-GATED, default false** (`ai.skills.learning_enabled`). `true` +
+    /// `actuator_enabled` + `skills=Some` → drive регистрирует `skill.save` (агент авторствует навыки
+    /// через гейт). default-OFF: classify режет `SkillSave` HardBlocked, инструмента нет.
+    skills_learning_enabled: bool,
     /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** Process-global `Arc<AtomicBool>` (взведён ⇒
     /// fail-safe останов). Проверяется на ТРЁХ слоях: (1) `drive` ДО старта (взведён ⇒ прогон остаётся
     /// queued, ре-кьюится); (2) пробрасывается в `run_agent_loop` (мид-ран останов → `Paused`);
@@ -156,6 +160,7 @@ impl AgentRunHandler {
         agent_paused: Arc<AtomicBool>,
         skills: Option<SkillContext>,
         web: Option<WebToolsConfig>,
+        skills_learning_enabled: bool,
     ) -> Self {
         Self {
             writer,
@@ -171,6 +176,7 @@ impl AgentRunHandler {
             agent_paused,
             skills,
             web,
+            skills_learning_enabled,
         }
     }
 
@@ -263,6 +269,7 @@ impl AgentRunHandler {
             blast_cap: self.blast_cap,
             context_window: self.context_window,
             canon_root: self.canon_root.clone(),
+            skills_learning_enabled: self.skills_learning_enabled,
         };
         let outcome = run_agent_session(
             &spec,
@@ -550,8 +557,9 @@ mod tests {
             16,
             Arc::new(crate::actuator::PolicyDefault),
             agent_paused,
-            None, // SKILL-2: без skills (AGENT-2-поведение, без регрессии)
-            None, // EGR-AGENT-2: без веба
+            None,  // SKILL-2: без skills (AGENT-2-поведение, без регрессии)
+            None,  // EGR-AGENT-2: без веба
+            false, // SL-7d: тест не про авторство навыков
         )
     }
 
@@ -574,8 +582,9 @@ mod tests {
             16,
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
-            None, // SKILL-2: без skills
-            None, // EGR-AGENT-2: без веба
+            None,  // SKILL-2: без skills
+            None,  // EGR-AGENT-2: без веба
+            false, // SL-7d: тест не про авторство навыков
         )
     }
 
@@ -623,8 +632,9 @@ mod tests {
             blast_cap,
             decision_source,
             agent_paused,
-            None, // SKILL-2: без skills (go-live-тесты актуатора не про скиллы)
-            None, // EGR-AGENT-2: без веба
+            None,  // SKILL-2: без skills (go-live-тесты актуатора не про скиллы)
+            None,  // EGR-AGENT-2: без веба
+            false, // SL-7d: тест не про авторство навыков
         )
     }
 
@@ -1173,7 +1183,8 @@ mod tests {
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
             Some(skills),
-            None, // EGR-AGENT-2: без веба
+            None,  // EGR-AGENT-2: без веба
+            false, // SL-7d: тест не про авторство навыков
         )
     }
 

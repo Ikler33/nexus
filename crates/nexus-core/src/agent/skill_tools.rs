@@ -113,6 +113,11 @@ impl SkillContext {
         &self.catalog
     }
 
+    /// КАНОНИЧЕСКИЙ корень skills-каталога (SL-7d: `SkillSaveCtx` пишет навыки под него; конфайн-база).
+    pub fn skills_root(&self) -> &std::path::Path {
+        &self.skills_root
+    }
+
     /// **Tier 1: фенсенный, user-role блок-меню** доступных скиллов (name+description, бюджетирован).
     /// Делегирует в [`SkillCatalog::catalog_block`] с per-request `marker`. Пусто → `None`.
     pub fn catalog_block(&self, marker: &str) -> Option<String> {
