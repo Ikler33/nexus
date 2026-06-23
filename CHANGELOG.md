@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### Агент · SELF-LEARNING SL-curator — фоновая курация жизненного цикла навыков (active→stale→archive, owner-gated)
+
+**Замыкает петлю само-обучения:** агент создаёт навыки (SL-7) → телеметрия копит использование (SL-2) → **curator поддерживает их «гигиену» сам, но СТРОГО консервативно.** Фоновая scheduler-джоба `skill_curator` (образец `EpisodeRollupHandler`, дисциплина `memory::consolidate` «при сомнении не разрушаем»). По-прежнему default-OFF: гейтится owner-gated `ai.skills.learning_enabled`.
+
+- **`skills::curator` (новый модуль)**: `decide(record, now, stale_after, archive_after)` — ЧИСТАЯ детерминированная функция (ядро «eval-гейта») + `SkillCuratorHandler` (`JobHandler`, `defer_under_interactive`=true — гигиена уступает интерактиву).
+- **Lifecycle `active → stale → archive`** по простою (`UsageRecord::last_activity`): ≥60 дн → `stale` (виден, deprioritized); ещё ≥180 дн → `archived` (вне выдачи). **ДВУХШАГОВО** (нет active→archive напрямую: `stale` = видимый период-предупреждение). Всё **ОБРАТИМО** (`set_state(Active)` снимает архив).
+- **НИКОГДА**: не удаляет ЖИВОЙ навык (ни файл — не владеет ФС, ни строку — `forget_orphans` только по отсутствующим на диске); не трогает не-agent (vendor/user — `agent_created_report` + SQL `WHERE created_by='agent'` double-enforce); не трогает `pinned`; полный NOOP при OFF или `skills_root=None` (fail-closed, defense-in-depth в `sweep`).
+- **«Eval-гейт»** = инвариант точности, доказанный тестом (LLM нет — решение детерминировано, СИЛЬНЕЕ LLM-гейта): `decide` НИКОГДА не архивирует/устаревает закреплённый ИЛИ активный-в-пределах-порога навык (precision=1.0 по построению). **GC консервативен**: пустой «живой» набор (пустой каталог НЕ отличить от транзиентного сбоя `discover_skills`) ⇒ НЕ чистим телеметрию.
+- **Проводка agentd**: регистрация хендлера + recurring (раз/сутки) + seed `reschedule_if_absent` — ТОЛЬКО при `learning_enabled && skills present` (иначе пусто, как прежде skeleton). Флаг `ai.skills.learning_enabled` хойстнут в один локал (DRY: прежде инлайн дважды). Desktop не курирует (agent-навыки создаются лишь в agentd: desktop-loop `skills_learning_enabled=false`).
+
+**Adversarial-ревью (3 линзы → 6 подтверждённых, 2 MAJOR — ВСЕ исправлены в срезе):**
+- **MAJOR — GC «present-but-unparseable ≠ deleted»**: `discover_skills().names()` = только УСПЕШНО разобранные; файл на диске, но непарсящийся (битый YAML/дубль-имя/vendor hash-drift/разовый IO) попадал в `errors()`, не в `names()` → `forget_orphans` снёс бы его lifecycle/провенанс (необратимо). **Фикс**: GC лишь когда каталог прочитан ЧИСТО (`live` непуст И `errors()` пуст) — иначе пропуск, «при сомнении не разрушаем».
+- **MAJOR — cross-process очередь**: общая `jobs`-таблица; desktop-воркер заклеймливал agentd'шный `skill_curator` → `неизвестный kind` → `dead`-шум. **Фикс**: **claim-by-registered-kind** (`scheduler::claim_next_handled`) — воркер выгребает ТОЛЬКО kind'ы своего реестра, чужие оставляет `pending` владельцу (чинит и обратное направление, и будущие agentd-kind'ы субагентов).
+- **MINOR #2** (ручное переименование frontmatter рассинхронит ключ) — закреплённые agent-строки добавляются в «живой» набор → pin владельца НИКОГДА не снимается GC. **MINOR #4** (осиротевшая джоба после флипа learning→OFF) — agentd сносит свою `skill_curator` через `delete_jobs_of_kind` при выключенной курации. **NIT #5** (дубль-seed после краша в середине прогона) — `reschedule_if_absent` теперь учитывает `running` в анти-стакинге.
+
+Tier-1 (+18 tests, 953 nexus-core): decide active→stale/stale→archive · **pinned/recent/archived/unknown → НИКОГДА не трогаются** · sweep NOOP при OFF/root=None · lifecycle лишь к eligible · **никогда не удаляет строку живого навыка** · **GC пропущен на пустом live И на любой ошибке разбора (present-but-unparseable сохранён)** · **GC щадит закреплённых даже отсутствующих** · claim-by-kind (чужой kind не заклеймлен/не похоронен) · `delete_jobs_of_kind` · кап переходов. `test-all` зелёный.
+
 ### Агент · SELF-LEARNING SL-7d — `skill.save` инструмент + провенанс (авторство навыков END-TO-END, owner-gated)
 
 **Завершает SELF-LEARNING write-path: агент теперь может СОЗДАВАТЬ/перезаписывать свои навыки** — через гейт (Confirm-НИКОГДА-Auto), под owner-gated `ai.skills.learning_enabled` (default false). Без флага — инструмента нет, `classify` режет `SkillSave` HardBlocked (поведение без регрессии).

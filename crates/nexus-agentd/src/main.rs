@@ -817,6 +817,15 @@ async fn run() -> Result<(), String> {
     // vault-корня (рекомендация `<vault>/.nexus/skills`). Не задан → None (агент без скиллов, без
     // регрессии). Скиллы — недоверенный внешний контент: они фенсятся в самом хендлере (I-5).
     let agent_skills = build_skill_context(local_cfg.as_ref(), &root, db.writer().clone());
+    // SL-7d/SL-curator: единый owner-gated флаг `ai.skills.learning_enabled` (default false) — гейтит И
+    // авторство навыков (skill.save), И фоновую курацию их жизненного цикла. Хойстим в один локал (DRY:
+    // прежде вычислялся инлайн дважды в коннекторе + AgentRunHandler). `curator_skills_root` ловим ДО
+    // перемещения `agent_skills` в AgentRunHandler ниже (для SkillCuratorHandler GC живого набора).
+    let skills_learning_enabled = local_cfg
+        .as_ref()
+        .map(|c| c.ai.skills.learning_enabled)
+        .unwrap_or(false);
+    let curator_skills_root = agent_skills.as_ref().map(|s| s.skills_root().to_path_buf());
 
     // EGR-AGENT-2: веб-инструменты (web.search/web.fetch). Включаются ТОЛЬКО при `ai.web.enabled` —
     // `enable_web_tools` включает `EgressFeature::Web` + allowlist хоста SearXNG и строит WebToolsConfig
@@ -859,10 +868,7 @@ async fn run() -> Result<(), String> {
         &agent_skills,
         &agent_web,
         // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled, default false).
-        local_cfg
-            .as_ref()
-            .map(|c| c.ai.skills.learning_enabled)
-            .unwrap_or(false),
+        skills_learning_enabled,
         &agent_paused,
     );
 
@@ -883,12 +889,56 @@ async fn run() -> Result<(), String> {
             agent_skills,
             agent_web,
             // SL-7d: авторство навыков (skill.save) — owner-gated ai.skills.learning_enabled (default false).
-            local_cfg
-                .as_ref()
-                .map(|c| c.ai.skills.learning_enabled)
-                .unwrap_or(false),
+            skills_learning_enabled,
         )),
     );
+    // SL-curator: фоновая гигиена жизненного цикла agent-навыков (active→stale→archive, ОБРАТИМО,
+    // НИКОГДА не удаляет; GC лишь орфан-телеметрии). Регистрируем ТОЛЬКО при owner-gated
+    // `ai.skills.learning_enabled` И наличии skills-каталога (иначе курировать нечего → не плодим
+    // no-op-джобу). Recurring/seed — ниже, тем же гейтом. `SkillCuratorHandler` ещё раз защищён внутри
+    // (learning=false / root=None → sweep NOOP), defense-in-depth.
+    let curator_registered = if skills_learning_enabled {
+        if let Some(skills_root) = curator_skills_root.clone() {
+            registry.insert(
+                nexus_core::skills::curator::KIND_SKILL_CURATOR.to_string(),
+                Arc::new(nexus_core::skills::curator::SkillCuratorHandler::new(
+                    db.reader().clone(),
+                    db.writer().clone(),
+                    Some(skills_root),
+                    true,
+                )),
+            );
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    // SL-curator (ревью #4): курация НЕ зарегистрирована (learning OFF или нет навыков) → подчистить
+    // осиротевшую `skill_curator`-джобу, засиженную в ПРЕЖНЕМ ON-прогоне. Иначе при флипе learning→OFF +
+    // рестарт она висела бы `pending` вечно (claim-by-kind её не заклеймит — нет хендлера; recurring/seed
+    // ниже под тем же гейтом её не пересоздадут). `skill_curator` обслуживает ТОЛЬКО agentd, поэтому снос
+    // безопасен (в отличие от чужих desktop-kind'ов при co-residence — их трогать нельзя).
+    if !curator_registered {
+        match nexus_core::scheduler::delete_jobs_of_kind(
+            db.writer(),
+            nexus_core::skills::curator::KIND_SKILL_CURATOR,
+        )
+        .await
+        {
+            Ok(0) => {}
+            Ok(n) => {
+                tracing::info!(
+                    reaped = n,
+                    "skill_curator: осиротевшие джобы сняты (курация выключена)"
+                )
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "skill_curator: уборка осиротевших джоб не удалась")
+            }
+        }
+    }
     let registry = Arc::new(registry);
 
     // KILL-SWITCH (AGENT-5) рантайм-вход: SIGUSR1 ТОГГЛИТ паузу (опциональный сигнальный триггер — UI
@@ -945,10 +995,32 @@ async fn run() -> Result<(), String> {
         interactive_busy: Box::new(|| false),
         jobs_changed: Box::new(|| {}),
     };
+    // Recurring (slice 6): SL-curator сам переназначается раз/сутки после прогона. Только при
+    // owner-gated learning + наличии skills-каталога (тем же гейтом, что регистрация хендлера выше) —
+    // иначе пусто (skeleton, как прежде). Seed run-if-absent ниже даёт первый прогон до ожидания интервала.
+    let mut recurring: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    if skills_learning_enabled && curator_skills_root.is_some() {
+        recurring.insert(
+            nexus_core::skills::curator::KIND_SKILL_CURATOR.to_string(),
+            nexus_core::skills::curator::CURATOR_INTERVAL_SECS,
+        );
+        // Seed: ставим pending-джобу куратора ТОЛЬКО если такой ещё нет (reschedule_if_absent — не
+        // стакать на каждом рестарте). run_at=now → первый прогон сразу, дальше recurring ведёт сам.
+        if let Err(e) = nexus_core::scheduler::reschedule_if_absent(
+            db.writer(),
+            nexus_core::skills::curator::KIND_SKILL_CURATOR,
+            nexus_core::scheduler::now_secs(),
+            3,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "skill_curator: seed-джоба не поставлена");
+        }
+    }
     let worker = tokio::spawn(nexus_core::scheduler::worker_loop(
         db.writer().clone(),
         registry.clone(),
-        std::collections::HashMap::new(), // recurring: пусто (skeleton)
+        recurring,
         db.reader().clone(),
         Vec::new(), // on_change: пусто (нет watcher-сигналов)
         hooks,
