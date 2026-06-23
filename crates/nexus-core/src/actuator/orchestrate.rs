@@ -1006,6 +1006,196 @@ async fn propose_and_decide(
     }
 }
 
+/// SELF-LEARNING SL-7c: host-РЕШЕНИЕ + применение `SkillSave` через ОТДЕЛЬНЫЙ путь под **skills_root**
+/// (НЕ vault-rooted `dispatch_action`). Зеркало decision-части [`propose_and_decide`] (ledger proposed →
+/// Proposal/Diff-события → [`DecisionSource`] → kill-switch re-check → transition → apply), но apply-делта
+/// — [`super::apply::apply_skill_save`] (skills_root-confined, обратимый). `SkillSave` classify НИКОГДА
+/// не Auto → ветки Auto тут нет (HardBlocked→Err / Confirm→propose). Дублирование propose/decide
+/// осознанно (ревью SL-7: «factor так, чтобы дельта = корень+apply-fn»; здесь дельта явная и
+/// тестируемая). KILL-SWITCH-инвариант сохранён: re-check паузы ПОСЛЕ decide и ПЕРЕД transition/apply.
+// SL-7c: прод-вызыватель (`SkillSaveTool`) появляется в SL-7d; до тех пор путь ПОКРЫТ Tier-1, но из
+// не-test сборки не вызывается. allow снимется в SL-7d.
+#[allow(dead_code, clippy::too_many_arguments)]
+pub(in crate::actuator) async fn dispatch_skill_save(
+    action: &Action,
+    run_id: i64,
+    policy: &DispatchPolicy,
+    decision_source: &Arc<dyn DecisionSource>,
+    events: &dyn EventSink,
+    ledger: &AuditSink,
+    skills_root: &Path,
+) -> Result<DispatchOutcome, ToolError> {
+    // Defense-in-depth: только SkillSave (вызывается из SkillSaveTool, SL-7d).
+    if !matches!(action.target, ActionTarget::SkillSave { .. }) {
+        return Err(ToolError::Exec(
+            "dispatch_skill_save вызван не для SkillSave".into(),
+        ));
+    }
+    let rel = action.target.rel().to_string();
+
+    // (1) classify ПЕРВЫМ (чистый, без IO): skills-флаги из политики. SkillSave classify НИКОГДА Auto.
+    let ctx = ClassifyCtx {
+        root: skills_root,
+        overwrite_threshold: policy.overwrite_threshold,
+        shell_enable: policy.shell_enable,
+        sandbox_available: policy.sandbox_available,
+        learning_enabled: policy.learning_enabled,
+        skills_root_configured: policy.skills_root_configured,
+    };
+    let tier = classify(action, &ctx);
+    let reason = match &tier {
+        // HardBlocked — ВСЕГДА Err (learning off / root не настроен / форма/vendor / путь). Диск не трогаем.
+        RiskTier::HardBlocked(reason) => return Err(ToolError::Exec(block_message(reason))),
+        // SkillSave недопустимо Auto (classify_skill_save это гарантирует). Defense-in-depth fail-closed.
+        RiskTier::Auto => {
+            return Ok(DispatchOutcome::Failed(
+                "SkillSave недопустимо Auto — внутренняя ошибка классификации".into(),
+            ))
+        }
+        RiskTier::Confirm(r) => r.clone(),
+    };
+    let _ = &reason; // тир уже Confirm; держим для симметрии/будущего
+
+    // (2) Pre-image из skills_root (для диффа + classify_hash) через КОНФАЙН-рубеж (как read_current_in_vault
+    // для заметок): резолвим путь `confine_for_overwrite` (resolve+leaf-симлинк+хардлинк reject) ПЕРЕД
+    // чтением — симлинк-escape наружу skills_root не утечёт в diff-счётчики (fail-closed; ревью SL-7c).
+    // None ⇒ create (нет файла / отвергнут). apply_skill_save всё равно ре-конфайнит на записи.
+    let current = {
+        let root = skills_root.to_path_buf();
+        let rel_p = std::path::PathBuf::from(&rel);
+        tokio::task::spawn_blocking(move || {
+            super::apply::confine_for_overwrite(&root, &rel_p)
+                .ok()
+                .and_then(|abs| std::fs::read_to_string(abs).ok())
+        })
+        .await
+        .ok()
+        .flatten()
+    };
+    let current_ref = current.as_deref().unwrap_or("");
+    let classify_hash = if current_ref.is_empty() {
+        String::new()
+    } else {
+        crate::vault::content_hash(current_ref.as_bytes())
+    };
+
+    // (3) proposed-строка ledger + Proposal/Diff события (зеркало propose_and_decide).
+    let proposed = proposed_content(action, current_ref);
+    let (add, del) = line_diff(current_ref, &proposed);
+    let status = file_status(action);
+    let propose_key = proposal_key(run_id, action, &classify_hash);
+    let entry = ActionEntry {
+        run_id,
+        idempotency_key: propose_key.clone(),
+        tool_name: action.target.tool_name().to_string(),
+        target_rel: Some(rel.clone()),
+        risk_tier: tier.as_str().to_string(),
+        state: STATE_PROPOSED.to_string(),
+        content_hash: if current_ref.is_empty() {
+            None
+        } else {
+            Some(classify_hash.clone())
+        },
+        diff_summary: Some(DiffSummary::new(add, del, change_kind(action)).render()),
+    };
+    let action_id = match ledger.record_before(entry).await {
+        Ok(id) => id,
+        Err(_) => match audit::lookup_id(&ledger_reader(ledger), &propose_key).await {
+            Some(id) => id,
+            None => {
+                return Ok(DispatchOutcome::Failed(
+                    "ledger: не удалось записать строку предложения навыка".into(),
+                ))
+            }
+        },
+    };
+    events.emit(AgentEvent::Proposal {
+        run_id,
+        files: vec![ProposedFile {
+            path: rel.clone(),
+            add,
+            del,
+            status,
+            action_id,
+        }],
+    });
+    events.emit(AgentEvent::Diff {
+        path: rel.clone(),
+        add,
+        del,
+        status,
+    });
+
+    // (4) Спросить источник решений.
+    let batch = ProposalBatch {
+        run_id,
+        items: vec![ProposalItem {
+            action_id,
+            target_rel: rel.clone(),
+            tier: tier.clone(),
+            add,
+            del,
+        }],
+    };
+    let decision = decision_source.decide(&batch).await;
+    match decision.decision_for(action_id) {
+        ItemDecision::Approve => {
+            // KILL-SWITCH (AGENT-5): даже одобренное НЕ пишется под паузой. Re-check ПОСЛЕ decide и ПЕРЕД
+            // transition/apply (строку оставляем proposed → можно одобрить снова на un-pause).
+            if policy.is_paused() {
+                return Ok(DispatchOutcome::Rejected(format!(
+                    "навык {rel}: агент на паузе (kill-switch) — запись подавлена (предложение остаётся)"
+                )));
+            }
+            let promoted = audit::transition(
+                &ledger_writer(ledger),
+                &propose_key,
+                STATE_PROPOSED,
+                STATE_APPROVED,
+            )
+            .await
+            .unwrap_or(false);
+            if !promoted {
+                return Ok(DispatchOutcome::Failed(format!(
+                    "навык {rel}: одобрение не применено (строка не в proposed) — запись отменена"
+                )));
+            }
+            // apply-делта: skills_root-confined обратимая запись. classify_hash → drift-фенс в apply.
+            let ch = if classify_hash.is_empty() {
+                None
+            } else {
+                Some(classify_hash.as_str())
+            };
+            Ok(
+                match super::apply::apply_skill_save(
+                    action,
+                    run_id,
+                    skills_root,
+                    ledger,
+                    ch,
+                    &policy.agent_paused,
+                )
+                .await
+                {
+                    ApplyOutcome::Executed { summary, .. } => DispatchOutcome::Applied(summary),
+                    ApplyOutcome::AlreadyDone(o) => DispatchOutcome::Applied(o),
+                    ApplyOutcome::PathEscape => DispatchOutcome::Failed(format!(
+                        "навык {rel}: путь вне skills_root — запись отклонена"
+                    )),
+                    ApplyOutcome::Failed(e) => DispatchOutcome::Failed(e),
+                },
+            )
+        }
+        ItemDecision::Reject => {
+            let outcome = format!("навык {rel}: предложение отклонено — НЕ сохранён");
+            let _ = ledger
+                .finish(&propose_key, STATE_REJECTED, &outcome, None)
+                .await;
+            Ok(DispatchOutcome::Rejected(outcome))
+        }
+    }
+}
+
 /// Исход host-РЕШЕНИЯ по exec-таргету (Фаза-3, SANDBOX-6c). НЕ применяет — exec исполняется ВНУТРИ
 /// песочницы (6c-2). На Approve несёт `ledger_action_id` (вызывающий минтит exec_token, привязанный к нему)
 /// и `propose_key` (СТРОКА idempotency-ключа ledger-строки — redeem/finalize 6c-2c/2d фенсят переходы
@@ -2183,5 +2373,122 @@ mod tests {
     // Доступ к reader sink'а для проверок ledger в тестах (зеркало apply.rs).
     fn sink_reader(sink: &AuditSink) -> crate::db::ReadPool {
         sink.reader_handle()
+    }
+
+    // ── SL-7c: dispatch_skill_save (skills_root-confined гейт + apply) ──────────────────────────
+    const VALID_SKILL: &str = "---\nname: myskill\ndescription: d\n---\nBODY";
+
+    /// learning_enabled=false (дефолт) ⇒ classify HardBlocked(LearningDisabled) ⇒ Err, файл НЕ записан.
+    #[tokio::test]
+    async fn skill_save_learning_disabled_is_blocked() {
+        let (_d, root, sink) = setup().await;
+        let events = CollectingSink::new();
+        let src: Arc<dyn DecisionSource> = Arc::new(PolicyDefault);
+        let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
+        // policy без skills-флагов (learning false, root false) → HardBlocked.
+        let out = dispatch_skill_save(
+            &action,
+            1,
+            &policy(Some("confirm")),
+            &src,
+            &events,
+            &sink,
+            &root,
+        )
+        .await;
+        assert!(
+            out.is_err(),
+            "learning off → Err (HardBlocked), получено {out:?}"
+        );
+        assert!(!root.join("myskill").exists(), "файл навыка НЕ записан");
+    }
+
+    /// learning ON + root ON + Approve ⇒ навык записан под skills_root; DispatchOutcome::Applied.
+    #[tokio::test]
+    async fn skill_save_approve_writes() {
+        let (_d, root, sink) = setup().await;
+        let events = CollectingSink::new();
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(approve(1)).await.unwrap();
+        let src: Arc<dyn DecisionSource> = Arc::new(chan);
+        let pol = policy(Some("confirm")).with_skills_flags(true, true);
+        let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
+
+        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
+            .await
+            .unwrap();
+        assert!(matches!(out, DispatchOutcome::Applied(_)), "out={out:?}");
+        assert_eq!(
+            read(&root, "myskill/SKILL.md"),
+            VALID_SKILL,
+            "навык записан под skills_root после Approve"
+        );
+        // Эмитирован Proposal (поверхность апрува).
+        assert!(
+            events
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Proposal { .. })),
+            "Proposal эмитирован"
+        );
+    }
+
+    /// learning ON + root ON + Reject (PolicyDefault) ⇒ Rejected, файл НЕ записан.
+    #[tokio::test]
+    async fn skill_save_reject_no_write() {
+        let (_d, root, sink) = setup().await;
+        let events = CollectingSink::new();
+        let src: Arc<dyn DecisionSource> = Arc::new(PolicyDefault);
+        let pol = policy(Some("confirm")).with_skills_flags(true, true);
+        let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
+
+        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
+            .await
+            .unwrap();
+        assert!(matches!(out, DispatchOutcome::Rejected(_)), "out={out:?}");
+        assert!(
+            !root.join("myskill").exists(),
+            "отклонённый навык НЕ записан"
+        );
+    }
+
+    /// vendor/-неймспейс ⇒ HardBlocked(InvalidSkillTarget) ⇒ Err даже при learning ON (keystone).
+    #[tokio::test]
+    async fn skill_save_vendor_blocked_even_when_enabled() {
+        let (_d, root, sink) = setup().await;
+        let events = CollectingSink::new();
+        let src: Arc<dyn DecisionSource> = Arc::new(PolicyDefault);
+        let pol = policy(Some("confirm")).with_skills_flags(true, true);
+        let action = Action::skill_save("vendor/kepano/x/SKILL.md", VALID_SKILL);
+        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root).await;
+        assert!(out.is_err(), "vendor → Err (InvalidSkillTarget): {out:?}");
+        assert!(!root.join("vendor").exists(), "vendor-навык НЕ записан");
+    }
+
+    /// KILL-SWITCH (ревью SL-7c MAJOR): learning ON + Approve, но агент НА ПАУЗЕ ⇒ навык НЕ записан
+    /// (Rejected); re-check паузы ПОСЛЕ decide и ПЕРЕД transition/apply держит «paused ⇒ нет записи».
+    #[tokio::test]
+    async fn skill_save_paused_approved_not_written() {
+        let (_d, root, sink) = setup().await;
+        let events = CollectingSink::new();
+        let (chan, tx) = ChannelDecision::new(1);
+        tx.send(approve(1)).await.unwrap();
+        let src: Arc<dyn DecisionSource> = Arc::new(chan);
+        let paused = Arc::new(AtomicBool::new(true));
+        let pol = DispatchPolicy::with_paused(Some("confirm"), T, CAP, paused)
+            .with_skills_flags(true, true);
+        let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
+
+        let out = dispatch_skill_save(&action, 1, &pol, &src, &events, &sink, &root)
+            .await
+            .unwrap();
+        assert!(
+            matches!(out, DispatchOutcome::Rejected(_)),
+            "пауза → Rejected: {out:?}"
+        );
+        assert!(
+            !root.join("myskill").exists(),
+            "под паузой (kill-switch) навык НЕ записан"
+        );
     }
 }
