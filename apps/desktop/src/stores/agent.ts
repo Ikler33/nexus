@@ -11,17 +11,19 @@ import type {
 } from '../lib/tauri-api';
 
 /**
- * Состояние вкладки Агента (UI-1b). Прогон = поток событий `AgentStreamEvent` через `Channel` (Tauri)
- * или мок (браузер), который `run()` копит в РЕНДЕР-МОДЕЛЬ: текст ассистента (склейка `assistantToken`),
- * ШАГИ (`toolCall`/`toolResult` по `id`), загрузка контекста (`contextUsage`), CHANGESET (`proposal`/
- * `diff` + per-file решение), отчёт (`final`), ошибка (`error`).
+ * Состояние вкладки Агента (UI-1b). Сессия = ОДНА задача + МУЛЬТИТЁРН внутри: каждое сообщение
+ * пользователя пушит новый ХОД (`AgentTurn`) в ленту `turns`, а не стирает прошлое (фикс «переписка
+ * исчезла на 2-м сообщении», 2026-06-23). Поток событий `AgentStreamEvent` (Tauri `Channel` или мок)
+ * аккумулируется в АКТИВНЫЙ (последний) ход: текст ассистента (склейка `assistantToken`), шаги
+ * (`toolCall`/`toolResult` по `id`), changeset (`proposal`/`diff` + per-file решение), отчёт (`final`),
+ * ошибка (`error`). Загрузка контекста (`contextUsage`) — на уровне сессии (питает %-бар шапки).
  *
- * Один активный прогон за раз (как бэкенд держит реестр по run_id). Аппрув собирает `decisions[]` из
- * per-file состояния changeset'а и шлёт `agent_approve`. autonomy/model/perms — per-run политика
- * (читаются в момент `run`, на лету не меняют идущий прогон).
+ * Один активный ход за раз (бэкенд держит реестр по run_id). `run()` — no-op, пока активный ход идёт.
+ * autonomy/model/perms — политика сессии (читаются в момент `run`, на лету не меняют идущий ход).
+ * «Новая сессия» (`newSession`) очищает ленту. Персист истории между запусками — отдельный срез.
  */
 
-/** Статус прогона. `awaiting` — changeset предложен, агент ждёт решения (Confirm-тир). */
+/** Статус хода. `awaiting` — changeset предложен, агент ждёт решения (Confirm-тир). */
 export type AgentStatus =
   | 'idle'
   | 'running'
@@ -67,71 +69,85 @@ export interface AgentPerms {
   web: boolean;
 }
 
-interface AgentState {
-  /** id текущего/последнего прогона (`null` — ещё не запускали). */
+/** Один ход диалога с агентом: задача пользователя + аккумулированный ответ/действия агента. */
+export interface AgentTurn {
+  /** Локальный стабильный ключ хода (react-key; растёт в пределах сессии, сбрасывается newSession). */
+  key: number;
+  /** Монотонный epoch-токен прогона (НЕ сбрасывается newSession). Гард событий: late-событие
+   *  прошлого прогона не попадёт в новый ход даже при совпадении `key` (после newSession) или до
+   *  прихода backend-`runId`. Закрывает окно «события прошлого прогона текут в новый». */
+  epoch: number;
+  /** id прогона на бэкенде (`null`, пока `agent_run` не вернул id). */
   runId: number | null;
-  status: AgentStatus;
-  /** Задача текущего прогона (промпт сессии). */
+  /** Сообщение пользователя, начавшее этот ход (для первого хода — «Задача сессии»). */
   task: string;
-  autonomy: AgentAutonomy;
-  /** Отображаемая модель (per-run политика UI; реальную выбирает бэкенд по конфигу). */
-  model: string;
-  perms: AgentPerms;
   /** Склеенный контент ассистента (`assistantToken`-дельты). */
   assistantText: string;
   /** Лента шагов (tool-вызовы + результаты). */
   steps: AgentStep[];
-  context: ContextUsage | null;
   /** Файлы changeset'а (из `proposal`; `diff` дополняет счётчики). */
   changeset: ChangesetFile[];
-  /** Идёт ли отправка решений в `agent_approve` (блок кнопок аппрува). */
-  approving: boolean;
-  /** Итоговый ответ (`final`) — питает отчёт правого дока. */
+  /** Итоговый ответ (`final`). */
   report: string | null;
   /** Текст ошибки (`error`-событие / сбой `agent_run`). */
   error: string | null;
+  status: AgentStatus;
+}
 
-  /** Запускает прогон по задаче (читает текущие autonomy/model/perms). No-op во время активного прогона. */
+interface AgentState {
+  /** Лента ходов сессии (мультитёрн). Пусто — сессия ещё не начата. */
+  turns: AgentTurn[];
+  autonomy: AgentAutonomy;
+  /** Отображаемая модель (per-run политика UI; реальную выбирает бэкенд по конфигу). */
+  model: string;
+  perms: AgentPerms;
+  context: ContextUsage | null;
+  /** Идёт ли отправка решений в `agent_approve` (блок кнопок аппрува). */
+  approving: boolean;
+
+  /** Запускает ход по задаче (читает текущие autonomy/perms). No-op во время активного хода. */
   run: (task: string) => void;
   setAutonomy: (autonomy: AgentAutonomy) => void;
   setModel: (model: string) => void;
   setPerm: (key: keyof AgentPerms, value: boolean) => void;
-  /** Поставить решение по файлу (повтор того же решения снимает — как тоггл макета). */
+  /** Поставить решение по файлу активного хода (повтор того же решения снимает — как тоггл макета). */
   setFileDecision: (actionId: number, decision: 'applied' | 'rejected') => void;
-  /** Массовое решение по всем файлам (bulk apply-all / reject). */
+  /** Массовое решение по всем файлам активного хода (bulk apply-all / reject). */
   setAllDecisions: (decision: 'applied' | 'rejected') => void;
-  /** Собирает `decisions[]` из per-file решений changeset'а и шлёт `agent_approve`. Нерешённые файлы
-   *  по умолчанию считаются reject (fail-closed, как бэкенд: отсутствующий айтем = Reject). */
+  /** Собирает `decisions[]` из per-file решений активного хода и шлёт `agent_approve`. Нерешённые
+   *  файлы по умолчанию = reject (fail-closed, как бэкенд: отсутствующий айтем = Reject). */
   approve: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   cancel: () => Promise<void>;
-  /** Откат применённых действий прогона (AGENT-4) → число откаченных. */
+  /** Откат применённых действий активного/последнего хода (AGENT-4) → число откаченных. */
   undo: () => Promise<number>;
-  /** Новая сессия: чистый прогон (нельзя во время активного — сначала cancel). */
+  /** Новая сессия: очищает ленту (нельзя во время активного хода — сначала cancel). */
   newSession: () => void;
 }
 
-/** Терминальные статусы — прогон завершён, можно стартовать новый / аппрув уже не нужен. */
+/** Терминальные статусы — ход завершён, можно стартовать новый / аппрув уже не нужен. */
 const TERMINAL: AgentStatus[] = ['idle', 'done', 'error', 'cancelled'];
 
-/** Активен ли прогон (стрим идёт / на паузе / ждёт аппрува). */
+/** Активен ли ход (стрим идёт / на паузе / ждёт аппрува). */
 function isActive(status: AgentStatus): boolean {
   return !TERMINAL.includes(status);
 }
 
+/** Статус сессии = статус последнего хода (или `idle`, если ходов нет). Для шапки/композера. */
+export function sessionStatus(turns: AgentTurn[]): AgentStatus {
+  return turns.length ? turns[turns.length - 1].status : 'idle';
+}
+
 const INITIAL = {
-  runId: null,
-  status: 'idle' as AgentStatus,
-  task: '',
-  assistantText: '',
-  steps: [] as AgentStep[],
-  context: null,
-  changeset: [] as ChangesetFile[],
+  turns: [] as AgentTurn[],
+  context: null as ContextUsage | null,
   approving: false,
-  report: null,
-  error: null,
 };
+
+/** Монотонный счётчик epoch прогонов (память модуля; НЕ сбрасывается newSession — в отличие от `key`).
+ *  Каждый `run()` берёт уникальный epoch → события строго адресуются своему ходу. */
+let agentEpochSeq = 0;
 
 export const useAgentStore = create<AgentState>((set, get) => ({
   ...INITIAL,
@@ -141,52 +157,76 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   run(task) {
     const q = task.trim();
-    if (!q || isActive(get().status)) return;
+    const last = get().turns[get().turns.length - 1];
+    if (!q || (last && isActive(last.status))) return;
     const { autonomy } = get();
-    logUi('agent:run', `autonomy=${autonomy} len=${q.length}`);
-    // Новый прогон — чистим рендер-модель прошлого (task/autonomy/model/perms сохраняются).
-    set({
-      ...INITIAL,
-      task: q,
-      status: 'running',
-    });
+    logUi('agent:run', `autonomy=${autonomy} len=${q.length} turn=${get().turns.length}`);
+    // Новый ХОД дописывается в ленту (НЕ стираем прошлые ходы — фикс стирания переписки).
+    const turnKey = last ? last.key + 1 : 0;
+    const myEpoch = ++agentEpochSeq;
+    set((s) => ({
+      turns: [
+        ...s.turns,
+        {
+          key: turnKey,
+          epoch: myEpoch,
+          runId: null,
+          task: q,
+          assistantText: '',
+          steps: [],
+          changeset: [],
+          report: null,
+          error: null,
+          status: 'running' as AgentStatus,
+        },
+      ],
+    }));
 
-    // Аккумулятор событий стрима → рендер-модель. Epoch-гард по runId: поздние события прошлого
-    // прогона (после cancel/нового run) игнорируем — иначе они дописались бы в чужую ленту.
-    let myRunId: number | null = null;
+    /** Патч конкретного хода по ключу (события адресуются СВОЕМУ ходу, не «последнему»). */
+    const patch = (fn: (tn: AgentTurn) => AgentTurn) =>
+      set((s) => ({ turns: s.turns.map((tn) => (tn.key === turnKey ? fn(tn) : tn)) }));
+
+    // Аккумулятор событий стрима → активный ход. Epoch-гард: событие применяется ТОЛЬКО к СВОЕМУ
+    // ходу (по `epoch`, а не «последнему») — закрывает окно ДО прихода runId и реюз `key` после
+    // newSession; late-события прошлого прогона в чужую ленту не текут.
     const onEvent = (event: AgentStreamEvent) => {
-      // До прихода run_id принимаем события текущего прогона (status='running' выставлен синхронно).
-      // После — только если runId совпадает с нашим прогоном.
-      if (myRunId != null && get().runId !== myRunId) return;
-      if (TERMINAL.includes(get().status) && get().status !== 'idle') {
-        // Уже завершено (cancel/error) — поздние токены не принимаем (кроме штатного потока до final).
+      const tn = get().turns.find((t) => t.key === turnKey);
+      if (!tn || tn.epoch !== myEpoch) return;
+      if (TERMINAL.includes(tn.status)) {
+        // Ход уже завершён — поздние токены не принимаем (кроме штатных final/error)…
         if (event.type !== 'final' && event.type !== 'error') return;
+        // …и НЕ воскрешаем ОТМЕНЁННЫЙ ход: cancel = явное намерение финала (уважаем решение юзера).
+        if (tn.status === 'cancelled') return;
       }
       switch (event.type) {
         case 'assistantToken':
-          set((s) => ({ assistantText: s.assistantText + event.text }));
+          patch((t0) => ({ ...t0, assistantText: t0.assistantText + event.text }));
           break;
         case 'toolCall':
-          set((s) => ({
+          patch((t0) => ({
+            ...t0,
             steps: [
-              ...s.steps,
+              ...t0.steps,
               { id: event.id, kind: event.kind, args: event.args, result: null, isError: false },
             ],
           }));
           break;
         case 'toolResult':
-          set((s) => ({
-            steps: s.steps.map((st) =>
+          patch((t0) => ({
+            ...t0,
+            steps: t0.steps.map((st) =>
               st.id === event.id ? { ...st, result: event.content, isError: event.isError } : st,
             ),
           }));
           break;
         case 'contextUsage':
+          // Контекст — на уровне сессии (последнее значение питает %-бар шапки).
           set({ context: { used: event.used, window: event.window } });
           break;
         case 'proposal':
           // Changeset предложен → агент ждёт решения (Confirm-тир). Auto-режим proposal НЕ шлёт.
-          set({
+          patch((t0) => ({
+            ...t0,
             changeset: event.files.map((f) => ({
               path: f.path,
               add: f.add,
@@ -195,17 +235,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
               actionId: f.actionId,
               decision: undefined,
             })),
-            status: get().status === 'paused' ? 'paused' : 'awaiting',
-          });
+            status: t0.status === 'paused' ? 'paused' : 'awaiting',
+          }));
           break;
         case 'diff':
           // Диф по файлу. Если файла нет в changeset (auto-режим без proposal) — заводим запись (без
           // actionId-аппрува: в auto он применяется агентом). Дедуп по path (proposal уже завёл).
-          set((s) => {
-            if (s.changeset.some((f) => f.path === event.path)) return s;
+          patch((t0) => {
+            if (t0.changeset.some((f) => f.path === event.path)) return t0;
             return {
+              ...t0,
               changeset: [
-                ...s.changeset,
+                ...t0.changeset,
                 {
                   path: event.path,
                   add: event.add,
@@ -219,10 +260,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           });
           break;
         case 'final':
-          set({ report: event.text, status: 'done' });
+          patch((t0) => ({ ...t0, report: event.text, status: 'done' }));
           break;
         case 'error':
-          set({ error: event.message, status: 'error' });
+          patch((t0) => ({ ...t0, error: event.message, status: 'error' }));
           break;
       }
     };
@@ -230,10 +271,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     void tauriApi.agent
       .run(q, autonomy, onEvent)
       .then((id) => {
-        myRunId = id;
-        // Прогон мог уже завершиться/отмениться синхронным потоком до резолва id — не воскрешаем.
-        if (get().status === 'cancelled') return;
-        set({ runId: id });
+        const tn = get().turns.find((t) => t.key === turnKey);
+        // Тот же ход (epoch), не отменён синхронным потоком до резолва id — иначе не привязываем runId.
+        if (!tn || tn.epoch !== myEpoch || tn.status === 'cancelled') return;
+        patch((t0) => ({ ...t0, runId: id }));
       })
       .catch(() => {
         // onEvent уже получил error-событие (tauri-api прокидывает) → статус выставлен. Здесь молча.
@@ -241,40 +282,56 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   setAutonomy(autonomy) {
-    if (isActive(get().status)) return; // per-run политика — на лету не меняем
+    if (isActive(sessionStatus(get().turns))) return; // per-run политика — на лету не меняем
     set({ autonomy });
   },
   setModel(model) {
-    if (isActive(get().status)) return;
+    if (isActive(sessionStatus(get().turns))) return;
     set({ model });
   },
   setPerm(key, value) {
-    if (isActive(get().status)) return;
+    if (isActive(sessionStatus(get().turns))) return;
     set((s) => ({ perms: { ...s.perms, [key]: value } }));
   },
 
   setFileDecision(actionId, decision) {
     set((s) => ({
-      changeset: s.changeset.map((f) =>
-        f.actionId === actionId
-          ? { ...f, decision: f.decision === decision ? undefined : decision }
-          : f,
+      turns: s.turns.map((tn, i) =>
+        i === s.turns.length - 1
+          ? {
+              ...tn,
+              changeset: tn.changeset.map((f) =>
+                f.actionId === actionId
+                  ? { ...f, decision: f.decision === decision ? undefined : decision }
+                  : f,
+              ),
+            }
+          : tn,
       ),
     }));
   },
   setAllDecisions(decision) {
-    set((s) => ({ changeset: s.changeset.map((f) => ({ ...f, decision })) }));
+    set((s) => ({
+      turns: s.turns.map((tn, i) =>
+        i === s.turns.length - 1
+          ? { ...tn, changeset: tn.changeset.map((f) => ({ ...f, decision })) }
+          : tn,
+      ),
+    }));
   },
 
   async approve() {
-    const { runId, changeset, status } = get();
-    if (runId == null || status !== 'awaiting' || get().approving) return;
+    const turns = get().turns;
+    const last = turns[turns.length - 1];
+    if (!last || last.runId == null || last.status !== 'awaiting' || get().approving) return;
     // decisions[]: одобренные = applied; всё прочее (rejected / нерешённое) = reject (fail-closed,
     // как бэкенд трактует отсутствующий айтем). Только адресуемые файлы (actionId >= 0).
-    const decisions: AgentApprovalDecision[] = changeset
+    const decisions: AgentApprovalDecision[] = last.changeset
       .filter((f) => f.actionId >= 0)
       .map((f) => ({ actionId: f.actionId, approve: f.decision === 'applied' }));
     if (!decisions.length) return;
+    const runId = last.runId;
+    const lastKey = last.key;
     logUi('agent:approve', `n=${decisions.length} ok=${decisions.filter((d) => d.approve).length}`);
     set({ approving: true });
     try {
@@ -282,9 +339,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       // Решение принято — нерешённые помечаем reject (отражаем то, что ушло на бэк), снимаем ожидание.
       set((s) => ({
         approving: false,
-        status: s.status === 'awaiting' ? 'running' : s.status,
-        changeset: s.changeset.map((f) =>
-          f.actionId >= 0 && f.decision === undefined ? { ...f, decision: 'rejected' } : f,
+        turns: s.turns.map((tn) =>
+          tn.key === lastKey
+            ? {
+                ...tn,
+                status: tn.status === 'awaiting' ? 'running' : tn.status,
+                changeset: tn.changeset.map((f) =>
+                  f.actionId >= 0 && f.decision === undefined ? { ...f, decision: 'rejected' } : f,
+                ),
+              }
+            : tn,
         ),
       }));
     } catch {
@@ -293,49 +357,68 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   async pause() {
-    const { runId, status } = get();
-    if (runId == null || (status !== 'running' && status !== 'awaiting')) return;
+    const last = get().turns[get().turns.length - 1];
+    if (!last || last.runId == null || (last.status !== 'running' && last.status !== 'awaiting'))
+      return;
+    const lastKey = last.key;
     try {
-      await tauriApi.agent.pause(runId);
-      set({ status: 'paused' });
+      await tauriApi.agent.pause(last.runId);
+      set((s) => ({
+        turns: s.turns.map((tn) => (tn.key === lastKey ? { ...tn, status: 'paused' } : tn)),
+      }));
     } catch {
       /* прогон не активен — статус не трогаем */
     }
   },
   async resume() {
-    const { runId, status } = get();
-    if (runId == null || status !== 'paused') return;
+    const last = get().turns[get().turns.length - 1];
+    if (!last || last.runId == null || last.status !== 'paused') return;
+    const lastKey = last.key;
     try {
-      await tauriApi.agent.resume(runId);
+      await tauriApi.agent.resume(last.runId);
       // Возвращаемся в running (если ждали аппрув — changeset всё ещё на ревью, кнопки активны).
-      set((s) => ({ status: s.changeset.some((f) => f.decision === undefined && f.actionId >= 0) ? 'awaiting' : 'running' }));
+      set((s) => ({
+        turns: s.turns.map((tn) =>
+          tn.key === lastKey
+            ? {
+                ...tn,
+                status: tn.changeset.some((f) => f.decision === undefined && f.actionId >= 0)
+                  ? 'awaiting'
+                  : 'running',
+              }
+            : tn,
+        ),
+      }));
     } catch {
       /* no-op */
     }
   },
   async cancel() {
-    const { runId } = get();
-    if (runId == null || !isActive(get().status)) return;
-    logUi('agent:cancel', `run=${runId}`);
-    set({ status: 'cancelled' });
+    const last = get().turns[get().turns.length - 1];
+    if (!last || last.runId == null || !isActive(last.status)) return;
+    const lastKey = last.key;
+    logUi('agent:cancel', `run=${last.runId}`);
+    set((s) => ({
+      turns: s.turns.map((tn) => (tn.key === lastKey ? { ...tn, status: 'cancelled' } : tn)),
+    }));
     try {
-      await tauriApi.agent.cancel(runId);
+      await tauriApi.agent.cancel(last.runId);
     } catch {
       /* уже не активен */
     }
   },
   async undo() {
-    const { runId } = get();
-    if (runId == null) return 0;
+    const last = get().turns[get().turns.length - 1];
+    if (!last || last.runId == null) return 0;
     try {
-      return await tauriApi.agent.undo(runId);
+      return await tauriApi.agent.undo(last.runId);
     } catch {
       return 0;
     }
   },
 
   newSession() {
-    if (isActive(get().status)) return; // активный прогон сначала отменить
+    if (isActive(sessionStatus(get().turns))) return; // активный ход сначала отменить
     logUi('agent:new-session');
     set({ ...INITIAL });
   },
