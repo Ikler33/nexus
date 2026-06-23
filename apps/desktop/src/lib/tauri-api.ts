@@ -621,10 +621,13 @@ export interface AiConfigDto {
   embedding: AiEndpoint | null;
   /** Утилитарная мелкая модель (`ai.fast`) — inline/судья/новости. */
   fast: AiEndpoint | null;
-  // Agent-флаги (Hermes-6/SYNC): конфиг ТОЛЬКО headless-агента (agentd). Десктоп их рантаймом не
-  // читает — выводятся тогглами для персиста в `.nexus/local.json`. См. AgentFlagsDto / setAgentFlags.
+  // Agent-флаги в `.nexus/local.json`. ПОСЛЕ AGENT-0.2/0.6 десктоп-`agent_run` ЧИТАЕТ часть рантаймом
+  // (`agentActuatorEnabled`/`ai.web`/`ai.agent_skills_dir`) — тогглы управляют И десктоп-агентом Castor,
+  // И headless `nexus-agentd`. Автономию прогона десктоп берёт per-run из UI. См. AgentFlagsDto.
   /** `ai.agent_autonomy` («confirm»|«auto»): дефолт-постура headless-коннектора. `null` → confirm. */
   agentAutonomy: string | null;
+  /** `ai.agent_actuator_enabled`: мастер-свитч РЕАЛЬНЫХ действий агента в vault (default-OFF → заглушки). */
+  agentActuatorEnabled: boolean;
   /** `ai.sandbox_enabled`: мастер-свитч OS-песочницы (Linux-only). Предпосылка shell-exec. */
   sandboxEnabled: boolean;
   /** `ai.shell_enable`: host-exec в песочнице (Confirm, никогда Auto). Требует sandbox + Linux. */
@@ -639,6 +642,8 @@ export interface AiConfigDto {
 export interface AgentFlagsDto {
   /** «confirm»|«auto»; иное/`null` → дефолт confirm (ключ не пишется в local.json). */
   agentAutonomy: string | null;
+  /** `ai.agent_actuator_enabled`: мастер-свитч реальных vault-действий агента (default-OFF). */
+  agentActuatorEnabled: boolean;
   sandboxEnabled: boolean;
   shellEnable: boolean;
   webAllowPublicFetch: boolean;

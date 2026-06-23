@@ -14,6 +14,7 @@ let config: AiConfigDto = {
   embedding: null,
   fast: null,
   agentAutonomy: null,
+  agentActuatorEnabled: false,
   sandboxEnabled: false,
   shellEnable: false,
   webAllowPublicFetch: false,

@@ -213,6 +213,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     const { tauriApi } = await import('../../lib/tauri-api');
     await tauriApi.settings.setAgentFlags({
       agentAutonomy: 'confirm',
+      agentActuatorEnabled: false,
       sandboxEnabled: false,
       shellEnable: false,
       webAllowPublicFetch: false,
