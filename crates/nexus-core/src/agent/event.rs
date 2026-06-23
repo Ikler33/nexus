@@ -46,6 +46,67 @@ pub struct ProposedFile {
     pub action_id: i64,
 }
 
+/// Статус ОДНОГО шага плана (SUB-2, ACP `AgentPlanUpdate`-семантика). ЗАКРЫТЫЙ набор (не free-form):
+/// фронт рисует иконку по дискриминанту. Сериализуется camelCase (`pending`/`running`/`done`/`failed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanStepState {
+    /// Ещё не начат.
+    Pending,
+    /// Выполняется.
+    Running,
+    /// Завершён успешно.
+    Done,
+    /// Провалился.
+    Failed,
+}
+
+/// Один шаг плана (SUB-2): стабильный `id` (адрес для [`AgentEvent::PlanStepStatus`]-обновлений),
+/// человекочитаемый `label`, текущий `status`. Узел «графа плана» правого дока (deep-research/делегирование).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStep {
+    /// Стабильный идентификатор шага (по нему адресуются обновления статуса).
+    pub id: String,
+    /// Человекочитаемая метка шага (под-вопрос/подзадача).
+    pub label: String,
+    /// Текущий статус шага.
+    pub status: PlanStepState,
+}
+
+/// Статус СУБАГЕНТА в дереве делегирования (SUB-2). ЗАКРЫТЫЙ набор; жизненный цикл узла
+/// `spawned → running → done | failed | paused`. Сериализуется camelCase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubagentState {
+    /// Субагент создан (строка `agent_runs` заведена), но цикл ещё не пошёл.
+    Spawned,
+    /// Цикл субагента выполняется.
+    Running,
+    /// Субагент завершил задачу (вернул саммари).
+    Done,
+    /// Субагент упал/исчерпал бюджет.
+    Failed,
+    /// Субагент остановлен kill-switch'ем (пауза родителя).
+    Paused,
+}
+
+/// Кап `goal` в [`AgentEvent::SubagentStatus`] (редакция: не льём огромную цель в стрим).
+pub const SUBAGENT_GOAL_MAX_CHARS: usize = 200;
+/// Кап `summary` субагента (компактный итог; сырой вывод ребёнка в стрим НЕ идёт — приватность).
+pub const SUBAGENT_SUMMARY_MAX_CHARS: usize = 2000;
+
+/// UTF-8-безопасная обрезка строки до `max` символов (+ маркер `…` при усечении).
+fn clip_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// Событие хода агента — единица потока, который цикл отдаёт через `on_event` (UI-1 потребитель).
 ///
 /// `#[non_exhaustive]`: будущие срезы добавляют варианты (план/предложения/отчёт) БЕЗ слома match'ей
@@ -153,6 +214,53 @@ pub enum AgentEvent {
         exit_code: i32,
         finalized: bool,
     },
+    /// **SUB-2: предложенный ПЛАН** (упорядоченные шаги) — «граф плана» правого дока (deep-research
+    /// decompose / делегирование). `run_id` коррелирует с прогоном; `steps` — закрытый список
+    /// [`PlanStep`]. Эмиттер придёт позже (RES-1/SUB-3) — SUB-2 закладывает только контракт.
+    PlanProposed {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        steps: Vec<PlanStep>,
+    },
+    /// **SUB-2: обновление статуса ОДНОГО шага плана** (по стабильному `id` из [`PlanStep`]). Инлайн-
+    /// лента/правый док перерисовывают шаг. ACP `AgentPlanUpdate`-семантика.
+    PlanStepStatus { id: String, status: PlanStepState },
+    /// **SUB-2: статус СУБАГЕНТА** в дереве делегирования (узел плана-графа по `parent_run_id` lineage).
+    /// `summary` — РЕДАКЦИЯ-БЕЗОПАСНЫЙ итог (НЕ сырой вывод/рассуждения ребёнка; приватность — зеркало
+    /// силуэт-дисциплины [`ProposedFile`]/[`AgentEvent::ExecProposal`]). Строить ТОЛЬКО через
+    /// [`AgentEvent::subagent_status`] (клип `goal`/`summary`). `parent_run_id`/`child_run_id`/`summary`
+    /// — явный camelCase (rename_all не каскадирует в struct-варианты enum).
+    SubagentStatus {
+        #[serde(rename = "parentRunId")]
+        parent_run_id: i64,
+        #[serde(rename = "childRunId")]
+        child_run_id: i64,
+        goal: String,
+        status: SubagentState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+}
+
+impl AgentEvent {
+    /// Конструктор [`AgentEvent::SubagentStatus`] с РЕДАКЦИЕЙ: `goal`/`summary` клипуются
+    /// ([`SUBAGENT_GOAL_MAX_CHARS`]/[`SUBAGENT_SUMMARY_MAX_CHARS`]). Эмиттер (SUB-3) обязан строить
+    /// событие ТОЛЬКО так — не сырым литералом — чтобы в стрим не утёк длинный goal/итог.
+    pub fn subagent_status(
+        parent_run_id: i64,
+        child_run_id: i64,
+        goal: &str,
+        status: SubagentState,
+        summary: Option<&str>,
+    ) -> Self {
+        AgentEvent::SubagentStatus {
+            parent_run_id,
+            child_run_id,
+            goal: clip_chars(goal, SUBAGENT_GOAL_MAX_CHARS),
+            status,
+            summary: summary.map(|s| clip_chars(s, SUBAGENT_SUMMARY_MAX_CHARS)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +322,98 @@ mod tests {
         assert_eq!(v["add"], 5);
         assert_eq!(v["del"], 0);
         assert_eq!(v["status"], "new");
+    }
+
+    /// SUB-2: `PlanProposed` сериализуется тегированно (`type:"planProposed"`, `runId`) со step.status
+    /// camelCase; round-trip сохраняет всё.
+    #[test]
+    fn plan_proposed_serializes_tagged_camelcase() {
+        let ev = AgentEvent::PlanProposed {
+            run_id: 5,
+            steps: vec![
+                PlanStep {
+                    id: "q1".into(),
+                    label: "подвопрос 1".into(),
+                    status: PlanStepState::Pending,
+                },
+                PlanStep {
+                    id: "q2".into(),
+                    label: "подвопрос 2".into(),
+                    status: PlanStepState::Running,
+                },
+            ],
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "planProposed");
+        assert_eq!(v["runId"], 5);
+        assert_eq!(v["steps"][0]["id"], "q1");
+        assert_eq!(v["steps"][0]["status"], "pending");
+        assert_eq!(v["steps"][1]["status"], "running");
+        let back: AgentEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    /// SUB-2: `PlanStepStatus` — `type:"planStepStatus"` + {id, status}; статус — закрытый camelCase.
+    #[test]
+    fn plan_step_status_serializes() {
+        let ev = AgentEvent::PlanStepStatus {
+            id: "q1".into(),
+            status: PlanStepState::Done,
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "planStepStatus");
+        assert_eq!(v["id"], "q1");
+        assert_eq!(v["status"], "done");
+    }
+
+    /// SUB-2: `subagent_status` КОНСТРУКТОР клипует goal/summary (редакция-безопасность — сырой длинный
+    /// итог ребёнка в стрим не уходит). camelCase составных имён (parentRunId/childRunId); None-summary
+    /// опускается.
+    #[test]
+    fn subagent_status_summary_is_capped_redaction_safe() {
+        let huge_goal = "g".repeat(SUBAGENT_GOAL_MAX_CHARS + 100);
+        let huge_summary = "s".repeat(SUBAGENT_SUMMARY_MAX_CHARS + 500);
+        let ev =
+            AgentEvent::subagent_status(3, 7, &huge_goal, SubagentState::Done, Some(&huge_summary));
+        match &ev {
+            AgentEvent::SubagentStatus {
+                goal,
+                summary,
+                parent_run_id,
+                child_run_id,
+                status,
+            } => {
+                assert_eq!(*parent_run_id, 3);
+                assert_eq!(*child_run_id, 7);
+                assert_eq!(*status, SubagentState::Done);
+                assert!(
+                    goal.chars().count() <= SUBAGENT_GOAL_MAX_CHARS + 1,
+                    "goal клипнут (+1 на маркер …)"
+                );
+                assert!(goal.ends_with('…'), "маркер усечения goal");
+                let s = summary.as_ref().unwrap();
+                assert!(
+                    s.chars().count() <= SUBAGENT_SUMMARY_MAX_CHARS + 1,
+                    "summary клипнут"
+                );
+                assert!(s.ends_with('…'));
+            }
+            _ => panic!("ожидался SubagentStatus"),
+        }
+        // Сериализация: camelCase составных имён + None-summary опускается.
+        let short = AgentEvent::subagent_status(1, 2, "цель", SubagentState::Spawned, None);
+        let v: serde_json::Value = serde_json::to_value(&short).unwrap();
+        assert_eq!(v["type"], "subagentStatus");
+        assert_eq!(v["parentRunId"], 1);
+        assert_eq!(v["childRunId"], 2);
+        assert_eq!(v["status"], "spawned");
+        assert!(
+            v.get("summary").is_none(),
+            "None-summary опущен (skip_serializing_if)"
+        );
+        // round-trip.
+        let back: AgentEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back, short);
     }
 
     /// `#[non_exhaustive]` сохранён: ВНЕШНИЙ (out-of-crate) match ОБЯЗАН иметь `_ =>` рукав, и

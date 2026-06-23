@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::event::{AgentEvent, FileStatus};
+use crate::agent::event::{AgentEvent, FileStatus, PlanStep, PlanStepState, SubagentState};
 
 /// Статус файла changeset'а для клиента — `"new"`|`"edit"` (зеркало [`FileStatus`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +25,69 @@ impl From<FileStatus> for AgentFileStatus {
         match s {
             FileStatus::New => AgentFileStatus::New,
             FileStatus::Edit => AgentFileStatus::Edit,
+        }
+    }
+}
+
+/// Статус шага плана для клиента (зеркало [`PlanStepState`]) — `pending|running|done|failed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentPlanStepState {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+impl From<PlanStepState> for AgentPlanStepState {
+    fn from(s: PlanStepState) -> Self {
+        match s {
+            PlanStepState::Pending => AgentPlanStepState::Pending,
+            PlanStepState::Running => AgentPlanStepState::Running,
+            PlanStepState::Done => AgentPlanStepState::Done,
+            PlanStepState::Failed => AgentPlanStepState::Failed,
+        }
+    }
+}
+
+/// Статус субагента для клиента (зеркало [`SubagentState`]) — `spawned|running|done|failed|paused`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentSubagentState {
+    Spawned,
+    Running,
+    Done,
+    Failed,
+    Paused,
+}
+
+impl From<SubagentState> for AgentSubagentState {
+    fn from(s: SubagentState) -> Self {
+        match s {
+            SubagentState::Spawned => AgentSubagentState::Spawned,
+            SubagentState::Running => AgentSubagentState::Running,
+            SubagentState::Done => AgentSubagentState::Done,
+            SubagentState::Failed => AgentSubagentState::Failed,
+            SubagentState::Paused => AgentSubagentState::Paused,
+        }
+    }
+}
+
+/// Один шаг плана для клиента (SUB-2). Зеркало [`PlanStep`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlanStep {
+    pub id: String,
+    pub label: String,
+    pub status: AgentPlanStepState,
+}
+
+impl From<&PlanStep> for AgentPlanStep {
+    fn from(s: &PlanStep) -> Self {
+        AgentPlanStep {
+            id: s.id.clone(),
+            label: s.label.clone(),
+            status: s.status.into(),
         }
     }
 }
@@ -109,6 +172,29 @@ pub enum AgentStreamEvent {
         exit_code: i32,
         finalized: bool,
     },
+    /// Предложенный план (SUB-2): зеркало [`AgentEvent::PlanProposed`]. `runId` явный camelCase.
+    PlanProposed {
+        #[serde(rename = "runId")]
+        run_id: i64,
+        steps: Vec<AgentPlanStep>,
+    },
+    /// Обновление статуса шага плана (SUB-2): зеркало [`AgentEvent::PlanStepStatus`].
+    PlanStepStatus {
+        id: String,
+        status: AgentPlanStepState,
+    },
+    /// Статус субагента (SUB-2): зеркало [`AgentEvent::SubagentStatus`]. `summary` — редакция-безопасный
+    /// итог (None опускается). `parentRunId`/`childRunId` — явный camelCase.
+    SubagentStatus {
+        #[serde(rename = "parentRunId")]
+        parent_run_id: i64,
+        #[serde(rename = "childRunId")]
+        child_run_id: i64,
+        goal: String,
+        status: AgentSubagentState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
 }
 
 /// Маппер `&AgentEvent` → [`AgentStreamEvent`] (контракт «бэкенд → клиент»). Возвращает `Option`: будущее
@@ -185,6 +271,27 @@ pub fn map_agent_event(ev: &AgentEvent) -> Option<AgentStreamEvent> {
             action_id: *action_id,
             exit_code: *exit_code,
             finalized: *finalized,
+        },
+        AgentEvent::PlanProposed { run_id, steps } => AgentStreamEvent::PlanProposed {
+            run_id: *run_id,
+            steps: steps.iter().map(AgentPlanStep::from).collect(),
+        },
+        AgentEvent::PlanStepStatus { id, status } => AgentStreamEvent::PlanStepStatus {
+            id: id.clone(),
+            status: (*status).into(),
+        },
+        AgentEvent::SubagentStatus {
+            parent_run_id,
+            child_run_id,
+            goal,
+            status,
+            summary,
+        } => AgentStreamEvent::SubagentStatus {
+            parent_run_id: *parent_run_id,
+            child_run_id: *child_run_id,
+            goal: goal.clone(),
+            status: (*status).into(),
+            summary: summary.clone(),
         },
         // Матч НАМЕРЕННО экзаустивный (без `_`): wire.rs в `nexus-core` видит все варианты `AgentEvent`,
         // и новый вариант ядра ДОЛЖЕН уронить компиляцию здесь — чтобы его wire-маппинг решили явно
@@ -343,5 +450,65 @@ mod tests {
             finalized: true,
         })
         .is_some());
+    }
+
+    /// SUB-2: новые варианты (PlanProposed/PlanStepStatus/SubagentStatus) маппятся в `Some(...)` (не
+    /// молчаливый `None`) — экзаустивный матч компилит-форсит их wire-решение.
+    #[test]
+    fn map_agent_event_covers_new_variants_some_not_none() {
+        use crate::agent::event::{PlanStep, PlanStepState, SubagentState};
+        assert!(map_agent_event(&AgentEvent::PlanProposed {
+            run_id: 1,
+            steps: vec![PlanStep {
+                id: "s".into(),
+                label: "l".into(),
+                status: PlanStepState::Pending,
+            }],
+        })
+        .is_some());
+        assert!(map_agent_event(&AgentEvent::PlanStepStatus {
+            id: "s".into(),
+            status: PlanStepState::Done,
+        })
+        .is_some());
+        assert!(map_agent_event(&AgentEvent::subagent_status(
+            1,
+            2,
+            "g",
+            SubagentState::Running,
+            None
+        ))
+        .is_some());
+    }
+
+    /// SUB-2: SubagentStatus проходит ядро→wire→JSON→wire round-trip с camelCase составными именами;
+    /// None-summary опущен; статус — закрытый camelCase.
+    #[test]
+    fn subagent_status_roundtrip_through_wire() {
+        use crate::agent::event::SubagentState;
+        let ev = AgentEvent::subagent_status(3, 7, "цель", SubagentState::Done, Some("итог"));
+        let v = to_json(&ev);
+        assert_eq!(v["type"], "subagentStatus");
+        assert_eq!(v["parentRunId"], 3);
+        assert_eq!(v["childRunId"], 7);
+        assert_eq!(v["goal"], "цель");
+        assert_eq!(v["status"], "done");
+        assert_eq!(v["summary"], "итог");
+        let wire = map_agent_event(&ev).unwrap();
+        let s = serde_json::to_string(&wire).unwrap();
+        assert_eq!(serde_json::from_str::<AgentStreamEvent>(&s).unwrap(), wire);
+
+        // PlanProposed: step.status camelCase на проводе.
+        let plan = to_json(&AgentEvent::PlanProposed {
+            run_id: 9,
+            steps: vec![crate::agent::event::PlanStep {
+                id: "q1".into(),
+                label: "под-вопрос".into(),
+                status: crate::agent::event::PlanStepState::Running,
+            }],
+        });
+        assert_eq!(plan["type"], "planProposed");
+        assert_eq!(plan["runId"], 9);
+        assert_eq!(plan["steps"][0]["status"], "running");
     }
 }
