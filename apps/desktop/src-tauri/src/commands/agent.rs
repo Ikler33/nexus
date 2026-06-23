@@ -452,6 +452,7 @@ async fn drive_run(
         &paused,
         &cancel,
         forwarder,
+        None, // top-level desktop-прогон (не субагент)
     )
     .await
 }

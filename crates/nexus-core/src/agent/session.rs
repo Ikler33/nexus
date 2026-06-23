@@ -85,6 +85,22 @@ pub struct SessionSpec {
     pub skills_learning_enabled: bool,
 }
 
+/// **SUB-3: оверрайды прогона СУБАГЕНТА** для [`run_agent_session`]. `None` (top-level) → текущее
+/// поведение байт-в-байт. `Some` →
+/// 1. реестр инструментов ребёнка СУЖАЕТСЯ до [`SubagentSpawn::allowed`] ПОСЛЕ полной сборки
+///    (actuator+skills+web) — security keystone child ⊆ parent (имена из
+///    [`crate::agent::delegate::build_child_registry`]); эскалация невозможна по построению;
+/// 2. при [`SubagentSpawn::dispatcher`] `Some` note-инструменты делят РОДИТЕЛЬСКИЙ actuator-гейт (общий
+///    blast-radius/ledger/policy/pause) вместо постройки своего — «запись через ОДИН gate»;
+/// 3. `skill.save` НЕ регистрируется (дети не авторствуют навыки — blocklist SUB-1).
+pub struct SubagentSpawn<'a> {
+    /// Разрешённые ИМЕНА инструментов ребёнка (подмножество родителя минус блок-лист).
+    pub allowed: &'a std::collections::BTreeSet<String>,
+    /// Опц. ОБЩИЙ с родителем actuator-диспетчер (тот же gate). `None` → ребёнок строит эквивалентный
+    /// gate из своих spec-полей (canon_root/autonomy/threshold/blast); blast-radius тогда per-child.
+    pub dispatcher: Option<Arc<dyn ActionDispatcher>>,
+}
+
 /// Гонит один прогон агента: собирает начальный контекст ([system преамбул] + [recall памяти] +
 /// [меню скиллов] + [задача]), выбирает реестр (стабы | гейтнутые актуаторы с
 /// [`ForwardingEventSink`]), регистрирует tier-2/3 инструменты скиллов и крутит [`run_agent_loop`].
@@ -93,6 +109,7 @@ pub struct SessionSpec {
 ///
 /// `memory = None` → recall пуст (поведение без памяти, без регрессии). `skills = None` → ни меню, ни
 /// tier-2/3 инструментов. KILL-SWITCH (`paused`) и `cancel` пробрасываются в цикл (и в политику гейта).
+/// `subagent = Some` → прогон-РЕБЁНОК (см. [`SubagentSpawn`]); `None` → top-level (без регрессии).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_session(
     spec: &SessionSpec,
@@ -106,6 +123,7 @@ pub async fn run_agent_session(
     paused: &Arc<AtomicBool>,
     cancel: &Arc<AtomicBool>,
     forwarder: Arc<dyn AgentEventForwarder>,
+    subagent: Option<&SubagentSpawn<'_>>,
 ) -> LoopOutcome {
     // Начальный контекст: [system преамбул] + [recall памяти] + [меню скиллов] + [задача]. recall —
     // только чтение, никогда не ошибка (деградирует в пусто); None память → пусто (без регрессии).
@@ -133,47 +151,51 @@ pub async fn run_agent_session(
     // что и события цикла. Per-run DispatchPolicy (общий blast-radius между инструментами) + проброс
     // `paused` в политику (KILL-SWITCH чек-пойнт #3: НЕ пишет под паузой даже мид-инструмент).
     let mut registry = if spec.actuator_enabled {
-        let ledger = AuditSink::new(writer.clone(), reader.clone());
-        // SL-7d: skills-флаги в политику → classify_skill_save видит learning/root (иначе SkillSave всегда
-        // HardBlocked). skills_root_configured = есть ли SkillContext (skills=Some). Note/exec не затронуты.
-        let policy = DispatchPolicy::with_paused(
-            spec.autonomy.as_deref(),
-            spec.overwrite_threshold,
-            spec.blast_cap,
-            paused.clone(),
-        )
-        .with_skills_flags(spec.skills_learning_enabled, skills.is_some());
-        let events: Arc<dyn EventSink> = Arc::new(ForwardingEventSink(forwarder.clone()));
         let mut reg = ToolRegistry::new();
-        // SL-7d: `skill.save` (авторство навыков) — ТОЛЬКО при `skills_learning_enabled` + сконфигурированном
-        // skills-каталоге (`skills=Some`). Делит policy(token-bucket/паузу)/ledger/decision_source/events с
-        // note-инструментами (общий blast-radius/kill-switch); пишет под skills_root; провенанс через writer.
-        // Флаг выкл (default) → инструмента НЕТ, а classify_skill_save и так режет SkillSave HardBlocked.
-        if spec.skills_learning_enabled {
-            if let Some(sk) = skills {
-                let skill_ctx = SkillSaveCtx::new(
-                    sk.skills_root().to_path_buf(),
-                    ledger.clone(),
-                    spec.run_id,
-                    policy.clone(),
-                    decision_source.clone(),
-                    events.clone(),
-                    Some(writer.clone()),
-                );
-                reg.insert(Arc::new(SkillSaveTool::new(Arc::new(skill_ctx))));
-            }
-        }
-        let gate = GatedToolCtx::new(
-            spec.canon_root.clone(),
-            ledger,
-            spec.run_id,
-            policy,
-            decision_source,
-            events,
-        );
         // ШОВ актуатора (SANDBOX-4b-2): инструменты держат `Arc<dyn ActionDispatcher>`. In-process путь —
-        // `GatedToolCtx` (локальный `dispatch_action`). Песочница подставит `ProxyActuator` (host/act RPC).
-        let dispatcher: Arc<dyn ActionDispatcher> = Arc::new(gate);
+        // `GatedToolCtx` (локальный `dispatch_action`). СУБАГЕНТ (SUB-3) с общим dispatcher → переиспуем
+        // РОДИТЕЛЬСКИЙ gate (общий blast-radius/ledger/policy/pause; «запись через ОДИН gate»), и `skill.save`
+        // детям НЕ кладём (blocklist SUB-1). Иначе строим свой gate как раньше.
+        let dispatcher: Arc<dyn ActionDispatcher> =
+            if let Some(d) = subagent.and_then(|s| s.dispatcher.clone()) {
+                let _ = &decision_source; // в этой ветке свой gate не строим
+                d
+            } else {
+                let ledger = AuditSink::new(writer.clone(), reader.clone());
+                // SL-7d: skills-флаги в политику → classify_skill_save видит learning/root. Note/exec не затронуты.
+                let policy = DispatchPolicy::with_paused(
+                    spec.autonomy.as_deref(),
+                    spec.overwrite_threshold,
+                    spec.blast_cap,
+                    paused.clone(),
+                )
+                .with_skills_flags(spec.skills_learning_enabled, skills.is_some());
+                let events: Arc<dyn EventSink> = Arc::new(ForwardingEventSink(forwarder.clone()));
+                // SL-7d: `skill.save` — ТОЛЬКО top-level (`subagent.is_none()`) + learning + skills.
+                // Дети навыки не авторствуют. Делит policy/ledger/decision_source/events с note-инструментами.
+                if subagent.is_none() && spec.skills_learning_enabled {
+                    if let Some(sk) = skills {
+                        let skill_ctx = SkillSaveCtx::new(
+                            sk.skills_root().to_path_buf(),
+                            ledger.clone(),
+                            spec.run_id,
+                            policy.clone(),
+                            decision_source.clone(),
+                            events.clone(),
+                            Some(writer.clone()),
+                        );
+                        reg.insert(Arc::new(SkillSaveTool::new(Arc::new(skill_ctx))));
+                    }
+                }
+                Arc::new(GatedToolCtx::new(
+                    spec.canon_root.clone(),
+                    ledger,
+                    spec.run_id,
+                    policy,
+                    decision_source,
+                    events,
+                ))
+            };
         reg.insert(Arc::new(NoteCreateTool::new(dispatcher.clone())));
         reg.insert(Arc::new(NoteEditTool::new(dispatcher.clone())));
         reg.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
@@ -200,6 +222,14 @@ pub async fn run_agent_session(
         for tool in skills.tools() {
             registry.insert(tool);
         }
+    }
+
+    // SUB-3 (security keystone проводки): реестр СУБАГЕНТА сужаем до выданного подмножества ПОСЛЕ полной
+    // сборки (actuator+skills+web). `allowed` = build_child_registry(child ⊆ parent минус блок-лист) —
+    // имя сверху физически удаляется, субагент не вызовет инструмент сверх выданного. Top-level (None) —
+    // без сужения.
+    if let Some(sa) = subagent {
+        registry.retain(sa.allowed);
     }
 
     // on_event: КАЖДОЕ событие цикла → форвардер (тот же, что у гейта). Запись шага/стрим/лог — забота
@@ -327,6 +357,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
         )
         .await;
 
@@ -337,6 +368,125 @@ mod tests {
         let res = pos(&|e| matches!(e, AgentEvent::ToolResult { .. })).expect("toolresult");
         let fin = pos(&|e| matches!(e, AgentEvent::Final(_))).expect("final");
         assert!(call < res && res < fin, "порядок ToolCall<ToolResult<Final");
+    }
+
+    /// SUB-3a (security keystone проводки): `subagent=Some(allowed)` СУЖАЕТ реестр ребёнка. Модель зовёт
+    /// `noop` (есть в полном реестре), но его НЕТ в `allowed={echo}` → реестр ребёнка его не содержит →
+    /// `UnknownTool` is_error. Эскалация инструментом сверх выданного невозможна по построению.
+    #[tokio::test]
+    async fn subagent_filtered_tool_is_unknown() {
+        let (_dir, db) = open_db().await;
+        let provider = FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "debug.noop".into(),
+                arguments: "{}".into(),
+            }])),
+            Ok(ToolTurn::Final("ок".into())),
+        ]);
+        let fwd = Arc::new(CollectingForwarder::default());
+        let spec = SessionSpec {
+            run_id: 10,
+            task: "t".into(),
+            autonomy: None,
+            actuator_enabled: false,
+            overwrite_threshold: 100,
+            blast_cap: 10,
+            context_window: Some(4096),
+            canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
+        };
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let allowed: std::collections::BTreeSet<String> =
+            ["debug.echo".to_string()].into_iter().collect();
+        let sa = SubagentSpawn {
+            allowed: &allowed,
+            dispatcher: None,
+        };
+        run_agent_session(
+            &spec,
+            &provider,
+            None,
+            None,
+            None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+            Some(&sa),
+        )
+        .await;
+        let evs = fwd.events.lock().unwrap();
+        let is_error = evs.iter().find_map(|e| match e {
+            AgentEvent::ToolResult { is_error, .. } => Some(*is_error),
+            _ => None,
+        });
+        assert_eq!(
+            is_error,
+            Some(true),
+            "debug.noop отфильтрован из реестра ребёнка (allowed={{debug.echo}}) → UnknownTool is_error"
+        );
+    }
+
+    /// SUB-3a контроль: инструмент, ВКЛЮЧённый в `allowed`, у ребёнка вызывается успешно (сужение не
+    /// режет лишнего).
+    #[tokio::test]
+    async fn subagent_allowed_tool_works() {
+        let (_dir, db) = open_db().await;
+        let provider = FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "debug.echo".into(),
+                arguments: r#"{"text":"hi"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("ок".into())),
+        ]);
+        let fwd = Arc::new(CollectingForwarder::default());
+        let spec = SessionSpec {
+            run_id: 11,
+            task: "t".into(),
+            autonomy: None,
+            actuator_enabled: false,
+            overwrite_threshold: 100,
+            blast_cap: 10,
+            context_window: Some(4096),
+            canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
+        };
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let allowed: std::collections::BTreeSet<String> =
+            ["debug.echo".to_string(), "debug.noop".to_string()]
+                .into_iter()
+                .collect();
+        let sa = SubagentSpawn {
+            allowed: &allowed,
+            dispatcher: None,
+        };
+        run_agent_session(
+            &spec,
+            &provider,
+            None,
+            None,
+            None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+            Some(&sa),
+        )
+        .await;
+        let evs = fwd.events.lock().unwrap();
+        let is_error = evs.iter().find_map(|e| match e {
+            AgentEvent::ToolResult { is_error, .. } => Some(*is_error),
+            _ => None,
+        });
+        assert_eq!(is_error, Some(false), "echo в allowed → вызывается успешно");
     }
 
     /// Пустой провайдер-стрим, который сразу Final — форвардер видит хотя бы ContextUsage + Final, vault
@@ -371,6 +521,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
         )
         .await;
         assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -459,6 +610,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
         )
         .await;
         assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -557,6 +709,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
         )
         .await;
         eprintln!("LIVE outcome: {outcome:?}");
