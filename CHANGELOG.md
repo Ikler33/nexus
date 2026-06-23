@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Документация · CONFIGURATION-REFERENCE.md — полная схема конфига из кода (product-completeness P1)
+
+Закрывает P1-gap «нет schema-доков для конфига» (`PRODUCT-COMPLETENESS.md`). Operator-facing справочник всех настроек, выведенный из кода (`ai/config.rs` + per-feature configs) через code-accurate gather; security-критичные дефолты сверены с кодом напрямую (`DEFAULT_BLAST_RADIUS_CAP=16`, delegation depth1/fanout3/spawns8, research rounds3/urls3/chars15000, OVERWRITE_THRESHOLD 64КиБ, context 32768/reserve 1024 — все совпали).
+
+- **`.nexus/local.json`** — всё дерево `ai.*`: эндпоинты (chat/embedding/fast/tokenizer + таймауты/temperature/context), актуатор (`agent_actuator_enabled`/`agent_autonomy`/overwrite/blast-radius), скиллы (`agent_skills_dir`/`skills.learning_enabled`), web (`web.enabled`/url/`allow_public_fetch`), sandbox/exec (`sandbox_enabled`/`shell_enable`/`git_worktree`), `delegation.*`, `research.*` — путь/тип/дефолт/гейтинг/назначение для каждого поля.
+- **Kill-switch файлы вне vault** (OS-config-dir): `egress.json` (offline/chat/embed/probe), `agent.json` (paused), `websearch.json`/`news.json` (десктоп-согласие); канбан `boards/<id>.json`.
+- OS-пути конфиг-дир (macOS/Linux/Windows), fail-safe-загрузка, hot-reload-семантика, валидация/гейтинг (SSRF на URL, shell↔sandbox-когерентность, клампы), авто-allowlist эндпоинтов, ADR-002 (gitignore). Помечены default-OFF/owner-gated; кросс-ссылки на THREAT_MODEL. Минимальный + агентный примеры `local.json`.
+
 ### Документация · THREAT_MODEL.md приведён в соответствие с кодом (product-completeness P0)
 
 Док устарел с #369 (T7 shell/host «НЕ СУЩЕСТВУЕТ», T3 env-scrub «не реализовано» — оба давно построены; ноль покрытия subagents/research/self-learning/backup). Освежён из **code-accurate gather (Workflow, 6 подсистем, file:symbol-доказательства)** + **adversarial accuracy-review (2 линзы: over-claim vs код / under-state риска)** → 0 CRITICAL, без ложных security-свойств.
