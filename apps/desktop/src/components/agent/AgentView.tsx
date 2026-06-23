@@ -21,9 +21,9 @@ import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
-import { useAgentStore } from '../../stores/agent';
+import { useAgentStore, sessionStatus } from '../../stores/agent';
 import { useToastStore } from '../../stores/toast';
-import type { AgentPerms, ChangesetFile } from '../../stores/agent';
+import type { AgentPerms, AgentTurn, ChangesetFile } from '../../stores/agent';
 import styles from './AgentView.module.css';
 
 /** Доступные модели для отображаемого селектора (per-run политика UI; реальный выбор — конфиг бэка). */
@@ -43,19 +43,12 @@ export function AgentView() {
   const { t } = useTranslation();
   const toast = useToastStore((s) => s.addToast);
 
-  const runId = useAgentStore((s) => s.runId);
-  const status = useAgentStore((s) => s.status);
-  const task = useAgentStore((s) => s.task);
+  const turns = useAgentStore((s) => s.turns);
   const autonomy = useAgentStore((s) => s.autonomy);
   const model = useAgentStore((s) => s.model);
   const perms = useAgentStore((s) => s.perms);
-  const assistantText = useAgentStore((s) => s.assistantText);
-  const steps = useAgentStore((s) => s.steps);
   const context = useAgentStore((s) => s.context);
-  const changeset = useAgentStore((s) => s.changeset);
   const approving = useAgentStore((s) => s.approving);
-  const report = useAgentStore((s) => s.report);
-  const error = useAgentStore((s) => s.error);
 
   const run = useAgentStore((s) => s.run);
   const setAutonomy = useAgentStore((s) => s.setAutonomy);
@@ -75,8 +68,12 @@ export function AgentView() {
   const [input, setInput] = useState('');
   const gearRef = useRef<HTMLDivElement>(null);
 
+  const lastTurn = turns.length ? turns[turns.length - 1] : null;
+  const status = sessionStatus(turns);
+  const runId = lastTurn?.runId ?? null;
+  const report = lastTurn?.report ?? null;
   const active = status === 'running' || status === 'paused' || status === 'awaiting';
-  const started = status !== 'idle';
+  const started = turns.length > 0;
 
   // Закрытие меню настроек по клику снаружи (как макет).
   useEffect(() => {
@@ -234,118 +231,30 @@ export function AgentView() {
             </div>
           ) : (
             <>
-              {/* Задача сессии */}
-              <div className={`${styles.msg} ${styles.msgUser}`}>
-                <div className={styles.who}>{t('agent.who.task')}</div>
-                <div className={styles.task}>{task}</div>
-              </div>
-
-              {/* Ответ ассистента (склейка assistantToken) */}
-              {(assistantText || active) && (
-                <div className={`${styles.msg} ${styles.msgBot}`}>
-                  <div className={styles.who}>
-                    <BrandThinking size={14} />
-                    {t('agent.who.agent')}
-                  </div>
-                  <div className={styles.reply}>{assistantText}</div>
-                </div>
-              )}
-
-              {/* Лента шагов (tool-вызовы/результаты) */}
-              {steps.length > 0 && (
-                <div className={styles.steps}>
-                  {steps.map((st) => (
-                    <details
-                      key={st.id}
-                      className={`${styles.step} ${st.result == null ? styles.stepRun : st.isError ? styles.stepErr : styles.stepOk}`}
-                      open={st.result == null}
-                    >
-                      <summary className={styles.stepHead}>
-                        <span className={styles.stIc}>
-                          {st.result == null ? (
-                            <BrandThinking size={14} />
-                          ) : st.isError ? (
-                            <X size={13} aria-hidden />
-                          ) : (
-                            <Check size={13} aria-hidden />
-                          )}
-                        </span>
-                        <span className={styles.stMain}>
-                          <span className={styles.stLabel}>
-                            <ChevronRight size={12} className={styles.stTw} aria-hidden />
-                            <span className={styles.stKind}>{st.kind}</span>
-                          </span>
-                        </span>
-                        <span
-                          className={`${styles.stTag} ${st.result == null ? styles.tagRun : ''}`}
-                        >
-                          {st.result == null ? t('agent.steps.running') : t('agent.steps.result')}
-                        </span>
-                      </summary>
-                      <div className={styles.stSub}>
-                        <div className={styles.stAct}>
-                          <span className={styles.stActK}>{st.kind}</span> {st.args}
-                        </div>
-                        {st.result != null && (
-                          <pre
-                            className={`${styles.toolOut} ${st.isError ? styles.toolErr : ''}`}
-                          >
-                            {st.result}
-                          </pre>
-                        )}
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              )}
-
-              {/* Changeset (proposal/diff) */}
-              {changeset.length > 0 && (
-                <Changeset
-                  files={changeset}
+              {/* Мультитёрн: лента ходов сессии (каждое сообщение = новый ход, прошлое НЕ стирается). */}
+              {turns.map((turn, i) => (
+                <TurnView
+                  key={turn.key}
+                  turn={turn}
+                  isLast={i === turns.length - 1}
                   autonomy={autonomy}
-                  awaiting={status === 'awaiting'}
                   approving={approving}
                   onFile={setFileDecision}
                   onBulk={(d) => {
                     setAllDecisions(d);
-                    toast(d === 'applied' ? t('agent.changeset.applyToast') : t('agent.changeset.rejectToast'));
+                    toast(
+                      d === 'applied'
+                        ? t('agent.changeset.applyToast')
+                        : t('agent.changeset.rejectToast'),
+                    );
                   }}
                   onApprove={() => void approve()}
+                  onPause={() => void pause()}
+                  onResume={() => void resume()}
+                  onCancel={() => void cancel()}
+                  onUndo={() => void doUndo()}
                 />
-              )}
-
-              {/* Ошибка хода */}
-              {error && <div className={styles.error}>{error}</div>}
-
-              {/* Контролы прогона (пауза/продолжить/стоп/откат) */}
-              {(active || status === 'done' || status === 'cancelled') && (
-                <div className={styles.controls}>
-                  <span className={styles.statusPill} data-status={status}>
-                    {t(`agent.status.${status}`)}
-                  </span>
-                  <div className={styles.spacer} />
-                  {status === 'paused' ? (
-                    <button type="button" className={styles.ctrlBtn} onClick={() => void resume()}>
-                      <Play size={14} aria-hidden /> {t('agent.controls.resume')}
-                    </button>
-                  ) : (status === 'running' || status === 'awaiting') ? (
-                    <button type="button" className={styles.ctrlBtn} onClick={() => void pause()}>
-                      <Pause size={14} aria-hidden /> {t('agent.controls.pause')}
-                    </button>
-                  ) : null}
-                  {active && (
-                    <button type="button" className={styles.ctrlBtn} onClick={() => void cancel()}>
-                      <Square size={13} aria-hidden /> {t('agent.controls.cancel')}
-                    </button>
-                  )}
-                  {(status === 'done' || status === 'cancelled') && (
-                    <button type="button" className={styles.ctrlBtn} onClick={() => void doUndo()}>
-                      <RotateCcw size={13} aria-hidden /> {t('agent.controls.undo')}
-                    </button>
-                  )}
-                </div>
-              )}
+              ))}
             </>
           )}
 
@@ -459,6 +368,151 @@ export function AgentView() {
         </nav>
       </div>
     </main>
+  );
+}
+
+// ── Один ход диалога (task пользователя + ответ/действия агента) ───────────────────────────────────
+
+interface TurnViewProps {
+  turn: AgentTurn;
+  /** Последний ход = активный/свежезавершённый: его контролы и аппрув-кнопки интерактивны. */
+  isLast: boolean;
+  autonomy: 'confirm' | 'auto';
+  approving: boolean;
+  onFile: (actionId: number, decision: 'applied' | 'rejected') => void;
+  onBulk: (decision: 'applied' | 'rejected') => void;
+  onApprove: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+  onUndo: () => void;
+}
+
+function TurnView({
+  turn,
+  isLast,
+  autonomy,
+  approving,
+  onFile,
+  onBulk,
+  onApprove,
+  onPause,
+  onResume,
+  onCancel,
+  onUndo,
+}: TurnViewProps) {
+  const { t } = useTranslation();
+  const status = turn.status;
+  const active = status === 'running' || status === 'paused' || status === 'awaiting';
+
+  return (
+    <>
+      {/* Сообщение пользователя (для первого хода — задача сессии) */}
+      <div className={`${styles.msg} ${styles.msgUser}`}>
+        <div className={styles.who}>{t('agent.who.task')}</div>
+        <div className={styles.task}>{turn.task}</div>
+      </div>
+
+      {/* Ответ ассистента (склейка assistantToken) */}
+      {(turn.assistantText || active) && (
+        <div className={`${styles.msg} ${styles.msgBot}`}>
+          <div className={styles.who}>
+            <BrandThinking size={14} />
+            {t('agent.who.agent')}
+          </div>
+          <div className={styles.reply}>{turn.assistantText}</div>
+        </div>
+      )}
+
+      {/* Лента шагов (tool-вызовы/результаты) */}
+      {turn.steps.length > 0 && (
+        <div className={styles.steps}>
+          {turn.steps.map((st) => (
+            <details
+              key={st.id}
+              className={`${styles.step} ${st.result == null ? styles.stepRun : st.isError ? styles.stepErr : styles.stepOk}`}
+              open={st.result == null}
+            >
+              <summary className={styles.stepHead}>
+                <span className={styles.stIc}>
+                  {st.result == null ? (
+                    <BrandThinking size={14} />
+                  ) : st.isError ? (
+                    <X size={13} aria-hidden />
+                  ) : (
+                    <Check size={13} aria-hidden />
+                  )}
+                </span>
+                <span className={styles.stMain}>
+                  <span className={styles.stLabel}>
+                    <ChevronRight size={12} className={styles.stTw} aria-hidden />
+                    <span className={styles.stKind}>{st.kind}</span>
+                  </span>
+                </span>
+                <span className={`${styles.stTag} ${st.result == null ? styles.tagRun : ''}`}>
+                  {st.result == null ? t('agent.steps.running') : t('agent.steps.result')}
+                </span>
+              </summary>
+              <div className={styles.stSub}>
+                <div className={styles.stAct}>
+                  <span className={styles.stActK}>{st.kind}</span> {st.args}
+                </div>
+                {st.result != null && (
+                  <pre className={`${styles.toolOut} ${st.isError ? styles.toolErr : ''}`}>
+                    {st.result}
+                  </pre>
+                )}
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+
+      {/* Changeset (proposal/diff). Аппрув активен только у последнего хода в статусе awaiting. */}
+      {turn.changeset.length > 0 && (
+        <Changeset
+          files={turn.changeset}
+          autonomy={autonomy}
+          awaiting={isLast && status === 'awaiting'}
+          approving={isLast && approving}
+          onFile={onFile}
+          onBulk={onBulk}
+          onApprove={onApprove}
+        />
+      )}
+
+      {/* Ошибка хода */}
+      {turn.error && <div className={styles.error}>{turn.error}</div>}
+
+      {/* Контролы прогона — только у последнего хода (пауза/продолжить/стоп/откат) */}
+      {isLast && (active || status === 'done' || status === 'cancelled') && (
+        <div className={styles.controls}>
+          <span className={styles.statusPill} data-status={status}>
+            {t(`agent.status.${status}`)}
+          </span>
+          <div className={styles.spacer} />
+          {status === 'paused' ? (
+            <button type="button" className={styles.ctrlBtn} onClick={onResume}>
+              <Play size={14} aria-hidden /> {t('agent.controls.resume')}
+            </button>
+          ) : status === 'running' || status === 'awaiting' ? (
+            <button type="button" className={styles.ctrlBtn} onClick={onPause}>
+              <Pause size={14} aria-hidden /> {t('agent.controls.pause')}
+            </button>
+          ) : null}
+          {active && (
+            <button type="button" className={styles.ctrlBtn} onClick={onCancel}>
+              <Square size={13} aria-hidden /> {t('agent.controls.cancel')}
+            </button>
+          )}
+          {(status === 'done' || status === 'cancelled') && (
+            <button type="button" className={styles.ctrlBtn} onClick={onUndo}>
+              <RotateCcw size={13} aria-hidden /> {t('agent.controls.undo')}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
