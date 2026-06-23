@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-2 — события плана/субагента (PlanProposed/PlanStepStatus/SubagentStatus) + wire ACP
+
+Контракт наблюдаемости ПЕРВЫМ (чтобы поздние срезы эмитили в стабильный шов). Реализованы зарезервированные в `event.rs` варианты + новый `SubagentStatus`. БЕЗ эмиттера (его дают SUB-3/RES-*).
+
+- **`AgentEvent`**: `PlanProposed { run_id, steps: Vec<PlanStep> }` («граф плана» — decompose/делегирование), `PlanStepStatus { id, status }` (ACP `AgentPlanUpdate`-семантика), `SubagentStatus { parent_run_id, child_run_id, goal, status, summary? }` (узел дерева по `parent_run_id` lineage). Закрытые статус-энумы `PlanStepState` (pending/running/done/failed) + `SubagentState` (spawned/running/done/failed/paused).
+- **Редакция-безопасность**: `SubagentStatus` строится ТОЛЬКО через конструктор `AgentEvent::subagent_status(..)` — клипует `goal` (≤200) и `summary` (≤2000), сырой вывод/рассуждения ребёнка в стрим НЕ уходят (зеркало силуэт-дисциплины `ProposedFile`/`ExecProposal`). `summary=None` опускается (`skip_serializing_if`).
+- **wire.rs (контракт desktop↔agentd)**: зеркальные DTO `AgentPlanStep`/`AgentPlanStepState`/`AgentSubagentState` + 3 варианта `AgentStreamEvent` + `From`-конверсии; `map_agent_event` (ЭКЗАУСТИВНЫЙ in-crate матч) расширен — новый core-вариант компилит-форсит wire-решение (контракт не дрейфует молча).
+
+Tier-1 (+5 tests, 975 nexus-core): planProposed tagged-camelCase + step.status · planStepStatus · **subagent_status конструктор клипует goal/summary (редакция) + None опущен** · map покрывает новые варианты Some-not-None · SubagentStatus ядро→wire→JSON round-trip (parentRunId/childRunId camelCase). `test-all` зелёный. Дальше: SUB-3 (spawn-примитив поверх run_agent_session + JoinSet).
+
 ### Агент · SUBAGENTS SUB-1 — реестр субагента child⊆parent (no-escalation keystone) + обрамление задачи
 
 Чистая логика (без спавна/инструмента). **Security keystone: набор инструментов ребёнка ⊆ набора родителя ВСЕГДА** (set-intersection, НИКОГДА union) — эскалация невозможна по построению.
