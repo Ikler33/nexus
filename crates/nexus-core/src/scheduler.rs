@@ -122,6 +122,84 @@ pub async fn claim_next(writer: &WriteActor, now: i64) -> DbResult<Option<Job>> 
         .await
 }
 
+/// Как [`claim_next`], но заклеймит ТОЛЬКО джобу, чей `kind` есть в `handled` (kind'ы реестра воркера).
+///
+/// # Зачем (ревью SL-curator, MAJOR cross-process)
+/// `jobs`-таблица — общая на vault. Если тот же vault держат ДВА процесса (напр. agentd-service +
+/// открытый desktop), их воркеры поллят одну очередь. Воркер НЕ вправе хоронить (`dead`) джобу, чей kind
+/// обслуживает ДРУГОЙ процесс: kind-agnostic claim приводил к тому, что desktop заклеймливал
+/// agentd'шный `skill_curator` → `неизвестный kind` → `dead`-шум + курация шла лишь когда нужный процесс
+/// выигрывал гонку. Claim-by-kind решает ОБА направления (и agentd, выгребающий desktop-kind'ы) и
+/// будущие agentd-only kind'ы (субагенты). Чужой kind просто НЕ заклеймливается этим воркером — остаётся
+/// `pending` для своего процесса (видим в counts.pending, не в `dead`). Пустой `handled` → claim ничего
+/// (воркер без хендлеров не выгребает очередь). `handled` мал (десятки) → `IN (...)` дёшев.
+pub async fn claim_next_handled(
+    writer: &WriteActor,
+    now: i64,
+    handled: &[String],
+) -> DbResult<Option<Job>> {
+    if handled.is_empty() {
+        return Ok(None);
+    }
+    let handled: Vec<String> = handled.to_vec();
+    writer
+        .transaction(move |tx| {
+            let placeholders = vec!["?"; handled.len()].join(",");
+            let sql = format!(
+                "SELECT id,kind,payload,state,run_at,attempts,max_attempts,last_error \
+                 FROM jobs WHERE state='pending' AND run_at<=? AND kind IN ({placeholders}) \
+                 ORDER BY run_at,id LIMIT 1"
+            );
+            // Гетерогенный bind: первый параметр `now` (i64), далее имена kind'ов (String).
+            let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(handled.len() + 1);
+            binds.push(&now);
+            for k in &handled {
+                binds.push(k);
+            }
+            let job = tx
+                .query_row(&sql, binds.as_slice(), |r| {
+                    Ok(Job {
+                        id: r.get(0)?,
+                        kind: r.get(1)?,
+                        payload: r.get(2)?,
+                        state: r.get(3)?,
+                        run_at: r.get(4)?,
+                        attempts: r.get(5)?,
+                        max_attempts: r.get(6)?,
+                        last_error: r.get(7)?,
+                    })
+                })
+                .optional()?;
+            if let Some(j) = &job {
+                tx.execute(
+                    "UPDATE jobs SET state='running', updated_at=?2 WHERE id=?1",
+                    params![j.id, now_secs()],
+                )?;
+            }
+            Ok(job.map(|mut j| {
+                j.state = "running".into();
+                j
+            }))
+        })
+        .await
+}
+
+/// Удаляет джобы заданного `kind` в состояниях `pending`/`running` (одноразовая уборка осиротевших
+/// recurring-джоб конкретного владельца). Возвращает число удалённых. Безопасно ТОЛЬКО для kind'ов,
+/// которые обслуживает РОВНО ОДИН процесс (напр. agentd `skill_curator`): иначе можно снести джобу,
+/// которую обслуживает другой процесс. НЕ трогает `done`/`dead` (их ведёт gc/оператор).
+pub async fn delete_jobs_of_kind(writer: &WriteActor, kind: &str) -> DbResult<usize> {
+    let kind = kind.to_string();
+    writer
+        .transaction(move |tx| {
+            tx.execute(
+                "DELETE FROM jobs WHERE kind=?1 AND state IN ('pending','running')",
+                [&kind],
+            )
+        })
+        .await
+}
+
 /// Успешное завершение → `done`.
 pub async fn complete(writer: &WriteActor, id: i64) -> DbResult<()> {
     writer
@@ -389,8 +467,13 @@ pub async fn reschedule_if_absent(
     let kind = kind.to_string();
     writer
         .transaction(move |tx| {
+            // Анти-стакинг: учитываем И `running` (ревью SL-curator NIT) — иначе при рестарте agentd
+            // ПОСЛЕ краша в середине прогона джоба ещё `running` (requeue_running во worker_loop её вернёт
+            // в `pending` ПОЗЖЕ), seed бы не увидел её и вставил дубль. `running`-джоба того же kind
+            // подавляет повторную вставку. На re-arm-сайтах (run_due) текущая джоба к этому моменту уже
+            // `done`/`pending`-ретрай — учёт `running` их не задевает.
             let pending: i64 = tx.query_row(
-                "SELECT count(*) FROM jobs WHERE kind=?1 AND state='pending'",
+                "SELECT count(*) FROM jobs WHERE kind=?1 AND state IN ('pending','running')",
                 [&kind],
                 |r| r.get(0),
             )?;
@@ -454,9 +537,12 @@ pub async fn run_due(
     busy: bool,
     recurring: &HashMap<String, i64>,
 ) -> DbResult<usize> {
+    // Claim-by-kind (ревью SL-curator): воркер выгребает ТОЛЬКО kind'ы своего реестра — не хоронит чужие
+    // (другой процесс на том же vault). Чужой kind остаётся `pending` для своего владельца.
+    let handled: Vec<String> = registry.keys().cloned().collect();
     let mut n = 0;
     while n < MAX_PER_TICK {
-        let Some(job) = claim_next(writer, now).await? else {
+        let Some(job) = claim_next_handled(writer, now, &handled).await? else {
             break;
         };
         let handler = registry.get(&job.kind);
@@ -824,7 +910,9 @@ mod tests {
             .expect("воркер завершился без паники");
     }
 
-    /// run_due диспатчит готовые: успешный kind→done, падающий→backoff; неизвестный kind → fail.
+    /// run_due диспатчит готовые: успешный kind→done, падающий→backoff. Claim-by-kind (ревью SL-curator):
+    /// kind БЕЗ хендлера в реестре НЕ заклеймливается (остаётся `pending` для своего процесса), а НЕ
+    /// хоронится — воркер не трогает чужие kind'ы общей очереди.
     #[tokio::test]
     async fn run_due_dispatches_by_kind() {
         let (_d, db) = open().await;
@@ -849,16 +937,103 @@ mod tests {
         );
         enqueue(w, "ok", "", 0, 5).await.unwrap();
         enqueue(w, "bad", "", 0, 5).await.unwrap();
-        enqueue(w, "ghost", "", 0, 1).await.unwrap(); // нет хендлера, max=1 → сразу dead
+        enqueue(w, "ghost", "", 0, 1).await.unwrap(); // нет хендлера → НЕ заклеймится (не наш kind)
 
         let n = run_due(w, &reg, 100, false, &HashMap::new()).await.unwrap();
-        assert_eq!(n, 3, "три готовые обработаны");
+        assert_eq!(
+            n, 2,
+            "обработаны только ok+bad (ghost — чужой kind, не заклеймлен)"
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2, "вызваны только ok+bad");
-        // ok→done, bad→backoff (не готова), ghost→dead → готовых нет
+        // ok→done, bad→backoff (не готова); ghost остался pending (не наш) → готовых для НАШИХ kind'ов нет.
         assert!(
             run_due(w, &reg, 100, false, &HashMap::new()).await.unwrap() == 0,
-            "повторно готовых нет"
+            "повторно готовых наших нет"
         );
+        // ghost ЖИВ и pending (его заклеймит процесс, у которого есть хендлер), НЕ dead.
+        let ghost_state: String = db
+            .reader()
+            .query(|c| {
+                c.query_row("SELECT state FROM jobs WHERE kind='ghost'", [], |r| {
+                    r.get(0)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            ghost_state, "pending",
+            "чужой kind не заклеймлен и не похоронен"
+        );
+    }
+
+    /// claim_next_handled заклеймливает ТОЛЬКО kind'ы из набора; чужие пропускает; пустой набор → ничего.
+    #[tokio::test]
+    async fn claim_next_handled_skips_unregistered_kinds() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        enqueue(w, "mine", "", 0, 5).await.unwrap();
+        enqueue(w, "foreign", "", 0, 5).await.unwrap();
+
+        // Пустой набор → ничего (воркер без хендлеров не выгребает очередь).
+        assert!(claim_next_handled(w, 100, &[]).await.unwrap().is_none());
+
+        // Набор {mine} → заклеймит mine, foreign не трогает.
+        let j = claim_next_handled(w, 100, &["mine".to_string()])
+            .await
+            .unwrap()
+            .expect("mine готова");
+        assert_eq!(j.kind, "mine");
+        // Повторно по {mine} — пусто (mine уже running, foreign не наш).
+        assert!(claim_next_handled(w, 100, &["mine".to_string()])
+            .await
+            .unwrap()
+            .is_none());
+        // foreign всё ещё pending (его заклеймит свой процесс).
+        let foreign_state: String = db
+            .reader()
+            .query(|c| {
+                c.query_row("SELECT state FROM jobs WHERE kind='foreign'", [], |r| {
+                    r.get(0)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(foreign_state, "pending");
+    }
+
+    /// delete_jobs_of_kind сносит pending/running заданного kind (уборка осиротевшей recurring-джобы),
+    /// не трогая done/dead и другие kind'ы.
+    #[tokio::test]
+    async fn delete_jobs_of_kind_removes_pending_running_only() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        enqueue(w, "victim", "", 0, 5).await.unwrap(); // pending
+        enqueue(w, "keep", "", 0, 5).await.unwrap(); // другой kind
+        let running = claim_next(w, 100).await.unwrap().expect("victim?"); // один из них → running
+                                                                           // Гарантируем: victim точно есть среди pending/running.
+        let removed = delete_jobs_of_kind(w, "victim").await.unwrap();
+        assert!(removed >= 1, "victim снят");
+        let victim_left: i64 = db
+            .reader()
+            .query(|c| {
+                c.query_row("SELECT count(*) FROM jobs WHERE kind='victim'", [], |r| {
+                    r.get(0)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(victim_left, 0, "не осталось victim-джоб");
+        let keep_left: i64 = db
+            .reader()
+            .query(|c| {
+                c.query_row("SELECT count(*) FROM jobs WHERE kind='keep'", [], |r| {
+                    r.get(0)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(keep_left, 1, "другой kind не тронут");
+        let _ = running; // claim_next мог взять victim ИЛИ keep — тест устойчив к обоим (victim снят в любом случае)
     }
 
     /// S5 backpressure: `defer_under_interactive`-джоба при `busy` откладывается (не выполняется,
