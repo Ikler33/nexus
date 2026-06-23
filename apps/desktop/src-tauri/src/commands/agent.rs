@@ -454,6 +454,7 @@ async fn drive_run(
         forwarder,
         None, // top-level desktop-прогон (не субагент)
         None, // delegation выкл в desktop-пути (как skills_learning) — owner-gated agentd-фича
+        None, // research (RES-4): default-OFF; прод-проводка в RES-5
     )
     .await
 }

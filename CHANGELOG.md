@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · DEEP-RESEARCH RES-4 — инструмент `research.run` + запись отчёта ЧЕРЕЗ actuator-гейт (default-OFF)
+
+Завершает write-path ресёрча: оркестратор RES-3 → отчёт → vault ЧЕРЕЗ гейт (НИКОГДА не сырой `fs`).
+
+- **`agent::research::write`** — `write_report`: строит `Action::note_create("Research/<slug>-<YYYY-MM-DD>.md", frontmatter+отчёт)` и отдаёт в `ActionDispatcher` (тот же путь, что `note.create`: classify→autonomy/blast-cap→ledger write-before-act→atomic→undo). Frontmatter-провенанс (`source: nexus-deep-research`, `query`, `sources_count`, `created`). `slugify`/`report_path`/`build_body` — чистые, тестируемы.
+- **`agent::research::tool::ResearchTool`** (`research.run`, args `{question, max_rounds?}`): прогоняет `run_research` → пишет отчёт через гейт → возвращает summary. Пустой ресёрч (0 источников) НЕ создаёт заметку. Под `confirm` гейт отдаёт Proposal (не пишет), под `auto` — применяет+аудитит (поведение наследуется от гейта).
+- **Регистрация в `session.rs`** — `research.run` ТОЛЬКО при `ai.research.enabled` И `ai.delegation.enabled` И web И actuator (нужен gate) И top-level (`should_register` truth-table). Провайдер/капы/бюджет берутся из `DelegationDeps`; web — боевой `GuardedResearchWeb`. Воркеры (RES-2) read-only — пишет ТОЛЬКО оркестратор через ТОТ ЖЕ родительский gate. Новый параметр `research: Option<&ResearchConfig>` у `run_agent_session` (13 call-sites: None везде — прод-проводка agentd/connect идёт в RES-5 вместе с live).
+
+**Adversarial-ревью (Workflow, 3 линзы: security-gating/write-correctness/integration; каждая находка верифицирована) → 0 CRITICAL/MAJOR (гейтинг и write-path признаны корректными), 7 NIT/MINOR закрыты в срезе:** frontmatter-значение теперь БЕЗОПАСНО для ОБОИХ читателей (`safe_value`: control/кавычки/двоеточия→пробел, без обрамляющих кавычек — тупой edge-stripper не декодировал эскейпы) + control-символы (#3/#4); `StopReason::Paused` отделён от `Cancelled` (зеркало `BudgetKind::Paused`, #6); warn при сбое часов вместо тихого 1970 (#5); security-инвариант-коммент на 4 `Some`-байндинга truth-table (#2); doc per-invoke wall-deadline (#7). #1 — процесс-нота: прод-проводка research в agentd/connect идёт в RES-5 (сейчас `None` везде, инертно).
+
+Tier-1 (+12 тестов): запись ЧЕРЕЗ dispatch (не fs) + frontmatter-провенанс · пустой ресёрч не пишет · slug/path/body · `safe_value` санитизация · should_register truth-table · paused≠cancel · отказ на пустой вопрос/лишнее поле. `fmt`/`clippy` чисто.
+
 ### Агент · DEEP-RESEARCH RES-3 — оркестратор IterResearch (decompose→fan-out→synthesize→stop), отчёт в памяти
 
 Склейка RES-1 (промпты/парсеры) + RES-2 (воркер) в итеративный цикл (порт odysseus `IterResearch.research()`). Производит отчёт В ПАМЯТИ + источники; **запись в vault — RES-4** (срез ревьюится изолированно, ещё без побочных эффектов).

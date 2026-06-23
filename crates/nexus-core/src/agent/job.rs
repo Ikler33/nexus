@@ -300,6 +300,7 @@ impl AgentRunHandler {
             forwarder,
             None, // top-level прогон (не субагент)
             delegation_deps.as_ref(),
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
 

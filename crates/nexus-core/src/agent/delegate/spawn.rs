@@ -224,6 +224,7 @@ pub async fn spawn_subagent(
         child_forwarder,
         Some(&sa),
         None, // дети НЕ делегируют (рекурсия-стоп: delegate.run не регистрируется ребёнку)
+        None, // research (RES-4): default-OFF; прод-проводка в RES-5
     )
     .await;
 

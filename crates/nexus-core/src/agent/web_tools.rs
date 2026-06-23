@@ -620,6 +620,7 @@ mod tests {
             fwd.clone(),
             None,
             None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
         )
         .await;
         eprintln!("LIVE web outcome: {outcome:?}");
