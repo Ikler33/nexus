@@ -52,3 +52,28 @@ rm -rf ~/sbx-test-vault ~/sbx-test-repo   # если пересоздаёшь
 - FOREGROUND/serial — **никаких фоновых git-операций в общем .28-репо** (см. feedback_no_bg_git_in_shared_repo).
 - **Никогда** не трогать `~/.nexus/vault`; **никогда** не оставлять `shell_enable=true` в не-тестовом конфиге.
 - Скрипт-помощник: `scripts/sandbox-tier2.sh` (шаги 1+3, идемпотентно).
+
+## Результаты live-прогона (2026-06-23, .28, rootless Podman 5.7.0)
+ПЕРВЫЙ реальный прогон вскрыл 2 бага САМОГО Tier-2-харнесса (тесты `#[ignore]` живьём не гонялись) —
+исправлено в `exec_it.rs` (PR #437):
+1. образ несёт `ENTRYPOINT=nexus-agentd` → `podman run <image> true` уходил в `nexus-agentd true`
+   («vault path true: No such file»); все 3 теста падали. Фикс: `--entrypoint ""`.
+2. `real_vault_write_is_erofs`: rootless под `USER nexus` (не владелец mount'а) → `:ro`-запись падает
+   РАНЬШЕ по EACCES, чем по EROFS, маскируя сигнатуру. Фикс: probe под `--user 0:0`.
+
+**Шаг 3 (containment-матрица): 3/3 PASS** — `no_network_route_inside_exec` (/proc/net/route пуст),
+`podman_smoke_runs_trivial_container`, `real_vault_write_is_erofs` (EROFS + файл НЕ на host).
+
+**Шаг 6 (прод-композиция `--sandbox-run`): PASS вживую против Qwen** — контейнер поднят, агент достал Qwen
+ЧЕРЕЗ egress-proxy (несмотря на `--network=none`), вызвал `shell.run` → host/exec → гейт классифицировал
+exec-предложение → **fail-closed DENY** (Confirm never-Auto, headless = нет аппрувера) → агент корректно
+отчитался, контейнер вышел `--rm` чисто. Доказан весь exec-composition end-to-end + fail-closed.
+
+**Шаг 5 (`--sandbox-undo`): entrypoint живой и fail-closed** — `--sandbox-undo <vault> <run> [--approve]`
+на прогоне без GitOp / на несуществующем run → `restored=0 deferred=0 failed=0`, без краша/двойного exec.
+
+**Отложено (требует интерактивного аппрувера = десктоп-коннектор, НЕ headless):** approved-EXECUTED
+ФОРВАРД-путь (shell.run реально выполнен) + живой git-reset round-trip с реальным pre-op-ref + reaper
+crash-injection (шаг 4) — все требуют одобрения Confirm-тира, которое headless по дизайну отклоняет.
+Покрыто Tier-1-тестами + доказано, что гейт корректно ТРЕБУЕТ одобрения. Догнать при прогоне
+десктоп-флоу одобрения exec.
