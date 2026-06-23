@@ -158,6 +158,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/023_agent_skill_usage.sql"),
         rebuild_fts: false, // self-learning (SL-1): телеметрия/lifecycle скиллов, заметочных производных не трогает
     },
+    Migration {
+        version: 24,
+        name: "agent_run_parent",
+        sql: include_str!("migrations/024_agent_run_parent.sql"),
+        rebuild_fts: false, // subagents (SUB-0): parent_run_id для дерева делегирования, производных не трогает
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
