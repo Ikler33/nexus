@@ -375,6 +375,7 @@
     "selectFile": "Выберите файл в дереве слева или нажмите {{shortcut}}",
     "emptyGroup": "Пустая группа",
     "splitRight": "Разделить вправо",
+    "closePane": "Закрыть панель",
     "close": "Закрыть {{name}}",
     "unsaved": "несохранено",
     "external": {

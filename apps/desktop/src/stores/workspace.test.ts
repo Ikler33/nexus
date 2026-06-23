@@ -70,6 +70,91 @@ describe('workspace store (Ф0-9, Б12)', () => {
     expect(activePath(useWorkspaceStore.getState())).toBe('README.md');
   });
 
+  // W-1: крестик закрытия пейна. closeGroup убирает группу, активной делает оставшуюся, GC буферов.
+  it('closeGroup закрывает пейн, перецеливает активную группу, GC-ит осиротевший буфер', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().splitRight();
+    await useWorkspaceStore.getState().openFile('Inbox.md'); // во второй (активной) группе
+    let s = useWorkspaceStore.getState();
+    expect(s.groups.length).toBe(2);
+    const secondId = s.activeGroupId;
+    expect(activePath(s)).toBe('Inbox.md');
+
+    useWorkspaceStore.getState().closeGroup(secondId);
+    s = useWorkspaceStore.getState();
+    expect(s.groups.length).toBe(1);
+    expect(s.groups.some((g) => g.id === secondId)).toBe(false);
+    expect(s.activeGroupId).toBe(s.groups[0].id); // активной стала оставшаяся группа
+    expect(activePath(s)).toBe('README.md');
+    // Inbox.md больше нигде не открыт → буфер собран GC.
+    expect(s.buffers['Inbox.md']).toBeUndefined();
+    // README.md ещё открыт в оставшейся группе → буфер жив.
+    expect(s.buffers['README.md']).toBeDefined();
+  });
+
+  it('closeGroup никогда не закрывает последнюю группу (no-op)', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    const s0 = useWorkspaceStore.getState();
+    expect(s0.groups.length).toBe(1);
+    useWorkspaceStore.getState().closeGroup(s0.activeGroupId);
+    const s = useWorkspaceStore.getState();
+    expect(s.groups.length).toBe(1);
+    expect(activePath(s)).toBe('README.md'); // ничего не потеряли
+  });
+
+  // Ревью-major: закрытие АКТИВНОЙ группы меняет активный документ → курсор истории нужно снапнуть
+  // на запись реально активного пути (инвариант navHistory[navIndex].path === activePath), иначе
+  // back «молча» жёг бы шаг.
+  it('closeGroup активной группы realign-ит navIndex на активный путь (back/forward консистентны)', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().splitRight();
+    await useWorkspaceStore.getState().openFile('Inbox.md'); // во второй (активной) группе
+    let s = useWorkspaceStore.getState();
+    const secondId = s.activeGroupId;
+    expect(activePath(s)).toBe('Inbox.md');
+
+    useWorkspaceStore.getState().closeGroup(secondId);
+    s = useWorkspaceStore.getState();
+    expect(activePath(s)).toBe('README.md');
+    // Инвариант: курсор истории указывает на реально активный документ.
+    expect(s.navHistory[s.navIndex]?.path).toBe(activePath(s));
+  });
+
+  // Ревью-minor: при закрытии активной группы фолбэк целится в первую НЕПУСТУЮ из оставшихся,
+  // а не в groups[0] (который может быть пустым пейном) — иначе редактор зря пустеет.
+  it('closeGroup активной группы → фолбэк на непустой пейн, не на пустой groups[0]', async () => {
+    // g0 остаётся пустым; README открыт в g1; g2 активна и закрывается.
+    useWorkspaceStore.getState().splitRight(); // g1 активна (пустая)
+    await useWorkspaceStore.getState().openFile('README.md'); // README в g1
+    useWorkspaceStore.getState().splitRight(); // g2 активна (копия README)
+    let s = useWorkspaceStore.getState();
+    expect(s.groups.length).toBe(3);
+    const g0 = s.groups[0].id;
+    const g1 = s.groups[1].id;
+    const g2 = s.activeGroupId;
+    expect(s.groups.find((g) => g.id === g0)?.tabs.length).toBe(0); // g0 пустой
+    expect(s.groups.find((g) => g.id === g1)?.tabs).toContain('README.md');
+
+    useWorkspaceStore.getState().closeGroup(g2);
+    s = useWorkspaceStore.getState();
+    // Активной стала НЕпустая g1 (с README), а не пустая g0.
+    expect(s.activeGroupId).toBe(g1);
+    expect(activePath(s)).toBe('README.md');
+  });
+
+  // SAFE-4: закрытие пейна с НЕсохранённым буфером флашит его на диск ПЕРЕД GC (как closeTab).
+  it('closeGroup флашит несохранённый буфер закрываемого пейна (SAFE-4)', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().splitRight();
+    await useWorkspaceStore.getState().openFile('Inbox.md');
+    useWorkspaceStore.getState().updateBufferDoc('Inbox.md', 'unsaved edit before close');
+    const writeSpy = vi.spyOn(tauriApi.vault, 'writeFile');
+    const secondId = useWorkspaceStore.getState().activeGroupId;
+    useWorkspaceStore.getState().closeGroup(secondId);
+    expect(writeSpy).toHaveBeenCalledWith('Inbox.md', 'unsaved edit before close', false);
+    writeSpy.mockRestore();
+  });
+
   it('saveBuffer сбрасывает dirty', async () => {
     await useWorkspaceStore.getState().openFile('README.md');
     useWorkspaceStore.getState().updateBufferDoc('README.md', 'x');

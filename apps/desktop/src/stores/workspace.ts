@@ -116,6 +116,9 @@ interface WorkspaceState {
   modes: Record<string, 'source' | 'preview'>;
   toggleMode: (groupId?: string) => void;
   splitRight: () => void;
+  /** W-1: закрыть весь пейн (группу) крестиком. Никогда не закрывает последнюю группу. Зеркалит
+   *  GC+flush closeTab (SAFE-4: осиротевшие буферы флашатся ПЕРЕД удалением) и nav-retarget moveTab. */
+  closeGroup: (groupId: string) => void;
   updateBufferDoc: (path: string, doc: string) => void;
   /** Запомнить позицию курсора буфера (NAV-4) — редактор зовёт при уходе с заметки. */
   setBufferCursor: (path: string, cursor: number) => void;
@@ -366,6 +369,59 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         groups: [...s.groups, { id, tabs: tab ? [tab] : [], activeTab: tab }],
         activeGroupId: id,
       };
+    });
+  },
+
+  closeGroup(groupId) {
+    const s0 = get();
+    // Никогда не закрываем последнюю группу (всегда есть куда открывать заметки).
+    if (s0.groups.length <= 1 || !s0.groups.some((g) => g.id === groupId)) return;
+    // SAFE-4: буферы, которые после закрытия осиротеют (нет ссылок в других группах), флашим
+    // ПЕРЕД GC — иначе несохранённые правки в закрываемом пейне потеряются.
+    const remaining0 = s0.groups.filter((g) => g.id !== groupId);
+    const referenced0 = new Set(remaining0.flatMap((g) => g.tabs));
+    s0.groups
+      .find((g) => g.id === groupId)
+      ?.tabs.forEach((p) => {
+        if (!referenced0.has(p)) void flush(p);
+      });
+    set((s) => {
+      // closeGroup НЕ схлопывает выжившие пустые пейны (пустой сплит — осознанный выбор юзера), но
+      // если активная группа закрыта — целимся в первую НЕПУСТУЮ из оставшихся (как closeTab/moveTab),
+      // иначе можно сесть на пустой пейн при живом наполненном → редактор зря пустеет (ревью-minor).
+      const groups = s.groups.filter((g) => g.id !== groupId);
+      const referenced = new Set(groups.flatMap((g) => g.tabs));
+      const activeGroupId = groups.some((g) => g.id === s.activeGroupId)
+        ? s.activeGroupId
+        : (groups.find((g) => g.tabs.length > 0) ?? groups[0]).id;
+      const buffers = Object.fromEntries(
+        Object.entries(s.buffers).filter(([p]) => referenced.has(p)),
+      );
+      const modes = { ...s.modes };
+      delete modes[groupId];
+      // Записи истории навигации закрытой группы перецеливаем на активную (как moveTab), иначе
+      // back/forward открыл бы заметку в уже не существующей группе.
+      const navHistory = s.navHistory.map((e) =>
+        e.groupId === groupId ? { ...e, groupId: activeGroupId } : e,
+      );
+      // Закрытие активной группы меняет активный документ → курсор истории мог указывать на запись
+      // ЗАКРЫТОГО пейна (инвариант navHistory[navIndex].path === activePath ломался, back «молча» жёг
+      // шаг — ревью-major). Снапаем navIndex на запись реально активного пути, ближайшую к позиции
+      // (как dropPathsUnder). Длина navHistory не меняется → клампим лишь защитно.
+      const activeNow = groups.find((g) => g.id === activeGroupId)?.activeTab ?? null;
+      let navIndex = Math.max(-1, Math.min(s.navIndex, navHistory.length - 1));
+      if (activeNow !== null && navHistory[navIndex]?.path !== activeNow) {
+        let left = -1;
+        let right = -1;
+        for (let i = 0; i < navHistory.length; i++) {
+          if (navHistory[i].path !== activeNow) continue;
+          if (i <= navIndex) left = i;
+          else if (right === -1) right = i;
+        }
+        if (left !== -1) navIndex = left;
+        else if (right !== -1) navIndex = right;
+      }
+      return { groups, activeGroupId, buffers, modes, navHistory, navIndex };
     });
   },
 

@@ -369,6 +369,7 @@
     "selectFile": "Pick a file in the tree, or press {{shortcut}}",
     "emptyGroup": "Empty group",
     "splitRight": "Split right",
+    "closePane": "Close pane",
     "close": "Close {{name}}",
     "unsaved": "unsaved",
     "external": {

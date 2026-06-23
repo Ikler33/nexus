@@ -56,3 +56,31 @@ describe('GroupPane back/forward (NAV-3 кнопки)', () => {
     expect(navForward).toHaveBeenCalledTimes(1);
   });
 });
+
+// W-1: крестик закрытия пейна — появляется ТОЛЬКО при сплите (>1 группы), зовёт closeGroup.
+describe('GroupPane close-pane (W-1)', () => {
+  it('одна группа → кнопки «Закрыть панель» нет (последний пейн не закрыть)', () => {
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: [], activeTab: null }],
+      activeGroupId: 'g0',
+      buffers: {},
+    });
+    render(<GroupPane groupId="g0" />);
+    expect(screen.queryByRole('button', { name: 'Закрыть панель' })).toBeNull();
+  });
+
+  it('две группы → кнопка есть и зовёт closeGroup для своего пейна', () => {
+    useWorkspaceStore.setState({
+      groups: [
+        { id: 'g0', tabs: [], activeTab: null },
+        { id: 'g1', tabs: [], activeTab: null },
+      ],
+      activeGroupId: 'g1',
+      buffers: {},
+    });
+    const closeGroup = vi.spyOn(useWorkspaceStore.getState(), 'closeGroup').mockImplementation(() => {});
+    render(<GroupPane groupId="g1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть панель' }));
+    expect(closeGroup).toHaveBeenCalledWith('g1');
+  });
+});

@@ -6,6 +6,7 @@ import {
   Columns2,
   FileText,
   History,
+  PanelRightClose,
   PenLine,
   Plus,
   X,
@@ -65,6 +66,9 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const moveTab = useWorkspaceStore((s) => s.moveTab);
   const toggleMode = useWorkspaceStore((s) => s.toggleMode);
   const splitRight = useWorkspaceStore((s) => s.splitRight);
+  const closeGroup = useWorkspaceStore((s) => s.closeGroup);
+  // W-1: крестик закрытия пейна показываем только при сплите (>1 группы) — последний не закрыть.
+  const groupCount = useWorkspaceStore((s) => s.groups.length);
   const updateBufferDoc = useWorkspaceStore((s) => s.updateBufferDoc);
   const saveBuffer = useWorkspaceStore((s) => s.saveBuffer);
   const reloadFromDisk = useWorkspaceStore((s) => s.reloadFromDisk);
@@ -288,6 +292,17 @@ export function GroupPane({ groupId }: { groupId: string }) {
           >
             <Columns2 size={14} aria-hidden />
           </button>
+          {/* W-1: закрыть пейн (сплит) — только когда групп > 1 (последний пейн не закрываем). */}
+          {groupCount > 1 && (
+            <button
+              className={styles.split}
+              onClick={() => closeGroup(groupId)}
+              title={t('editor.closePane')}
+              aria-label={t('editor.closePane')}
+            >
+              <PanelRightClose size={14} aria-hidden />
+            </button>
+          )}
         </div>
       </div>
 
