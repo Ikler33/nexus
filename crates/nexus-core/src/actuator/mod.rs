@@ -65,7 +65,8 @@ pub use tools::{
     OVERWRITE_THRESHOLD,
 };
 pub use undo::{
-    undo_run, undo_run_with_driver, ActionUndo, UndoExecDriver, UndoOutcome, UndoStatus,
+    undo_run, undo_run_full, undo_run_with_driver, ActionUndo, UndoExecDriver, UndoOutcome,
+    UndoStatus,
 };
 
 /// Состояние действия в статус-машине актуатора (значения `agent_actions.state`).

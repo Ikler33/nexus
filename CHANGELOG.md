@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### Агент · SELF-LEARNING SL-7c — `apply_skill_save` + `dispatch_skill_save` (реальная обратимая запись SKILL.md)
+
+Data-путь авторства навыков: атомарная ОБРАТИМАЯ запись `<name>/SKILL.md` под **skills_root** через actuator-гейт. По-прежнему default-OFF (нет инструмента-эмиттера — SL-7d; гейт `learning_enabled` дефолт false). Зеркалит проверенные рубежи `apply_action`/`propose_and_decide`, дельта = корень (skills_root, НЕ vault) + apply-fn.
+
+- **`apply::apply_skill_save`** (`pub(in crate::actuator)`, вызывается ТОЛЬКО из `dispatch_skill_save`): рубежи `apply_action` под skills_root — лексический конфайн (defense-in-depth до `create_dir_all`) → **round-trip через `parse_skill`** (битый SKILL.md → Failed, диск не тронут) → симлинк/хардлинк-конфайн → read (create-vs-overwrite ДАННО по наличию файла) → ledger write-before-act + replay → **snapshot-before-act для overwrite** (нет снапшота → НЕ пишем, fail-closed) → atomic_write → finish. Обратимость: create→`Trash`, overwrite→`Snapshot` (history под skills_root).
+- **`orchestrate::dispatch_skill_save`**: зеркало decision-части `propose_and_decide` (classify-first → HardBlocked→Err / Confirm → proposed-ledger + Proposal/Diff-события → `DecisionSource` → **kill-switch re-check ПОСЛЕ decide и ПЕРЕД transition/apply** → transition → `apply_skill_save`). `SkillSave` НИКОГДА не Auto.
+- **Обратимый undo**: `undo_run_full(.., skills_root: Option<&Path>, ..)` — строки навыка (`tool_name=skill_save`) восстанавливаются ПОД skills_root (Snapshot/Trash); vault-only `undo_run` на строке навыка без skills_root → Failed (fail-closed, не угадываем корень). `undo_run`/`undo_run_with_driver` — тонкие обёртки (skills_root=None, back-compat).
+
+**Adversarial-ревью (3 линзы → 5 подтверждённых, 2 MAJOR — ВСЕ исправлены в срезе):**
+- **MAJOR data-loss**: пропущен БЕЗУСЛОВНЫЙ re-read drift-fence перед записью (Fix-2 из `apply_action`) — при `classify_hash=None` (overwrite пустого файла / 3c-вызыватель) внешняя правка в окне read→write молча затёрлась бы + стейл-снапшот ⇒ необратимо → добавлен `reread_drift_detected`-рубеж (overwrite + drift → Failed).
+- **MAJOR kill-switch**: `apply_skill_save` без last-moment pause-guard (как `apply_now`) — пауза в окне после decide-проверки → paused-but-writes → добавлен `agent_paused`-параметр + guard в самом начале (под паузой запись навыка подавлена).
+- + MINOR pre-image read через `confine_for_overwrite` (симлинк-escape не утечёт в diff) · NIT pause-тест.
+
+Tier-1 (+16, 141 actuator, 0 failed): apply create/overwrite-snapshot/malformed-no-write/pathescape-no-write · dispatch learning-disabled-Err/approve-writes/reject-no-write/vendor-blocked/**paused-not-written** · undo create-uncreate/overwrite-restore/без-skills_root-fail-closed. `test-all` зелёный. `skill_save`-инструмент + provenance + регистрация — SL-7d.
+
 ### Агент · SELF-LEARNING SL-7a+b — `ActionTarget::SkillSave` + `classify_skill_save` (фундамент, default-OFF/инертно)
 
 Фундамент авторства навыков агентом: типизированная цель записи SKILL.md + её классификация риска + конфиг-флаг — всё **СТРУКТУРНО ИНЕРТНО** (никакой инструмент не эмитит `SkillSave`, ни один живой `DispatchPolicy` не включает learning → classify всегда HardBlocked). Реальная запись/откол/инструмент — SL-7c+d.

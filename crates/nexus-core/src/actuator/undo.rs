@@ -159,7 +159,22 @@ pub trait UndoExecDriver: Send + Sync {
 /// [`audit::actions_for_undo`] их не вернёт) → no-op. Толерантен к частичному провалу: один сбойный откат
 /// не прерывает остальные — собираем все исходы в [`UndoOutcome`].
 pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> UndoOutcome {
-    undo_run_with_driver(run_id, canon_root, ledger, None).await
+    undo_run_inner(run_id, canon_root, None, ledger, None).await
+}
+
+/// SELF-LEARNING SL-7c: как [`undo_run_with_driver`], но с `skills_root` для отката строк навыков
+/// (`tool_name="skill_save"`): их `Snapshot`/`Trash` восстанавливаются ПОД skills_root (НЕ vault
+/// canon_root). `skills_root=None` ⇒ строка навыка не откатывается (Failed «skills_root не задан» —
+/// fail-closed: не угадываем корень). Не-навыковые строки всегда идут под `canon_root`. Прод-вызыватель
+/// (SL-7d/handler) подставляет канонизированный skills_root; vault-only вызыватели зовут [`undo_run`].
+pub async fn undo_run_full(
+    run_id: i64,
+    canon_root: &Path,
+    skills_root: Option<&Path>,
+    ledger: &AuditSink,
+    driver: Option<&dyn UndoExecDriver>,
+) -> UndoOutcome {
+    undo_run_inner(run_id, canon_root, skills_root, ledger, driver).await
 }
 
 /// Как [`undo_run`], но с опциональным [`UndoExecDriver`] (SANDBOX-6c-3e): `Some` ⇒ exec-GitOp откат
@@ -170,6 +185,30 @@ pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> Und
 pub async fn undo_run_with_driver(
     run_id: i64,
     canon_root: &Path,
+    ledger: &AuditSink,
+    driver: Option<&dyn UndoExecDriver>,
+) -> UndoOutcome {
+    undo_run_inner(run_id, canon_root, None, ledger, driver).await
+}
+
+/// Выбор корня отката строки по её `tool_name`: навык (`skill_save`) → skills_root (если задан), иначе
+/// vault `canon_root`. SL-7c: навыки живут вне vault, их Snapshot/Trash восстанавливаются под skills_root.
+fn undo_root_for<'a>(
+    tool_name: &str,
+    canon_root: &'a Path,
+    skills_root: Option<&'a Path>,
+) -> Option<&'a Path> {
+    if tool_name == "skill_save" {
+        skills_root
+    } else {
+        Some(canon_root)
+    }
+}
+
+async fn undo_run_inner(
+    run_id: i64,
+    canon_root: &Path,
+    skills_root: Option<&Path>,
     ledger: &AuditSink,
     driver: Option<&dyn UndoExecDriver>,
 ) -> UndoOutcome {
@@ -199,16 +238,33 @@ pub async fn undo_run_with_driver(
 
         // (status, drifted): restore-снапшота сообщает дрейф (current != pre-edit ⇒ вероятная правка
         // человека); uncreate/битый хэндл дрейфа не несут (false).
+        // SL-7c: корень отката зависит от tool_name (навык → skills_root, заметка → canon_root).
+        let row_root = undo_root_for(&row.tool_name, canon_root, skills_root);
         let (status, drifted) = match handle {
-            Some(UndoHandle::Snapshot { rel, ts }) => {
-                restore_snapshot(canon_root, &rel, ts as u64).await
-            }
+            Some(UndoHandle::Snapshot { rel, ts }) => match row_root {
+                Some(root) => restore_snapshot(root, &rel, ts as u64).await,
+                // Навык, но skills_root не задан (vault-only вызыватель) → откатить нечем (fail-closed).
+                None => (
+                    UndoStatus::Failed(format!(
+                        "undo: навык {rel} — skills_root не задан, откат невозможен (fail-closed)"
+                    )),
+                    false,
+                ),
+            },
             Some(UndoHandle::Trash { trash_rel }) => {
                 // Откат create: целевая заметка — это target_rel (где файл был создан). trash_rel в 3c
                 // хранит ИМЕННО этот rel (намерение «перенести созданный файл в корзину»). Берём rel из
                 // target_rel (источник истины пути), с fallback на trash_rel (они совпадают).
                 let rel = target_rel.clone().unwrap_or(trash_rel);
-                (uncreate_via_trash(canon_root, &rel).await, false)
+                match row_root {
+                    Some(root) => (uncreate_via_trash(root, &rel).await, false),
+                    None => (
+                        UndoStatus::Failed(format!(
+                            "undo: навык {rel} — skills_root не задан, откат невозможен (fail-closed)"
+                        )),
+                        false,
+                    ),
+                }
             }
             // exec-GitOp откат (6c-2h/3e): pre-op ref из ledger. РЕ-ВАЛИДАЦИЯ host-side (defense-in-depth:
             // ledger мог быть повреждён/подменён — 6c-2h уже валидировал на записи, но не доверяем хранилищу
@@ -436,7 +492,7 @@ enum RestoreResult {
 mod tests {
     use super::*;
     use crate::actuator::action::Action;
-    use crate::actuator::apply::{apply_action, ApplyOutcome};
+    use crate::actuator::apply::{apply_action, apply_skill_save, ApplyOutcome};
     use crate::actuator::UNDO_EXEC_GITREF;
     use crate::db::Database;
     use std::fs;
@@ -1004,6 +1060,103 @@ mod tests {
         assert!(
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "драйвер для shell не зовётся (необратим)"
+        );
+    }
+
+    // ── SL-7c: откат навыков (skills_root-rooted Snapshot/Trash через undo_run_full) ─────────────
+    const VALID_SKILL: &str = "---\nname: s\ndescription: d\n---\nBODY";
+
+    /// Канонизированный отдельный skills_root внутри temp (НЕ vault canon_root).
+    fn mk_skills_root(root: &Path) -> PathBuf {
+        let p = root.join("skills_area");
+        fs::create_dir_all(&p).unwrap();
+        p.canonicalize().unwrap()
+    }
+
+    async fn apply_skill_ok(action: &Action, run_id: i64, skills_root: &Path, sink: &AuditSink) {
+        let never_paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let out = apply_skill_save(action, run_id, skills_root, sink, None, &never_paused).await;
+        assert!(
+            matches!(out, ApplyOutcome::Executed { .. }),
+            "ожидалось Executed, получено {out:?}"
+        );
+    }
+
+    /// CREATE навыка → undo_run_full (skills_root) уносит файл в корзину (откат create).
+    #[tokio::test]
+    async fn skill_create_then_undo_uncreates() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        apply_skill_ok(
+            &Action::skill_save("s/SKILL.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+        assert!(skills_root.join("s/SKILL.md").exists(), "навык создан");
+
+        let outcome = undo_run_full(1, &root, Some(&skills_root), &sink, None).await;
+        assert_eq!(outcome.restored(), 1, "create навыка откачен");
+        assert!(
+            !skills_root.join("s/SKILL.md").exists(),
+            "созданный навык унесён из дерева (в корзину)"
+        );
+    }
+
+    /// OVERWRITE навыка → undo_run_full восстанавливает ПРЕД-контент под skills_root.
+    #[tokio::test]
+    async fn skill_overwrite_then_undo_restores_prior() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        let old = "---\nname: s\ndescription: old\n---\nOLD";
+        let abs = skills_root.join("s/SKILL.md");
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(&abs, old).unwrap();
+
+        apply_skill_ok(
+            &Action::skill_save("s/SKILL.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+        assert_eq!(
+            fs::read_to_string(&abs).unwrap(),
+            VALID_SKILL,
+            "перезаписан"
+        );
+
+        let outcome = undo_run_full(1, &root, Some(&skills_root), &sink, None).await;
+        assert_eq!(outcome.restored(), 1, "overwrite навыка откачен");
+        assert_eq!(
+            fs::read_to_string(&abs).unwrap(),
+            old,
+            "навык восстановлен к ПРЕД-контенту"
+        );
+    }
+
+    /// FAIL-CLOSED: строка навыка, но undo_run (vault-only, без skills_root) → Failed, файл НЕ тронут
+    /// (не угадываем корень). Восстановить можно только через undo_run_full со skills_root.
+    #[tokio::test]
+    async fn skill_undo_without_skills_root_fails_closed() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        apply_skill_ok(
+            &Action::skill_save("s/SKILL.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+
+        // undo_run НЕ знает skills_root → навык откатить нечем.
+        let outcome = undo_run(1, &root, &sink).await;
+        assert_eq!(outcome.failed(), 1, "без skills_root навык → Failed");
+        assert_eq!(outcome.restored(), 0);
+        assert!(
+            skills_root.join("s/SKILL.md").exists(),
+            "файл навыка не тронут (fail-closed)"
         );
     }
 

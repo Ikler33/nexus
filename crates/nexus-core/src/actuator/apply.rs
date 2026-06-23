@@ -44,6 +44,8 @@
 //! DecisionSource, эмиссия Proposal/Diff, blast-radius — AGENT-3d. Проводки в agentd/registry нет (3e).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::db::{DbResult, ReadPool, WriteActor};
 
@@ -490,6 +492,229 @@ pub(in crate::actuator) async fn apply_action(
         Err(e) => {
             // Write упал ПОСЛЕ снапшота/ledger-строки: фиксируем Failed без undo (нечего откатывать —
             // atomic_write либо записал целиком, либо ничего; снапшот для create не делали).
+            let _ = ledger.finish(&key, STATE_FAILED, &e, None).await;
+            ApplyOutcome::Failed(e)
+        }
+    }
+}
+
+/// SELF-LEARNING SL-7c: применить `SkillSave` — атомарная ОБРАТИМАЯ запись `<name>/SKILL.md` под
+/// **skills_root** (НЕ vault `canon_root`). Зеркало [`apply_action`]-рубежей, но: (1) корень — skills_root;
+/// (2) create-vs-overwrite ДАННО-ОПРЕДЕЛЯЕТСЯ наличием файла (у `SkillSave` нет отдельных Create/Edit —
+/// перезапись СВОЕГО навыка легитимна; запрет перезаписи ЧУЖОГО — на tool-слое SL-7d по `created_by`);
+/// (3) содержимое РАУНД-ТРИПИТСЯ через [`crate::skills::parse_skill`] ПЕРЕД записью (битый frontmatter →
+/// Failed, диск не тронут — навык обязан быть перезагружаемым). Обратимость: create→Trash, overwrite→
+/// Snapshot (history под skills_root) — ДО записи; снапшот не записался ⇒ Failed без записи (fail-closed).
+/// `pub(in crate::actuator)` — вызывается ТОЛЬКО из `dispatch_skill_save` (нет ungated-пути), как
+/// `apply_action`. classify-гейт (Confirm-never-Auto + skills_root/vendor/форма) — у вызывателя.
+// SL-7c: прод-вызыватель (`dispatch_skill_save` ← `SkillSaveTool`) появляется в SL-7d; до тех пор путь
+// существует и ПОКРЫТ Tier-1-тестами, но из не-test сборки не вызывается. allow снимется в SL-7d.
+#[allow(dead_code)]
+pub(in crate::actuator) async fn apply_skill_save(
+    action: &Action,
+    run_id: i64,
+    skills_root: &Path,
+    ledger: &AuditSink,
+    classify_hash: Option<&str>,
+    agent_paused: &Arc<AtomicBool>,
+) -> ApplyOutcome {
+    // Только SkillSave (defense-in-depth: dispatch_skill_save зовёт только с ним).
+    if !matches!(action.target, ActionTarget::SkillSave { .. }) {
+        return ApplyOutcome::Failed("apply_skill_save вызван не для SkillSave".into());
+    }
+    // KILL-SWITCH last-moment guard (AGENT-5, зеркало apply_now): пауза могла взвестись между
+    // re-check'ом dispatch_skill_save (после decide) и этой записью. Читаем В САМОМ НАЧАЛЕ, ДО любого
+    // ledger/disk-эффекта → под паузой НИ ОДНОЙ записи навыка (Failed, строки-якоря нет, retry-safe).
+    if agent_paused.load(Ordering::Relaxed) {
+        return ApplyOutcome::Failed(
+            "агент на паузе (kill-switch) — запись навыка подавлена".into(),
+        );
+    }
+    let rel = action.target.rel().to_string();
+    let content = action.content.clone().unwrap_or_default();
+
+    // ── ЛЕКСИЧЕСКИЙ КОНФАЙН (defense-in-depth): apply_skill_save может зваться вне dispatch_skill_save,
+    // а РУБЕЖ 1 делает create_dir_all(parent) — для `../x` это создало бы каталог ВНЕ skills_root ДО
+    // canonical-реджекта. Поэтому ЛЕКСИЧЕСКИ режем abs/`..`/dot/backslash ЗДЕСЬ (тот же надмножество-
+    // фильтр, что classify) ДО любого касания ФС. В проде classify уже отсёк — это второй рубеж. ──────
+    if super::classify::path_confinement(&rel).is_err() {
+        return ApplyOutcome::PathEscape;
+    }
+
+    // ── ВАЛИДАЦИЯ СОДЕРЖИМОГО (до диска и до ledger): навык обязан round-trip'иться через parse_skill
+    // (валидный frontmatter name+description). Битый → Failed, НИЧЕГО не пишем (как BadArgs). ──────────
+    if let Err(e) = crate::skills::parse_skill(&content, &rel) {
+        return ApplyOutcome::Failed(format!(
+            "SkillSave: SKILL.md не парсится ({e}) — не записан"
+        ));
+    }
+
+    // ── РУБЕЖ 1: конфайнмент в skills_root (симлинк-компоненты → create_dir_all parent → resolve+leaf+
+    // hardlink). reject_symlinked_components ДО create_dir_all (не создаём каталоги сквозь симлинк наружу).
+    let abs = {
+        let root = skills_root.to_path_buf();
+        let rel_path = PathBuf::from(&rel);
+        let resolved = tokio::task::spawn_blocking(move || {
+            if let Some(parent) = root.join(&rel_path).parent() {
+                if !parent.exists() {
+                    reject_symlinked_components(&root, &rel_path)?;
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+            // confine_for_overwrite: resolve(parent canonicalize+starts_with) + leaf-симлинк + хардлинк.
+            // Для НОВОГО leaf'а (create) симлинк/хардлинк-проверки просто проходят (файла нет).
+            confine_for_overwrite(&root, &rel_path)
+        })
+        .await;
+        match resolved {
+            Ok(Ok(abs)) => abs,
+            Ok(Err(_)) => return ApplyOutcome::PathEscape,
+            Err(join_err) => return ApplyOutcome::Failed(format!("skill apply join: {join_err}")),
+        }
+    };
+
+    // ── РУБЕЖ 2: read-current → create-vs-overwrite (данно). ──────────────────────────────────────
+    let current_content: Option<String> = read_to_string_opt(&abs).await;
+    let on_disk_hash: Option<String> = current_content
+        .as_ref()
+        .map(|c| crate::vault::content_hash(c.as_bytes()));
+    let is_create = current_content.is_none();
+
+    // Идемпотентность-ключ (как apply_action): classify_hash (at-classify) либо on-disk/планируемый.
+    let payload = action_payload(action);
+    let target_hash = match classify_hash {
+        Some(h) => h.to_string(),
+        None => {
+            if is_create {
+                crate::vault::content_hash(content.as_bytes())
+            } else {
+                on_disk_hash
+                    .clone()
+                    .unwrap_or_else(|| crate::vault::content_hash(content.as_bytes()))
+            }
+        }
+    };
+    let args = canonical_args(Some(&rel), payload);
+    let key = idempotency_key(run_id, action.target.tool_name(), &args, &target_hash);
+
+    // ── РУБЕЖ 3: optimistic concurrency (classify_hash drift) — ДО фенса. ─────────────────────────
+    if let Some(expected) = classify_hash {
+        let now = on_disk_hash.as_deref().unwrap_or("");
+        if now != expected {
+            return ApplyOutcome::Failed(drift_msg(&rel));
+        }
+    }
+
+    // ── РУБЕЖ 4: ledger WRITE-BEFORE-ACT (ДО записи). Приватность: diff_summary — счётчики+ChangeKind. ─
+    let diff_summary =
+        super::orchestrate::diff_summary_for(action, current_content.as_deref().unwrap_or(""))
+            .render();
+    let entry = ActionEntry {
+        run_id,
+        idempotency_key: key.clone(),
+        tool_name: action.target.tool_name().to_string(),
+        target_rel: Some(rel.clone()),
+        risk_tier: audit::TIER_AUTO.to_string(),
+        state: STATE_EXECUTING.to_string(),
+        content_hash: on_disk_hash.clone(),
+        diff_summary: Some(diff_summary),
+    };
+    match ledger.record_before(entry).await {
+        Ok(_) => {} // Fresh: строка-якорь записана ДО касания диска.
+        Err(_) => match ledger.replay_decision(&key).await {
+            Ok(ReplayDecision::AlreadyDone(outcome)) => return ApplyOutcome::AlreadyDone(outcome),
+            Ok(ReplayDecision::CrashedMidExecute(row)) => {
+                if row.content_hash.as_deref() != on_disk_hash.as_deref() {
+                    let _ = ledger
+                        .finish(&key, STATE_FAILED, &drift_msg(&rel), None)
+                        .await;
+                    return ApplyOutcome::Failed(drift_msg(&rel));
+                }
+                // hash совпал — доводим запись (complete-forward).
+            }
+            Ok(ReplayDecision::Fresh) => {
+                return ApplyOutcome::Failed(
+                    "ledger record_before: запись строки SkillSave не удалась".into(),
+                )
+            }
+            Err(e) => return ApplyOutcome::Failed(format!("ledger replay: {e}")),
+        },
+    }
+
+    // ── РУБЕЖ 5: snapshot-before-act для overwrite (обратимость); create → Trash-намерение. ───────
+    let undo: UndoHandle = if is_create {
+        UndoHandle::Trash {
+            trash_rel: rel.clone(),
+        }
+    } else {
+        let current = current_content.clone().unwrap_or_default();
+        let snap = {
+            let root = skills_root.to_path_buf();
+            let rel_s = rel.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::vault::history::snapshot(&root, &rel_s, &current, true)?;
+                let snaps = crate::vault::history::list_snapshots(&root, &rel_s)?;
+                Ok::<_, crate::vault::VaultError>(snaps.first().map(|s| s.ts))
+            })
+            .await
+        };
+        match snap {
+            Ok(Ok(Some(ts))) => UndoHandle::Snapshot {
+                rel: rel.clone(),
+                ts: ts as i64,
+            },
+            // Снапшот не записался → без корректного undo НЕ пишем (fail-closed): обратимость обязательна.
+            Ok(Ok(None)) => {
+                let m = format!(
+                    "SkillSave: снапшот пред-правки {rel} не записан — перезапись отменена"
+                );
+                let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
+                return ApplyOutcome::Failed(m);
+            }
+            Ok(Err(e)) => {
+                let m = format!("SkillSave: снапшот пред-правки {rel} провалился ({e}) — отмена");
+                let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
+                return ApplyOutcome::Failed(m);
+            }
+            Err(join_err) => {
+                let m = format!("SkillSave snapshot join: {join_err}");
+                let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
+                return ApplyOutcome::Failed(m);
+            }
+        }
+    };
+
+    // ── РУБЕЖ 5-bis: БЕЗУСЛОВНЫЙ re-read fence ПЕРЕД записью (зеркало apply_action Fix 2) ──────────
+    // РУБЕЖ 3 (drift по classify_hash) срабатывает ТОЛЬКО при Some; при None (3c-style вызыватель /
+    // overwrite пустого файла) окно read(РУБЕЖ2)→write остаётся незакрытым: внешняя правка в нём была бы
+    // молча затёрта, а снапшот РУБЕЖА 5 — СТЕЙЛ (undo восстановил бы не то). Поэтому для overwrite
+    // НЕПОСРЕДСТВЕННО перед записью ПЕРЕЧИТЫВАЕМ диск и сверяем с on_disk_hash (снятым в РУБЕЖЕ 2):
+    // рассинхрон ⇒ Failed, НЕ клобберим (data-loss-rampart как у заметок).
+    let is_overwrite = !is_create && current_content.is_some();
+    if is_overwrite && reread_drift_detected(&abs, on_disk_hash.as_deref()).await {
+        let m = drift_msg(&rel);
+        let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
+        return ApplyOutcome::Failed(m);
+    }
+
+    // ── РУБЕЖ 6: WRITE (atomic_write по `abs`). ───────────────────────────────────────────────────
+    let write_result = spawn_atomic_write(abs.clone(), content.into_bytes()).await;
+
+    // ── РУБЕЖ 7: ledger FINISH (поглощающий). ─────────────────────────────────────────────────────
+    match write_result {
+        Ok(()) => {
+            let verb = if is_create {
+                "создан"
+            } else {
+                "обновлён"
+            };
+            let summary = format!("навык {verb}: {rel}");
+            let _ = ledger
+                .finish(&key, audit::STATE_EXECUTED, &summary, Some(undo.to_cols()))
+                .await;
+            ApplyOutcome::Executed { summary, undo }
+        }
+        Err(e) => {
             let _ = ledger.finish(&key, STATE_FAILED, &e, None).await;
             ApplyOutcome::Failed(e)
         }
@@ -1510,6 +1735,124 @@ mod tests {
         assert!(
             !any_file,
             "SkillSave НЕ должен создавать файлы в vault-корне"
+        );
+    }
+
+    // ── SL-7c: apply_skill_save (skills_root-confined обратимая запись) ──────────────────────────
+    const VALID_SKILL: &str = "---\nname: myskill\ndescription: does things\n---\nBODY";
+
+    /// Never-paused kill-switch для тестов apply_skill_save.
+    fn np() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
+    /// CREATE: новый навык записан в skills_root; ledger Executed; undo = Trash.
+    #[tokio::test]
+    async fn apply_skill_save_create_writes_and_trash_undo() {
+        let (_d, skills_root, sink) = setup().await;
+        let action = Action::skill_save("myskill/SKILL.md", VALID_SKILL);
+        let out = apply_skill_save(&action, 1, &skills_root, &sink, None, &np()).await;
+        match out {
+            ApplyOutcome::Executed { undo, .. } => {
+                assert!(
+                    matches!(undo, UndoHandle::Trash { .. }),
+                    "create → Trash undo"
+                );
+            }
+            o => panic!("ожидалось Executed, получено {o:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(skills_root.join("myskill/SKILL.md")).unwrap(),
+            VALID_SKILL,
+            "файл навыка записан под skills_root"
+        );
+    }
+
+    /// OVERWRITE: перезапись существующего навыка снапшотит ПРЕД-контент (undo=Snapshot восстановим).
+    #[tokio::test]
+    async fn apply_skill_save_overwrite_snapshots_undo() {
+        let (_d, skills_root, sink) = setup().await;
+        let old = "---\nname: myskill\ndescription: old\n---\nOLD";
+        let abs = skills_root.join("myskill/SKILL.md");
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(&abs, old).unwrap();
+
+        let new = "---\nname: myskill\ndescription: new\n---\nNEW";
+        let out = apply_skill_save(
+            &Action::skill_save("myskill/SKILL.md", new),
+            1,
+            &skills_root,
+            &sink,
+            None,
+            &np(),
+        )
+        .await;
+        match out {
+            ApplyOutcome::Executed { undo, .. } => {
+                assert!(
+                    matches!(undo, UndoHandle::Snapshot { .. }),
+                    "overwrite → Snapshot undo"
+                );
+            }
+            o => panic!("ожидалось Executed, получено {o:?}"),
+        }
+        assert_eq!(fs::read_to_string(&abs).unwrap(), new, "навык перезаписан");
+        // Снапшот ПРЕД-контента (old) лежит в skills_root/.nexus/history — обратимость.
+        let snaps =
+            crate::vault::history::list_snapshots(&skills_root, "myskill/SKILL.md").unwrap();
+        let bodies: Vec<String> = snaps
+            .iter()
+            .map(|s| {
+                crate::vault::history::read_snapshot(&skills_root, "myskill/SKILL.md", s.ts)
+                    .unwrap()
+            })
+            .collect();
+        assert!(
+            bodies.iter().any(|b| b == old),
+            "пред-контент снапшотнут: {bodies:?}"
+        );
+    }
+
+    /// MALFORMED: SKILL.md без валидного frontmatter → Failed, НИЧЕГО не записано (parse-фенс до диска).
+    #[tokio::test]
+    async fn apply_skill_save_malformed_no_write() {
+        let (_d, skills_root, sink) = setup().await;
+        let out = apply_skill_save(
+            &Action::skill_save("bad/SKILL.md", "просто текст без frontmatter"),
+            1,
+            &skills_root,
+            &sink,
+            None,
+            &np(),
+        )
+        .await;
+        assert!(
+            matches!(out, ApplyOutcome::Failed(_)),
+            "битый навык → Failed: {out:?}"
+        );
+        assert!(
+            !skills_root.join("bad").exists(),
+            "битый навык не создал ни файла, ни каталога"
+        );
+    }
+
+    /// PATH-ESCAPE: `../` rel → PathEscape, БЕЗ записи и БЕЗ создания каталога ВНЕ skills_root.
+    #[tokio::test]
+    async fn apply_skill_save_pathescape_no_write() {
+        let (_d, skills_root, sink) = setup().await;
+        let out = apply_skill_save(
+            &Action::skill_save("../escape/SKILL.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+            None,
+            &np(),
+        )
+        .await;
+        assert_eq!(out, ApplyOutcome::PathEscape, "../ → PathEscape: {out:?}");
+        assert!(
+            !skills_root.parent().unwrap().join("escape").exists(),
+            "create_dir_all НЕ создал каталог ВНЕ skills_root (лексический гард до ФС)"
         );
     }
 }
