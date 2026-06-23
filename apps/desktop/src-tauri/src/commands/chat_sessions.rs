@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::ai::ChatMessage;
-use crate::chat_log::{self, ChatSession, StoredMessage};
+use crate::chat_log::{self, ChatSearchHit, ChatSession, StoredMessage};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::vault;
@@ -18,6 +18,18 @@ use crate::vault;
 pub async fn chat_sessions_list(state: State<'_, AppState>) -> AppResult<Vec<ChatSession>> {
     let reader = state.vault().await?.db.reader().clone();
     Ok(chat_log::list_sessions(&reader).await?)
+}
+
+/// Полнотекстовый поиск по переписке (#58 session-search): совпавшие сообщения со snippet-
+/// подсветкой, заголовком сессии и саммари эпизода (EP). `limit` клампится в ядре (1..=200).
+#[tauri::command]
+pub async fn chat_search(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<i64>,
+) -> AppResult<Vec<ChatSearchHit>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(chat_log::search_chat(&reader, &query, limit.unwrap_or(50)).await?)
 }
 
 /// Сообщения сессии (загрузка в ленту по клику в истории).

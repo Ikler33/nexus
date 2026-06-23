@@ -13,6 +13,11 @@ struct Migration {
     /// пересобирается индексатором (reconcile на открытии — нужен embedder), см. `docs/dev/db.md`.
     /// ADR-007/§5.1: примитив-резюмируемости для будущих схемо-миграций (#14 re-chunk, jobs и т.п.).
     rebuild_fts: bool,
+    /// Симметрично `rebuild_fts`, но для external-content `fts_chat_messages` (переписка, #58): раннер
+    /// после SQL миграции пересобирает FTS переписки из `chat_messages` ([`rebuild_chat_fts`]). Сейчас
+    /// индекс держат триггеры (миграция 025) → у всех миграций `false`; будущая схемо-миграция переписки
+    /// (или добавление delete-session-пути, где каскад НЕ дёргает AD-триггер) выставит `true`.
+    rebuild_chat_fts: bool,
 }
 
 /// Упорядоченный список миграций. Версия = индекс в эволюции схемы.
@@ -25,144 +30,177 @@ const MIGRATIONS: &[Migration] = &[
         name: "initial",
         sql: include_str!("migrations/001_initial.sql"),
         rebuild_fts: false,
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 2,
         name: "chunks_fts",
         sql: include_str!("migrations/002_chunks_fts.sql"),
         rebuild_fts: false, // создаёт FTS — пересобирать нечего
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 3,
         name: "frontmatter_fields",
         sql: include_str!("migrations/003_frontmatter_fields.sql"),
         rebuild_fts: false,
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 4,
         name: "jobs",
         sql: include_str!("migrations/004_jobs.sql"),
         rebuild_fts: false, // новая таблица, производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 5,
         name: "digests",
         sql: include_str!("migrations/005_digests.sql"),
         rebuild_fts: false,
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 6,
         name: "contradictions",
         sql: include_str!("migrations/006_contradictions.sql"),
         rebuild_fts: false,
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 7,
         name: "contradiction_cache",
         sql: include_str!("migrations/007_contradiction_cache.sql"),
         rebuild_fts: false,
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 8,
         name: "home_widgets",
         sql: include_str!("migrations/008_home_widgets.sql"),
         rebuild_fts: false, // новая таблица-кэш, производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 9,
         name: "stale_cache",
         sql: include_str!("migrations/009_stale_cache.sql"),
         rebuild_fts: false, // новая таблица-кэш, производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 10,
         name: "news",
         sql: include_str!("migrations/010_news.sql"),
         rebuild_fts: false, // новые таблицы ленты (NF-3), производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 11,
         name: "news_bodies",
         sql: include_str!("migrations/011_news_bodies.sql"),
         rebuild_fts: false, // колонки-кэш reader'а (NF-6), производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 12,
         name: "chat_sessions",
         sql: include_str!("migrations/012_chat_sessions.sql"),
         rebuild_fts: false, // новые таблицы переписки, производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 13,
         name: "links_dangling_index",
         sql: include_str!("migrations/013_links_dangling_index.sql"),
         rebuild_fts: false, // только индекс для перф-резолва ссылок, данные не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 14,
         name: "news_comments_url",
         sql: include_str!("migrations/014_news_comments_url.sql"),
         rebuild_fts: false, // nullable-колонка ссылки на HN-обсуждение, производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 15,
         name: "edit_events",
         sql: include_str!("migrations/015_edit_events.sql"),
         rebuild_fts: false, // журнал изменений для временной оси, производных индексов не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 16,
         name: "relation_reasons",
         sql: include_str!("migrations/016_relation_reasons.sql"),
         rebuild_fts: false, // новая таблица-кэш LLM-объяснений связей, производных не инвалидирует
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 17,
         name: "memory_facts",
         sql: include_str!("migrations/017_memory_facts.sql"),
         rebuild_fts: false, // память агента (MEM): отдельный слой фактов, заметочных производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 18,
         name: "memory_fact_events",
         sql: include_str!("migrations/018_memory_fact_events.sql"),
         rebuild_fts: false, // история/supersede фактов памяти (MEM-7), заметочных производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 19,
         name: "chat_episodes",
         sql: include_str!("migrations/019_chat_episodes.sql"),
         rebuild_fts: false, // эпизодическая память (EP): саммари сессий, заметочных производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 20,
         name: "egress_audit",
         sql: include_str!("migrations/020_egress_audit.sql"),
         rebuild_fts: false, // durable egress-журнал (P0-b): append-only журнал подотчётности, производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 21,
         name: "agent_runs",
         sql: include_str!("migrations/021_agent_runs.sql"),
         rebuild_fts: false, // durable запись прогонов агента (AGENT-2): статус-машина прогона, производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 22,
         name: "agent_actions",
         sql: include_str!("migrations/022_agent_actions.sql"),
         rebuild_fts: false, // idempotency-ledger актуатора (AGENT-3b): журнал действий, производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 23,
         name: "agent_skill_usage",
         sql: include_str!("migrations/023_agent_skill_usage.sql"),
         rebuild_fts: false, // self-learning (SL-1): телеметрия/lifecycle скиллов, заметочных производных не трогает
+        rebuild_chat_fts: false,
     },
     Migration {
         version: 24,
         name: "agent_run_parent",
         sql: include_str!("migrations/024_agent_run_parent.sql"),
         rebuild_fts: false, // subagents (SUB-0): parent_run_id для дерева делегирования, производных не трогает
+        rebuild_chat_fts: false,
+    },
+    Migration {
+        version: 25,
+        name: "chat_messages_fts",
+        sql: include_str!("migrations/025_chat_messages_fts.sql"),
+        // НЕ rebuild_fts: создаёт СВОЙ fts_chat_messages с собственным бэкфиллом (rebuild_fts чинит
+        // ТОЛЬКО fts_chunks). Session-search (#58) — FTS над перепиской, заметочных производных не трогает.
+        rebuild_fts: false,
+        rebuild_chat_fts: false,
     },
 ];
 
@@ -208,6 +246,10 @@ pub(crate) fn apply(conn: &mut Connection) -> DbResult<()> {
         if m.rebuild_fts {
             rebuild_fts(&tx).map_err(wrap)?;
         }
+        // Симметрично — пересборка FTS переписки из chat_messages (#58).
+        if m.rebuild_chat_fts {
+            rebuild_chat_fts(&tx).map_err(wrap)?;
+        }
         // user_version нельзя биндить плейсхолдером; значение — из нашего кода, не из ввода.
         tx.pragma_update(None, "user_version", m.version)
             .map_err(wrap)?;
@@ -222,6 +264,14 @@ pub(crate) fn apply(conn: &mut Connection) -> DbResult<()> {
 /// как точечный ремонт рассинхрона. `chunks` не трогается — переразбор файлов НЕ нужен.
 pub(crate) fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild');")
+}
+
+/// Точечный ремонт рассинхрона FTS переписки (#58): пересобирает external-content `fts_chat_messages`
+/// из `chat_messages` командой FTS5 `'rebuild'` — паритет с [`rebuild_fts`] для chunks. В штатном
+/// режиме индекс держат триггеры (ai/ad/au миграции 025); этот примитив — на случай ремонта (будущая
+/// reconcile-тулза / FTS-схемо-миграция переписки), чтобы починка не требовала сноса `.nexus`.
+pub(crate) fn rebuild_chat_fts(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("INSERT INTO fts_chat_messages(fts_chat_messages) VALUES('rebuild');")
 }
 
 #[cfg(test)]
@@ -260,6 +310,45 @@ mod tests {
 
         rebuild_fts(&conn).unwrap();
         assert_eq!(hits(&conn), 1, "rebuild восстановил индекс из chunks");
+    }
+
+    /// `rebuild_chat_fts` (#58): после рассинхрона (delete-all FTS переписки) команда `'rebuild'`
+    /// восстанавливает `fts_chat_messages` из `chat_messages` — паритет ремонта с chunks.
+    #[test]
+    fn rebuild_chat_fts_restores_index_from_chat_messages() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap(); // 001..025
+
+        // Тест про FTS, не про FK — нужна лишь chat_sessions-строка под FK chat_messages.
+        conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+        conn.execute(
+            "INSERT INTO chat_messages(session_id,role,content,created_at) \
+             VALUES(1,'user','подними docker контейнер',100)",
+            [],
+        )
+        .unwrap();
+        let hits = |c: &Connection| -> i64 {
+            c.query_row(
+                "SELECT count(*) FROM fts_chat_messages WHERE fts_chat_messages MATCH 'docker'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(hits(&conn), 1, "триггер наполнил FTS переписки");
+
+        conn.execute_batch(
+            "INSERT INTO fts_chat_messages(fts_chat_messages) VALUES('delete-all');",
+        )
+        .unwrap();
+        assert_eq!(hits(&conn), 0, "после delete-all индекс переписки пуст");
+
+        rebuild_chat_fts(&conn).unwrap();
+        assert_eq!(
+            hits(&conn),
+            1,
+            "rebuild восстановил индекс из chat_messages"
+        );
     }
 
     /// Идемпотентность раннера: повторный `apply` не двигает `user_version` и доводит до `latest`.

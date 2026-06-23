@@ -33,6 +33,23 @@ pub struct StoredMessage {
     pub created_at: i64,
 }
 
+/// Совпадение полнотекстового поиска по переписке (#58, session-search): сообщение + контекст
+/// сессии (заголовок) и эпизода (саммари EP, если сгенерировано) для группировки результатов.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSearchHit {
+    pub session_id: i64,
+    /// Заголовок сессии (для перехода и группировки совпадений по диалогу).
+    pub title: String,
+    /// Роль совпавшего сообщения (`user`/`assistant`).
+    pub role: String,
+    /// Фрагмент с подсветкой совпадений (`[...]`, многоточие по краям) — из FTS5 `snippet()`.
+    pub snippet: String,
+    pub created_at: i64,
+    /// Саммари эпизода сессии (EP) — контекст диалога. `None`, если эпизод не сгенерирован/скрыт.
+    pub summary: Option<String>,
+}
+
 /// Пишет завершённый обмен (вопрос + ответ). `session_id=None` → создаёт сессию с
 /// плейсхолдер-заголовком из вопроса. Возвращает (session_id, created — нужна ли генерация заголовка).
 pub async fn log_exchange(
@@ -184,6 +201,48 @@ pub async fn session_messages(reader: &ReadPool, id: i64) -> DbResult<Vec<Stored
                     content: r.get(1)?,
                     sources_json: r.get(2)?,
                     created_at: r.get(3)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await
+}
+
+/// Полнотекстовый поиск по переписке (#58, session-search) над `fts_chat_messages` (миграция 025).
+/// Возвращает совпавшие сообщения (snippet с подсветкой `[...]`, лучшие сверху по BM25 `rank`) с
+/// заголовком сессии и — если есть — саммари эпизода (EP) для группировки. Запрос санитизируется
+/// общим `search::fts_query` (токены в кавычках через OR, спецсинтаксис FTS нейтрализован, стоп-слова
+/// отброшены) — пустой/целиком-стоп-словный запрос даёт пустой Vec, НЕ ошибку. `limit` клампится 1..=200.
+pub async fn search_chat(
+    reader: &ReadPool,
+    query: &str,
+    limit: i64,
+) -> DbResult<Vec<ChatSearchHit>> {
+    let Some(match_expr) = crate::search::fts_query(query) else {
+        return Ok(Vec::new());
+    };
+    let limit = limit.clamp(1, 200);
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT m.session_id, s.title, m.role, \
+                        snippet(fts_chat_messages, 0, '[', ']', '…', 12), \
+                        m.created_at, e.summary \
+                 FROM fts_chat_messages \
+                 JOIN chat_messages m ON m.id = fts_chat_messages.rowid \
+                 JOIN chat_sessions s ON s.id = m.session_id \
+                 LEFT JOIN chat_episodes e ON e.session_id = m.session_id AND e.dismissed = 0 \
+                 WHERE fts_chat_messages MATCH ?1 \
+                 ORDER BY fts_chat_messages.rank LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![match_expr, limit], |r| {
+                Ok(ChatSearchHit {
+                    session_id: r.get(0)?,
+                    title: r.get(1)?,
+                    role: r.get(2)?,
+                    snippet: r.get(3)?,
+                    created_at: r.get(4)?,
+                    summary: r.get(5)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -436,6 +495,92 @@ mod tests {
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].role, "assistant");
         assert!(msgs[1].sources_json.as_deref().unwrap().contains("a.md"));
+    }
+
+    /// #58 session-search: FTS5-поиск находит совпавшее сообщение со snippet-подсветкой и
+    /// заголовком сессии; бэкфилл миграции 025 индексирует уже накопленную переписку; саммари
+    /// эпизода (EP) подмешивается через LEFT JOIN; стоп-словный/пустой запрос → пустой Vec (не ошибка);
+    /// спецсинтаксис FTS нейтрализован (не паникует, не матчит мусор).
+    #[tokio::test]
+    async fn search_chat_finds_messages_with_snippet_and_episode() {
+        let (_d, db) = open().await;
+        let sid = log_exchange(
+            db.writer(),
+            None,
+            "Как настроить SearXNG для веб-агента?",
+            "Подними docker-контейнер и включи JSON-формат.",
+            None,
+        )
+        .await
+        .unwrap()
+        .session_id;
+        log_exchange(
+            db.writer(),
+            None,
+            "Что такое RRF?",
+            "Reciprocal Rank Fusion.",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Совпадение по содержимому ответа: snippet подсвечивает термин, заголовок сессии прикреплён.
+        let hits = search_chat(db.reader(), "docker", 20).await.unwrap();
+        assert_eq!(hits.len(), 1, "ровно одно сообщение содержит 'docker'");
+        assert_eq!(hits[0].session_id, sid);
+        assert_eq!(hits[0].role, "assistant");
+        assert!(
+            hits[0].title.starts_with("Как настроить"),
+            "заголовок сессии"
+        );
+        assert!(
+            hits[0].snippet.contains("[docker]") || hits[0].snippet.contains("[docker-контейнер]"),
+            "snippet подсвечивает совпадение: {}",
+            hits[0].snippet
+        );
+        assert!(hits[0].summary.is_none(), "эпизод ещё не сгенерирован");
+
+        // Совпадение в РАЗНЫХ сессиях для одного термина.
+        let searxng = search_chat(db.reader(), "SearXNG", 20).await.unwrap();
+        assert_eq!(searxng.len(), 1, "термин в вопросе первой сессии");
+
+        // Саммари эпизода (EP) подмешивается через LEFT JOIN chat_episodes.
+        db.writer()
+            .call(move |c| {
+                c.execute(
+                    "INSERT INTO chat_episodes(session_id, summary, msg_count, last_msg_id, \
+                     started_at, ended_at, generated_at) VALUES(?1, ?2, 2, 2, 100, 200, 200)",
+                    params![sid, "Диалог о настройке SearXNG."],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let with_ep = search_chat(db.reader(), "docker", 20).await.unwrap();
+        assert_eq!(
+            with_ep[0].summary.as_deref(),
+            Some("Диалог о настройке SearXNG."),
+            "саммари эпизода прикреплено"
+        );
+
+        // Бестокенный запрос (пробелы / только пунктуация) → fts_query=None → пустой Vec, НЕ ошибка.
+        // (NB: запрос ЦЕЛИКОМ из стоп-слов НЕ пуст — fts_query откатывается на исходные токены, чтобы
+        // не терять лексику; пустоту гарантирует лишь отсутствие токенов вообще.)
+        assert!(search_chat(db.reader(), "   ", 20)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Спецсинтаксис FTS нейтрализован (кавычки/операторы) — не паникует, мусор не матчит.
+        assert!(search_chat(db.reader(), "\"", 20).await.unwrap().is_empty());
+        let safe = search_chat(db.reader(), "docker OR (NEAR", 20)
+            .await
+            .unwrap();
+        assert_eq!(
+            safe.len(),
+            1,
+            "извлечён токен 'docker', операторы как литералы"
+        );
     }
 
     /// P6-RGN: удаление последнего обмена убирает ровно последнюю пару (user+assistant) и
