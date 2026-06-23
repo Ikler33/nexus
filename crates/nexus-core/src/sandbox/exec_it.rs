@@ -114,6 +114,10 @@ mod tier2 {
                 "run",
                 "--rm",
                 "--network=none",
+                // образ несёт ENTRYPOINT=nexus-agentd → очищаем, иначе `true` уедет ему в argv
+                // как vault-путь (`nexus-agentd true` → «vault path true: No such file»).
+                "--entrypoint",
+                "",
                 DEFAULT_SANDBOX_IMAGE,
                 "true",
             ])
@@ -138,6 +142,10 @@ mod tier2 {
             "/tmp",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
+            // образ несёт ENTRYPOINT=nexus-agentd → очищаем, чтобы прогонять сырые probe-команды
+            // (`cat`/`touch`/…), а не отдавать их агент-бинарю как vault-путь.
+            "--entrypoint",
+            "",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -171,7 +179,11 @@ mod tier2 {
             "тест-vault не под ~/.nexus"
         );
         let mount = format!("{}:/vault:ro", vault.path().display());
-        let (code, _out, err) = hardened_podman_run(&["-v", &mount], &["touch", "/vault/probe"]);
+        // `--user 0:0`: контейнер-root маппится (rootless userns) на host-владельца mount'а, поэтому
+        // ЕДИНСТВЕННЫЙ блокиратор записи — флаг `:ro` → чистая EROFS-сигнатура. Под дефолтным USER nexus
+        // (uid 10001, не владелец) запись падает РАНЬШЕ по EACCES (ownership), маскируя EROFS.
+        let (code, _out, err) =
+            hardened_podman_run(&["-v", &mount, "--user", "0:0"], &["touch", "/vault/probe"]);
         assert_ne!(code, 0, "запись в :ro vault должна падать (EROFS)");
         assert!(
             err.to_lowercase().contains("read-only"),
