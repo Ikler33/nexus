@@ -122,6 +122,10 @@ pub struct AgentRunHandler {
     /// `actuator_enabled` + `skills=Some` → drive регистрирует `skill.save` (агент авторствует навыки
     /// через гейт). default-OFF: classify режет `SkillSave` HardBlocked, инструмента нет.
     skills_learning_enabled: bool,
+    /// **SUBAGENTS (SUB-3b-2b), OWNER-GATED, default disabled** (`ai.delegation`). `enabled` → drive
+    /// собирает `DelegationDeps` и регистрирует `delegate.run` (fan-out субагентов) в top-level прогоне.
+    /// Выключено (дефолт) → инструмента нет (без регрессии).
+    delegation: crate::ai::DelegationConfig,
     /// **KILL-SWITCH (AGENT-5): глобальная пауза агента.** Process-global `Arc<AtomicBool>` (взведён ⇒
     /// fail-safe останов). Проверяется на ТРЁХ слоях: (1) `drive` ДО старта (взведён ⇒ прогон остаётся
     /// queued, ре-кьюится); (2) пробрасывается в `run_agent_loop` (мид-ран останов → `Paused`);
@@ -161,6 +165,7 @@ impl AgentRunHandler {
         skills: Option<SkillContext>,
         web: Option<WebToolsConfig>,
         skills_learning_enabled: bool,
+        delegation: crate::ai::DelegationConfig,
     ) -> Self {
         Self {
             writer,
@@ -177,6 +182,7 @@ impl AgentRunHandler {
             skills,
             web,
             skills_learning_enabled,
+            delegation,
         }
     }
 
@@ -271,6 +277,15 @@ impl AgentRunHandler {
             canon_root: self.canon_root.clone(),
             skills_learning_enabled: self.skills_learning_enabled,
         };
+        // SUB-3b-2b: delegate.run в top-level прогоне ТОЛЬКО при `ai.delegation.enabled`. Провайдер как Arc
+        // (`self.ai.agent_tools` = тот же `provider`), чтобы дети владели клоном.
+        let delegation_deps =
+            self.delegation
+                .enabled
+                .then(|| crate::agent::session::DelegationDeps {
+                    provider: provider.clone(),
+                    config: self.delegation.clone(),
+                });
         let outcome = run_agent_session(
             &spec,
             provider.as_ref(),
@@ -284,6 +299,7 @@ impl AgentRunHandler {
             &cancel,
             forwarder,
             None, // top-level прогон (не субагент)
+            delegation_deps.as_ref(),
         )
         .await;
 
@@ -561,6 +577,7 @@ mod tests {
             None,  // SKILL-2: без skills (AGENT-2-поведение, без регрессии)
             None,  // EGR-AGENT-2: без веба
             false, // SL-7d: тест не про авторство навыков
+            crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
         )
     }
 
@@ -583,9 +600,10 @@ mod tests {
             16,
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
-            None,  // SKILL-2: без skills
-            None,  // EGR-AGENT-2: без веба
-            false, // SL-7d: тест не про авторство навыков
+            None,                                   // SKILL-2: без skills
+            None,                                   // EGR-AGENT-2: без веба
+            false,                                  // SL-7d: тест не про авторство навыков
+            crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
         )
     }
 
@@ -636,6 +654,7 @@ mod tests {
             None,  // SKILL-2: без skills (go-live-тесты актуатора не про скиллы)
             None,  // EGR-AGENT-2: без веба
             false, // SL-7d: тест не про авторство навыков
+            crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
         )
     }
 
@@ -1184,8 +1203,9 @@ mod tests {
             Arc::new(crate::actuator::PolicyDefault),
             unpaused(),
             Some(skills),
-            None,  // EGR-AGENT-2: без веба
-            false, // SL-7d: тест не про авторство навыков
+            None,                                   // EGR-AGENT-2: без веба
+            false,                                  // SL-7d: тест не про авторство навыков
+            crate::ai::DelegationConfig::default(), // SUB-3b-2b: тест не про делегирование
         )
     }
 

@@ -101,6 +101,18 @@ pub struct SubagentSpawn<'a> {
     pub dispatcher: Option<Arc<dyn ActionDispatcher>>,
 }
 
+/// **SUB-3b-2b: зависимости для РЕГИСТРАЦИИ `delegate.run`** в TOP-LEVEL прогоне. `Some` И `config.enabled`
+/// → [`run_agent_session`] собирает [`SubagentContext`] (из своих хендлов + Arc-провайдера + общего gate)
+/// и регистрирует [`crate::agent::delegate::DelegateTool`]. `None`/выключено → инструмента нет (поведение
+/// без регрессии). Передаётся ТОЛЬКО для top-level: субагенты (`spawn_subagent`) зовут сессию БЕЗ него —
+/// дети делегировать не могут (рекурсия-стоп). `provider` — `Arc` (дети клонируют в конкурентные задачи).
+pub struct DelegationDeps {
+    /// Провайдер модели как `Arc` (для порождения детей — `&dyn` цикла недостаточно, нужен 'static-клон).
+    pub provider: Arc<dyn ToolCapableProvider>,
+    /// Капы/флаг делегирования (`enabled`/`max_depth`/`max_fanout`/`max_total_spawns`).
+    pub config: crate::ai::DelegationConfig,
+}
+
 /// Гонит один прогон агента: собирает начальный контекст ([system преамбул] + [recall памяти] +
 /// [меню скиллов] + [задача]), выбирает реестр (стабы | гейтнутые актуаторы с
 /// [`ForwardingEventSink`]), регистрирует tier-2/3 инструменты скиллов и крутит [`run_agent_loop`].
@@ -124,6 +136,7 @@ pub async fn run_agent_session(
     cancel: &Arc<AtomicBool>,
     forwarder: Arc<dyn AgentEventForwarder>,
     subagent: Option<&SubagentSpawn<'_>>,
+    delegation: Option<&DelegationDeps>,
 ) -> LoopOutcome {
     // Начальный контекст: [system преамбул] + [recall памяти] + [меню скиллов] + [задача]. recall —
     // только чтение, никогда не ошибка (деградирует в пусто); None память → пусто (без регрессии).
@@ -150,6 +163,9 @@ pub async fn run_agent_session(
     // dispatch_action. Гейт получает ForwardingEventSink → Proposal/Diff уходят тем же форвардером,
     // что и события цикла. Per-run DispatchPolicy (общий blast-radius между инструментами) + проброс
     // `paused` в политику (KILL-SWITCH чек-пойнт #3: НЕ пишет под паузой даже мид-инструмент).
+    // SUB-3b-2b: gate-диспетчер хойстим наружу блока — `delegate.run` (если включён) положит его в
+    // `SubagentContext`, чтобы ДЕТИ писали через ТОТ ЖЕ родительский gate (общий blast-radius/ledger).
+    let mut parent_dispatcher: Option<Arc<dyn ActionDispatcher>> = None;
     let mut registry = if spec.actuator_enabled {
         let mut reg = ToolRegistry::new();
         // ШОВ актуатора (SANDBOX-4b-2): инструменты держат `Arc<dyn ActionDispatcher>`. In-process путь —
@@ -158,7 +174,6 @@ pub async fn run_agent_session(
         // детям НЕ кладём (blocklist SUB-1). Иначе строим свой gate как раньше.
         let dispatcher: Arc<dyn ActionDispatcher> =
             if let Some(d) = subagent.and_then(|s| s.dispatcher.clone()) {
-                let _ = &decision_source; // в этой ветке свой gate не строим
                 d
             } else {
                 let ledger = AuditSink::new(writer.clone(), reader.clone());
@@ -187,15 +202,17 @@ pub async fn run_agent_session(
                         reg.insert(Arc::new(SkillSaveTool::new(Arc::new(skill_ctx))));
                     }
                 }
+                // decision_source КЛОНИРУЕМ (не move) — он ещё нужен для `SubagentContext` делегирования ниже.
                 Arc::new(GatedToolCtx::new(
                     spec.canon_root.clone(),
                     ledger,
                     spec.run_id,
                     policy,
-                    decision_source,
+                    decision_source.clone(),
                     events,
                 ))
             };
+        parent_dispatcher = Some(dispatcher.clone());
         reg.insert(Arc::new(NoteCreateTool::new(dispatcher.clone())));
         reg.insert(Arc::new(NoteEditTool::new(dispatcher.clone())));
         reg.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
@@ -230,6 +247,44 @@ pub async fn run_agent_session(
     // без сужения.
     if let Some(sa) = subagent {
         registry.retain(sa.allowed);
+    }
+
+    // SUB-3b-2b: регистрация `delegate.run` (fan-out субагентов) — ТОЛЬКО top-level (`delegation=Some`,
+    // дети его не получают) + `ai.delegation.enabled`. `SubagentContext` собираем из ТЕКУЩИХ хендлов сессии:
+    // parent_tool_names = снимок реестра ДО `delegate.run` (он сам в блок-листе ребёнка), gate — общий
+    // (parent_dispatcher), один `DelegationBudget` на дерево (клонируется детям, общий счётчик спавнов).
+    if let Some(deps) = delegation {
+        if deps.config.enabled {
+            let sub_ctx = crate::agent::delegate::SubagentContext {
+                provider: deps.provider.clone(),
+                skills: skills.cloned(),
+                web: web.cloned(),
+                decision_source: decision_source.clone(),
+                writer: writer.clone(),
+                reader: reader.clone(),
+                paused: paused.clone(),
+                parent_cancel: cancel.clone(),
+                forwarder: forwarder.clone(),
+                parent_run_id: spec.run_id,
+                parent_tool_names: registry.names(),
+                dispatcher: parent_dispatcher.clone(),
+                actuator_enabled: spec.actuator_enabled,
+                autonomy: spec.autonomy.clone(),
+                overwrite_threshold: spec.overwrite_threshold,
+                blast_cap: spec.blast_cap,
+                context_window: spec.context_window,
+                canon_root: spec.canon_root.clone(),
+                model: Some(provider.model_id().to_string()),
+                budget: crate::agent::delegate::DelegationBudget::from_config(
+                    &deps.config,
+                    bounds.wall_clock,
+                ),
+            };
+            registry.insert(Arc::new(crate::agent::delegate::DelegateTool::new(
+                sub_ctx,
+                deps.config.max_fanout,
+            )));
+        }
     }
 
     // on_event: КАЖДОЕ событие цикла → форвардер (тот же, что у гейта). Запись шага/стрим/лог — забота
@@ -358,6 +413,7 @@ mod tests {
             &cancel,
             fwd.clone(),
             None,
+            None,
         )
         .await;
 
@@ -417,6 +473,7 @@ mod tests {
             &cancel,
             fwd.clone(),
             Some(&sa),
+            None,
         )
         .await;
         let evs = fwd.events.lock().unwrap();
@@ -479,6 +536,7 @@ mod tests {
             &cancel,
             fwd.clone(),
             Some(&sa),
+            None,
         )
         .await;
         let evs = fwd.events.lock().unwrap();
@@ -487,6 +545,147 @@ mod tests {
             _ => None,
         });
         assert_eq!(is_error, Some(false), "echo в allowed → вызывается успешно");
+    }
+
+    /// SUB-3b-2b: `delegation=None` → `delegate.run` НЕ зарегистрирован → вызов модели → UnknownTool
+    /// is_error (без регрессии: дефолт-поведение).
+    #[tokio::test]
+    async fn delegation_disabled_means_no_delegate_tool() {
+        let (_dir, db) = open_db().await;
+        let provider = FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "delegate.run".into(),
+                arguments: r#"{"tasks":[{"goal":"x"}]}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("ок".into())),
+        ]);
+        let fwd = Arc::new(CollectingForwarder::default());
+        let spec = SessionSpec {
+            run_id: 20,
+            task: "t".into(),
+            autonomy: None,
+            actuator_enabled: false,
+            overwrite_threshold: 100,
+            blast_cap: 10,
+            context_window: Some(4096),
+            canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
+        };
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        run_agent_session(
+            &spec,
+            &provider,
+            None,
+            None,
+            None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+            None,
+            None, // delegation выкл
+        )
+        .await;
+        let evs = fwd.events.lock().unwrap();
+        let is_error = evs.iter().find_map(|e| match e {
+            AgentEvent::ToolResult { is_error, .. } => Some(*is_error),
+            _ => None,
+        });
+        assert_eq!(
+            is_error,
+            Some(true),
+            "delegate.run НЕ зарегистрирован при delegation=None → UnknownTool"
+        );
+    }
+
+    /// SUB-3b-2b: `delegation=Some(enabled)` → `delegate.run` ЗАРЕГИСТРИРОВАН → вызов модели порождает
+    /// ребёнка (дерево parent_run_id) и возвращает агрегат (НЕ UnknownTool). Изоляция: анонимные ходы
+    /// ребёнка не текут в поток родителя.
+    #[tokio::test]
+    async fn delegation_enabled_registers_delegate_tool() {
+        let (_dir, db) = open_db().await;
+        let provider = Arc::new(FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "delegate.run".into(),
+                arguments: r#"{"tasks":[{"goal":"под-цель"}]}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("child done".into())), // ребёнок
+            Ok(ToolTurn::Final("parent done".into())), // родитель
+        ]));
+        let fwd = Arc::new(CollectingForwarder::default());
+        let spec = SessionSpec {
+            run_id: 21,
+            task: "t".into(),
+            autonomy: None,
+            actuator_enabled: false,
+            overwrite_threshold: 100,
+            blast_cap: 10,
+            context_window: Some(4096),
+            canon_root: _dir.path().to_path_buf(),
+            skills_learning_enabled: false,
+        };
+        let deps = DelegationDeps {
+            provider: provider.clone(),
+            config: crate::ai::DelegationConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        };
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        run_agent_session(
+            &spec,
+            provider.as_ref(),
+            None,
+            None,
+            None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+            None,
+            Some(&deps),
+        )
+        .await;
+        // Извлекаем ToolResult в блоке → guard дропается ДО await ниже (clippy await_holding_lock).
+        let tr = {
+            let evs = fwd.events.lock().unwrap();
+            evs.iter().find_map(|e| match e {
+                AgentEvent::ToolResult {
+                    is_error, content, ..
+                } => Some((*is_error, content.clone())),
+                _ => None,
+            })
+        };
+        let (is_error, content) = tr.expect("есть ToolResult delegate.run");
+        assert!(
+            !is_error,
+            "delegate.run зарегистрирован и отработал: {content}"
+        );
+        assert!(
+            content.contains("child done"),
+            "агрегат несёт саммари ребёнка: {content}"
+        );
+        // Дерево: ровно один ребёнок с parent_run_id=21.
+        let kids: i64 = db
+            .reader()
+            .query(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM agent_runs WHERE parent_run_id=21",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(kids, 1, "порождён один ребёнок");
     }
 
     /// Пустой провайдер-стрим, который сразу Final — форвардер видит хотя бы ContextUsage + Final, vault
@@ -521,6 +720,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
             None,
         )
         .await;
@@ -610,6 +810,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
             None,
         )
         .await;
@@ -709,6 +910,7 @@ mod tests {
             &paused,
             &cancel,
             fwd.clone(),
+            None,
             None,
         )
         .await;

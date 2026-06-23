@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-3b-2b — проводка `delegate.run` (регистрация + reconcile-sweep) — делегирование LIVE end-to-end
+
+Финальная проводка субагентов: `delegate.run` регистрируется в top-level прогоне под owner-gated `ai.delegation.enabled` (default OFF). **🎉 In-process делегирование работает end-to-end** (родитель → `delegate.run` → fan-out детей → дерево `parent_run_id` → агрегат саммари).
+
+- **`run_agent_session` +параметр `delegation: Option<&DelegationDeps>`** (`DelegationDeps{provider: Arc, config}`): при `Some`+`enabled` собирает `SubagentContext` из хендлов сессии (gate-диспетчер хойстнут наружу actuator-блока → дети пишут через ОДИН родительский gate; `parent_tool_names` = снимок реестра ДО `delegate.run`; один `DelegationBudget` на дерево) и регистрирует `DelegateTool`. `decision_source` клонируется (не move) — нужен для ctx. `None`/выключено → без регрессии (все 13 текущих вызовов передают `None`, кроме job/connect при enabled).
+- **Проводка**: `AgentRunHandler` + `ConnectDeps` несут `ai.delegation`; agentd строит `DelegationDeps` (провайдер как Arc) для обоих; desktop — выкл (как skills_learning).
+- **#4 reconcile-sweep ВКЛЮЧЁН** (ревью SUB-3b-2a hard-prereq): agentd на старте зовёт `reconcile_orphan_child_runs` (рядом с `requeue_stale_running`) ДО регистрации — осиротевшие `running`-дети (abort-on-drop) → терминал `error`.
+
+Tier-1 (+2 wiring tests, 987 nexus-core): **delegation=None → delegate.run UnknownTool** (без регрессии) · **delegation=enabled → delegate.run зарегистрирован, порождает ребёнка (parent_run_id), агрегат несёт саммари ребёнка, анонимные ходы ребёнка не текут к родителю**. `test-all` зелёный. **🎉 SUBAGENTS in-process ЗАВЕРШЁН (SUB-0..3b).** Остаётся SUB-4 (live .28 smoke, operational) → RES-1..5 deep-research.
+
 ### Агент · SUBAGENTS SUB-3b-2a — `DelegateTool` (`delegate.run`: конкурентный fan-out субагентов)
 
 Инструмент делегирования (порт hermes `delegate_task`). Родитель зовёт `delegate.run` с батчем задач → КОНКУРЕНТНЫЙ fan-out [`spawn_subagent`] по каждой, агрегат `[{index,status,summary}]`. Сам инструмент (логика fan-out); регистрация под `ai.delegation.enabled` + проводка хендлов — SUB-3b-2b (БЕЗ неё `delegate.run` ещё не активен).

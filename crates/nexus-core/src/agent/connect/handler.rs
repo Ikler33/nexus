@@ -99,6 +99,9 @@ pub struct ConnectDeps {
     /// Single-owner-семантика: `agent/control(pause)` коннектора = ГЛОБАЛЬНАЯ пауза демона (один владелец,
     /// один агент); per-session гранулярность — поздний multi-client срез.
     pub agent_paused: Arc<AtomicBool>,
+    /// **SUBAGENTS (SUB-3b-2b), OWNER-GATED, default disabled** (`ai.delegation`). `enabled` →
+    /// прогоны коннектора регистрируют `delegate.run` (fan-out субагентов). Выключено → без регрессии.
+    pub delegation: crate::ai::DelegationConfig,
 }
 
 /// [`AgentEventForwarder`] → асинхронный [`Transport`]. Синхронный `forward` кладёт событие в ОГРАНИЧЕННЫЙ
@@ -264,6 +267,14 @@ impl ConnectHandler for ConnectAgentHandler {
                 skills_learning_enabled: deps.skills_learning_enabled,
             };
             let _ = run_store::mark_running(&deps.writer, run_id).await;
+            // SUB-3b-2b: delegate.run для прогона коннектора ТОЛЬКО при `ai.delegation.enabled`.
+            let delegation_deps =
+                deps.delegation
+                    .enabled
+                    .then(|| crate::agent::session::DelegationDeps {
+                        provider: deps.provider.clone(),
+                        config: deps.delegation.clone(),
+                    });
             let outcome = run_agent_session(
                 &spec,
                 deps.provider.as_ref(),
@@ -277,6 +288,7 @@ impl ConnectHandler for ConnectAgentHandler {
                 &cancel,
                 forwarder,
                 None, // top-level прогон коннектора (не субагент)
+                delegation_deps.as_ref(),
             )
             .await;
             let (status, text) = outcome_to_finish(&outcome);
@@ -450,6 +462,7 @@ mod tests {
             skills: None,
             web: None,
             skills_learning_enabled: false,
+            delegation: crate::ai::DelegationConfig::default(),
             agent_paused: Arc::new(AtomicBool::new(false)),
         })
     }
