@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-1 — реестр субагента child⊆parent (no-escalation keystone) + обрамление задачи
+
+Чистая логика (без спавна/инструмента). **Security keystone: набор инструментов ребёнка ⊆ набора родителя ВСЕГДА** (set-intersection, НИКОГДА union) — эскалация невозможна по построению.
+
+- **`delegate::registry::build_child_registry(parent_names, requested)`**: `requested=Some` → `requested ∩ parent` (имя не у родителя молча ОТБРАСЫВАЕТСЯ, не добавляется — сужающий фильтр, не вектор расширения); `requested=None` → `parent` минус блок-лист. Блок-лист `CHILD_BLOCKED_TOOLS`: `delegate.run`/`research.run` (рекурсия/внук структурно запрещены — 2-й чекпоинт поверх depth-бюджета) + `skill.save` (запись в общую библиотеку навыков — прерогатива топ-уровня, least-privilege). Память агента — read-only recall (write-tool'а нет; появится — добавить в блок-лист).
+- **`delegate::child_task::build_child_task(goal, context)`**: фокус-обрамление субагента (одна задача → краткое саммари), БЕЗ истории родителя (изоляция; в SUB-3 ребёнок стартует `memory=None`). Поля клипуются (анти-раздувание контекста).
+
+Tier-1 (+8 tests, 970 nexus-core): child⊆parent при superset-запросе · unknown-имя отброшено не добавлено · blocked всегда вырезаны (вкл. явный запрос) · none→наследование минус блок-лист · пустой parent→пустой child · task содержит goal+саммари-инструкцию без истории родителя · пустой контекст опущен · длинные поля клипуются. `test-all` зелёный. Дальше: SUB-2 (события PlanProposed/SubagentStatus + wire ACP).
+
 ### Агент · SUBAGENTS SUB-0 — safety-примитивы делегирования (бюджет + parent_run_id + конфиг, без инструмента)
 
 **Старт killer-фичи «субагенты/делегирование»** (порт паттернов hermes `delegate_tool.py`). Субагент = ВТОРОЙ ин-процесс вызов `run_agent_session` (НЕ новый рантайм). SUB-0 кладёт ТОЛЬКО фундамент безопасности — НИКАКОГО инструмента/спавна, нулевое изменение поведения агента. Всё default-OFF.

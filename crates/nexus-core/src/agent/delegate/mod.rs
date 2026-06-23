@@ -9,5 +9,9 @@
 //! (default-OFF). Реестр-подмножество (SUB-1), события (SUB-2) и сам инструмент (SUB-3/4) — следующие срезы.
 
 pub mod budget;
+pub mod child_task;
+pub mod registry;
 
 pub use budget::{BudgetError, DelegationBudget};
+pub use child_task::build_child_task;
+pub use registry::{build_child_registry, DELEGATE_RUN_TOOL, RESEARCH_RUN_TOOL, SKILL_SAVE_TOOL};
