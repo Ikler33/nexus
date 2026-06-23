@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · SUBAGENTS SUB-0 — safety-примитивы делегирования (бюджет + parent_run_id + конфиг, без инструмента)
+
+**Старт killer-фичи «субагенты/делегирование»** (порт паттернов hermes `delegate_tool.py`). Субагент = ВТОРОЙ ин-процесс вызов `run_agent_session` (НЕ новый рантайм). SUB-0 кладёт ТОЛЬКО фундамент безопасности — НИКАКОГО инструмента/спавна, нулевое изменение поведения агента. Всё default-OFF.
+
+- **`agent::delegate::budget::DelegationBudget`** — ОБЩИЙ (Arc) анти-runaway бюджет дерева: глубина (per-уровень, ребёнок=depth-1), суммарные спавны (Arc<AtomicUsize>, один пул на дерево), дедлайн (Instant). `check_then_acquire_spawn()` fail-closed: глубина → дедлайн → атомарное списание спавна (CAS, без underflow). `child_budget()` = depth-1 (на max_depth=1 ребёнок=0 → рекурсия структурно-стоп).
+- **Миграция 024** `agent_runs.parent_run_id` (NULLable self-FK, NULL=top-level) + `run_store::create_child_run` (ссылка на родителя; `create_run` без изменений → back-compat). Дерево прогонов для корреляции egress/ledger + узлов плана.
+- **`ai.delegation` (DelegationConfig)** default-OFF + консервативные капы (hermes-tuned: depth=1/fanout=3/spawns=8); частичный конфиг падает в безопасные дефолты полей.
+
+**Adversarial-ревью (security/concurrency скептик → CAS/atomics ЧИСТЫ; 1 MAJOR + MINOR + NIT исправлены):** нулевой кап из конфига нормализуется к ≥1 (`new()` + warn — «включено» всегда значит «можно ≥1 спавн», incoherent-конфиг не рождает вечно-падающий инструмент); `wall_clock` клампится к 1 году (анти-overflow `Instant+Duration`); добавлен МНОГОПОТОЧНЫЙ стресс-тест (32×50 против пула 100 → ровно 100 Ok, остаток 0).
+
+Tier-1 (+8 tests, 962 nexus-core): budget acquire/fail-closed/no-underflow · child depth-1+shared-pool · deadline · zero-caps→1 · **concurrent acquire не превышает кап** · migration_024 roundtrip (None top-level / Some child) · delegation defaults-off. `test-all` зелёный. Дальше: SUB-1 (реестр-подмножество child⊆parent).
+
 ### Агент · SELF-LEARNING SL-curator — фоновая курация жизненного цикла навыков (active→stale→archive, owner-gated)
 
 **Замыкает петлю само-обучения:** агент создаёт навыки (SL-7) → телеметрия копит использование (SL-2) → **curator поддерживает их «гигиену» сам, но СТРОГО консервативно.** Фоновая scheduler-джоба `skill_curator` (образец `EpisodeRollupHandler`, дисциплина `memory::consolidate` «при сомнении не разрушаем»). По-прежнему default-OFF: гейтится owner-gated `ai.skills.learning_enabled`.

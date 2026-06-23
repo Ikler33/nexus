@@ -27,6 +27,7 @@
 
 pub mod connect;
 pub mod control;
+pub mod delegate;
 pub mod event;
 pub mod job;
 pub mod memory;
@@ -45,6 +46,7 @@ pub use connect::{
     ConnectDeps, ConnectHandler, RpcError, RpcMessage, Transport, PROTOCOL_VERSION,
 };
 pub use control::{load_control_state, save_control_state, AgentControlState};
+pub use delegate::{BudgetError, DelegationBudget};
 pub use event::{AgentEvent, FileStatus, ProposedFile};
 pub use job::{
     enqueue_agent_run, AgentRunHandler, AGENT_PREAMBLE, KIND_AGENT_RUN, RECALL_BUDGET_TOKENS,

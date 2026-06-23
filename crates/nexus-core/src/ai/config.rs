@@ -111,6 +111,11 @@ pub struct AiConfig {
     /// (всегда есть, дефолт-OFF — нет None-неоднозначности): отсутствие `ai.skills` в конфиге = всё false.
     #[serde(default)]
     pub skills: SkillsConfig,
+
+    /// **SUBAGENTS (SUB-0), SAFE BY DEFAULT + OWNER-GATED.** Делегирование/субагенты. NON-Option (всегда
+    /// есть, дефолт-OFF): отсутствие `ai.delegation` в конфиге = `enabled=false` + консервативные капы.
+    #[serde(default)]
+    pub delegation: DelegationConfig,
 }
 
 /// Конфиг самообучения навыкам (SELF-LEARNING). Дефолт-OFF: пустой `ai.skills` → `learning_enabled=false`.
@@ -123,6 +128,37 @@ pub struct SkillsConfig {
     /// телеметрию использования (`agent_skill_usage` пишется всегда — чистая наблюдаемость, SL-2).
     #[serde(default)]
     pub learning_enabled: bool,
+}
+
+/// Конфиг делегирования/субагентов (SUBAGENTS, SUB-0). Дефолт-OFF + консервативные капы (hermes-tuned):
+/// отсутствие `ai.delegation` = `enabled=false`, `max_depth=1`, `max_fanout=3`, `max_total_spawns=8`.
+/// `#[serde(default)]` на контейнере → недостающие поля берутся из [`Default`] (частичный конфиг ОК, и
+/// каждое поле падает в свой безопасный дефолт, а не в 0). Капы НЕнулевые → ручной `impl Default`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct DelegationConfig {
+    /// **OWNER-GATED, ДЕФОЛТ false.** Гейт делегирования: инструмент `delegate.run` регистрируется ТОЛЬКО
+    /// при `true`. `false` → субагентов нет, поведение без регрессии (инструмент структурно отсутствует).
+    pub enabled: bool,
+    /// Макс. ГЛУБИНА дерева делегирования. hermes `MAX_DEPTH=1` (плоско parent→child; внук отвергается —
+    /// `delegate.run` структурно вырезан из реестра ребёнка + depth-гейт бюджета, два чекпоинта).
+    pub max_depth: usize,
+    /// Макс. детей за ОДИН вызов `delegate.run` (hermes `_DEFAULT_MAX_CONCURRENT_CHILDREN=3`). Батч сверх
+    /// — recoverable-ошибка инструмента (не спавним).
+    pub max_fanout: usize,
+    /// Макс. СУММАРНО спавнов за прогон (общий счётчик дерева, анти-runaway).
+    pub max_total_spawns: usize,
+}
+
+impl Default for DelegationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_depth: 1,
+            max_fanout: 3,
+            max_total_spawns: 8,
+        }
+    }
 }
 
 /// Конфиг веб-инструментов агента (EGR-AGENT-2). `url` — база SearXNG (consent-эндпоинт мета-поиска).
@@ -535,5 +571,30 @@ mod tests {
         .unwrap();
         assert_eq!(mixed.ai.chat.unwrap().url, "http://h:8080");
         assert!(mixed.ai.skills.learning_enabled);
+    }
+
+    /// SUB-0: `ai.delegation` дефолт-OFF + консервативные капы; частичный конфиг падает в дефолты полей.
+    #[test]
+    fn delegation_config_defaults_off() {
+        // Пусто → дефолт OFF + капы hermes-tuned.
+        let zc = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert!(
+            !zc.ai.delegation.enabled,
+            "нет ai.delegation → enabled false"
+        );
+        assert_eq!(zc.ai.delegation.max_depth, 1);
+        assert_eq!(zc.ai.delegation.max_fanout, 3);
+        assert_eq!(zc.ai.delegation.max_total_spawns, 8);
+
+        // Явный opt-in + частичная секция: enabled читается, незаданные капы — дефолты (не 0).
+        let on =
+            LocalConfig::parse(r#"{"ai":{"delegation":{"enabled":true,"max_fanout":5}}}"#).unwrap();
+        assert!(on.ai.delegation.enabled);
+        assert_eq!(on.ai.delegation.max_fanout, 5, "явный кап прочитан");
+        assert_eq!(
+            on.ai.delegation.max_depth, 1,
+            "незаданный кап → дефолт, не 0"
+        );
+        assert_eq!(on.ai.delegation.max_total_spawns, 8);
     }
 }

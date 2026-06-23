@@ -43,6 +43,9 @@ pub struct AgentRun {
     pub step: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// SUBAGENTS (SUB-0): id РОДИТЕЛЬСКОГО прогона (дерево делегирования). `None` = top-level прогон
+    /// (все прежние `create_run`). Заполняется только [`create_child_run`].
+    pub parent_run_id: Option<i64>,
 }
 
 /// Создаёт прогон в статусе `queued` (шаг 0, без исхода). Возвращает его `id` (= run_id для
@@ -65,6 +68,36 @@ pub async fn create_run(
                 "INSERT INTO agent_runs(task,status,model,autonomy,step,created_at,updated_at) \
                  VALUES(?1,?2,?3,?4,0,?5,?5)",
                 params![task, STATUS_QUEUED, model, autonomy, ts],
+            )?;
+            Ok(tx.last_insert_rowid())
+        })
+        .await
+}
+
+/// Создаёт ПРОГОН-РЕБЁНОК (субагент, SUB-0) в статусе `queued` со ссылкой на `parent_run_id` (дерево
+/// делегирования). Идентично [`create_run`], но проставляет `parent_run_id` (родитель ВИДЕН в строке для
+/// реконструкции дерева, per-child корреляции egress/ledger, узлов плана). Возвращает `id` ребёнка
+/// (= его run_id для egress-корреляции). Top-level прогоны по-прежнему создаёт [`create_run`] (parent
+/// NULL) — обратная совместимость не нарушена.
+pub async fn create_child_run(
+    writer: &WriteActor,
+    task: &str,
+    model: Option<&str>,
+    autonomy: Option<&str>,
+    parent_run_id: i64,
+) -> DbResult<i64> {
+    let (task, model, autonomy) = (
+        task.to_string(),
+        model.map(str::to_string),
+        autonomy.map(str::to_string),
+    );
+    writer
+        .transaction(move |tx| {
+            let ts = now_secs();
+            tx.execute(
+                "INSERT INTO agent_runs(task,status,model,autonomy,parent_run_id,step,created_at,updated_at) \
+                 VALUES(?1,?2,?3,?4,?5,0,?6,?6)",
+                params![task, STATUS_QUEUED, model, autonomy, parent_run_id, ts],
             )?;
             Ok(tx.last_insert_rowid())
         })
@@ -183,7 +216,7 @@ pub async fn get_run(reader: &ReadPool, id: i64) -> DbResult<Option<AgentRun>> {
     reader
         .query(move |c| {
             c.query_row(
-                "SELECT id,session_id,task,status,model,autonomy,outcome,step,created_at,updated_at \
+                "SELECT id,session_id,task,status,model,autonomy,outcome,step,created_at,updated_at,parent_run_id \
                  FROM agent_runs WHERE id=?1",
                 [id],
                 row_to_run,
@@ -232,6 +265,7 @@ fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRun> {
         step: r.get(7)?,
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
+        parent_run_id: r.get(10)?,
     })
 }
 
@@ -286,6 +320,40 @@ mod tests {
         assert_eq!(done.status, STATUS_DONE);
         assert_eq!(done.outcome.as_deref(), Some("готово"));
         assert_eq!(done.step, 3, "шаг сохранён после финала");
+    }
+
+    /// SUB-0 / миграция 024: `create_child_run` персистит `parent_run_id` и `get_run` его читает;
+    /// `create_run` (top-level) оставляет `None` (обратная совместимость).
+    #[tokio::test]
+    async fn migration_024_parent_run_id_roundtrip() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        // Top-level: parent_run_id = None.
+        let parent = create_run(w, "родитель", Some("qwen"), Some("auto"))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_run(db.reader(), parent)
+                .await
+                .unwrap()
+                .unwrap()
+                .parent_run_id,
+            None,
+            "top-level прогон — parent_run_id NULL (back-compat)"
+        );
+        // Ребёнок: parent_run_id = Some(parent).
+        let child = create_child_run(w, "ребёнок", Some("qwen"), Some("auto"), parent)
+            .await
+            .unwrap();
+        let cr = get_run(db.reader(), child).await.unwrap().unwrap();
+        assert_eq!(
+            cr.parent_run_id,
+            Some(parent),
+            "ребёнок ссылается на родителя"
+        );
+        assert_eq!(cr.task, "ребёнок");
+        assert_eq!(cr.status, STATUS_QUEUED);
+        assert_ne!(child, parent, "у ребёнка свой run_id");
     }
 
     /// Терминал — поглощающий: finish уже-терминальной строки — no-op (исход первого финала
