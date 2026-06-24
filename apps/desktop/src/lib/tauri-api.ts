@@ -724,6 +724,8 @@ export interface AiConfigDto {
   agentSkillsDir: string | null;
   /** W-24 `ai.delegation.enabled`: owner-gated делегирование субагентам (default-OFF). */
   delegationEnabled: boolean;
+  /** W-25 `ai.research.enabled`: owner-gated deep-research (default-OFF). Требует delegation+web+actuator. */
+  researchEnabled: boolean;
   /** Поддержана ли песочница/host-exec на ЭТОЙ платформе (Linux-only) — фронт дизейблит sandbox/shell. */
   shellSupported: boolean;
 }
@@ -743,6 +745,8 @@ export interface AgentFlagsDto {
   agentSkillsDir: string | null;
   /** W-24 `ai.delegation.enabled` (owner-gated, default-OFF). */
   delegationEnabled: boolean;
+  /** W-25 `ai.research.enabled` (owner-gated, default-OFF). */
+  researchEnabled: boolean;
 }
 
 /** W-10 строка навыка для SL-панели (зеркалит Rust `commands::agent::SkillRowDto`). */

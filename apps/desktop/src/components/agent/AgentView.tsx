@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { useToastStore } from '../../stores/toast';
 import type { AgentPerms, AgentStep, AgentTurn, ChangesetFile } from '../../stores/agent';
 import { lineDiff, type DiffLine } from '../../lib/diff';
@@ -333,7 +334,11 @@ export function AgentView() {
               ) : aside === 'graph' ? (
                 <GraphDock />
               ) : (
-                <ReportPane report={report} onToNote={() => toast(t('agent.report.savedToast'), { kind: 'success' })} />
+                <ReportPane
+                  report={report}
+                  research={lastTurn?.researchReport ?? null}
+                  onToNote={() => toast(t('agent.report.savedToast'), { kind: 'success' })}
+                />
               )}
             </div>
           </aside>
@@ -950,19 +955,55 @@ function ResearchGraph() {
 
 // ── Правый dock: Отчёт (реальные данные из `final`) ──────────────────────────────────────────────
 
-function ReportPane({ report, onToNote }: { report: string | null; onToNote: () => void }) {
+/**
+ * Карточка отчёта deep-research (W-25): заголовок + путь + счётчики (источники/раунды) из последнего
+ * хода (`turn.researchReport`, живые данные RES-5). «Открыть» → openFile(path) в редакторе.
+ */
+function ResearchReportCard({ doc }: { doc: NonNullable<AgentTurn['researchReport']> }) {
   const { t } = useTranslation();
-  if (!report) return <div className={styles.reportEmpty}>{t('agent.report.empty')}</div>;
+  const openFile = useWorkspaceStore((s) => s.openFile);
   return (
-    <div className={styles.report}>
-      <div className={styles.repDoc}>
-        <p className={styles.repP}>{report}</p>
-      </div>
+    <div className={styles.repDoc}>
+      <p className={styles.repP}>{doc.title}</p>
+      <span className={styles.rcMeta}>
+        {t('agent.research.sources', { count: doc.sourcesCount })} ·{' '}
+        {t('agent.research.rounds', { count: doc.rounds })}
+      </span>
       <div className={styles.repActs}>
-        <button type="button" className={styles.artBtn} onClick={onToNote}>
-          <FilePlus2 size={14} aria-hidden /> {t('agent.report.toNote')}
+        <button type="button" className={styles.artBtn} onClick={() => void openFile(doc.path)}>
+          <FileText size={14} aria-hidden /> {t('agent.research.open')}
         </button>
       </div>
+    </div>
+  );
+}
+
+function ReportPane({
+  report,
+  research,
+  onToNote,
+}: {
+  report: string | null;
+  research: AgentTurn['researchReport'];
+  onToNote: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!report && !research) return <div className={styles.reportEmpty}>{t('agent.report.empty')}</div>;
+  return (
+    <div className={styles.report}>
+      {research && <ResearchReportCard doc={research} />}
+      {report && (
+        <div className={styles.repDoc}>
+          <p className={styles.repP}>{report}</p>
+        </div>
+      )}
+      {report && (
+        <div className={styles.repActs}>
+          <button type="button" className={styles.artBtn} onClick={onToNote}>
+            <FilePlus2 size={14} aria-hidden /> {t('agent.report.toNote')}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

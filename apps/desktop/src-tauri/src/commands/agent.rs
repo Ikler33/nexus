@@ -322,6 +322,14 @@ pub async fn agent_run(
             })
         });
 
+    // W-25: owner-gated deep-research (ai.research, default-OFF). Передаём конфиг ТОЛЬКО при enabled;
+    // research.run регистрируется в session.rs лишь при research+delegation+web+actuator+top-level
+    // (любой co-requisite OFF → инструмента нет, без регрессии). Зеркало agentd.
+    let research: Option<nexus_core::ai::ResearchConfig> = cfg
+        .as_ref()
+        .map(|c| c.ai.research.clone())
+        .filter(|r| r.enabled);
+
     // Создаём строку прогона (queued) — источник run_id для UI/корреляции/ledger.
     let run_id = run_store::create_run(
         &writer,
@@ -387,6 +395,7 @@ pub async fn agent_run(
             agent_skills,
             skills_learning_enabled,
             delegation,
+            research,
             decision_source,
             agent_memory,
             canon_root,
@@ -518,6 +527,9 @@ async fn drive_run(
     skills_learning_enabled: bool,
     // W-24: owner-gated делегирование (ai.delegation, default-OFF). Some → регистрируется delegate.run.
     delegation: Option<DelegationDeps>,
+    // W-25: owner-gated deep-research (ai.research, default-OFF). Some → регистрируется research.run
+    // (лишь при наличии delegation+web+actuator — см. session.rs).
+    research: Option<nexus_core::ai::ResearchConfig>,
     decision_source: Arc<dyn DecisionSource>,
     memory: Arc<dyn AgentMemory>,
     canon_root: PathBuf,
@@ -575,7 +587,7 @@ async fn drive_run(
         forwarder,
         None,                // top-level desktop-прогон (не субагент)
         delegation.as_ref(), // W-24: owner-gated делегирование (ai.delegation, default-OFF)
-        None,                // research (RES-4) — следующий срез
+        research.as_ref(),   // W-25: owner-gated deep-research (ai.research, default-OFF)
     )
     .await
 }
@@ -909,6 +921,7 @@ mod tests {
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
             None,  // delegation (W-24)
+            None,  // research (W-25)
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -964,6 +977,7 @@ mod tests {
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
             None,  // delegation (W-24)
+            None,  // research (W-25)
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -1046,6 +1060,7 @@ mod tests {
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
             None,  // delegation (W-24)
+            None,  // research (W-25)
             decision,
             empty_memory(&db),
             canon.clone(),
@@ -1099,6 +1114,7 @@ mod tests {
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
             None,  // delegation (W-24)
+            None,  // research (W-25)
             decision,
             empty_memory(&db),
             canon.clone(),

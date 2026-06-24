@@ -21,6 +21,7 @@ let config: AiConfigDto = {
   skillsLearningEnabled: false,
   agentSkillsDir: null,
   delegationEnabled: false,
+  researchEnabled: false,
   shellSupported: false,
 };
 

@@ -60,6 +60,9 @@ pub struct AiConfigDto {
     /// W-24 `ai.delegation.enabled`: owner-gated мастер-свитч делегирования субагентам (default-OFF).
     /// OFF → delegate.run структурно отсутствует (без регрессии).
     pub delegation_enabled: bool,
+    /// W-25 `ai.research.enabled`: owner-gated мастер-свитч deep-research (default-OFF). research.run
+    /// регистрируется лишь при research+delegation+web+actuator (см. session.rs) — иначе инертен.
+    pub research_enabled: bool,
     /// Может ли песочница/host-exec В ПРИНЦИПЕ работать на ЭТОЙ платформе (Linux-only). Фронт гейтит
     /// (disabled) тогглы sandbox/shell этим флагом — на macOS/Windows они структурно инертны.
     pub shell_supported: bool,
@@ -82,6 +85,8 @@ pub struct AgentFlagsDto {
     pub agent_skills_dir: Option<String>,
     /// W-24 `ai.delegation.enabled` (owner-gated, default-OFF).
     pub delegation_enabled: bool,
+    /// W-25 `ai.research.enabled` (owner-gated, default-OFF).
+    pub research_enabled: bool,
 }
 
 /// Может ли host-exec/песочница работать на платформе сборки десктопа (Linux-only — rootless-Podman).
@@ -237,6 +242,19 @@ fn apply_agent_flags(doc: &mut serde_json::Value, flags: &AgentFlagsDto) -> Resu
             serde_json::Value::Bool(flags.delegation_enabled),
         );
 
+    // W-25 `ai.research.enabled` (owner-gated): пишем в объект `ai.research` (создаём при нужде).
+    // Капы (max_rounds/urls/…) НЕ трогаем — берутся из ResearchConfig::default при отсутствии.
+    if !ai.get("research").map(|v| v.is_object()).unwrap_or(false) {
+        ai.insert("research".into(), serde_json::json!({}));
+    }
+    ai.get_mut("research")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai.research не объект")?
+        .insert(
+            "enabled".into(),
+            serde_json::Value::Bool(flags.research_enabled),
+        );
+
     // W-10 `ai.agent_skills_dir`: непустой путь → пишем; пусто/None → убираем ключ (без шум-значений).
     match flags.agent_skills_dir.as_deref().map(str::trim) {
         Some(dir) if !dir.is_empty() => {
@@ -368,6 +386,7 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
         skills_learning_enabled: cfg.ai.skills.learning_enabled,
         agent_skills_dir: cfg.ai.agent_skills_dir.clone(),
         delegation_enabled: cfg.ai.delegation.enabled,
+        research_enabled: cfg.ai.research.enabled,
         shell_supported: shell_supported(),
     })
 }
@@ -571,6 +590,7 @@ pub async fn set_agent_flags(
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         delegation_enabled: flags.delegation_enabled,
+        research_enabled: flags.research_enabled,
     })
 }
 
@@ -662,6 +682,7 @@ mod tests {
             skills_learning_enabled: false,
             agent_skills_dir: None,
             delegation_enabled: false,
+            research_enabled: false,
         }
     }
 
@@ -704,6 +725,19 @@ mod tests {
         assert!(cfg.ai.delegation.enabled);
     }
 
+    /// W-25: `apply_agent_flags` пишет `ai.research.enabled` (создаёт `ai.research`), default-OFF не
+    /// трогает капы. Round-trip через `LocalConfig`.
+    #[test]
+    fn apply_agent_flags_writes_research_enabled() {
+        let mut doc = serde_json::json!({ "ai": { "chat": { "url": "http://h:8080" } } });
+        let mut f = flags(Some("confirm"), false, false, false);
+        f.research_enabled = true;
+        apply_agent_flags(&mut doc, &f).unwrap();
+        assert_eq!(doc.pointer("/ai/research/enabled").unwrap(), true);
+        let cfg = nexus_core::ai::LocalConfig::parse(&doc.to_string()).unwrap();
+        assert!(cfg.ai.research.enabled);
+    }
+
     /// AGENT-0.6: `apply_agent_flags` пишет `ai.agent_actuator_enabled` (мастер-свитч записи агента),
     /// СОХРАНЯЯ прочие ключи. Round-trip через `LocalConfig` (нет коррапта).
     #[test]
@@ -718,6 +752,7 @@ mod tests {
             skills_learning_enabled: false,
             agent_skills_dir: None,
             delegation_enabled: false,
+            research_enabled: false,
         };
         apply_agent_flags(&mut doc, &f).unwrap();
         assert_eq!(doc["ai"]["agent_actuator_enabled"], serde_json::json!(true));

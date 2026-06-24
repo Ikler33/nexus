@@ -950,6 +950,7 @@ function HeadlessAgentBlock() {
           skillsLearningEnabled: c.skillsLearningEnabled,
           agentSkillsDir: c.agentSkillsDir,
           delegationEnabled: c.delegationEnabled,
+          researchEnabled: c.researchEnabled,
         });
         setShellSupported(c.shellSupported);
       })
@@ -966,6 +967,10 @@ function HeadlessAgentBlock() {
     const base = flagsRef.current as AgentFlagsDto;
     const next: AgentFlagsDto = { ...base, ...patch };
     next.shellEnable = next.shellEnable && next.sandboxEnabled;
+    // W-25: deep-research структурно инертен без делегирования + актуатора (и веб-инструментов агента,
+    // которые включаются web-consent'ом, не этим DTO) — авто-гасим, чтобы тоггл не «висел» включённым,
+    // но молча не работал (зеркало shell↔sandbox-когерентности).
+    next.researchEnabled = next.researchEnabled && next.delegationEnabled && next.agentActuatorEnabled;
     setSaved(false);
     setErr(null);
     setFlags(next); // оптимистично: тоггл откликается сразу
@@ -1068,6 +1073,19 @@ function HeadlessAgentBlock() {
       />
       {flags.delegationEnabled && (
         <p className={styles.warnText}>{t('settings.agent.delegationWarn')}</p>
+      )}
+
+      {/* W-25: deep-research (owner-gated, default-OFF). Структурно требует delegation+actuator (+web-
+          инструменты агента, включаемые web-consent'ом) — гейтим тоггл, как shell на sandbox. */}
+      <EgressRow
+        label={t('settings.agent.research')}
+        desc={t('settings.agent.researchDesc')}
+        value={flags.researchEnabled}
+        onChange={(v) => persist({ researchEnabled: v })}
+        disabled={!(flags.delegationEnabled && flags.agentActuatorEnabled)}
+      />
+      {flags.researchEnabled && (
+        <p className={styles.warnText}>{t('settings.agent.researchWarn')}</p>
       )}
 
       {/* W-10: самообучение навыкам (owner-gated, default-OFF) + каталог + список авто-навыков. */}

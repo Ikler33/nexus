@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · W-25 — глубокий ресёрч в десктоп-UI (owner-gated) 🔴 BETA
+
+Deep-research стал доступен и видим в десктопе — движок (RES-1..5b) был готов, но в десктоп-пути выключен (`research: None`).
+
+- **Бэкенд** (`commands/agent.rs`): `agent_run` передаёт `Option<ResearchConfig>` под флагом `ai.research.enabled` в `run_agent_session` (через `drive_run`). `research.run` регистрируется лишь при research+delegation+web+actuator+top-level (session.rs — структурно fail-closed); любой co-requisite OFF → инструмента нет, без регрессии.
+- **Настройки** (`settings.rs` + `SettingsView.tsx`): тоггл «Глубокий ресёрч» (owner-gated, default-OFF). **Честный UX**: тоггл `disabled`, пока не включены делегирование + актуатор; persist-coherence-guard авто-гасит ресёрч при выключении co-reqs; web-co-requisite (не в этом DTO) раскрыт в всегда-видимом предупреждении. DTO `researchEnabled` (Rust↔TS↔мок паритет), пишет только `enabled` (капы не трогает).
+- **UI** (`AgentView.tsx`): `ResearchReportCard` в доке «Отчёт» — заголовок + источники/раунды + «Открыть отчёт» (`openFile(path)`), живые данные из `turn.researchReport` (W-23). End-to-end: `Report`-событие → карточка.
+- Adversarial-ревью (gating/honesty + contract/FE, 2 линзы): **0 critical / 0 major** — structurally fail-closed (4-Some truth table), default-OFF = true no-op, без утечки контента, DTO-паритет полный. Гейт: cargo (1034+193) / clippy(ws) / fmt / typecheck / lint / vitest **975**.
+
 ### Агент · W-24 — субагенты/делегирование в десктоп-UI (owner-gated) 🔴 BETA
 
 Делегирование субагентам стало **доступно и видимо** в десктоп-приложении — раньше бэкенд был готов, но в десктоп-пути жёстко выключен (`delegation: None`).

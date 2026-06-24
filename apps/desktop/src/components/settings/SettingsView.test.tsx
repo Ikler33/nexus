@@ -221,6 +221,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       skillsLearningEnabled: false,
       agentSkillsDir: null,
       delegationEnabled: false,
+      researchEnabled: false,
     });
   });
 

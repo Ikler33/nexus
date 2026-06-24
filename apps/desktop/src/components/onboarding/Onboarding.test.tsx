@@ -38,6 +38,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       skillsLearningEnabled: false,
       agentSkillsDir: null,
       delegationEnabled: false,
+      researchEnabled: false,
       shellSupported: false,
     });
     await gotoAiStep();
@@ -60,6 +61,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       skillsLearningEnabled: false,
       agentSkillsDir: null,
       delegationEnabled: false,
+      researchEnabled: false,
       shellSupported: false,
     });
     const setCfg = vi
@@ -96,6 +98,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       skillsLearningEnabled: false,
       agentSkillsDir: null,
       delegationEnabled: false,
+      researchEnabled: false,
       shellSupported: false,
     });
     const setCfg = vi
@@ -125,6 +128,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       skillsLearningEnabled: false,
       agentSkillsDir: null,
       delegationEnabled: false,
+      researchEnabled: false,
       shellSupported: false,
     });
     const setCfg = vi

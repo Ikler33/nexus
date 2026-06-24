@@ -261,7 +261,10 @@
       "publicFetchWarn": "The server agent may fetch any public URL. Private/loopback addresses stay blocked (SSRF guard); every request is audited.",
       "delegation": "Subagent delegation",
       "delegationDesc": "The agent may spawn child subagents for parallel subtasks (flat, no nesting; conservative caps).",
-      "delegationWarn": "Enabled: the agent spawns subagents. Their actions still pass the same confirmation gate and blast-radius cap; writes inherit the parent's actuator posture."
+      "delegationWarn": "Enabled: the agent spawns subagents. Their actions still pass the same confirmation gate and blast-radius cap; writes inherit the parent's actuator posture.",
+      "research": "Deep research",
+      "researchDesc": "The agent may run multi-round web research and write a cited report. Requires delegation, the agent's web tools, and the actuator (to write the report) — all enabled.",
+      "researchWarn": "Enabled: the agent can run deep web research and write a report note. It also needs delegation + web tools + the actuator on, otherwise the tool stays inert. The report write passes the same confirmation gate and blast-radius cap."
     }
   },
   "sidebar": {
@@ -656,6 +659,11 @@
       "toNote": "To note",
       "open": "Open",
       "savedToast": "Saved to a note"
+    },
+    "research": {
+      "open": "Open report",
+      "sources": "{{count}} sources",
+      "rounds": "{{count}} rounds"
     }
   },
   "chat": {
