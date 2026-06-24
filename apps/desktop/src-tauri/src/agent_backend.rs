@@ -84,6 +84,47 @@ impl AgentBackend for EmbeddedBackend {
     }
 }
 
+/// CONN-2/CONN-4: ЕДИНЫЙ выбор агент-бэкенда по `ai.connection.mode` (default embedded — нулевая
+/// регрессия). Local → клиент коннектора к локальному agentd (AF_UNIX, lazy — соединение на первом
+/// прогоне, отсутствие демона НЕ ломает выбор); Remote (CONN-3) пока → embedded с предупреждением.
+/// Зовётся из `open_vault` (при открытии) И `set_agent_connection` (немедленный своп при смене в UI).
+pub fn select_agent_backend(
+    cfg: Option<&nexus_core::ai::LocalConfig>,
+    #[cfg_attr(not(unix), allow(unused_variables))] root: &std::path::Path,
+) -> std::sync::Arc<dyn AgentBackend> {
+    use std::sync::Arc;
+    let mode = cfg
+        .map(|c| c.ai.connection.mode())
+        .unwrap_or(nexus_core::ai::ConnectionMode::Embedded);
+    match mode {
+        nexus_core::ai::ConnectionMode::Local => {
+            #[cfg(unix)]
+            {
+                let socket = cfg
+                    .and_then(|c| c.ai.connection.socket.clone())
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| root.join(".nexus").join("agentd.sock"));
+                tracing::info!(socket = %socket.display(), "CONN-2: агент-бэкенд = connected (local agentd)");
+                Arc::new(ConnectedBackend::new(socket)) as Arc<dyn AgentBackend>
+            }
+            #[cfg(not(unix))]
+            {
+                tracing::warn!(
+                    "ai.connection.mode=local требует Unix (AF_UNIX) → fallback embedded"
+                );
+                Arc::new(EmbeddedBackend) as Arc<dyn AgentBackend>
+            }
+        }
+        nexus_core::ai::ConnectionMode::Remote => {
+            tracing::warn!(
+                "ai.connection.mode=remote ещё не реализован (CONN-3) → fallback embedded"
+            );
+            Arc::new(EmbeddedBackend)
+        }
+        nexus_core::ai::ConnectionMode::Embedded => Arc::new(EmbeddedBackend),
+    }
+}
+
 // ── CONN-2: ConnectedBackend — клиент коннектора к локальному agentd (AF_UNIX) ─────────────────────
 //
 // При `ai.connection.mode="local"` десктоп НЕ гонит цикл in-process, а драйвит ВНЕШНИЙ `nexus-agentd`

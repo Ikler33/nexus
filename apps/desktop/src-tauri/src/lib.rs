@@ -276,6 +276,8 @@ pub fn run() {
             commands::settings::get_ai_config,
             commands::settings::set_ai_config,
             commands::settings::set_agent_flags,
+            commands::settings::set_agent_connection,
+            commands::settings::test_agent_connection,
             commands::settings::test_ai_connection,
             commands::plugin::list_plugins,
             commands::plugin::set_plugin_enabled,

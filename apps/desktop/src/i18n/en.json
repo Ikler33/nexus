@@ -271,7 +271,19 @@
     "conn": {
       "title": "Connection",
       "intro": "The current vault's LLM endpoints and their reachability.",
-      "check": "Re-check"
+      "check": "Re-check",
+      "mode": "Agent mode",
+      "modeDesc": "Where the agent runs: embedded (in-app) or an external daemon.",
+      "modeOpts": {
+        "embedded": "Embedded",
+        "local": "Local (agentd)",
+        "remote": "Remote — soon"
+      },
+      "socket": "Socket path",
+      "socketHint": "Default: <vault>/.nexus/agentd.sock",
+      "test": "Check",
+      "testOk": "Reachable · v{{version}}",
+      "localWarn": "Local mode: the agent runs one-shot — no conversation history and no per-run autonomy (the daemon uses its own config). The agentd daemon must open the SAME vault, otherwise edits go to the wrong place. Restarting agentd drops the current run — start the task again."
     }
   },
   "sidebar": {

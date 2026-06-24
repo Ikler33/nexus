@@ -519,49 +519,11 @@ pub async fn open_vault(
                 .await;
     }
 
-    // CONN-2: выбор агент-бэкенда по `ai.connection.mode` (default embedded — нулевая регрессия). Local →
-    // клиент коннектора к локальному agentd (AF_UNIX); Remote (CONN-3) пока → embedded с предупреждением.
-    // Делаем ДО перемещения `root` в VaultContext (нужен для пути сокета). Lazy: соединение откроется
-    // на первом прогоне — отсутствие демона НЕ ломает открытие vault.
-    {
-        let mode = local_cfg
-            .as_ref()
-            .map(|c| c.ai.connection.mode())
-            .unwrap_or(nexus_core::ai::ConnectionMode::Embedded);
-        let backend: Arc<dyn crate::agent_backend::AgentBackend> = match mode {
-            nexus_core::ai::ConnectionMode::Local => {
-                #[cfg(unix)]
-                {
-                    let socket = local_cfg
-                        .as_ref()
-                        .and_then(|c| c.ai.connection.socket.clone())
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| root.join(".nexus").join("agentd.sock"));
-                    tracing::info!(socket = %socket.display(), "CONN-2: агент-бэкенд = connected (local agentd)");
-                    Arc::new(crate::agent_backend::ConnectedBackend::new(socket))
-                        as Arc<dyn crate::agent_backend::AgentBackend>
-                }
-                #[cfg(not(unix))]
-                {
-                    tracing::warn!(
-                        "ai.connection.mode=local требует Unix (AF_UNIX) → fallback embedded"
-                    );
-                    Arc::new(crate::agent_backend::EmbeddedBackend)
-                        as Arc<dyn crate::agent_backend::AgentBackend>
-                }
-            }
-            nexus_core::ai::ConnectionMode::Remote => {
-                tracing::warn!(
-                    "ai.connection.mode=remote ещё не реализован (CONN-3) → fallback embedded"
-                );
-                Arc::new(crate::agent_backend::EmbeddedBackend)
-            }
-            nexus_core::ai::ConnectionMode::Embedded => {
-                Arc::new(crate::agent_backend::EmbeddedBackend)
-            }
-        };
-        *state.agent_backend.write().await = backend;
-    }
+    // CONN-2/CONN-4: выбор агент-бэкенда по `ai.connection.mode` (default embedded — нулевая регрессия).
+    // Единый хелпер (тот же зовёт `set_agent_connection` при смене в UI). Делаем ДО перемещения `root`
+    // в VaultContext (нужен для пути сокета). Lazy: соединение откроется на первом прогоне.
+    *state.agent_backend.write().await =
+        crate::agent_backend::select_agent_backend(local_cfg.as_ref(), &root);
 
     // Фасад §4.3 (AC-EGR-13): ВСЕ провайдеры + политика — одним полем; policy — тот же Arc, что
     // в AppState (один экземпляр на приложение, через него hot-swap пересоберёт guarded-клиент).

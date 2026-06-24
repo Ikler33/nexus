@@ -25,6 +25,7 @@ import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import type {
+  AgentConnectionDto,
   AgentFlagsDto,
   AiConfigDto,
   AiEndpoint,
@@ -956,6 +957,7 @@ function AiSection() {
 
       <EgressBlock />
       <WebSearchBlock />
+      <ConnectionModeBlock />
       <HeadlessAgentBlock />
     </>
   );
@@ -1043,6 +1045,142 @@ function WebSearchBlock() {
  * включения дают consent-предупреждение (зеркало WebSearchBlock). sandbox/shell — Linux-only: на не-Linux
  * структурно инертны → тогглы disabled. shell зависит от sandbox (exec всегда Confirm, никогда Auto).
  */
+/**
+ * CONN-4: селектор режима подключения агента (Embedded｜Local｜Remote-soon) + путь сокета + проба связи.
+ * Зеркало W-27 `ConnectionBlock` (badge-пилюли, latest-wins) + `HeadlessAgentBlock` (optimistic persist/seq).
+ * Смена режима свопает бэкенд НЕМЕДЛЕННО (`set_agent_connection`). Local раскрывает поле сокета +
+ * предупреждение о лимитах (one-shot/no-history/vault-coherence — R1/R2; не прячем).
+ */
+function ConnectionModeBlock() {
+  const { t } = useTranslation();
+  const [conn, setConn] = useState<AgentConnectionDto | null>(null);
+  const connRef = useRef<AgentConnectionDto | null>(null);
+  connRef.current = conn;
+  const seqRef = useRef(0);
+  const [socketDraft, setSocketDraft] = useState('');
+  const [testState, setTestState] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle');
+  const [testMsg, setTestMsg] = useState('');
+  const testReq = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    void tauriApi.settings
+      .getAiConfig()
+      .then((c) => {
+        if (!alive) return;
+        setConn(c.connection);
+        setSocketDraft(c.connection.socket ?? '');
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!conn) return null;
+
+  // Оптимистичный персист + немедленный своп бэкенда на бэке. `socket=null` → бэк не трогает путь.
+  const persist = (mode: AgentConnectionDto['mode'], socket: string | null) => {
+    const next: AgentConnectionDto = {
+      mode,
+      socket: socket === null ? (connRef.current?.socket ?? null) : socket.trim() || null,
+    };
+    setConn(next);
+    connRef.current = next;
+    setTestState('idle');
+    const seq = ++seqRef.current;
+    void tauriApi.settings
+      .setAgentConnection(mode, socket)
+      .then((applied) => {
+        if (seq !== seqRef.current) return;
+        setConn(applied);
+        connRef.current = applied;
+        setSocketDraft(applied.socket ?? '');
+      })
+      .catch(() => {});
+  };
+
+  const runTest = () => {
+    setTestState('running');
+    const my = ++testReq.current;
+    void tauriApi.settings
+      .testAgentConnection()
+      .then((version) => {
+        if (my !== testReq.current) return;
+        setTestState('ok');
+        setTestMsg(t('settings.conn.testOk', { version }));
+      })
+      .catch((e: unknown) => {
+        if (my !== testReq.current) return;
+        setTestState('fail');
+        setTestMsg(String(e));
+      });
+  };
+
+  return (
+    <>
+      <SectionHeader title={t('settings.conn.mode')} sub={t('settings.conn.modeDesc')} nested />
+      <section className={styles.group}>
+        <div className={styles.seg}>
+          {(['embedded', 'local'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`${styles.segBtn} ${conn.mode === m ? styles.on : ''}`}
+              onClick={() => conn.mode !== m && persist(m, m === 'local' ? socketDraft : null)}
+            >
+              {t(`settings.conn.modeOpts.${m}`)}
+            </button>
+          ))}
+          {/* CONN-3: remote-режим ещё не реализован — показываем disabled. */}
+          <button type="button" className={styles.segBtn} disabled aria-disabled="true">
+            {t('settings.conn.modeOpts.remote')}
+          </button>
+        </div>
+      </section>
+
+      {conn.mode === 'local' && (
+        <>
+          <label className={styles.skillsField}>
+            <span className={styles.label}>{t('settings.conn.socket')}</span>
+            <input
+              type="text"
+              className={styles.skillsInput}
+              placeholder=".nexus/agentd.sock"
+              value={socketDraft}
+              onChange={(e) => setSocketDraft(e.target.value)}
+              onBlur={() => persist('local', socketDraft)}
+            />
+            <span className={styles.rowDesc}>{t('settings.conn.socketHint')}</span>
+          </label>
+          <div className={styles.saveBar}>
+            <button
+              type="button"
+              className={styles.ghostBtn}
+              onClick={runTest}
+              disabled={testState === 'running'}
+            >
+              {testState === 'running' && <Loader2 size={14} className={styles.spin} aria-hidden />}
+              {t('settings.conn.test')}
+            </button>
+            {testState !== 'idle' && (
+              <span
+                className={`${styles.badge} ${
+                  testState === 'ok' ? styles.badgeOk : testState === 'fail' ? styles.badgeFail : ''
+                }`}
+                title={testMsg}
+              >
+                {testState === 'ok' ? `✓ ${testMsg}` : testState === 'fail' ? `✗ ${testMsg}` : '…'}
+              </span>
+            )}
+          </div>
+          <p className={styles.warnText}>{t('settings.conn.localWarn')}</p>
+        </>
+      )}
+    </>
+  );
+}
+
 function HeadlessAgentBlock() {
   const { t } = useTranslation();
   const [flags, setFlags] = useState<AgentFlagsDto | null>(null);

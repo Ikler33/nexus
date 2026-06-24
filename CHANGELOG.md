@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Агент · CONN-4 — UI-селектор подключения агента (Embedded/Local) 🔴 BETA
+
+Режим подключения агента теперь выбирается в Настройках — без правки `local.json`. Делает CONN-2 пригодным к использованию.
+
+- **Селектор** (`SettingsView.tsx` → `ConnectionModeBlock`): сегмент **Встроенный｜Локальный** (Удалённый — `disabled`/«скоро», CONN-3). Для local — поле пути к сокету + кнопка **«Проверить»** (статус-пилюля ✓ v{version}/✗, latest-wins). **Честное предупреждение** раскрывает лимиты local: one-shot/без истории, автономия из конфига демона (R1), agentd должен открывать ТОТ ЖЕ vault (R2), рестарт демона обрывает прогон (R3) — ничего не скрыто.
+- **Бэкенд** (`settings.rs`): `AgentConnectionDto{mode,socket}` на `AiConfigDto`; `set_agent_connection` (атомарная запись `ai.connection.{mode,socket}` + **немедленный своп** бэкенда через выделенный `select_agent_backend`); `test_agent_connection` (`#[cfg(unix)]` initialize-проба, зеркало `nexus status`; non-unix стаб). `open_vault` рефакторён на тот же хелпер (байт-идентично). Мусорный mode→embedded; `url`/`auth_ref` не трогаются (CONN-3).
+- Adversarial-ревью (regression + honesty, 2 линзы): **0 critical / 0 major** (рефактор байт-идентичен, все DTO-сайты обновлены, embedded не тронут; localWarn правдив, проба не фейкает «подключено») + 1 MINOR (warning не упоминал R3) **исправлен**. Гейт: cargo core 1042 / desktop 196 / clippy(ws) / fmt / typecheck / lint / vitest **980** / i18n-паритет.
+
 ### Агент · CONN-2 — клиент коннектора: `mode=local` драйвит внешний agentd 🔴 BETA
 
 Второй срез ACP-эпика: десктоп может драйвить ВНЕШНИЙ локальный `nexus-agentd` по AF_UNIX (вместо in-process). Default остаётся embedded — **0 регрессии**.

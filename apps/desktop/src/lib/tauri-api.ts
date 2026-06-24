@@ -700,11 +700,20 @@ export interface AiEndpoint {
   model: string | null;
 }
 /** Текущая AI-конфигурация для формы настроек (зеркалит Rust `settings::AiConfigDto`). */
+/** CONN-4: подключение агента (`ai.connection`) для UI-селектора. `mode` нормализован; `socket` — путь
+ *  AF_UNIX для local (`null` → дефолт `<vault>/.nexus/agentd.sock`). `url`/`auth_ref` (CONN-3) не сюда. */
+export interface AgentConnectionDto {
+  mode: 'embedded' | 'local' | 'remote';
+  socket: string | null;
+}
+
 export interface AiConfigDto {
   chat: AiEndpoint | null;
   embedding: AiEndpoint | null;
   /** Утилитарная мелкая модель (`ai.fast`) — inline/судья/новости. */
   fast: AiEndpoint | null;
+  /** CONN-4 `ai.connection`: режим подключения агента (embedded|local|remote) + сокет для local. */
+  connection: AgentConnectionDto;
   // Agent-флаги в `.nexus/local.json`. ПОСЛЕ AGENT-0.2/0.6 десктоп-`agent_run` ЧИТАЕТ часть рантаймом
   // (`agentActuatorEnabled`/`ai.web`/`ai.agent_skills_dir`) — тогглы управляют И десктоп-агентом Castor,
   // И headless `nexus-agentd`. Автономию прогона десктоп берёт per-run из UI. См. AgentFlagsDto.
@@ -1841,6 +1850,23 @@ export const tauriApi = {
       isTauri()
         ? invoke<AgentFlagsDto>('set_agent_flags', { flags })
         : mockSettings.setAgentFlags(flags),
+
+    /** CONN-4: персистит режим подключения агента (`ai.connection`) + немедленно свопает бэкенд.
+     *  `mode` нормализуется (мусор → embedded); `socket=null` → не трогает путь. Возвращает записанное. */
+    setAgentConnection: (
+      mode: 'embedded' | 'local' | 'remote',
+      socket: string | null,
+    ): Promise<AgentConnectionDto> =>
+      isTauri()
+        ? invoke<AgentConnectionDto>('set_agent_connection', { mode, socket })
+        : mockSettings.setAgentConnection(mode, socket),
+
+    /** CONN-4: проверка связи с локальным agentd (AF_UNIX handshake `initialize`). Резолвится версией
+     *  протокола; throw = недоступен / не Unix. */
+    testAgentConnection: (): Promise<string> =>
+      isTauri()
+        ? invoke<string>('test_agent_connection')
+        : mockSettings.testAgentConnection(),
   },
 };
 

@@ -201,6 +201,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
+      connection: { mode: 'embedded', socket: null },
       shellSupported: false,
     });
     const testSpy = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -228,6 +229,69 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     useUIStore.setState({ settingsSection: 'ai' });
     render(<SettingsView />);
     expect(await screen.findByText(/^(возможности|capabilities)$/i)).toBeInTheDocument();
+  });
+
+  // CONN-4: селектор режима подключения. Переключение на «Локальный» → setAgentConnection +
+  // раскрывает поле сокета + честное предупреждение о лимитах (one-shot/vault-coherence).
+  const cfgWith = (connection: { mode: 'embedded' | 'local' | 'remote'; socket: string | null }) => ({
+    chat: { url: 'http://h:8080', model: 'qwen' },
+    embedding: null,
+    fast: null,
+    agentAutonomy: null,
+    agentActuatorEnabled: false,
+    sandboxEnabled: false,
+    shellEnable: false,
+    webAllowPublicFetch: false,
+    skillsLearningEnabled: false,
+    agentSkillsDir: null,
+    delegationEnabled: false,
+    researchEnabled: false,
+    connection,
+    shellSupported: false,
+  });
+
+  it('AI-секция: переключение на «Локальный» (CONN-4) → setAgentConnection + поле сокета + предупреждение', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const getCfg = vi
+      .spyOn(tauriApi.settings, 'getAiConfig')
+      .mockResolvedValue(cfgWith({ mode: 'embedded', socket: null }));
+    const setConn = vi
+      .spyOn(tauriApi.settings, 'setAgentConnection')
+      .mockResolvedValue({ mode: 'local', socket: null });
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    const localBtn = await screen.findByRole('button', {
+      name: /(локальный|local) \(agentd\)/i,
+    });
+    fireEvent.click(localBtn);
+    await vi.waitFor(() => expect(setConn).toHaveBeenCalledWith('local', expect.anything()));
+    // Поле сокета + предупреждение R1/R2 появились.
+    expect(await screen.findByPlaceholderText(/agentd\.sock/)).toBeInTheDocument();
+    expect(screen.getByText(/один ход|one-shot|тот же vault|same vault/i)).toBeInTheDocument();
+
+    getCfg.mockRestore();
+    setConn.mockRestore();
+  });
+
+  it('AI-секция: в local-режиме «Проверить» (CONN-4) зовёт testAgentConnection + пилюля ✗', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const getCfg = vi
+      .spyOn(tauriApi.settings, 'getAiConfig')
+      .mockResolvedValue(cfgWith({ mode: 'local', socket: '/tmp/x.sock' }));
+    const testSpy = vi
+      .spyOn(tauriApi.settings, 'testAgentConnection')
+      .mockRejectedValue(new Error('agentd не запущен'));
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    const checkBtn = await screen.findByRole('button', { name: /^(проверить|check)$/i });
+    fireEvent.click(checkBtn);
+    await vi.waitFor(() => expect(testSpy).toHaveBeenCalled());
+    expect(await screen.findByText(/✗/)).toBeInTheDocument();
+
+    getCfg.mockRestore();
+    testSpy.mockRestore();
   });
 
   // Регрессия стейл-замыкания: два тоггла РАЗНЫХ контролов в одном батче (до ре-рендера) не должны

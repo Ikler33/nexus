@@ -1,4 +1,10 @@
-import type { AgentFlagsDto, AiConfigDto, AiEndpoint, SetAiResult } from '../tauri-api';
+import type {
+  AgentConnectionDto,
+  AgentFlagsDto,
+  AiConfigDto,
+  AiEndpoint,
+  SetAiResult,
+} from '../tauri-api';
 
 /**
  * Мок раздела настроек «AI / Модели» для браузерного превью / vitest (вне Tauri).
@@ -22,6 +28,7 @@ let config: AiConfigDto = {
   agentSkillsDir: null,
   delegationEnabled: false,
   researchEnabled: false,
+  connection: { mode: 'embedded', socket: null },
   shellSupported: false,
 };
 
@@ -61,4 +68,26 @@ export async function setAgentFlags(flags: AgentFlagsDto): Promise<AgentFlagsDto
 export async function testConnection(url: string): Promise<void> {
   if (!/^https?:\/\/.+/.test(url.trim())) throw new Error('некорректный URL (ожидается http(s)://…)');
   // В превью любой синтаксически верный URL считаем достижимым.
+}
+
+/** CONN-4: зеркало Rust `set_agent_connection` — нормализует mode (мусор → embedded), хранит сокет
+ *  (только при Some; null → не трогаем). Возвращает записанное. */
+export async function setAgentConnection(
+  mode: AgentConnectionDto['mode'],
+  socket: string | null,
+): Promise<AgentConnectionDto> {
+  const m: AgentConnectionDto['mode'] =
+    mode === 'local' ? 'local' : mode === 'remote' ? 'remote' : 'embedded';
+  const next: AgentConnectionDto = {
+    mode: m,
+    socket: socket === null ? config.connection.socket : socket.trim() || null,
+  };
+  config = { ...config, connection: next };
+  return next;
+}
+
+/** CONN-4: в браузер-превью/vitest сокета agentd нет — честно «недоступен» (mock-must-match-backend:
+ *  реальная команда тоже вернёт ошибку без запущенного демона). */
+export async function testAgentConnection(): Promise<string> {
+  throw new Error('agentd не запущен (превью)');
 }

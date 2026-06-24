@@ -26,6 +26,25 @@ pub struct EndpointDto {
     pub model: Option<String>,
 }
 
+/// CONN-4: подключение агента (`ai.connection`) для UI-селектора. `mode` нормализован
+/// (`embedded`|`local`|`remote`); `socket` — путь AF_UNIX для local (None → дефолт `<vault>/.nexus/
+/// agentd.sock`). `url`/`auth_ref` (CONN-3 remote) НЕ сюда.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConnectionDto {
+    pub mode: String,
+    pub socket: Option<String>,
+}
+
+impl Default for AgentConnectionDto {
+    fn default() -> Self {
+        Self {
+            mode: "embedded".into(),
+            socket: None,
+        }
+    }
+}
+
 /// Текущая AI-конфигурация для префилла формы.
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +53,8 @@ pub struct AiConfigDto {
     pub embedding: Option<EndpointDto>,
     /// Утилитарная мелкая модель (`ai.fast`, напр. Qwen3-4B) — inline/судья/сводка reasoning/новости.
     pub fast: Option<EndpointDto>,
+    /// CONN-4 `ai.connection`: режим подключения агента (embedded|local|remote) + сокет для local.
+    pub connection: AgentConnectionDto,
 
     // --- Agent-флаги в `.nexus/local.json`. ПОСЛЕ AGENT-0.2/0.6 десктопный `agent_run` ЧИТАЕТ часть из
     // них рантаймом (`agent_actuator_enabled` / `ai.web` / `ai.agent_skills_dir`) — тогглы управляют И
@@ -270,6 +291,52 @@ fn apply_agent_flags(doc: &mut serde_json::Value, flags: &AgentFlagsDto) -> Resu
     Ok(())
 }
 
+/// CONN-4: пишет `ai.connection.{mode,socket}` в local.json (создаёт объект при нужде, как `ai.delegation`).
+/// `mode` нормализуется: только `embedded|local|remote`, иначе → `embedded` (SAFE-default, как
+/// `agent_autonomy`). `socket`: `Some(непустой)` → пишем, `Some("")` → убираем ключ, `None` → НЕ трогаем
+/// (смена режима не должна сюрприз-удалять путь). `url`/`auth_ref` (CONN-3 remote) НЕ трогаем. Сохраняет
+/// прочие ключи `ai.*`. Чистая — тестируется без `State`.
+fn apply_connection(
+    doc: &mut serde_json::Value,
+    mode: &str,
+    socket: Option<&str>,
+) -> Result<(), String> {
+    if !doc.get("ai").map(|v| v.is_object()).unwrap_or(false) {
+        doc["ai"] = serde_json::json!({});
+    }
+    let ai = doc
+        .get_mut("ai")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai не объект")?;
+    if !ai.get("connection").map(|v| v.is_object()).unwrap_or(false) {
+        ai.insert("connection".into(), serde_json::json!({}));
+    }
+    let conn = ai
+        .get_mut("connection")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai.connection не объект")?;
+    // SAFE-default: мусорный режим → embedded (как `agent_autonomy`).
+    let norm = match mode {
+        "local" => "local",
+        "remote" => "remote",
+        _ => "embedded",
+    };
+    conn.insert("mode".into(), serde_json::Value::String(norm.into()));
+    match socket {
+        Some(s) if !s.trim().is_empty() => {
+            conn.insert(
+                "socket".into(),
+                serde_json::Value::String(s.trim().to_string()),
+            );
+        }
+        Some(_) => {
+            conn.remove("socket"); // явная очистка пустым
+        }
+        None => {} // не трогаем существующий socket
+    }
+    Ok(())
+}
+
 /// W-3: зеркалит web-consent (`enabled` + `url`) в `ai.web` local.json. Веб-инструменты АГЕНТА
 /// (`agent_run` читает `ai.web.enabled`+`url`) включаются ТЕМ ЖЕ тогглом, что Home/chat-веб
 /// (`websearch.json`) — иначе тоггл писал только websearch.json, а у агента `ai.web` оставался пуст
@@ -387,6 +454,15 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
         agent_skills_dir: cfg.ai.agent_skills_dir.clone(),
         delegation_enabled: cfg.ai.delegation.enabled,
         research_enabled: cfg.ai.research.enabled,
+        connection: AgentConnectionDto {
+            mode: match cfg.ai.connection.mode() {
+                nexus_core::ai::ConnectionMode::Embedded => "embedded",
+                nexus_core::ai::ConnectionMode::Local => "local",
+                nexus_core::ai::ConnectionMode::Remote => "remote",
+            }
+            .into(),
+            socket: cfg.ai.connection.socket.clone(),
+        },
         shell_supported: shell_supported(),
     })
 }
@@ -594,6 +670,126 @@ pub async fn set_agent_flags(
     })
 }
 
+/// CONN-4: персистит режим подключения агента (`ai.connection.{mode,socket}`) в local.json (сохраняя
+/// прочие ключи) и НЕМЕДЛЕННО свопает активный бэкенд (тот же выбор, что `open_vault` — без переоткрытия
+/// vault). Возвращает НОРМАЛИЗОВАННЫЙ набор (мусорный mode → embedded). `socket=None` → не трогаем путь.
+#[tauri::command]
+pub async fn set_agent_connection(
+    state: State<'_, AppState>,
+    mode: String,
+    socket: Option<String>,
+) -> AppResult<AgentConnectionDto> {
+    let root = state.vault().await?.root.clone();
+    let dir = root.join(".nexus");
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join("local.json");
+    let raw = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    let mut doc: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&raw).map_err(|e| AppError::Msg(format!("local.json не JSON: {e}")))?
+    };
+    apply_connection(&mut doc, &mode, socket.as_deref())?;
+    let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
+    let path2 = path.clone();
+    let bytes = pretty.clone().into_bytes();
+    tokio::task::spawn_blocking(move || crate::vault::atomic_write_io(&path2, &bytes))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))??;
+    // Немедленный своп бэкенда (CONN-4): тот же хелпер, что в open_vault. ConnectedBackend::new ленив —
+    // отсутствие демона НЕ ломает смену режима (соединение откроется на первом прогоне).
+    let parsed = LocalConfig::parse(&pretty).ok();
+    *state.agent_backend.write().await =
+        crate::agent_backend::select_agent_backend(parsed.as_ref(), &root);
+    // Эхо нормализованного (что реально записано/распарсено) — фронт берёт за источник истины.
+    let (mode_echo, socket_echo) = parsed
+        .as_ref()
+        .map(|c| {
+            let m = match c.ai.connection.mode() {
+                nexus_core::ai::ConnectionMode::Embedded => "embedded",
+                nexus_core::ai::ConnectionMode::Local => "local",
+                nexus_core::ai::ConnectionMode::Remote => "remote",
+            };
+            (m.to_string(), c.ai.connection.socket.clone())
+        })
+        .unwrap_or_else(|| ("embedded".to_string(), None));
+    Ok(AgentConnectionDto {
+        mode: mode_echo,
+        socket: socket_echo,
+    })
+}
+
+/// CONN-4: классификация сокета ДО connect (внятная диагностика). Чистая — тестируется без демона.
+#[cfg(unix)]
+fn classify_socket(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::FileTypeExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if !m.file_type().is_socket() => Err(format!(
+            "путь {} существует, но это НЕ сокет (проверь ai.connection.socket)",
+            path.display()
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "agentd не запущен? сокет {} не найден",
+            path.display()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// CONN-4: проверка связи с локальным agentd по AF_UNIX — handshake `initialize`. Возвращает версию
+/// протокола или внятную ошибку (зеркало `nexus status`). Лёгкая проба: без read-loop/forward-таска.
+#[cfg(unix)]
+#[tauri::command]
+pub async fn test_agent_connection(state: State<'_, AppState>) -> AppResult<String> {
+    use nexus_core::agent::connect::{connect_unix, RpcMessage, Transport};
+    let root = state.vault().await?.root.clone();
+    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
+        .await
+        .unwrap_or_default();
+    let socket = LocalConfig::parse(&raw)
+        .ok()
+        .and_then(|c| c.ai.connection.socket.clone())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join(".nexus").join("agentd.sock"));
+    classify_socket(&socket).map_err(AppError::Msg)?;
+    let transport = connect_unix(&socket)
+        .await
+        .map_err(|e| AppError::Msg(format!("agent недоступен на {}: {e}", socket.display())))?;
+    transport
+        .send(RpcMessage::request(
+            1,
+            "initialize",
+            serde_json::json!({ "supportedVersions": ["1.0"] }),
+        ))
+        .await
+        .map_err(|_| AppError::Msg("не удалось отправить initialize (сокет закрылся)".into()))?;
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), transport.recv())
+        .await
+        .map_err(|_| AppError::Msg("таймаут ответа initialize".into()))?
+        .ok_or_else(|| AppError::Msg("сокет закрыт без ответа".into()))?;
+    match resp {
+        RpcMessage::Response { result: Ok(v), .. } => Ok(v
+            .get("version")
+            .and_then(|x| x.as_str())
+            .unwrap_or("?")
+            .to_string()),
+        RpcMessage::Response { result: Err(e), .. } => Err(AppError::Msg(format!(
+            "agentd ответил ошибкой: {}",
+            e.message
+        ))),
+        other => Err(AppError::Msg(format!("неожиданный ответ: {other:?}"))),
+    }
+}
+
+/// CONN-4: на не-Unix локальный коннектор (AF_UNIX) недоступен — структурно.
+#[cfg(not(unix))]
+#[tauri::command]
+pub async fn test_agent_connection(_state: State<'_, AppState>) -> AppResult<String> {
+    Err(AppError::Msg(
+        "локальный коннектор (AF_UNIX) доступен только на Unix".into(),
+    ))
+}
+
 /// Проверка связи с LLM-эндпоинтом: пробный GET `/v1/models` (OpenAI-совместимо). Любой ответ сервера →
 /// достижим; сетевая ошибка → нет. Через [`GuardedClient`] с `Feature::Probe` (AC-EGR-6): url с фронта
 /// проверяется политикой ДО сети — «первый egress-вектор» (произвольный GET из доверенного ядра) закрыт.
@@ -736,6 +932,48 @@ mod tests {
         assert_eq!(doc.pointer("/ai/research/enabled").unwrap(), true);
         let cfg = nexus_core::ai::LocalConfig::parse(&doc.to_string()).unwrap();
         assert!(cfg.ai.research.enabled);
+    }
+
+    /// CONN-4: `apply_connection` пишет `ai.connection.{mode,socket}`, СОХРАНЯЯ прочие ключи; round-trip
+    /// через `LocalConfig`. Мусорный mode → embedded; пустой socket → ключ убран; `url`/`auth_ref` целы.
+    #[test]
+    fn apply_connection_round_trips_mode_and_socket() {
+        // local + socket, при существующих ai.chat и ai.connection.url (CONN-3) — не трогаем url.
+        let mut doc = serde_json::json!({
+            "ai": { "chat": { "url": "http://h:8080" }, "connection": { "url": "wss://x", "auth_ref": "k" } }
+        });
+        apply_connection(&mut doc, "local", Some("/tmp/a.sock")).unwrap();
+        assert_eq!(doc.pointer("/ai/connection/mode").unwrap(), "local");
+        assert_eq!(doc.pointer("/ai/connection/socket").unwrap(), "/tmp/a.sock");
+        assert_eq!(doc.pointer("/ai/connection/url").unwrap(), "wss://x"); // CONN-3 не тронут
+        assert_eq!(doc.pointer("/ai/connection/auth_ref").unwrap(), "k");
+        assert_eq!(doc.pointer("/ai/chat/url").unwrap(), "http://h:8080"); // прочее цело
+        let cfg = nexus_core::ai::LocalConfig::parse(&doc.to_string()).unwrap();
+        assert_eq!(
+            cfg.ai.connection.mode(),
+            nexus_core::ai::ConnectionMode::Local
+        );
+        assert_eq!(cfg.ai.connection.socket.as_deref(), Some("/tmp/a.sock"));
+
+        // мусорный mode → embedded (SAFE); пустой socket → ключ удалён.
+        apply_connection(&mut doc, "garbage", Some("  ")).unwrap();
+        assert_eq!(doc.pointer("/ai/connection/mode").unwrap(), "embedded");
+        assert!(doc.pointer("/ai/connection/socket").is_none());
+
+        // socket=None → существующий путь не трогаем (смена режима не должна сюрприз-удалять).
+        apply_connection(&mut doc, "local", Some("/tmp/b.sock")).unwrap();
+        apply_connection(&mut doc, "embedded", None).unwrap();
+        assert_eq!(doc.pointer("/ai/connection/mode").unwrap(), "embedded");
+        assert_eq!(doc.pointer("/ai/connection/socket").unwrap(), "/tmp/b.sock");
+    }
+
+    /// CONN-4: `classify_socket` без демона → внятная «не запущен» ошибка (не паника, не connect).
+    #[cfg(unix)]
+    #[test]
+    fn classify_socket_not_found_is_clear_error() {
+        let missing = std::path::Path::new("/tmp/nexus-conn4-nope-12345.sock");
+        let e = classify_socket(missing).unwrap_err();
+        assert!(e.contains("не запущен"), "got: {e}");
     }
 
     /// AGENT-0.6: `apply_agent_flags` пишет `ai.agent_actuator_enabled` (мастер-свитч записи агента),
