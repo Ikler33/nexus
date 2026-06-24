@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · CONN-2 — клиент коннектора: `mode=local` драйвит внешний agentd 🔴 BETA
+
+Второй срез ACP-эпика: десктоп может драйвить ВНЕШНИЙ локальный `nexus-agentd` по AF_UNIX (вместо in-process). Default остаётся embedded — **0 регрессии**.
+
+- **`ConnectClient`** (`crates/nexus-core/src/agent/connect/client.rs`, новый): клиент AGENT-CONNECT поверх `Transport` — единый read-loop (Response→ожидание по id, `agent/event`→sink), `request` (таймаут 30с, не виснет), `notify`, `initialize`-handshake + version-negotiate. +4 теста через `ChannelTransport`/`FakeProvider` (handshake, end-to-end прогон, approve-over-wire пишет файл, closed-transport→Err).
+- **`ConnectedBackend`** (`agent_backend.rs`, `#[cfg(unix)]`): реализует `AgentBackend` поверх `ConnectClient` — ленивый connect, `run_id↔session_id`-карта, форвард `agent/event`→`AgentStreamEvent`→Tauri-канал (БЕЗ ремапа — тот же DTO), синтетическая Error при дисконнекте. Каждый метод→RPC (run/approve/pause/resume/cancel/undo).
+- **Выбор бэкенда**: `open_vault` читает `ai.connection.mode()` → `local`→`ConnectedBackend` (сокет = `ai.connection.socket` или `<vault>/.nexus/agentd.sock`); иначе/не-unix→`EmbeddedBackend`. `AppState.agent_backend` стал `RwLock`-свопаемым (аксессор async). Embedded байт-идентичен.
+- **Честные ограничения (в комментариях)**: R1 — протокол v1.0 не несёт history/autonomy → `mode=local` = one-shot, без мультитёрн-истории, автономия из конфига демона; R2 — два писателя в один vault-DB (agentd `--vault` должен совпадать); R3 — нет reconnect; R4 — один активный прогон на соединение (теперь **enforced** гардом).
+- Adversarial-ревью (regression + client/honesty, 2 линзы): **0 critical / 0 major** (embedded байт-идентичен, протокол точен в обе стороны, R1-R4 честно задокументированы) + 2 MINOR/1 NIT **исправлены** (ложная Error после Final; гард перекрытия прогонов; симметрия снятия pending). Гейт: core 1042 / desktop 194 / clippy(ws) / fmt / traceability.
+
 ### Агент · CONN-1 — фундамент расцепления: `AgentBackend` + `agent.connection` 🔴 BETA
 
 Первый срез ACP-эпика (самостоятельные app+агент + подключение Hermes). Чистый рефактор, **0 видимых изменений**.

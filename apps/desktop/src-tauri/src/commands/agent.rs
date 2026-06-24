@@ -169,6 +169,7 @@ pub async fn agent_run(
 ) -> AppResult<i64> {
     state
         .agent_backend()
+        .await
         .run(&state, task, autonomy, history, channel)
         .await
 }
@@ -444,6 +445,7 @@ pub async fn agent_approve(
 ) -> AppResult<()> {
     state
         .agent_backend()
+        .await
         .approve(&state, run_id, decisions)
         .await
 }
@@ -480,7 +482,7 @@ pub(crate) async fn approve_impl(
 /// текущего цикла — пауза проверяется fail-safe на каждом шаге).
 #[tauri::command]
 pub async fn agent_pause(state: State<'_, AppState>, run_id: i64) -> AppResult<()> {
-    state.agent_backend().pause(&state, run_id).await
+    state.agent_backend().await.pause(&state, run_id).await
 }
 
 /// EMBEDDED-реализация `agent_pause` (CONN-1).
@@ -498,7 +500,7 @@ pub(crate) async fn pause_impl(state: &AppState, run_id: i64) -> AppResult<()> {
 /// продолжит со следующего хода.
 #[tauri::command]
 pub async fn agent_resume(state: State<'_, AppState>, run_id: i64) -> AppResult<()> {
-    state.agent_backend().resume(&state, run_id).await
+    state.agent_backend().await.resume(&state, run_id).await
 }
 
 /// EMBEDDED-реализация `agent_resume` (CONN-1).
@@ -516,7 +518,7 @@ pub(crate) async fn resume_impl(state: &AppState, run_id: i64) -> AppResult<()> 
 /// хода (партиал не теряется — он в outcome).
 #[tauri::command]
 pub async fn agent_cancel(state: State<'_, AppState>, run_id: i64) -> AppResult<()> {
-    state.agent_backend().cancel(&state, run_id).await
+    state.agent_backend().await.cancel(&state, run_id).await
 }
 
 /// EMBEDDED-реализация `agent_cancel` (CONN-1).
@@ -535,7 +537,7 @@ pub(crate) async fn cancel_impl(state: &AppState, run_id: i64) -> AppResult<()> 
 /// откаченных действий. Требует открытого vault (канонизированный корень — предусловие apply-рубежа).
 #[tauri::command]
 pub async fn agent_undo(state: State<'_, AppState>, run_id: i64) -> AppResult<usize> {
-    state.agent_backend().undo(&state, run_id).await
+    state.agent_backend().await.undo(&state, run_id).await
 }
 
 /// EMBEDDED-реализация `agent_undo` (CONN-1): прежнее тело (только `State`→`&AppState`).

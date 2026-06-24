@@ -16,8 +16,10 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::event::AgentEvent;
 
+pub mod client;
 pub mod handler;
 pub mod wire;
+pub use client::{ConnectClient, ConnectError};
 pub use handler::{ConnectAgentHandler, ConnectDeps};
 pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamEvent};
 
