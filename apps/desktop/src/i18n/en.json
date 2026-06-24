@@ -258,7 +258,10 @@
       "shellWarn": "The server agent may execute commands inside the sandbox. Each run needs explicit approval (Confirm, never Auto); a kill-switch and audit log apply.",
       "publicFetch": "Public web fetch",
       "publicFetchDesc": "Allow the agent's web.fetch to reach ANY public URL, not just your SearXNG. Needs the agent's web tools enabled in local.json.",
-      "publicFetchWarn": "The server agent may fetch any public URL. Private/loopback addresses stay blocked (SSRF guard); every request is audited."
+      "publicFetchWarn": "The server agent may fetch any public URL. Private/loopback addresses stay blocked (SSRF guard); every request is audited.",
+      "delegation": "Subagent delegation",
+      "delegationDesc": "The agent may spawn child subagents for parallel subtasks (flat, no nesting; conservative caps).",
+      "delegationWarn": "Enabled: the agent spawns subagents. Their actions still pass the same confirmation gate and blast-radius cap; writes inherit the parent's actuator posture."
     }
   },
   "sidebar": {
@@ -630,6 +633,16 @@
     },
     "plan": {
       "empty": "No steps yet — the agent hasn't taken any actions in this run."
+    },
+    "subagents": {
+      "empty": "No subagents — delegation is off or none have been spawned.",
+      "status": {
+        "spawned": "spawned",
+        "running": "running",
+        "done": "done",
+        "failed": "failed",
+        "paused": "paused"
+      }
     },
     "graph": {
       "demoNote": "Demo execution graph (research tasks)",

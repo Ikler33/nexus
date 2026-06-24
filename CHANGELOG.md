@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · W-24 — субагенты/делегирование в десктоп-UI (owner-gated) 🔴 BETA
+
+Делегирование субагентам стало **доступно и видимо** в десктоп-приложении — раньше бэкенд был готов, но в десктоп-пути жёстко выключен (`delegation: None`).
+
+- **Бэкенд** (`commands/agent.rs`): `agent_run` собирает `Option<DelegationDeps>` под флагом `ai.delegation.enabled` (клон Arc-провайдера, top-level-прогон) и передаёт в `run_agent_session`; протянуто через `drive_run`. Default-OFF → `delegate.run` структурно отсутствует (нулевая регрессия). Дети не делегируют (рекурсия-стоп), наследуют actuator-постуру родителя (при OFF — read-only).
+- **Настройки** (`commands/settings.rs` + `SettingsView.tsx`): тоггл «Делегирование субагентам» (owner-gated, default-OFF, с предупреждением) — пишет только `ai.delegation.enabled`, капы (1/3/8) не трогает. DTO `delegationEnabled` (Rust↔TS↔мок паритет).
+- **UI** (`AgentView.tsx`): `SubagentTree` в доке «Граф» — живое дерево субагентов (цель + статус, плоский список max_depth=1) вместо статичного демо, когда субагенты есть. Рендерит только редакция-безопасные goal/summary (приватность — данные уже клипнуты на проводе).
+- Adversarial-ревью (security/gating + contract/FE, 2 линзы): **0 critical / 0 major** — default-OFF = структурное отсутствие, без эскалации/рекурсии, капы безопасны, write не клоббертит, DTO-паритет точный. Гейт: cargo (1034+192) / clippy(ws) / fmt / typecheck / lint / vitest **974**.
+
 ### Агент · W-23 — wire-контракт `AgentStreamEvent` (TS) + agent-store (фундамент UI) 🔴 BETA
 
 Фронт научился ПРИНИМАТЬ все события агента — раньше 6 из 14 молча терялись (TS-юнион отставал от Rust).

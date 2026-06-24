@@ -949,6 +949,7 @@ function HeadlessAgentBlock() {
           webAllowPublicFetch: c.webAllowPublicFetch,
           skillsLearningEnabled: c.skillsLearningEnabled,
           agentSkillsDir: c.agentSkillsDir,
+          delegationEnabled: c.delegationEnabled,
         });
         setShellSupported(c.shellSupported);
       })
@@ -1056,6 +1057,17 @@ function HeadlessAgentBlock() {
       />
       {flags.webAllowPublicFetch && (
         <p className={styles.warnText}>{t('settings.agent.publicFetchWarn')}</p>
+      )}
+
+      {/* W-24: делегирование субагентам (owner-gated, default-OFF). OFF → delegate.run отсутствует. */}
+      <EgressRow
+        label={t('settings.agent.delegation')}
+        desc={t('settings.agent.delegationDesc')}
+        value={flags.delegationEnabled}
+        onChange={(v) => persist({ delegationEnabled: v })}
+      />
+      {flags.delegationEnabled && (
+        <p className={styles.warnText}>{t('settings.agent.delegationWarn')}</p>
       )}
 
       {/* W-10: самообучение навыкам (owner-gated, default-OFF) + каталог + список авто-навыков. */}

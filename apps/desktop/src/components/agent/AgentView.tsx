@@ -331,7 +331,7 @@ export function AgentView() {
               {aside === 'plan' ? (
                 <PlanLive />
               ) : aside === 'graph' ? (
-                <ResearchGraph />
+                <GraphDock />
               ) : (
                 <ReportPane report={report} onToNote={() => toast(t('agent.report.savedToast'), { kind: 'success' })} />
               )}
@@ -819,6 +819,52 @@ function PlanLive() {
       </div>
     </div>
   );
+}
+
+// ── Правый dock: дерево субагентов (W-24, живые данные) ──────────────────────────────────────────
+
+/**
+ * Дерево делегирования (W-24): плоский список субагентов последнего хода (max_depth=1 → без вложенности).
+ * Живые данные из `turn.subagents` (события `subagentStatus`). Пусто → подсказка. Статус-классы — те же,
+ * что у `PlanLive` (piDone/piRun/piErr).
+ */
+function SubagentTree() {
+  const { t } = useTranslation();
+  const turns = useAgentStore((s) => s.turns);
+  const turn = turns.length ? turns[turns.length - 1] : null;
+  const subs = turn?.subagents ?? [];
+  if (subs.length === 0) {
+    return <div className={styles.planEmpty}>{t('agent.subagents.empty')}</div>;
+  }
+  const piCls = (status: string): string =>
+    status === 'done' ? styles.piDone : status === 'failed' ? styles.piErr : styles.piRun;
+  return (
+    <div className={styles.planList}>
+      {subs.map((s) => (
+        <div key={s.childRunId} className={`${styles.planItem} ${piCls(s.status)}`}>
+          <span className={styles.planIc}>
+            <Share2 size={12} aria-hidden />
+          </span>
+          <span className={styles.planLabel}>
+            {s.goal}
+            {s.summary ? ` — ${s.summary}` : ''}
+          </span>
+          <span className={styles.rcMeta}>{t(`agent.subagents.status.${s.status}`)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Содержимое дока «Граф»: живое дерево субагентов (W-24), если они есть в последнем ходе; иначе —
+ * статичный демо-граф (контракт graph-данных пока не несёт топологию research-раундов).
+ */
+function GraphDock() {
+  const turns = useAgentStore((s) => s.turns);
+  const turn = turns.length ? turns[turns.length - 1] : null;
+  const hasSubs = (turn?.subagents?.length ?? 0) > 0;
+  return hasSubs ? <SubagentTree /> : <ResearchGraph />;
 }
 
 // ── Правый dock: Граф выполнения (демо-структура) ────────────────────────────────────────────────

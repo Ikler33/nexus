@@ -20,6 +20,7 @@ let config: AiConfigDto = {
   webAllowPublicFetch: false,
   skillsLearningEnabled: false,
   agentSkillsDir: null,
+  delegationEnabled: false,
   shellSupported: false,
 };
 

@@ -220,6 +220,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       webAllowPublicFetch: false,
       skillsLearningEnabled: false,
       agentSkillsDir: null,
+      delegationEnabled: false,
     });
   });
 

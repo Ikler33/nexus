@@ -25,6 +25,7 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       webAllowPublicFetch: false,
       skillsLearningEnabled: false,
       agentSkillsDir: null,
+      delegationEnabled: false,
       shellSupported: false,
     });
     const probe = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -46,6 +47,7 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       webAllowPublicFetch: false,
       skillsLearningEnabled: false,
       agentSkillsDir: null,
+      delegationEnabled: false,
       shellSupported: false,
     });
     vi.spyOn(tauriApi.settings, 'testConnection').mockImplementation(async (url: string) => {
@@ -71,6 +73,7 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       webAllowPublicFetch: false,
       skillsLearningEnabled: false,
       agentSkillsDir: null,
+      delegationEnabled: false,
       shellSupported: false,
     });
     vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -92,6 +95,7 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       webAllowPublicFetch: false,
       skillsLearningEnabled: false,
       agentSkillsDir: null,
+      delegationEnabled: false,
       shellSupported: false,
     });
     vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();

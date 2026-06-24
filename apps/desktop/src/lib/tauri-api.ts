@@ -722,6 +722,8 @@ export interface AiConfigDto {
   skillsLearningEnabled: boolean;
   /** W-10 `ai.agent_skills_dir`: каталог SKILL.md (отн. vault или абсолютный). `null` — навыков нет. */
   agentSkillsDir: string | null;
+  /** W-24 `ai.delegation.enabled`: owner-gated делегирование субагентам (default-OFF). */
+  delegationEnabled: boolean;
   /** Поддержана ли песочница/host-exec на ЭТОЙ платформе (Linux-only) — фронт дизейблит sandbox/shell. */
   shellSupported: boolean;
 }
@@ -739,6 +741,8 @@ export interface AgentFlagsDto {
   skillsLearningEnabled: boolean;
   /** W-10 `ai.agent_skills_dir`: каталог навыков (пусто/`null` → ключ убирается). */
   agentSkillsDir: string | null;
+  /** W-24 `ai.delegation.enabled` (owner-gated, default-OFF). */
+  delegationEnabled: boolean;
 }
 
 /** W-10 строка навыка для SL-панели (зеркалит Rust `commands::agent::SkillRowDto`). */

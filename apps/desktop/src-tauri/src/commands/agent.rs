@@ -43,8 +43,8 @@ use nexus_core::actuator::{
     self, AuditSink, BatchDecision, DecisionSource, ItemDecision, ProposalBatch,
 };
 use nexus_core::agent::{
-    run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, LoopOutcome,
-    SessionSpec, VaultAgentMemory,
+    run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, DelegationDeps,
+    LoopOutcome, SessionSpec, VaultAgentMemory,
 };
 use nexus_core::ai::ChatMessage;
 
@@ -306,6 +306,22 @@ pub async fn agent_run(
         .map(|c| c.ai.skills.learning_enabled)
         .unwrap_or(false);
 
+    // W-24: owner-gated делегирование (ai.delegation, default-OFF). DelegationDeps ТОЛЬКО для TOP-LEVEL
+    // (desktop agent_run всегда top-level — subagent=None ниже); дети делегировать не могут (рекурсия-стоп).
+    // Some только при enabled И наличии провайдера (без него цикл и так деградирует error-терминалом).
+    // Клонируем Arc провайдера ДО его move в drive_run. Субагенты наследуют actuator-постуру родителя
+    // (при OFF — read-only/стабы), флаги независимы.
+    let delegation: Option<DelegationDeps> = cfg
+        .as_ref()
+        .map(|c| c.ai.delegation.clone())
+        .filter(|d| d.enabled)
+        .and_then(|config| {
+            provider.clone().map(|p| DelegationDeps {
+                provider: p,
+                config,
+            })
+        });
+
     // Создаём строку прогона (queued) — источник run_id для UI/корреляции/ledger.
     let run_id = run_store::create_run(
         &writer,
@@ -370,6 +386,7 @@ pub async fn agent_run(
             agent_web,
             agent_skills,
             skills_learning_enabled,
+            delegation,
             decision_source,
             agent_memory,
             canon_root,
@@ -499,6 +516,8 @@ async fn drive_run(
     web: Option<nexus_core::agent::WebToolsConfig>,
     skills: Option<nexus_core::agent::SkillContext>,
     skills_learning_enabled: bool,
+    // W-24: owner-gated делегирование (ai.delegation, default-OFF). Some → регистрируется delegate.run.
+    delegation: Option<DelegationDeps>,
     decision_source: Arc<dyn DecisionSource>,
     memory: Arc<dyn AgentMemory>,
     canon_root: PathBuf,
@@ -554,9 +573,9 @@ async fn drive_run(
         &paused,
         &cancel,
         forwarder,
-        None, // top-level desktop-прогон (не субагент)
-        None, // delegation выкл в desktop-пути — AGENT-0.3
-        None, // research (RES-4) — AGENT-0.3
+        None,                // top-level desktop-прогон (не субагент)
+        delegation.as_ref(), // W-24: owner-gated делегирование (ai.delegation, default-OFF)
+        None,                // research (RES-4) — следующий срез
     )
     .await
 }
@@ -889,6 +908,7 @@ mod tests {
             None,  // web (AGENT-0.2): тест без веб-инструментов
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
+            None,  // delegation (W-24)
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -943,6 +963,7 @@ mod tests {
             None,  // web (AGENT-0.2): тест без веб-инструментов
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
+            None,  // delegation (W-24)
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -1024,6 +1045,7 @@ mod tests {
             None,  // web (AGENT-0.2): тест без веб-инструментов
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
+            None,  // delegation (W-24)
             decision,
             empty_memory(&db),
             canon.clone(),
@@ -1076,6 +1098,7 @@ mod tests {
             None,  // web (AGENT-0.2): тест без веб-инструментов
             None,  // skills (AGENT-0.2): тест без навыков
             false, // skills_learning_enabled
+            None,  // delegation (W-24)
             decision,
             empty_memory(&db),
             canon.clone(),
