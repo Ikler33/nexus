@@ -15,7 +15,14 @@ function readOnboarded(): boolean {
 
 type AiTab = 'chat' | 'agent';
 /** Активная секция раздела настроек (Obsidian-style: левый нав → контент). Кросс-план #11. */
-export type SettingsSection = 'general' | 'editor' | 'appearance' | 'ai' | 'hotkeys' | 'about';
+export type SettingsSection =
+  | 'general'
+  | 'editor'
+  | 'appearance'
+  | 'ai'
+  | 'data'
+  | 'hotkeys'
+  | 'about';
 
 interface UIState {
   paletteOpen: boolean;

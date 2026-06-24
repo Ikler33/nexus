@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { SettingsView } from './SettingsView';
+import { tauriApi } from '../../lib/tauri-api';
 import { commands } from '../../lib/commands';
 import { registerCoreCommands } from '../../lib/commands-core';
 import { usePrefsStore } from '../../stores/prefs';
@@ -279,5 +280,41 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     render(<SettingsView />);
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(useUIStore.getState().tweaksOpen).toBe(false);
+  });
+
+  // W-9 (#59): секция «Данные» — экспорт зовёт backup.exportToFile; импорт показывает отчёт.
+  it('Данные: экспорт зовёт backup.exportToFile', async () => {
+    useUIStore.setState({ settingsSection: 'data' });
+    const exportSpy = vi
+      .spyOn(tauriApi.backup, 'exportToFile')
+      .mockResolvedValue('/tmp/orvin-backup.json');
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: /Экспорт в файл|Export to file/i }));
+    await screen.findByText(/Сохранено в|Saved to/i);
+    expect(exportSpy).toHaveBeenCalled();
+    exportSpy.mockRestore();
+  });
+
+  it('Данные: импорт показывает отчёт (добавлено/пропущено)', async () => {
+    useUIStore.setState({ settingsSection: 'data' });
+    vi.spyOn(tauriApi.backup, 'importFromFile').mockResolvedValue({
+      factsAdded: 3,
+      factsSkipped: 1,
+      sessionsAdded: 2,
+      sessionsReused: 0,
+      messagesAdded: 8,
+      messagesSkipped: 0,
+      episodesAdded: 1,
+      episodesSkipped: 0,
+      skillsAdded: 0,
+      skillsSkipped: 0,
+      messagesOrphaned: 0,
+      episodesOrphaned: 0,
+      schemaVersionMismatch: false,
+    });
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: /Импорт из файла|Import from file/i }));
+    expect(await screen.findByText(/Импорт завершён|Import complete/i)).toBeInTheDocument();
+    expect(screen.getByText(/\+3 добавлено|\+3 added/i)).toBeInTheDocument();
   });
 });

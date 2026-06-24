@@ -1,6 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import * as mockAgent from './mock/agent';
 import * as mockBoard from './mock/board';
 import * as mockProps from './mock/properties';
@@ -11,6 +11,7 @@ import * as mockGit from './mock/git';
 import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
 import * as mockSessions from './mock/sessions';
+import * as mockBackup from './mock/backup';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
 import * as mockTags from './mock/tags';
@@ -342,6 +343,23 @@ export interface ChatSessionInfo {
   title: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Отчёт импорта бэкапа (#59, зеркалит Rust `backup::ImportReport`). */
+export interface BackupImportReport {
+  factsAdded: number;
+  factsSkipped: number;
+  sessionsAdded: number;
+  sessionsReused: number;
+  messagesAdded: number;
+  messagesSkipped: number;
+  episodesAdded: number;
+  episodesSkipped: number;
+  skillsAdded: number;
+  skillsSkipped: number;
+  messagesOrphaned: number;
+  episodesOrphaned: number;
+  schemaVersionMismatch: boolean;
 }
 
 /** Совпадение поиска по переписке (#58, зеркалит Rust `chat_log::ChatSearchHit`). */
@@ -773,6 +791,33 @@ export const tauriApi = {
       isTauri()
         ? invoke<BuildInfo>('app_build_info')
         : Promise.resolve({ version: 'dev', branch: 'dev', hash: '', dirty: false }),
+  },
+
+  /** #59 (W-9) backup/restore: экспорт/импорт «второго мозга» (факты/переписка/эпизоды/навыки) в
+   *  файл. fs делается в доверенном бэкенде; путь выбирает пользователь OS-диалогом (dialog:default). */
+  backup: {
+    /** Экспорт в файл через save-диалог. Путь сохранённого файла, либо null если отменили. */
+    exportToFile: async (): Promise<string | null> => {
+      if (!isTauri()) return mockBackup.exportToFile();
+      const path = await saveDialog({
+        defaultPath: 'orvin-backup.json',
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!path) return null;
+      await invoke<void>('backup_export_to_path', { path });
+      return path;
+    },
+    /** Импорт из файла через open-диалог. Отчёт импорта, либо null если отменили. */
+    importFromFile: async (): Promise<BackupImportReport | null> => {
+      if (!isTauri()) return mockBackup.importFromFile();
+      const path = await openDialog({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!path || typeof path !== 'string') return null;
+      return invoke<BackupImportReport>('backup_import_from_path', { path });
+    },
   },
 
   external: {

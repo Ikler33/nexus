@@ -191,6 +191,8 @@ pub fn run() {
             commands::agent::agent_undo,
             commands::backup::backup_export_json,
             commands::backup::backup_import_json,
+            commands::backup::backup_export_to_path,
+            commands::backup::backup_import_from_path,
             commands::chat_sessions::chat_sessions_list,
             commands::chat_sessions::chat_search,
             commands::chat_sessions::chat_session_messages,

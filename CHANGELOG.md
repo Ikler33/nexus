@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Данные · W-9 — backup/restore в UI (#59) 🔴 BETA
+
+Команды экспорта/импорта «второго мозга» (#59) были в бэкенде, не в UI. Теперь — секция Настройки → Данные с кнопками Экспорт/Импорт.
+
+- **backend** (`commands/backup.rs`): `backup_export_to_path(path)` / `backup_import_from_path(path)` — fs остаётся в доверенном бэкенде (фронт прав на запись НЕ получает); путь выбирает пользователь OS-диалогом (`dialog:default`). Anti-DoS: size-check по `metadata().len()` ДО чтения.
+- **frontend** (`tauri-api` + мок): `backup.exportToFile` (save-диалог) / `importFromFile` (open-диалог) → `BackupImportReport`. Новая секция `DataSection` в SettingsView: Экспорт/Импорт + отчёт (added/skipped/reused, orphan/schema-warn), live-region для SR.
+- Решение (граничный случай): file-I/O по user-chosen пути — НЕ owner-gated security (это data-export, не binary/host-write); задокументировано.
+- Adversarial-ревью (3 измерения × verify, 7 находок / 1 подтверждено — a11y live-region для статуса экспорта, исправлено; security-измерение подтвердило, что fs-поверхность приемлема). Гейт: fmt / clippy -D warnings / `cargo test` / typecheck / eslint / vitest 964 (SettingsView +2).
+
 ### Сессии · W-8 — поиск по переписке в UI (#58) 🔴 BETA
 
 `chat_search` (#58, FTS5 со snippet-подсветкой) был в бэкенде, но не выведен в UI. Теперь — строка поиска в дропдауне истории сессий.

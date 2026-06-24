@@ -3,6 +3,8 @@ import {
   AlertCircle,
   Check,
   Cpu,
+  Database,
+  Download,
   Globe,
   Info,
   Keyboard,
@@ -11,6 +13,7 @@ import {
   Pencil,
   RotateCcw,
   Settings as SettingsIcon,
+  Upload,
   X,
 } from 'lucide-react';
 import { OrbitIcon } from '../chrome/BrandGlyphs';
@@ -21,7 +24,12 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
-import type { AgentFlagsDto, EgressState, WebSearchConfig } from '../../lib/tauri-api';
+import type {
+  AgentFlagsDto,
+  BackupImportReport,
+  EgressState,
+  WebSearchConfig,
+} from '../../lib/tauri-api';
 import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useEpisodeStore } from '../../stores/episode';
 import { usePrefsStore } from '../../stores/prefs';
@@ -77,6 +85,7 @@ const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
   { id: 'editor', icon: Pencil, key: 'settings.editor' },
   { id: 'appearance', icon: Palette, key: 'settings.appearance' },
   { id: 'ai', icon: Cpu, key: 'settings.ai' },
+  { id: 'data', icon: Database, key: 'settings.data' },
   { id: 'hotkeys', icon: Keyboard, key: 'settings.hotkeys' },
   { id: 'about', icon: Info, key: 'settings.about' },
 ];
@@ -135,6 +144,7 @@ export function SettingsView() {
           {section === 'editor' && <EditorSection />}
           {section === 'appearance' && <AppearanceSection />}
           {section === 'ai' && <AiSection />}
+          {section === 'data' && <DataSection />}
           {section === 'hotkeys' && <HotkeysSection />}
           {section === 'about' && <AboutSection />}
         </div>
@@ -404,6 +414,133 @@ function AppearanceSection() {
         </div>
       </section>
     </>
+  );
+}
+
+/**
+ * W-9 (#59): backup/restore «второго мозга» (факты/переписка/эпизоды/навыки). Экспорт → файл через
+ * save-диалог; импорт → файл через open-диалог с дедупом, показываем отчёт. fs — в бэкенде.
+ */
+function DataSection() {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState<'export' | 'import' | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [report, setReport] = useState<BackupImportReport | null>(null);
+
+  const doExport = async () => {
+    setBusy('export');
+    setMsg(null);
+    setErr(null);
+    setReport(null);
+    try {
+      const path = await tauriApi.backup.exportToFile();
+      if (path) setMsg(t('settings.dataSec.exportedTo', { path }));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doImport = async () => {
+    setBusy('import');
+    setMsg(null);
+    setErr(null);
+    setReport(null);
+    try {
+      const r = await tauriApi.backup.importFromFile();
+      if (r) setReport(r);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div>
+      <SectionHeader title={t('settings.dataSec.title')} sub={t('settings.dataSec.sub')} />
+      <section className={styles.group}>
+        <div className={styles.dataActions}>
+          <button
+            type="button"
+            className={styles.dataBtn}
+            onClick={() => void doExport()}
+            disabled={busy !== null}
+          >
+            <Download size={15} aria-hidden />
+            {busy === 'export' ? t('settings.dataSec.exporting') : t('settings.dataSec.export')}
+          </button>
+          <button
+            type="button"
+            className={styles.dataBtn}
+            onClick={() => void doImport()}
+            disabled={busy !== null}
+          >
+            <Upload size={15} aria-hidden />
+            {busy === 'import' ? t('settings.dataSec.importing') : t('settings.dataSec.import')}
+          </button>
+        </div>
+        {msg && (
+          <p className={styles.dataOk} role="status">
+            {msg}
+          </p>
+        )}
+        {err && (
+          <p className={styles.dataErr} role="alert">
+            {err}
+          </p>
+        )}
+        {report && (
+          <div className={styles.dataReport} role="status">
+            <div className={styles.dataReportHead}>{t('settings.dataSec.imported')}</div>
+            <ul className={styles.dataReportList}>
+              <li>
+                {t('settings.dataSec.rFacts', {
+                  added: report.factsAdded,
+                  skipped: report.factsSkipped,
+                })}
+              </li>
+              <li>
+                {t('settings.dataSec.rSessions', {
+                  added: report.sessionsAdded,
+                  reused: report.sessionsReused,
+                })}
+              </li>
+              <li>
+                {t('settings.dataSec.rMessages', {
+                  added: report.messagesAdded,
+                  skipped: report.messagesSkipped,
+                })}
+              </li>
+              <li>
+                {t('settings.dataSec.rEpisodes', {
+                  added: report.episodesAdded,
+                  skipped: report.episodesSkipped,
+                })}
+              </li>
+              <li>
+                {t('settings.dataSec.rSkills', {
+                  added: report.skillsAdded,
+                  skipped: report.skillsSkipped,
+                })}
+              </li>
+            </ul>
+            {(report.messagesOrphaned > 0 || report.episodesOrphaned > 0) && (
+              <p className={styles.dataWarn}>
+                {t('settings.dataSec.orphaned', {
+                  count: report.messagesOrphaned + report.episodesOrphaned,
+                })}
+              </p>
+            )}
+            {report.schemaVersionMismatch && (
+              <p className={styles.dataWarn}>{t('settings.dataSec.schemaOld')}</p>
+            )}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
