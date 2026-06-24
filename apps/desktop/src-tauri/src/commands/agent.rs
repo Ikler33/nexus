@@ -1085,6 +1085,89 @@ mod tests {
         );
     }
 
+    /// **W-12: ДЕТЕРМИНИРОВАННЫЙ E2E критпути агента в CI — задача→tool→proposal→approve→ЗАПИСЬ→UNDO.**
+    /// Раньше полный путь с откатом был только в `#[ignore]` live-тесте (нужен рижский LLM). Здесь тот же
+    /// desktop-путь (`drive_run` + реальный `UiDecisionSource` + гейт actuator'а + temp-vault БД), но на
+    /// `FakeProvider` — поэтому гоняется в CI на каждом PR/push. Сцепляет уже-проверенные по-отдельности
+    /// записи-через-гейт и `undo_run` (зеркало `agent_undo`) в ОДНУ непрерывную цепочку.
+    #[tokio::test]
+    async fn approve_then_undo_reverts_write_e2e() {
+        let (_dir, db, canon) = open_db().await;
+        let provider = note_create_then_final("Notes/E2E.md", "созданоаппрувом");
+        let (channel, buf) = collector_channel();
+        let (decision, tx): (Arc<dyn DecisionSource>, _) = {
+            let (s, t) = UiDecisionSource::new();
+            (Arc::new(s), t)
+        };
+
+        // Approve по факту прихода Proposal (как в approve_applies_confirm_item).
+        let buf_for_approver = buf.clone();
+        let approver = tokio::spawn(async move {
+            loop {
+                let action_id = {
+                    let g = buf_for_approver.lock().unwrap();
+                    g.iter()
+                        .find(|v| type_of(v) == "proposal")
+                        .and_then(|v| v["files"][0]["actionId"].as_i64())
+                };
+                if let Some(id) = action_id {
+                    let _ = tx
+                        .send(BatchDecision::from_pairs([(id, ItemDecision::Approve)]))
+                        .await;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        });
+
+        let run_id = 1;
+        let outcome = drive_run(
+            run_id,
+            "создай заметку".into(),
+            vec![],
+            "confirm",
+            Some(provider),
+            true, // actuator ВКЛ (go-live в temp-vault)
+            64 * 1024,
+            16,
+            Some(32768),
+            None,
+            None,
+            false,
+            None, // delegation (W-24)
+            None, // research (W-25)
+            decision,
+            empty_memory(&db),
+            canon.clone(),
+            db.writer(),
+            db.reader(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            &channel,
+        )
+        .await;
+        approver.await.unwrap();
+
+        // Этап 1: approve применил Confirm-айтем → файл записан через гейт.
+        assert_eq!(outcome, LoopOutcome::Final("готово".into()));
+        assert_eq!(
+            std::fs::read_to_string(canon.join("Notes/E2E.md"))
+                .ok()
+                .as_deref(),
+            Some("созданоаппрувом"),
+            "файл записан после approve"
+        );
+
+        // Этап 2: UNDO прогона (зеркало agent_undo: AuditSink над тем же writer/reader) → файл откатан.
+        let ledger = nexus_core::actuator::AuditSink::new(db.writer().clone(), db.reader().clone());
+        let undone = nexus_core::actuator::undo_run(run_id, &canon, &ledger).await;
+        assert!(undone.restored() >= 1, "undo восстановил ≥1 действие");
+        assert!(
+            !canon.join("Notes/E2E.md").exists(),
+            "после undo созданный файл удалён (откат записи)"
+        );
+    }
+
     /// **БЕЗ APPROVE → FAIL-CLOSED (не применяется).** Тот же путь, но decision-sender ДРОПНУТ (фронт
     /// ушёл, не ответив) → UiDecisionSource.decide возвращает reject_all → note.create НЕ применяется,
     /// файл НЕ создан. Доказывает fail-closed: нет явного Approve ⇒ диск не тронут.

@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Агент · W-12 — детерминированный E2E критпути агента в CI 🔴 BETA
+
+Полный путь агента задача→tool→proposal→approve→**запись**→**undo** теперь проверяется в CI на каждом PR/push.
+
+- Новый headless `#[tokio::test]` `approve_then_undo_reverts_write_e2e` (`commands/agent.rs`): тот же desktop-путь (`drive_run` + реальный `UiDecisionSource` + гейт actuator'а + temp-vault БД), но на `FakeProvider` — гоняется в CI. Сцепляет в ОДНУ непрерывную цепочку запись-через-гейт и `undo_run` (зеркало `agent_undo`), что раньше было только в `#[ignore]` live-тесте (нужен был рижский LLM).
+- Аудит покрытия (агент-исследователь): критпуть на 90% уже был зелёным в CI (loop/session/actuator/undo по-отдельности); W-12 закрыл единственный пробел — непрерывную desktop-цепочку с откатом. Не пересекает реальный webview (tauri-driver-инфры нет — честно вне скоупа). Гейт: cargo fmt/clippy + nexus-desktop 194 теста.
+
 ### Агент · W-26 — список exec-команд в UI (defensive-render, Linux/agentd-only) 🔴 BETA
 
 Десктоп готов ОТОБРАЖАТЬ exec-предложения песочницы, если они придут.
