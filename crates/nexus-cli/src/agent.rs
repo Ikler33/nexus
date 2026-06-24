@@ -104,13 +104,14 @@ fn select_decision_mode(opts: AgentOpts) -> DecisionMode {
     }
 }
 
-/// Общие зависимости прогона: строятся ОДИН раз, в REPL переиспользуются между ходами.
-struct Deps {
-    db: nexus_core::db::Database,
-    provider: Arc<dyn nexus_core::ai::tools::ToolCapableProvider>,
-    canon_root: PathBuf,
-    model: String,
-    context_window: Option<usize>,
+/// Общие зависимости прогона: строятся ОДИН раз, в REPL переиспользуются между ходами. `pub(crate)`:
+/// переиспользуется `acp.rs` (ACP-2 сервер) — та же композиция vault/DB/egress/provider, что у `nexus agent`.
+pub(crate) struct Deps {
+    pub(crate) db: nexus_core::db::Database,
+    pub(crate) provider: Arc<dyn nexus_core::ai::tools::ToolCapableProvider>,
+    pub(crate) canon_root: PathBuf,
+    pub(crate) model: String,
+    pub(crate) context_window: Option<usize>,
 }
 
 /// Исход одного хода. `run_id` — для `/undo` и истории; `done` — терминал `done` (иначе cancelled/error).
@@ -121,8 +122,8 @@ struct TurnOutcome {
 }
 
 /// Собирает зависимости из vault: БД + egress-граница + общий tool-провайдер (зеркало `--sandbox-run`).
-/// `None`-провайдер (нет ai.chat) → внятная ошибка.
-async fn build_deps(root: PathBuf) -> Result<Deps, String> {
+/// `None`-провайдер (нет ai.chat) → внятная ошибка. `pub(crate)`: shared с `acp.rs` (ACP-2 сервер).
+pub(crate) async fn build_deps(root: PathBuf) -> Result<Deps, String> {
     use nexus_core::ai::tools::build_agent_tool_provider;
     use nexus_core::db::Database;
     use nexus_core::net::{EgressAudit, EgressPolicy};
@@ -448,7 +449,7 @@ fn print_repl_help() {
 /// Читает/парсит `.nexus/local.json` (зеркало desktop/agentd `load_local_config`, но СИНХРОННО —
 /// один разовый read на старте CLI, без tokio-fs-фичи). Нет файла / битый JSON → внятная ошибка
 /// (агенту нужен ai.chat, иначе нечем думать).
-fn load_local_config(root: &Path) -> Result<nexus_core::ai::LocalConfig, String> {
+pub(crate) fn load_local_config(root: &Path) -> Result<nexus_core::ai::LocalConfig, String> {
     let path = root.join(".nexus").join("local.json");
     let raw = std::fs::read_to_string(&path).map_err(|_| {
         format!(

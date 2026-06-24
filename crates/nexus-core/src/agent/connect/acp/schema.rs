@@ -49,11 +49,16 @@ pub struct InitializeResult {
 
 // ── session/new ─────────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
+/// ACP-2: ДВУСТОРОННИЙ — ACP-1-клиент СЕРИАЛИЗУЕТ при исходящем `session/new`, ACP-2-сервер
+/// (`super::server`) ДЕСЕРИАЛИЗУЕТ при входящем запросе. `cwd` сервером ЛОГИРУЕТСЯ, но НЕ репойнтит vault
+/// (vault фиксирован `--vault`; R7); `mcp_servers` парсятся-и-игнорируются (логируются, если непусты).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionParams {
+    #[serde(default)]
     pub cwd: PathBuf,
-    /// MCP-серверы для сессии (ACP-1: пусто).
+    /// MCP-серверы для сессии (ACP-1: пусто; ACP-2: парсятся-и-игнорируются).
+    #[serde(default)]
     pub mcp_servers: Vec<serde_json::Value>,
 }
 
@@ -65,7 +70,9 @@ pub struct NewSessionResult {
 
 // ── session/prompt ──────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
+/// ACP-2: ДВУСТОРОННИЙ (см. [`NewSessionParams`]). Сервер собирает текст хода из `Text`-блоков `prompt`
+/// (Other/image/audio игнорируются).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptParams {
     pub session_id: String,
@@ -101,7 +108,9 @@ pub enum StopReason {
 
 // ── session/cancel (notification) ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
+/// ACP-2: ДВУСТОРОННИЙ (см. [`NewSessionParams`]). `session/cancel` приходит как notification (а у
+/// некоторых клиентов — как request); сервер взводит кооперативный cancel-флаг сессии.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelParams {
     pub session_id: String,
@@ -463,5 +472,38 @@ mod tests {
         let pr: PromptResult =
             serde_json::from_value(serde_json::json!({"stopReason": "end_turn"})).unwrap();
         assert_eq!(pr.stop_reason, StopReason::EndTurn);
+
+        // ── ACP-2 (СЕРВЕР): входящие client-запросы ДЕСЕРИАЛИЗУЮТСЯ (инверсия ACP-1) ──
+        // session/new params: cwd + mcpServers (оба default-толерантны).
+        let ns: NewSessionParams = serde_json::from_value(serde_json::json!({
+            "cwd": "/abs/vault",
+            "mcpServers": [{"name": "x"}]
+        }))
+        .unwrap();
+        assert_eq!(ns.cwd.to_string_lossy(), "/abs/vault");
+        assert_eq!(ns.mcp_servers.len(), 1);
+        // отсутствующие cwd/mcpServers → дефолты (IDE-интероп).
+        let ns2: NewSessionParams = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(ns2.cwd.as_os_str().len(), 0);
+        assert!(ns2.mcp_servers.is_empty());
+
+        // session/prompt params: sessionId + prompt[] (Text-блоки).
+        let pp: PromptParams = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "prompt": [{"type": "text", "text": "do it"}, {"type": "image", "data": "…"}]
+        }))
+        .unwrap();
+        assert_eq!(pp.session_id, "s1");
+        assert_eq!(pp.prompt.len(), 2);
+        assert!(matches!(
+            pp.prompt.first(),
+            Some(ContentBlock::Text { text }) if text == "do it"
+        ));
+        assert!(matches!(pp.prompt.get(1), Some(ContentBlock::Other)));
+
+        // session/cancel params: sessionId.
+        let cp: CancelParams =
+            serde_json::from_value(serde_json::json!({"sessionId": "s1"})).unwrap();
+        assert_eq!(cp.session_id, "s1");
     }
 }

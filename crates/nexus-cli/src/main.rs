@@ -21,6 +21,7 @@
 //! Минимум зависимостей (без clap — ручной разбор, как у `nexus-agentd`); сетевого egress нет (только
 //! локальный AF_UNIX для `status`).
 
+mod acp;
 mod agent;
 mod service;
 
@@ -41,6 +42,7 @@ fn main() -> ExitCode {
         ["deploy", "remote", flags @ ..] => run(cmd_deploy_remote(flags)),
         ["deploy", "docker", flags @ ..] => run(cmd_deploy_docker(flags)),
         ["agent", rest @ ..] => run(agent::cmd_agent(rest)),
+        ["acp", rest @ ..] => run(acp::cmd_acp(rest)),
         ["status", flags @ ..] => run(cmd_status(flags)),
         // `undeploy docker`/`undeploy remote` ДО общего `undeploy` (иначе под-команда утечёт во флаги
         // launchd/systemd-выгрузки).
@@ -72,6 +74,9 @@ fn print_help() {
          КОМАНДЫ:\n  \
          agent [--vault P] \"<задача>\"\n      \
          Запустить агента в терминале (one-shot, без записи в vault). `nexus agent --help` — детали.\n  \
+         acp --vault P [--actuator] [--auto]\n      \
+         ACP-сервер по stdio (внешний ACP-клиент драйвит Castor). Safe by default: actuator OFF,\n      \
+         автономия confirm, permission fail-closed. `nexus acp --help` — детали.\n  \
          deploy local [--vault P] [--socket P] [--agentd P] [--apply]\n      \
          Развернуть agentd локальным сервисом (launchd/systemd). Без --apply — печать плана.\n  \
          deploy remote --host user@host --binary P [--remote-vault P] [--remote-socket P]\n               \
