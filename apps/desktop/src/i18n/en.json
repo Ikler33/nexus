@@ -264,7 +264,14 @@
       "delegationWarn": "Enabled: the agent spawns subagents. Their actions still pass the same confirmation gate and blast-radius cap; writes inherit the parent's actuator posture.",
       "research": "Deep research",
       "researchDesc": "The agent may run multi-round web research and write a cited report. Requires delegation, the agent's web tools, and the actuator (to write the report) — all enabled.",
-      "researchWarn": "Enabled: the agent can run deep web research and write a report note. It also needs delegation + web tools + the actuator on, otherwise the tool stays inert. The report write passes the same confirmation gate and blast-radius cap."
+      "researchWarn": "Enabled: the agent can run deep web research and write a report note. It also needs delegation + web tools + the actuator on, otherwise the tool stays inert. The report write passes the same confirmation gate and blast-radius cap.",
+      "capabilities": "Capabilities",
+      "capabilitiesIntro": "What the server agent is allowed to do. Everything off by default."
+    },
+    "conn": {
+      "title": "Connection",
+      "intro": "The current vault's LLM endpoints and their reachability.",
+      "check": "Re-check"
     }
   },
   "sidebar": {

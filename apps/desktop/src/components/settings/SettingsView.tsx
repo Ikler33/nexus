@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState, type ComponentType } from 'react';
 import {
   AlertCircle,
   Check,
@@ -26,6 +26,8 @@ import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/comma
 import { tauriApi } from '../../lib/tauri-api';
 import type {
   AgentFlagsDto,
+  AiConfigDto,
+  AiEndpoint,
   BackupImportReport,
   EgressState,
   SkillList,
@@ -575,6 +577,126 @@ function AboutSection() {
 
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'fail'; msg?: string };
 
+// ── W-27: блок «Подключение» ──────────────────────────────────────────────────────────────────────
+
+type ConnProbe = 'checking' | 'ok' | 'fail' | 'unset';
+
+interface ConnRow {
+  key: 'chat' | 'embedding' | 'fast';
+  /** `fast` не обязателен (падает на chat-модель) → его «не задан» нейтрален, не ошибка. */
+  optional: boolean;
+  ep: AiEndpoint | null;
+  status: ConnProbe;
+}
+
+const CONN_ROWS: Array<Pick<ConnRow, 'key' | 'optional'>> = [
+  { key: 'chat', optional: false },
+  { key: 'embedding', optional: false },
+  { key: 'fast', optional: true },
+];
+
+/**
+ * W-27: блок «Подключение» — LLM-эндпоинты текущего vault (chat/embedding/fast) и их доступность.
+ * Реюз логики W-21 [`SelfCheck`] (getAiConfig → testConnection per-endpoint, latest-wins reqId), но
+ * ПОСТОЯННЫЙ (не dev-only, без dismiss) — живёт в Настройках рядом с эндпоинтами. Пилюли — те же
+ * badge-стили, что у Endpoint-карточек выше. Реюзит i18n-ключи `selfCheck.*` для подписей строк.
+ * Нет vault/конфига → `null` (как SelfCheck). Только чтение — семантику тогглов не трогает.
+ */
+function ConnectionBlock() {
+  const { t } = useTranslation();
+  const [rows, setRows] = useState<ConnRow[] | null>(null);
+  const [running, setRunning] = useState(false);
+  // Latest-wins: ручной re-check не должен затираться более старым прогоном.
+  const reqId = useRef(0);
+
+  const run = useCallback(async () => {
+    const my = ++reqId.current;
+    setRunning(true);
+    let cfg: AiConfigDto;
+    try {
+      cfg = await tauriApi.settings.getAiConfig();
+    } catch {
+      // Vault не открыт / конфига нет — нечего проверять, прячемся.
+      if (my === reqId.current) {
+        setRows([]);
+        setRunning(false);
+      }
+      return;
+    }
+    const eps: Record<ConnRow['key'], AiEndpoint | null> = {
+      chat: cfg.chat,
+      embedding: cfg.embedding,
+      fast: cfg.fast,
+    };
+    if (my === reqId.current) {
+      setRows(CONN_ROWS.map((r) => ({ ...r, ep: eps[r.key], status: 'checking' as ConnProbe })));
+    }
+    const results = await Promise.all(
+      CONN_ROWS.map(async (r): Promise<ConnRow> => {
+        const ep = eps[r.key];
+        const url = ep?.url?.trim();
+        if (!url) return { ...r, ep, status: 'unset' };
+        try {
+          await tauriApi.settings.testConnection(url);
+          return { ...r, ep, status: 'ok' };
+        } catch {
+          return { ...r, ep, status: 'fail' };
+        }
+      }),
+    );
+    if (my === reqId.current) {
+      setRows(results);
+      setRunning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void run();
+  }, [run]);
+
+  // null — первый прогон ещё идёт; пустой массив — проверять нечего (vault не открыт).
+  if (!rows || rows.length === 0) return null;
+
+  return (
+    <>
+      <SectionHeader title={t('settings.conn.title')} sub={t('settings.conn.intro')} nested />
+      <div className={styles.saveBar}>
+        <button
+          type="button"
+          className={styles.ghostBtn}
+          onClick={() => void run()}
+          disabled={running}
+        >
+          {running && <Loader2 size={14} className={styles.spin} aria-hidden />}
+          {t('settings.conn.check')}
+        </button>
+      </div>
+      <ul className={styles.connList} role="status" aria-live="polite">
+        {rows.map((r) => (
+          <li key={r.key} className={styles.connRow}>
+            <span
+              className={`${styles.badge} ${
+                r.status === 'ok' ? styles.badgeOk : r.status === 'fail' ? styles.badgeFail : ''
+              }`}
+              aria-hidden
+            >
+              {r.status === 'ok' ? '✓' : r.status === 'fail' ? '✗' : r.status === 'unset' ? '—' : '…'}
+            </span>
+            <span className={styles.label}>{t(`selfCheck.${r.key}`)}</span>
+            <span className={styles.connMeta} title={r.ep?.url ?? ''}>
+              {r.ep?.url
+                ? `${r.ep.url}${r.ep.model ? ` · ${r.ep.model}` : ''}`
+                : r.optional
+                  ? t('selfCheck.unsetOptional')
+                  : t('selfCheck.unsetRequired')}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 /**
  * Секция «AI / Модели» (кросс-план #11, слайс 2): форма эндпоинтов chat/embedding с проверкой связи
  * и сохранением в `.nexus/local.json` через нативные команды. Chat применяется немедленно; смена
@@ -713,6 +835,9 @@ function AiSection() {
         {saved && !restart && <span className={styles.okText}>{t('settings.aiSec.saved')}</span>}
         {saved && restart && <span className={styles.warnText}>{t('settings.aiSec.restart')}</span>}
       </div>
+
+      {/* W-27: статус подключения к LLM-эндпоинтам (chat/embedding/fast) — рядом с их настройкой. */}
+      <ConnectionBlock />
 
       {/* Reasoning-режим чата (замер 2026-06-18): «Быстрый» (без CoT) vs «Глубокий» (с CoT gemma).
           ВЫКЛ по умолчанию = Быстрый — на RAG-по-базе reasoning давал +30–40с без выигрыша качества;
@@ -1030,6 +1155,13 @@ function HeadlessAgentBlock() {
       {flags.agentActuatorEnabled && (
         <p className={styles.warnText}>{t('settings.agent.actuatorWarn')}</p>
       )}
+
+      {/* W-27: подзаголовок «Возможности» — группирует, что серверному агенту разрешено (всё OFF). */}
+      <SectionHeader
+        title={t('settings.agent.capabilities')}
+        sub={t('settings.agent.capabilitiesIntro')}
+        nested
+      />
 
       {/* Песочница (мастер-свитч, Linux-only) — предпосылка для host-exec. */}
       <EgressRow

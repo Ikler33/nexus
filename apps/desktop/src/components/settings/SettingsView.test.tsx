@@ -184,6 +184,52 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     spy.mockRestore();
   });
 
+  // W-27: блок «Подключение» — на монтировании пингует эндпоинты (getAiConfig→testConnection),
+  // кнопка «Перепроверить» гонит повторно. Реюз логики W-21 SelfCheck, но постоянный (не dev-only).
+  it('AI-секция: блок «Подключение» (W-27) — пингует эндпоинты и перепроверяет по кнопке', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const getCfg = vi.spyOn(tauriApi.settings, 'getAiConfig').mockResolvedValue({
+      chat: { url: 'http://192.168.0.28:8080', model: 'qwen' },
+      embedding: { url: 'http://192.168.0.28:8083', model: 'bge' },
+      fast: null,
+      agentAutonomy: null,
+      agentActuatorEnabled: false,
+      sandboxEnabled: false,
+      shellEnable: false,
+      webAllowPublicFetch: false,
+      skillsLearningEnabled: false,
+      agentSkillsDir: null,
+      delegationEnabled: false,
+      researchEnabled: false,
+      shellSupported: false,
+    });
+    const testSpy = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    // Заголовок блока + автопроверка на монтировании пингует chat-эндпоинт.
+    expect(await screen.findByText(/^(подключение|connection)$/i)).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(testSpy).toHaveBeenCalledWith('http://192.168.0.28:8080'),
+    );
+    // Кнопка «Перепроверить» (distinct от per-endpoint «Проверить связь») → повторный прогон.
+    testSpy.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^(перепроверить|re-check)$/i }));
+    await vi.waitFor(() =>
+      expect(testSpy).toHaveBeenCalledWith('http://192.168.0.28:8083'),
+    );
+
+    getCfg.mockRestore();
+    testSpy.mockRestore();
+  });
+
+  // W-27: подзаголовок «Возможности» группирует agent-флаги (header-only regroup, тогглы не двигались).
+  it('AI-секция: подзаголовок «Возможности» (W-27) рендерится в секции агента', async () => {
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+    expect(await screen.findByText(/^(возможности|capabilities)$/i)).toBeInTheDocument();
+  });
+
   // Регрессия стейл-замыкания: два тоггла РАЗНЫХ контролов в одном батче (до ре-рендера) не должны
   // затирать друг друга. Старый код (`{...flags}` из замыкания) ронял autonomy при втором клике; новый
   // (мерж patch'а от flagsRef) — нет. native .click() внутри act() батчит оба до flush.
