@@ -150,4 +150,48 @@ async fn acp_e2e_real_subprocess_full_run() {
         "end_turn",
         "после аппрува агент должен завершить ход end_turn"
     );
+
+    // ── ВТОРОЙ ход по ТОМУ ЖЕ соединению/сессии (без нового initialize/session/new) ─────────────────
+    // Доказывает, что одно соединение несёт несколько ходов (фундамент переиспользования AcpBackend):
+    // мок-агент в цикле обслуживает следующий `session/prompt` на том же процессе. Полный happy-path
+    // (токен + plan + мульти-diff permission + аппрув + end_turn) повторяется идентично первому ходу.
+    //
+    // Сначала дренируем ХВОСТ хода 1 (tool_call_update + "done"-токен, которые drive не дочитал) — мок
+    // уже заблокирован на следующем `session/prompt`, новых апдейтов нет, так что `try_recv` опустошит
+    // канал без гонки. Иначе ход 2 прочитал бы остатки хода 1 первым `recv`.
+    while updates.try_recv().is_ok() {}
+    let prompt2 = client.request(
+        "session/prompt",
+        json!({"sessionId":"s1","prompt":[{"type":"text","text":"again"}]}),
+        None,
+    );
+    let drive2 = async {
+        let first = updates.recv().await.expect("ход2: первый update");
+        assert!(matches!(
+            first.update,
+            SessionUpdate::AgentMessageChunk { .. }
+        ));
+        let plan = updates.recv().await.expect("ход2: plan update");
+        assert!(matches!(plan.update, SessionUpdate::Plan { .. }));
+        let p = perms.recv().await.expect("ход2: permission");
+        let allow = p
+            .params
+            .options
+            .iter()
+            .find(|o| o.option_id == "a")
+            .expect("ход2: allow-опция");
+        client
+            .respond(
+                p.id.clone(),
+                Ok(json!({"outcome":{"outcome":"selected","optionId":allow.option_id}})),
+            )
+            .await
+            .expect("ход2: respond permission");
+    };
+    let (prompt2_res, ()) = tokio::join!(prompt2, drive2);
+    assert_eq!(
+        prompt2_res.expect("ход2: prompt result")["stopReason"],
+        "end_turn",
+        "ВТОРОЙ ход по тому же соединению тоже завершается end_turn (переиспользование сессии)"
+    );
 }

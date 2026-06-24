@@ -73,6 +73,11 @@ impl AcpClient {
         )
     }
 
+    /// Жив ли read-loop (соединение). false → агент отвалился, нужен переспавн.
+    pub fn is_alive(&self) -> bool {
+        !self.read_task.is_finished()
+    }
+
     /// Исходящий запрос с ОПЦИОНАЛЬНЫМ таймаутом. `None` → ждём бесконечно (для `session/prompt`: целый
     /// ход + cold-start модели 1-3 мин). `Some(d)` → управляющие RPC (`initialize`/`session/new`/`cancel`).
     pub async fn request(
@@ -365,5 +370,26 @@ mod tests {
             .request("initialize", json!({}), Some(Duration::from_millis(200)))
             .await;
         assert!(r.is_err(), "закрытый транспорт → Err, не зависание");
+    }
+
+    #[tokio::test]
+    async fn acp_client_is_alive_tracks_read_loop() {
+        let (client_t, server_t) = channel_pair();
+        // _u/_p держим, иначе закрытие updates/perms-каналов тут ни при чём — нас интересует read-loop.
+        let (client, _u, _p) = AcpClient::new(Arc::new(client_t));
+        assert!(client.is_alive(), "соединение живо, пока транспорт открыт");
+        // Агент уходит → транспорт закрывается → recv() в read-loop отдаёт None → read_task завершается.
+        drop(server_t);
+        // Подождём, пока read-loop увидит закрытие и завершится (без busy-loop на фикс. таймауте).
+        for _ in 0..100 {
+            if !client.is_alive() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            !client.is_alive(),
+            "после ухода агента read-loop завершён → is_alive() == false (нужен переспавн)"
+        );
     }
 }

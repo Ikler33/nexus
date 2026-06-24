@@ -429,9 +429,12 @@ pub use connected::ConnectedBackend;
 //   R1: `session/prompt` НЕ несёт history/autonomy (сессии stateful у агента) → один ход на прогон.
 //   R2: агент правит СВОЙ `cwd` (наш vault, только если acp_cwd == корень vault); caps=false.
 //   R3: undo → Ok(0) (нет леджера для записей агента); pause/resume → Err (в ACP нет паузы).
-//   R4: один активный прогон на соединение; соединение = спавн агента ПЕР-ПРОГОН (переиспользование
-//       сессии для мультитёрна — отложено).
-//   R5: нет reconnect (краш агента → синтетическая Error в канал, переотправь).
+//   R4: соединение + сессия ПЕРЕИСПОЛЬЗУЮТСЯ между ходами (perf: спавн+initialize+session/new ОДИН раз;
+//       первый ход греет cold-start ~9.5с, каждый следующий = только новый `session/prompt` по той же
+//       сессии → почти мгновенно). ОДИН активный ход на соединение (R2): пока ход не дошёл до Final/Error,
+//       новый run() отклоняется. Мёртвое соединение (`!client.is_alive()` — агент отвалился) переспавнится
+//       на следующем run() (старый AcpState дропнется → агент убит kill_on_drop).
+//   R5: нет reconnect МИД-хода (краш агента → синтетическая Error в канал; следующий run() переспавнит).
 //   R6: только ACP v1 stable (unstable session-fork выключен).
 mod acp_backend {
     use super::*;
@@ -450,13 +453,28 @@ mod acp_backend {
     };
     use nexus_core::agent::connect::{
         AgentFileStatus, AgentPlanStep, AgentPlanStepState, AgentProposedFile, StdioTransport,
+        Transport,
     };
 
     /// Текущий канал событий активного прогона. `None` после терминала (R4-слот свободен).
     type SharedChannel = Arc<Mutex<Option<Channel<AgentStreamEvent>>>>;
 
-    /// Таймаут управляющих RPC (`initialize`/`session/new`). `session/prompt` — БЕЗ таймаута (cold-start 1-3м).
+    /// Фабрика транспорта к ACP-агенту: `(program, args, cwd) → Transport`. В проде — спавн подпроцесса
+    /// ([`StdioTransport`]); тест-шов подменяет на in-process [`ChannelTransport`] со счётчиком спавнов,
+    /// чтобы доказать переиспользование (один спавн на N ходов). Возвращает boxed future (async-замыкание).
+    type SpawnFut = std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::io::Result<Arc<dyn Transport>>> + Send>,
+    >;
+    type TransportFactory = Arc<dyn Fn(String, Vec<String>, PathBuf) -> SpawnFut + Send + Sync>;
+
+    /// Таймаут управляющих RPC (`initialize`/`session/new`).
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Верхняя граница на ОДИН ход `session/prompt`. Cold-start+инференс легитимно длятся 1-3 мин →
+    /// порог щедрый (10 мин). Нужен из-за reuse: КРАШ агента провалит запрос через EOF-дренаж
+    /// (client.rs: «acp transport closed»), но ЗАВИСШИЙ-но-живой агент (без EOF) при `None` висел бы
+    /// вечно → ход не терминируется → `current_channel` занят → ВСЕ следующие ходы «уже идёт» (залип
+    /// бэкенда до рестарта). Таймаут гарантирует терминал → освобождение слота → респавн на след. ходе.
+    const PROMPT_TIMEOUT: Duration = Duration::from_secs(600);
 
     /// Висящий `request_permission`: `rpc_id` запроса агента + опции (для маппинга approve→outcome).
     struct PendingPerm {
@@ -465,14 +483,22 @@ mod acp_backend {
     }
     type PendingPerms = Arc<Mutex<HashMap<i64, PendingPerm>>>;
 
-    /// Живое ACP-соединение прогона.
+    /// Приёмники потоков соединения (`session/update` + входящие permission). ПЕРЕЖИВАЮТ ходы: живут в
+    /// [`AcpState`], а активный ход на время прогона лочит их (R2 — один активный ход → нет контеншена).
+    type SharedUpdates = Arc<Mutex<tokio::sync::mpsc::Receiver<schema::SessionNotification>>>;
+    type SharedPerms = Arc<Mutex<tokio::sync::mpsc::Receiver<InboundPermission>>>;
+
+    /// Живое ACP-соединение. ПЕРЕИСПОЛЬЗУЕТСЯ между ходами (perf: спавн+initialize+session/new ОДИН раз;
+    /// каждый следующий ход — только `session/prompt` по ЭТОМУ же соединению и сессии). `updates`/`perms`
+    /// держатся здесь (а не отдаются drive-таску по значению), чтобы пережить ход. Дроп AcpState → дроп
+    /// client → агент убит (kill_on_drop) — так заменяется мёртвое соединение при переспавне.
     struct AcpState {
         client: Arc<AcpClient>,
         session_id: String,
         current_channel: SharedChannel,
         pending_perms: PendingPerms,
-        // drive-таск самозавершается на терминале хода; дроп AcpState → дроп client → агент убит (kill_on_drop).
-        _drive_task: tokio::task::JoinHandle<()>,
+        updates: SharedUpdates,
+        perms: SharedPerms,
     }
 
     /// Бэкенд, драйвящий внешний ACP-агент. Lazy-spawn на первом `run`.
@@ -482,6 +508,20 @@ mod acp_backend {
         inner: Mutex<Option<AcpState>>,
         next_run: AtomicI64,
         next_action: Arc<AtomicI64>,
+        // Фабрика транспорта (прод: спавн подпроцесса; тест: ChannelTransport + счётчик спавнов).
+        spawn: TransportFactory,
+    }
+
+    /// Прод-фабрика: спавнит реальный подпроцесс ([`StdioTransport`], kill_on_drop).
+    fn default_spawn() -> TransportFactory {
+        Arc::new(
+            |program: String, args: Vec<String>, cwd: PathBuf| -> SpawnFut {
+                Box::pin(async move {
+                    let t = StdioTransport::spawn(&program, &args, &cwd).await?;
+                    Ok(Arc::new(t) as Arc<dyn Transport>)
+                })
+            },
+        )
     }
 
     impl AcpBackend {
@@ -492,6 +532,25 @@ mod acp_backend {
                 inner: Mutex::new(None),
                 next_run: AtomicI64::new(1),
                 next_action: Arc::new(AtomicI64::new(1)),
+                spawn: default_spawn(),
+            }
+        }
+
+        /// Тест-конструктор: подменяет фабрику транспорта (in-process [`ChannelTransport`] + счётчик
+        /// спавнов) — чтобы доказать переиспользование соединения (один спавн на N ходов).
+        #[cfg(test)]
+        fn with_transport_factory(
+            command: Option<Vec<String>>,
+            cwd: PathBuf,
+            spawn: TransportFactory,
+        ) -> Self {
+            Self {
+                command,
+                cwd,
+                inner: Mutex::new(None),
+                next_run: AtomicI64::new(1),
+                next_action: Arc::new(AtomicI64::new(1)),
+                spawn,
             }
         }
     }
@@ -686,13 +745,20 @@ mod acp_backend {
         }
     }
 
-    /// Drive-таск прогона: гонит `session/prompt` (без таймаута) + параллельно пампит updates/perms в канал,
-    /// до терминала хода. На терминале — финальное событие + разрешение висящих permission в Cancelled.
+    /// Drive-таск ОДНОГО хода: гонит `session/prompt` (с `PROMPT_TIMEOUT`) + параллельно пампит updates/perms в
+    /// канал, до терминала хода. На терминале — финальное событие + разрешение висящих permission в
+    /// Cancelled + освобождение R2-слота (канал → None). Соединение/приёмники НЕ дропаются — живут в
+    /// AcpState для следующего хода.
+    ///
+    /// `updates_arc`/`perms_arc` лочатся на ВЕСЬ ход: активный ход ВЛАДЕЕТ приёмниками (соединение
+    /// переживает ход, приёмники переживают ход). Держать гард `tokio::sync::Mutex` через `.await` —
+    /// НАМЕРЕННО и безопасно: clippy `await_holding_lock` срабатывает только на `std::sync::Mutex`; R2
+    /// гарантирует ОДИН активный ход на соединение → контеншена за эти мьютексы нет.
     #[allow(clippy::too_many_arguments)]
     async fn drive_run(
         client: Arc<AcpClient>,
-        mut updates: tokio::sync::mpsc::Receiver<schema::SessionNotification>,
-        mut perms: tokio::sync::mpsc::Receiver<InboundPermission>,
+        updates_arc: SharedUpdates,
+        perms_arc: SharedPerms,
         current: SharedChannel,
         pending_perms: PendingPerms,
         next_action: Arc<AtomicI64>,
@@ -700,27 +766,38 @@ mod acp_backend {
         session_id: String,
         task: String,
     ) {
+        // Лочим приёмники на время хода (R2: один активный ход → без контеншена; см. док-коммент выше).
+        let mut updates = updates_arc.lock().await;
+        let mut perms = perms_arc.lock().await;
         let prompt = client.request(
             "session/prompt",
             json!({"sessionId": session_id, "prompt": [{"type":"text","text": task}]}),
-            None, // R1/cold-start: без таймаута на весь ход
+            Some(PROMPT_TIMEOUT), // верхняя граница хода: зависший-но-живой агент не залипит слот навсегда
         );
         tokio::pin!(prompt);
         let mut answer = String::new();
 
-        let terminal: AgentStreamEvent = loop {
+        // Терминал НЕ строим прямо в select!: сначала фиксируем «как закончился ход», потом дренируем
+        // запоздавшие токены (фолдим их в `answer`), и ТОЛЬКО затем собираем Final с ПОЛНЫМ текстом.
+        // Иначе гонка select! (Response пришёл раньше, чем буфер updates обработан → токен дренируется
+        // ПОСЛЕ `mem::take(answer)`) терялась бы из Final — особенно на быстрых ходах переиспользования.
+        enum End {
+            Final,
+            Error(String),
+        }
+        let end: End = loop {
             tokio::select! {
                 res = &mut prompt => {
                     break match res {
                         Ok(v) => {
                             let stop = v.get("stopReason").and_then(|s| s.as_str()).unwrap_or("end_turn");
                             match stop {
-                                "refusal" => AgentStreamEvent::Error { message: "ACP-агент отклонил запрос (refusal)".into() },
-                                "cancelled" => AgentStreamEvent::Error { message: "прогон отменён".into() },
-                                _ => AgentStreamEvent::Final { text: std::mem::take(&mut answer) },
+                                "refusal" => End::Error("ACP-агент отклонил запрос (refusal)".into()),
+                                "cancelled" => End::Error("прогон отменён".into()),
+                                _ => End::Final,
                             }
                         }
-                        Err(e) => AgentStreamEvent::Error { message: format!("ACP session/prompt: {}", e.message) },
+                        Err(e) => End::Error(format!("ACP session/prompt: {}", e.message)),
                     };
                 }
                 n = updates.recv() => match n {
@@ -732,7 +809,7 @@ mod acp_backend {
                             for ev in map_update(run_id, notif.update) { send_ev(&current, ev).await; }
                         }
                     }
-                    None => break AgentStreamEvent::Error { message: "ACP-агент отключился".into() },
+                    None => break End::Error("ACP-агент отключился".into()),
                 },
                 p = perms.recv() => {
                     if let Some(inbound) = p {
@@ -742,9 +819,10 @@ mod acp_backend {
             }
         };
 
-        // Best-effort дренаж буферизованных апдейтов перед терминалом.
+        // Best-effort дренаж буферизованных апдейтов перед терминалом (фолдим токены в `answer`).
         while let Ok(notif) = updates.try_recv() {
             if let Some(t) = chunk_text(&notif.update) {
+                answer.push_str(t);
                 send_ev(
                     &current,
                     AgentStreamEvent::AssistantToken {
@@ -758,6 +836,10 @@ mod acp_backend {
                 }
             }
         }
+        let terminal = match end {
+            End::Final => AgentStreamEvent::Final { text: answer },
+            End::Error(message) => AgentStreamEvent::Error { message },
+        };
         // Висящие permission на конце хода → Cancelled (fail-closed: ход окончен, агент ждать не должен).
         {
             let mut pp = pending_perms.lock().await;
@@ -771,7 +853,10 @@ mod acp_backend {
             }
         }
         send_ev(&current, terminal).await;
-        *current.lock().await = None; // освобождаем R4-слот
+        // Освобождаем ТОЛЬКО R2-слот хода (канал → None). Соединение/приёмники остаются в AcpState для
+        // следующего хода (переиспользование). Если ход кончился из-за ухода агента ("ACP-агент
+        // отключился"), соединение мёртво — это поймает `is_alive()` на следующем run() → переспавн.
+        *current.lock().await = None;
     }
 
     #[async_trait]
@@ -795,8 +880,9 @@ mod acp_backend {
                 })?;
 
             let mut guard = self.inner.lock().await;
-            // R4: один активный прогон. Прошлый завершён (канал освобождён) → заменяем (старый client дропнется
-            // → агент-подпроцесс убьётся kill_on_drop).
+
+            // R2: ОДИН активный ход на соединение. Прошлый ход ещё не дошёл до Final/Error (канал занят) →
+            // отклоняем (события двух ходов смешались бы в одном канале; UI и так гонит по одному).
             if let Some(st) = guard.as_ref() {
                 if st.current_channel.lock().await.is_some() {
                     return Err(AppError::Msg(
@@ -805,13 +891,39 @@ mod acp_backend {
                 }
             }
 
+            // ПЕРЕИСПОЛЬЗОВАНИЕ: соединение есть и живо → НЕ спавним подпроцесс, НЕ переинициализируем.
+            // Новый ход = только новый `session/prompt` по той же сессии (первый ход прогрел cold-start,
+            // остальные мгновенны). Приёмники updates/perms живут в AcpState и лочатся drive-таском на ход.
+            if let Some(st) = guard.as_ref() {
+                if st.client.is_alive() {
+                    let run_id = self.next_run.fetch_add(1, Ordering::Relaxed);
+                    *st.current_channel.lock().await = Some(channel);
+                    tokio::spawn(drive_run(
+                        st.client.clone(),
+                        st.updates.clone(),
+                        st.perms.clone(),
+                        st.current_channel.clone(),
+                        st.pending_perms.clone(),
+                        self.next_action.clone(),
+                        run_id,
+                        st.session_id.clone(),
+                        task,
+                    ));
+                    return Ok(run_id);
+                }
+            }
+
+            // СВЕЖИЙ СПАВН: соединения нет ИЛИ оно мёртвое (`!is_alive()` — агент отвалился). Спавним
+            // подпроцесс + initialize + session/new (cold-start ~9.5с — как warm-up нативного агента).
+            // Замена мёртвого: старый AcpState дропнется при `*guard = Some(...)` → старый client дропнется
+            // → старый подпроцесс убьётся kill_on_drop.
             let (program, args) = command
                 .split_first()
                 .expect("command непустой (проверено выше)");
-            let transport = StdioTransport::spawn(program, args, &self.cwd)
+            let transport = (self.spawn)(program.clone(), args.to_vec(), self.cwd.clone())
                 .await
                 .map_err(|e| AppError::Msg(format!("спавн ACP-агента `{program}`: {e}")))?;
-            let (client, updates_rx, perms_rx) = AcpClient::new(Arc::new(transport));
+            let (client, updates_rx, perms_rx) = AcpClient::new(transport);
             let client = Arc::new(client);
 
             client
@@ -839,10 +951,12 @@ mod acp_backend {
             let run_id = self.next_run.fetch_add(1, Ordering::Relaxed);
             let current_channel: SharedChannel = Arc::new(Mutex::new(Some(channel)));
             let pending_perms: PendingPerms = Arc::new(Mutex::new(HashMap::new()));
-            let drive = tokio::spawn(drive_run(
+            let updates: SharedUpdates = Arc::new(Mutex::new(updates_rx));
+            let perms: SharedPerms = Arc::new(Mutex::new(perms_rx));
+            tokio::spawn(drive_run(
                 client.clone(),
-                updates_rx,
-                perms_rx,
+                updates.clone(),
+                perms.clone(),
                 current_channel.clone(),
                 pending_perms.clone(),
                 self.next_action.clone(),
@@ -855,7 +969,8 @@ mod acp_backend {
                 session_id,
                 current_channel,
                 pending_perms,
-                _drive_task: drive,
+                updates,
+                perms,
             });
             Ok(run_id)
         }
@@ -1134,6 +1249,199 @@ mod acp_backend {
             assert_eq!(
                 pick_outcome(&aa, true),
                 json!({"outcome": {"outcome": "selected", "optionId": "x"}})
+            );
+        }
+
+        // ── Переиспользование соединения: ДВА хода по ОДНОМУ соединению, спавн РОВНО ОДИН раз ──────────
+
+        use nexus_core::agent::connect::{channel_pair, ChannelTransport, RpcMessage};
+        use std::sync::atomic::AtomicUsize;
+        use tauri::ipc::Channel;
+
+        type EventBuf = Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+
+        /// Channel, складывающий каждое отправленное событие (parsed JSON) в `buf` (тот же путь, что Tauri).
+        fn channel_into(buf: EventBuf) -> Channel<AgentStreamEvent> {
+            Channel::new(move |body: tauri::ipc::InvokeResponseBody| {
+                if let tauri::ipc::InvokeResponseBody::Json(s) = body {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                        buf.lock().unwrap().push(v);
+                    }
+                }
+                Ok(())
+            })
+        }
+
+        /// Ждёт (с дедлайном), пока в буфере появится событие нужного `type`-тега; возвращает его текст
+        /// (поле `text`, если есть). Паникует по таймауту — чтобы тест не висел вечно.
+        async fn wait_for_event(buf: &EventBuf, ty: &str) -> serde_json::Value {
+            for _ in 0..200 {
+                if let Some(ev) = buf
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v.get("type").and_then(|t| t.as_str()) == Some(ty))
+                {
+                    return ev.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!(
+                "событие type={ty} не пришло за дедлайн; буфер: {:?}",
+                buf.lock().unwrap()
+            );
+        }
+
+        /// In-process мок-ACP-агент на серверном конце ChannelTransport: initialize → session/new →
+        /// затем БЕСКОНЕЧНО обслуживает `session/prompt` (по одному токену + end_turn на ход), пока
+        /// клиент не закроет транспорт. Так ОДНО соединение несёт несколько ходов (как реальный агент).
+        async fn mock_multi_turn_agent(srv: ChannelTransport) {
+            // initialize
+            let RpcMessage::Request { id, method, .. } = srv.recv().await.unwrap() else {
+                panic!("ждали initialize-Request")
+            };
+            assert_eq!(method, "initialize");
+            srv.send(RpcMessage::Response {
+                id,
+                result: Ok(json!({"protocolVersion": ACP_PROTOCOL_VERSION})),
+            })
+            .await
+            .unwrap();
+            // session/new (ОДИН раз — доказывает, что второй ход НЕ переинициализирует сессию)
+            let RpcMessage::Request { id, method, .. } = srv.recv().await.unwrap() else {
+                panic!("ждали session/new-Request")
+            };
+            assert_eq!(method, "session/new");
+            srv.send(RpcMessage::Response {
+                id,
+                result: Ok(json!({"sessionId": "s1"})),
+            })
+            .await
+            .unwrap();
+            // ходы: каждый session/prompt → токен + end_turn; до закрытия транспорта (клиент дропнул state)
+            while let Some(msg) = srv.recv().await {
+                let RpcMessage::Request { id, method, params } = msg else {
+                    continue; // ответы клиента (на наши request_permission тут не шлём) — игнор
+                };
+                assert_eq!(
+                    method, "session/prompt",
+                    "после рукопожатия — только prompt'ы"
+                );
+                // эхо текста запроса как один токен ответа (доказывает стрим)
+                let task = params
+                    .pointer("/prompt/0/text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                srv.send(RpcMessage::notification(
+                    "session/update",
+                    json!({"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk",
+                           "content":{"type":"text","text": format!("echo:{task}")}}}),
+                ))
+                .await
+                .unwrap();
+                srv.send(RpcMessage::Response {
+                    id,
+                    result: Ok(json!({"stopReason": "end_turn"})),
+                })
+                .await
+                .unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn acp_reuses_connection_across_two_turns_spawns_once() {
+            // Серверный конец отдаём моку; клиентский — отдаём фабрике транспорта (ОДИН раз).
+            let (client_t, server_t) = channel_pair();
+            tokio::spawn(mock_multi_turn_agent(server_t));
+
+            let spawns = Arc::new(AtomicUsize::new(0));
+            // Клиентский транспорт прячем в Option — фабрика берёт его на ПЕРВОМ (и единственном) спавне;
+            // повторный спавн (если бы переиспользование сломалось) запаниковал бы на take().unwrap().
+            let slot = Arc::new(std::sync::Mutex::new(Some(
+                Arc::new(client_t) as Arc<dyn Transport>
+            )));
+            let spawns_f = spawns.clone();
+            let factory: TransportFactory = Arc::new(move |_program, _args, _cwd| -> SpawnFut {
+                let spawns_f = spawns_f.clone();
+                let slot = slot.clone();
+                Box::pin(async move {
+                    spawns_f.fetch_add(1, Ordering::Relaxed);
+                    let t = slot
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("спавн вызван второй раз — переиспользование сломано");
+                    Ok(t)
+                })
+            });
+
+            let backend = AcpBackend::with_transport_factory(
+                Some(vec!["mock".into()]),
+                std::env::temp_dir(),
+                factory,
+            );
+            let state = crate::state::AppState::new();
+
+            // ── Ход 1: спавн + initialize + session/new + prompt → Final ─────────────────────────────
+            let buf1: EventBuf = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let run1 = backend
+                .run(
+                    &state,
+                    "первый".into(),
+                    "ask".into(),
+                    vec![],
+                    channel_into(buf1.clone()),
+                )
+                .await
+                .expect("run #1");
+            let final1 = wait_for_event(&buf1, "final").await;
+            assert_eq!(
+                final1.get("text").and_then(|t| t.as_str()),
+                Some("echo:первый"),
+                "ход 1 должен стримить ответ и завершиться Final"
+            );
+
+            // ── Ход 2: ТОТ ЖЕ процесс/сессия — только новый prompt → Final (без переспавна) ──────────
+            // Final хода 1 отправляется ДО очистки R2-слота (канал → None) и до релиза локов приёмников
+            // drive-таском; крошечное окно между «увидели Final» и «слот свободен» закрываем ретраем по
+            // тому же буферу (реальный UI тоже не шлёт второй ход раньше, чем дорисует ответ первого).
+            let buf2: EventBuf = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let run2 = loop {
+                match backend
+                    .run(
+                        &state,
+                        "второй".into(),
+                        "ask".into(),
+                        vec![],
+                        channel_into(buf2.clone()),
+                    )
+                    .await
+                {
+                    Ok(id) => break id,
+                    Err(e) => {
+                        // единственная ожидаемая транзиентная ошибка — слот хода 1 ещё не освобождён
+                        assert!(
+                            e.to_string().contains("уже идёт"),
+                            "неожиданная ошибка run #2: {e}"
+                        );
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+            };
+            let final2 = wait_for_event(&buf2, "final").await;
+            assert_eq!(
+                final2.get("text").and_then(|t| t.as_str()),
+                Some("echo:второй"),
+                "ход 2 должен стримить ответ и завершиться Final по тому же соединению"
+            );
+
+            assert_ne!(run1, run2, "у каждого хода свой run_id");
+            assert_eq!(
+                spawns.load(Ordering::Relaxed),
+                1,
+                "ПЕРЕИСПОЛЬЗОВАНИЕ: транспорт/агент спавнится РОВНО ОДИН раз на ДВА хода \
+                 (никакого респавна + initialize/session/new на втором ходе)"
             );
         }
     }
