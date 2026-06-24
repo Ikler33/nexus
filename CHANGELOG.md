@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Исправлено · ACP `session/update` — ВЛОЖЕННЫЙ `update` (баг найден живым прогоном против Hermes)
+
+Поймано при первом живом подключении приложения к РЕАЛЬНОМУ ACP-агенту (Hermes 0.17 на DeepSeek, контейнер на .28). ACP-спека: `session/update` params = `{sessionId, update:{sessionUpdate,…}}` — `update` ВЛОЖЕН. У нас `SessionNotification` стоял с `#[serde(flatten)]` (ждал плоско `{sessionId, sessionUpdate,…}`), а наш `mock_acp_agent` повторял ту же неверную форму → e2e был зелёный, но живой Hermes молча НЕ парсился: клиент терял ВСЕ стрим-апдейты (токены/мысли/tool_call/plan); аппрув и финал работали. Классика «мок ≠ реальный бэкенд».
+
+- **`schema.rs`**: убран `#[serde(flatten)]` с `SessionNotification.update` → теперь вложенный объект (правит ACP-1 клиент).
+- **`acp/server.rs`** (ACP-2): `map_event_to_acp` эмитит `{sessionId, update:{…}}` (а не плоско) → реальный Zed/JetBrains теперь распарсит наш сервер.
+- **`mock_acp_agent.rs`** + клиентский unit-тест: формы обновлены на вложенные (мок снова зеркалит реальный ACP).
+- **Регрессия запинена** новым тестом `acp_session_update_matches_real_hermes` — десериализует СЫРЫЕ байты Hermes (initialize/session-new/agent_message_chunk/agent_thought_chunk/tool_call/request_permission/prompt-result), снятые живым прогоном. _Хендшейк, request_permission, outcome, prompt-result против живого Hermes уже совпадали — менять не пришлось._
+
 ### Агент · ACP-2 — ACP-СЕРВЕР: подкоманда `nexus acp` (внешний ACP-клиент драйвит Castor) 🔴 BETA
 
 Инверсия ACP-1: теперь МЫ хостим прогон Castor поверх stdio, а внешний ACP-клиент (Zed/JetBrains или наш собственный `AcpClient`) спавнит `nexus acp --vault <P>` и драйвит ход по line-delimited JSON-RPC 2.0 (ACP v1). Backend-only, без UI. **SAFE BY DEFAULT / fail-closed**, **0 регрессии** для `nexus agent`/agentd. Спека: `docs/specs/acp-server.md`.

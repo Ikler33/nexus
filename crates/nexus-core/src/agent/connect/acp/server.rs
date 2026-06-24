@@ -494,14 +494,13 @@ fn acp_plan_status(s: &crate::agent::event::PlanStepState) -> &'static str {
 /// Чистый маппинг ОДНОГО события цикла → ноль-или-более `session/update`-уведомлений. ИСЧЕРПЫВАЮЩИЙ match
 /// + `_ => vec![]` (AgentEvent — `#[non_exhaustive]`). Outbound — через `json!` (без Serialize).
 fn map_event_to_acp(session_id: &str, ev: &AgentEvent) -> Vec<RpcMessage> {
+    // ACP-спека: params = {sessionId, update:{sessionUpdate,…}} — `update` ВЛОЖЕН (не flatten).
+    // Реальный клиент (Zed/JetBrains) и наш AcpClient ждут именно эту форму; плоская молча не парсится.
     let upd = |body: Value| {
-        let mut obj = json!({ "sessionId": session_id });
-        if let (Value::Object(o), Value::Object(b)) = (&mut obj, &body) {
-            for (k, v) in b {
-                o.insert(k.clone(), v.clone());
-            }
-        }
-        vec![RpcMessage::notification("session/update", obj)]
+        vec![RpcMessage::notification(
+            "session/update",
+            json!({ "sessionId": session_id, "update": body }),
+        )]
     };
     match ev {
         AgentEvent::AssistantToken(s) => upd(json!({
@@ -1074,7 +1073,7 @@ mod tests {
         for _ in 0..50 {
             match recv_to(client.as_ref()).await {
                 RpcMessage::Notification { method, params } if method == "session/update" => {
-                    match params["sessionUpdate"].as_str().unwrap_or("") {
+                    match params["update"]["sessionUpdate"].as_str().unwrap_or("") {
                         "agent_message_chunk" => saw_chunk = true,
                         "tool_call" => saw_tool_call = true,
                         "tool_call_update" => saw_tool_update = true,
@@ -1543,8 +1542,8 @@ mod tests {
             RpcMessage::Notification { method, params } => {
                 assert_eq!(method, "session/update");
                 assert_eq!(params["sessionId"], "s1");
-                assert_eq!(params["sessionUpdate"], "agent_message_chunk");
-                assert_eq!(params["content"]["text"], "hi");
+                assert_eq!(params["update"]["sessionUpdate"], "agent_message_chunk");
+                assert_eq!(params["update"]["content"]["text"], "hi");
             }
             _ => panic!(),
         }
@@ -1562,10 +1561,10 @@ mod tests {
         );
         match &call[0] {
             RpcMessage::Notification { params, .. } => {
-                assert_eq!(params["sessionUpdate"], "tool_call");
-                assert_eq!(params["toolCallId"], "t1");
-                assert_eq!(params["kind"], "edit"); // note.create → write → edit
-                assert_eq!(params["status"], "in_progress");
+                assert_eq!(params["update"]["sessionUpdate"], "tool_call");
+                assert_eq!(params["update"]["toolCallId"], "t1");
+                assert_eq!(params["update"]["kind"], "edit"); // note.create → write → edit
+                assert_eq!(params["update"]["status"], "in_progress");
             }
             _ => panic!(),
         }
@@ -1577,7 +1576,7 @@ mod tests {
                 is_error: false,
             },
         );
-        assert_eq!(notif_params(&ok[0])["status"], "completed");
+        assert_eq!(notif_params(&ok[0])["update"]["status"], "completed");
         let err = map_event_to_acp(
             "s1",
             &AgentEvent::ToolResult {
@@ -1586,7 +1585,7 @@ mod tests {
                 is_error: true,
             },
         );
-        assert_eq!(notif_params(&err[0])["status"], "failed");
+        assert_eq!(notif_params(&err[0])["update"]["status"], "failed");
     }
 
     #[test]
@@ -1610,9 +1609,9 @@ mod tests {
             },
         );
         let p = notif_params(&v[0]);
-        assert_eq!(p["sessionUpdate"], "plan");
-        assert_eq!(p["entries"][0]["status"], "in_progress");
-        assert_eq!(p["entries"][1]["status"], "completed"); // Failed → completed
+        assert_eq!(p["update"]["sessionUpdate"], "plan");
+        assert_eq!(p["update"]["entries"][0]["status"], "in_progress");
+        assert_eq!(p["update"]["entries"][1]["status"], "completed"); // Failed → completed
     }
 
     #[test]

@@ -122,7 +122,11 @@ pub struct CancelParams {
 #[serde(rename_all = "camelCase")]
 pub struct SessionNotification {
     pub session_id: String,
-    #[serde(flatten)]
+    /// ACP-спека: `update` — ВЛОЖЕННЫЙ объект (не flatten!). Реальный агент (Hermes 0.17) шлёт
+    /// `{"sessionId":…,"update":{"sessionUpdate":…,…}}`. Раньше тут стоял `#[serde(flatten)]`
+    /// (ждал плоско `{"sessionId":…,"sessionUpdate":…}`) — наш мок повторял ту же НЕВЕРНУЮ форму,
+    /// e2e был зелёный, а живой Hermes молча не парсился (все стрим-апдейты терялись). Пиннируется
+    /// тестом на реальных байтах Hermes (`acp_session_update_matches_real_hermes`).
     pub update: SessionUpdate,
 }
 
@@ -331,8 +335,7 @@ mod tests {
         // session/update: agent_message_chunk
         let n: SessionNotification = serde_json::from_value(serde_json::json!({
             "sessionId": "s1",
-            "sessionUpdate": "agent_message_chunk",
-            "content": {"type": "text", "text": "hi"}
+            "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}}
         }))
         .unwrap();
         assert_eq!(n.session_id, "s1");
@@ -346,12 +349,14 @@ mod tests {
         // session/update: tool_call with a diff
         let n2: SessionNotification = serde_json::from_value(serde_json::json!({
             "sessionId": "s1",
-            "sessionUpdate": "tool_call",
-            "toolCallId": "t1",
-            "title": "edit Notes/A.md",
-            "kind": "edit",
-            "status": "pending",
-            "content": [{"type": "diff", "path": "Notes/A.md", "oldText": null, "newText": "x\ny"}]
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t1",
+                "title": "edit Notes/A.md",
+                "kind": "edit",
+                "status": "pending",
+                "content": [{"type": "diff", "path": "Notes/A.md", "oldText": null, "newText": "x\ny"}]
+            }
         }))
         .unwrap();
         match n2.update {
@@ -366,12 +371,14 @@ mod tests {
         // ACP-1b: session/update tool_call с ДВУМЯ diff'ами (мульти-файловый permission).
         let n2b: SessionNotification = serde_json::from_value(serde_json::json!({
             "sessionId": "s1",
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": "t2",
-            "content": [
-                {"type": "diff", "path": "Notes/A.md", "oldText": null, "newText": "x"},
-                {"type": "diff", "path": "Notes/B.md", "oldText": "p", "newText": "q\nr"}
-            ]
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t2",
+                "content": [
+                    {"type": "diff", "path": "Notes/A.md", "oldText": null, "newText": "x"},
+                    {"type": "diff", "path": "Notes/B.md", "oldText": "p", "newText": "q\nr"}
+                ]
+            }
         }))
         .unwrap();
         match n2b.update {
@@ -397,11 +404,13 @@ mod tests {
         // ACP-1b: session/update plan (полный список записей со статусами/приоритетами).
         let np: SessionNotification = serde_json::from_value(serde_json::json!({
             "sessionId": "s1",
-            "sessionUpdate": "plan",
-            "entries": [
-                {"content": "research", "priority": "high", "status": "in_progress"},
-                {"content": "write", "priority": "medium", "status": "pending"}
-            ]
+            "update": {
+                "sessionUpdate": "plan",
+                "entries": [
+                    {"content": "research", "priority": "high", "status": "in_progress"},
+                    {"content": "write", "priority": "medium", "status": "pending"}
+                ]
+            }
         }))
         .unwrap();
         match np.update {
@@ -418,8 +427,10 @@ mod tests {
         // ACP-1b: plan с неизвестными priority/status → Other (forward-compat, не ошибка).
         let np2: SessionNotification = serde_json::from_value(serde_json::json!({
             "sessionId": "s1",
-            "sessionUpdate": "plan",
-            "entries": [{"content": "x", "priority": "urgent", "status": "blocked"}]
+            "update": {
+                "sessionUpdate": "plan",
+                "entries": [{"content": "x", "priority": "urgent", "status": "blocked"}]
+            }
         }))
         .unwrap();
         match np2.update {
@@ -432,7 +443,7 @@ mod tests {
 
         // unknown sessionUpdate variant → Other (forward-compat, не ошибка)
         let n3: SessionNotification = serde_json::from_value(serde_json::json!({
-            "sessionId": "s1", "sessionUpdate": "current_mode_update", "currentModeId": "x"
+            "sessionId": "s1", "update": {"sessionUpdate": "current_mode_update", "currentModeId": "x"}
         }))
         .unwrap();
         assert!(matches!(n3.update, SessionUpdate::Other));
@@ -505,5 +516,116 @@ mod tests {
         let cp: CancelParams =
             serde_json::from_value(serde_json::json!({"sessionId": "s1"})).unwrap();
         assert_eq!(cp.session_id, "s1");
+    }
+
+    /// Регрессия: ПИННИРОВАННЫЕ СЫРЫЕ payload'ы реального агента Hermes 0.17 (DeepSeek), снятые
+    /// живым ACP-прогоном против `docker exec -i hermes hermes acp` на .28 (2026-06-24). Ловит баг
+    /// `#[serde(flatten)]` на `SessionNotification` (раньше тест пиннил ПЛОСКУЮ форму нашего же мока,
+    /// а Hermes шлёт ВЛОЖЕННУЮ `{"sessionId":…,"update":{…}}`). НЕ редактировать payload'ы под код —
+    /// это байты с провода; код обязан их парсить.
+    #[test]
+    fn acp_session_update_matches_real_hermes() {
+        // initialize result: protocolVersion присутствует (+ agentCapabilities/agentInfo/authMethods).
+        let init: InitializeResult = serde_json::from_value(serde_json::json!({
+            "agentCapabilities": {"loadSession": true, "promptCapabilities": {"image": true},
+                "sessionCapabilities": {"fork": {}, "list": {}, "resume": {}}},
+            "agentInfo": {"name": "hermes-agent", "version": "0.17.0"},
+            "authMethods": [{"description": "…", "id": "deepseek", "name": "deepseek runtime credentials"}],
+            "protocolVersion": 1
+        }))
+        .unwrap();
+        assert_eq!(init.protocol_version, 1);
+
+        // session/new result: sessionId присутствует (+ _meta/models/modes — игнорируем).
+        let nr: NewSessionResult = serde_json::from_value(serde_json::json!({
+            "_meta": {"hermes": {"sessionProvenance": {"sessionKind": "root"}}},
+            "models": {"currentModelId": "deepseek:deepseek-v4-flash"},
+            "modes": {"currentModeId": "default"},
+            "sessionId": "39226b5d-5d12-4a6f-a22e-3701ad92f8d3"
+        }))
+        .unwrap();
+        assert_eq!(nr.session_id, "39226b5d-5d12-4a6f-a22e-3701ad92f8d3");
+
+        // session/update agent_message_chunk (ВЛОЖЕННЫЙ update — реальная форма Hermes).
+        let amc: SessionNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "39226b5d-5d12-4a6f-a22e-3701ad92f8d3",
+            "update": {"content": {"text": "\n\nГ", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            amc.update,
+            SessionUpdate::AgentMessageChunk { content: ContentBlock::Text { ref text } } if text == "\n\nГ"
+        ));
+
+        // session/update agent_thought_chunk → Other (мы его не используем, но НЕ должны падать).
+        let atc: SessionNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "s", "update": {"content": {"text": "The", "type": "text"}, "sessionUpdate": "agent_thought_chunk"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            atc.update,
+            SessionUpdate::AgentThoughtChunk { .. }
+        ));
+
+        // session/update tool_call с реальными полями Hermes (locations/rawInput игнорируются).
+        let tc: SessionNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "39226b5d-5d12-4a6f-a22e-3701ad92f8d3",
+            "update": {
+                "content": [{"content": {"text": "Preparing write to /opt/hermes/hello.md.", "type": "text"}, "type": "content"}],
+                "kind": "edit",
+                "locations": [{"path": "/opt/hermes/hello.md"}],
+                "title": "write: /opt/hermes/hello.md",
+                "toolCallId": "tc-09ab46b1a720",
+                "sessionUpdate": "tool_call"
+            }
+        }))
+        .unwrap();
+        match tc.update {
+            SessionUpdate::ToolCall(t) => {
+                assert_eq!(t.tool_call_id, "tc-09ab46b1a720");
+                assert_eq!(t.kind, ToolKind::Edit);
+            }
+            _ => panic!("expected tool_call"),
+        }
+
+        // session/request_permission params реального Hermes (toolCall.content[].diff + options).
+        let rp: RequestPermissionParams = serde_json::from_value(serde_json::json!({
+            "options": [
+                {"kind": "allow_once", "name": "Allow edit", "optionId": "allow_once"},
+                {"kind": "reject_once", "name": "Deny", "optionId": "deny"}
+            ],
+            "sessionId": "39226b5d-5d12-4a6f-a22e-3701ad92f8d3",
+            "toolCall": {
+                "content": [{"newText": "Hello from Hermes.", "path": "/opt/hermes/hello.md", "type": "diff"}],
+                "kind": "edit",
+                "rawInput": {"tool": "write_file", "arguments": {"path": "/opt/hermes/hello.md", "content": "Hello from Hermes."}},
+                "status": "pending",
+                "title": "Approve edit: /opt/hermes/hello.md",
+                "toolCallId": "edit-approval-1"
+            }
+        }))
+        .unwrap();
+        assert_eq!(rp.options[0].kind, PermissionOptionKind::AllowOnce);
+        let diffs: Vec<_> = rp
+            .tool_call
+            .content
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|c| match c {
+                ToolCallContent::Diff(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path.to_string_lossy(), "/opt/hermes/hello.md");
+        assert_eq!(diffs[0].new_text, "Hello from Hermes.");
+
+        // prompt result реального Hermes: stopReason + usage (usage игнорируем).
+        let pr: PromptResult = serde_json::from_value(serde_json::json!({
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 50118, "outputTokens": 526, "totalTokens": 50644}
+        }))
+        .unwrap();
+        assert_eq!(pr.stop_reason, StopReason::EndTurn);
     }
 }

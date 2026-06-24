@@ -269,7 +269,7 @@ mod tests {
         // стрим: токен
         srv.send(RpcMessage::notification(
             "session/update",
-            json!({"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}),
+            json!({"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}),
         ))
         .await
         .unwrap();

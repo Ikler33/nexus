@@ -54,24 +54,25 @@ fn drive_prompt(
     lines: &mut std::io::Lines<impl BufRead>,
     prompt_id: Option<Value>,
 ) {
+    // session/update: `update` ВЛОЖЕН (форма реального ACP-агента Hermes 0.17, не flatten).
     // (a) токен ассистента
     notify(
         out,
-        json!({"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi "}}),
+        json!({"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi "}}}),
     );
     // (a2) ACP-1b: план хода (todo-список) ДО действий — клиент маппит в PlanProposed.
     notify(
         out,
-        json!({"sessionId":"s1","sessionUpdate":"plan","entries":[
+        json!({"sessionId":"s1","update":{"sessionUpdate":"plan","entries":[
             {"content":"edit A and B","priority":"high","status":"in_progress"},
             {"content":"finish","priority":"medium","status":"pending"}
-        ]}),
+        ]}}),
     );
     // (b) tool_call (edit-намерение)
     notify(
         out,
-        json!({"sessionId":"s1","sessionUpdate":"tool_call","toolCallId":"t1","title":"edit Notes/A.md",
-               "kind":"edit","status":"pending"}),
+        json!({"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"edit Notes/A.md",
+               "kind":"edit","status":"pending"}}),
     );
     // (c) запрос разрешения с ДВУМЯ diff (мульти-файл, ACP-1b) — БЛОКИРУЕМСЯ до Response клиента.
     send(
@@ -108,12 +109,12 @@ fn drive_prompt(
     if approved {
         notify(
             out,
-            json!({"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"t1",
-                   "status":"completed","content":[{"type":"content","content":{"type":"text","text":"written"}}]}),
+            json!({"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1",
+                   "status":"completed","content":[{"type":"content","content":{"type":"text","text":"written"}}]}}),
         );
         notify(
             out,
-            json!({"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}),
+            json!({"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}),
         );
     }
     let stop = if approved { "end_turn" } else { "cancelled" };

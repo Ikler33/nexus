@@ -60,7 +60,9 @@ permission с Err (decide() → reject_all), взвести cancel, вернут
 
 ## 4. Маппинг события цикла → `session/update` (`map_event_to_acp`, чистая, ИСЧЕРПЫВАЮЩАЯ + `_`)
 
-| `AgentEvent` | ACP `session/update` (params = {sessionId, …}) |
+> **Форма params (ACP-спека):** `{sessionId, update:{sessionUpdate, …}}` — `update` ВЛОЖЕН (НЕ flatten). Подтверждено живым прогоном против Hermes 0.17; пиннировано тестом `acp_session_update_matches_real_hermes`. В таблице ниже показано содержимое `update`.
+
+| `AgentEvent` | ACP `session/update` `update` = {sessionUpdate, …} |
 |---|---|
 | `AssistantToken(s)` | `agent_message_chunk` `{content:{type:text, text:s}}` |
 | `ToolCall{id,kind,args}` | `tool_call` `{toolCallId:id, title:"<kind clip(args)>", kind:<acp_tool_kind→edit/read/search/other>, status:in_progress}` |
