@@ -16,11 +16,15 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::event::AgentEvent;
 
+pub mod acp;
 pub mod client;
+pub(crate) mod framing;
 pub mod handler;
+pub mod stdio;
 pub mod wire;
 pub use client::{ConnectClient, ConnectError};
 pub use handler::{ConnectAgentHandler, ConnectDeps};
+pub use stdio::StdioTransport;
 pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamEvent};
 
 // AF_UNIX-хостинг коннектора (P0b-2c) — Unix-only (на Windows `tokio::net::Unix*` отсутствует).

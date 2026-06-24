@@ -147,6 +147,31 @@ where
     Ok(v.and_then(|val| val.as_str().map(str::to_string)))
 }
 
+/// Тип-толерантный десериализатор `Option<Vec<String>>` (ACP-1, для `ai.connection.acp_command`): принимает
+/// ТОЛЬКО массив строк; любое иное (число/объект/строка/массив-с-не-строками) → `None`, НЕ ошибка парса
+/// (та же data-loss-защита, что у [`de_tolerant_opt_string`] — мусорный `acp_command` не роняет `ai.chat`).
+fn de_tolerant_string_vec<'de, D>(d: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|val| match val {
+        serde_json::Value::Array(items) => {
+            let strs: Vec<String> = items
+                .iter()
+                .filter_map(|i| i.as_str().map(str::to_string))
+                .collect();
+            // Все элементы должны быть строками И массив непустой, иначе команда бессмысленна → None.
+            if !strs.is_empty() && strs.len() == items.len() {
+                Some(strs)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }))
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ConnectionConfig {
@@ -163,6 +188,13 @@ pub struct ConnectionConfig {
     /// Ссылка на секрет/токен auth (keyring ref / env, CONN-3). Игнорируется для embedded.
     #[serde(default, deserialize_with = "de_tolerant_opt_string")]
     pub auth_ref: Option<String>,
+    /// ACP-1: программа+аргументы для спавна внешнего ACP-агента, напр. `["hermes","acp"]`. Только для
+    /// `mode="acp"`. Тип-толерантно: не-массив/не-строки/пусто → None (не роняет конфиг).
+    #[serde(default, deserialize_with = "de_tolerant_string_vec")]
+    pub acp_command: Option<Vec<String>>,
+    /// ACP-1: рабочий каталог (`cwd`) для ACP-сессии (`session/new`). Дефолт — корень vault. Только `mode="acp"`.
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub acp_cwd: Option<String>,
 }
 
 /// Нормализованный режим коннекта. `Default` = `Embedded` → отсутствие/неизвестное значение безопасно.
@@ -172,6 +204,8 @@ pub enum ConnectionMode {
     Embedded,
     Local,
     Remote,
+    /// ACP-1: внешний ACP-агент (Hermes и пр.), спавнится подпроцессом по `acp_command`.
+    Acp,
 }
 
 impl ConnectionConfig {
@@ -181,6 +215,7 @@ impl ConnectionConfig {
         match self.mode.as_deref() {
             Some("local") => ConnectionMode::Local,
             Some("remote") => ConnectionMode::Remote,
+            Some("acp") => ConnectionMode::Acp,
             _ => ConnectionMode::Embedded,
         }
     }
@@ -509,6 +544,45 @@ mod tests {
             let cfg =
                 LocalConfig::parse(bad).unwrap_or_else(|e| panic!("parse упал на {bad}: {e}"));
             assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Embedded);
+            assert_eq!(
+                cfg.ai.chat.expect("ai.chat должен выжить").url,
+                "http://h:8080"
+            );
+        }
+    }
+
+    #[test]
+    fn acp1_parses_acp_mode_and_command() {
+        // on-disk local.json для ai.* — snake_case (ConnectionConfig без rename_all, как и весь AiConfig).
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"connection":{"mode":"acp","acp_command":["hermes","acp"],"acp_cwd":"/v"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Acp);
+        assert_eq!(
+            cfg.ai.connection.acp_command.as_deref(),
+            Some(["hermes".to_string(), "acp".to_string()].as_slice())
+        );
+        assert_eq!(cfg.ai.connection.acp_cwd.as_deref(), Some("/v"));
+    }
+
+    #[test]
+    fn acp1_garbage_acp_command_does_not_nuke_config() {
+        // Мусорный acp_command (число / объект / массив-с-не-строками / пустой) → None, parse не падает,
+        // ai.chat выживает (та же data-loss-защита).
+        for bad in [
+            r#"{"ai":{"connection":{"mode":"acp","acp_command":42},"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"connection":{"mode":"acp","acp_command":{"x":1}},"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"connection":{"mode":"acp","acp_command":["hermes",7]},"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"connection":{"mode":"acp","acp_command":[]},"chat":{"url":"http://h:8080"}}}"#,
+        ] {
+            let cfg =
+                LocalConfig::parse(bad).unwrap_or_else(|e| panic!("parse упал на {bad}: {e}"));
+            assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Acp);
+            assert!(
+                cfg.ai.connection.acp_command.is_none(),
+                "мусорный acpCommand → None: {bad}"
+            );
             assert_eq!(
                 cfg.ai.chat.expect("ai.chat должен выжить").url,
                 "http://h:8080"

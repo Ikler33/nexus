@@ -20,21 +20,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
+use super::framing;
 use super::handler::{ConnectAgentHandler, ConnectDeps};
 use super::{dispatch, RpcMessage, Transport, TransportError};
 
-/// Кап длины одной строки-кадра (анти-OOM): клиент без `\n` не должен раздуть буфер бесконечно. Легит
-/// JSON-RPC кадры малы; >1 MiB — аномалия → закрываем соединение. NB: для УДАЛЁННОГО (WS) транспорта с
-/// недоверенным клиентом (Фаза P1a) кап обязателен ещё строже — здесь 0600-локальный single-owner.
-const MAX_LINE_BYTES: usize = 1 << 20;
-/// Кап подряд идущих нераспарсенных/невалидных строк: устойчивость к мусору, но не бесконечный CPU/лог-спам
-/// от залипшего клиента → после порога закрываем соединение.
-const MAX_CONSECUTIVE_MALFORMED: u32 = 64;
 /// Потолок backoff accept-loop при повторных ошибках `accept` (анти-spin при исчерпании fd).
 const ACCEPT_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -61,96 +55,14 @@ impl AfUnixTransport {
 #[async_trait]
 impl Transport for AfUnixTransport {
     async fn send(&self, msg: RpcMessage) -> Result<(), TransportError> {
-        let line = msg.to_json();
         let mut w = self.write.lock().await;
-        // Пишем строку + перевод строки + flush. Любая I/O-ошибка ⇒ пир ушёл ⇒ Closed.
-        w.write_all(line.as_bytes())
-            .await
-            .map_err(|_| TransportError::Closed)?;
-        w.write_all(b"\n")
-            .await
-            .map_err(|_| TransportError::Closed)?;
-        w.flush().await.map_err(|_| TransportError::Closed)
+        framing::send_frame(&mut *w, msg).await
     }
 
     async fn recv(&self) -> Option<RpcMessage> {
         let mut r = self.read.lock().await;
-        let mut malformed = 0u32;
-        loop {
-            // Читаем один кадр до `\n` с КАПОМ длины (анти-OOM): fill_buf/consume вместо read_line,
-            // чтобы остановиться на MAX_LINE_BYTES, а не аллоцировать бесконечно на потоке без `\n`.
-            let mut buf: Vec<u8> = Vec::new();
-            let status = loop {
-                let available = match r.fill_buf().await {
-                    Ok(c) => c,
-                    Err(_) => break LineStatus::Closed,
-                };
-                if available.is_empty() {
-                    break LineStatus::Eof; // EOF (неполная строка без `\n` отбрасывается — протокол требует `\n`)
-                }
-                if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-                    buf.extend_from_slice(&available[..pos]);
-                    let advance = pos + 1;
-                    r.consume(advance);
-                    break LineStatus::Line;
-                }
-                if buf.len() + available.len() > MAX_LINE_BYTES {
-                    break LineStatus::TooLong; // кадр > капа → закрываем соединение
-                }
-                let advance = available.len();
-                buf.extend_from_slice(available);
-                r.consume(advance);
-            };
-
-            match status {
-                LineStatus::Eof | LineStatus::Closed => return None,
-                LineStatus::TooLong => {
-                    tracing::warn!(target: "agent::connect", cap = MAX_LINE_BYTES, "afunix: кадр превысил кап длины — закрываем соединение");
-                    return None;
-                }
-                LineStatus::Line => {
-                    let s = match std::str::from_utf8(&buf) {
-                        Ok(s) => s.trim(),
-                        Err(_) => {
-                            malformed += 1;
-                            if malformed > MAX_CONSECUTIVE_MALFORMED {
-                                return None;
-                            }
-                            continue;
-                        }
-                    };
-                    if s.is_empty() {
-                        continue; // keep-alive/пустая строка — пропускаем (не считаем за malformed)
-                    }
-                    match RpcMessage::from_json(s) {
-                        Ok(m) => return Some(m),
-                        Err(_) => {
-                            // Нераспарсенная строка НЕ роняет соединение сразу (устойчивость к мусору), но
-                            // поток мусора подряд → закрываем (анти CPU/лог-спам).
-                            malformed += 1;
-                            tracing::warn!(target: "agent::connect", "afunix: пропуск нераспарсенной строки");
-                            if malformed > MAX_CONSECUTIVE_MALFORMED {
-                                return None;
-                            }
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
+        framing::recv_frame(&mut *r, "afunix").await
     }
-}
-
-/// Исход чтения одного кадра в [`AfUnixTransport::recv`].
-enum LineStatus {
-    /// Прочитана полная строка до `\n` (в `buf`).
-    Line,
-    /// EOF — пир закрыл write-половину.
-    Eof,
-    /// I/O-ошибка чтения.
-    Closed,
-    /// Кадр превысил [`MAX_LINE_BYTES`] без `\n`.
-    TooLong,
 }
 
 /// Готовит путь под bind: stale-сокет от прошлого запуска снимается, НО только если это реально СОКЕТ.
@@ -390,7 +302,7 @@ mod tests {
         let (a, mut b) = UnixStream::pair().unwrap();
         let ta = AfUnixTransport::new(a);
         // Пишем > капа байт БЕЗ перевода строки — recv должен упереться в кап и вернуть None.
-        let huge = vec![b'x'; MAX_LINE_BYTES + 1024];
+        let huge = vec![b'x'; super::framing::MAX_LINE_BYTES + 1024];
         tokio::spawn(async move {
             let _ = b.write_all(&huge).await;
             let _ = b.flush().await;

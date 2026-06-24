@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Агент · ACP-1 — клиент Agent Client Protocol: `mode=acp` драйвит ВНЕШНЕГО агента (Hermes) 🔴 BETA
+
+Первый срез ACP-клиента: desktop может спавнить и драйвить чужого ACP-агента (`hermes acp` и пр.) подпроцессом вместо встроенного движка. Зеркальная пара к CONN (там мы — сервер своего протокола; здесь — клиент [ACP](https://agentclientprotocol.com)). Default остаётся embedded — **0 регрессии**; CONN-2 `mode=local` не тронут. Спека: `docs/specs/acp-client.md`.
+
+- **Хэндролл, +0 deps** (`crates/nexus-core/src/agent/connect/acp/`): крейт `agent-client-protocol` отвергнут (несовместимый с tokio рантайм / ~12 транзитивных крейтов). ACP на проводе = JSON-RPC 2.0 line-delimited — БАЙТ-в-байт наш AF_UNIX-framing, поэтому вынесен общий `connect/framing.rs` (AF_UNIX рефакторён на него, **байт-идентично** — тесты CONN-2 зелёные) и переиспользованы `RpcMessage`/`Transport`.
+- **`StdioTransport`** (`connect/stdio.rs`, кросс-платформенно): спавнит агента (stdin/stdout/stderr piped, `kill_on_drop` — нет осиротевших процессов, **дренаж stderr** — анти-дедлок). Транспорт-тесты (cat-roundtrip / EOF / нет-бинаря→Err).
+- **`AcpClient`** (`connect/acp/client.rs`) — **двунаправленный** (в отличие от half-duplex `ConnectClient`): read-loop разводит `Response`→ждущим по `id`, `session/update`→канал, входящий `session/request_permission`→канал; `fs/*`/`terminal/*` агента → `method_not_found` (caps=false → **fail-closed без зависа**). `request` с опциональным таймаутом (`None` для `session/prompt` — целый ход + cold-start модели). `acp/schema.rs` — v1 serde wire-типы (`protocolVersion`=u16, `#[serde(other)]` forward-compat), пиннированный контракт-тест.
+- **`AcpBackend`** (`apps/desktop/agent_backend.rs`, реализует `AgentBackend`, кросс-платформенно): `run`→spawn→`initialize`/`session/new`(30s)→drive-task (`select!` над `session/prompt` без таймаута + pump updates/perms). **Мост аппрува**: входящий `request_permission` → синтетический `action_id` + `Proposal` (тот же DTO, что у Castor → **фронт не тронут**) → блок до `agent_approve` → `pick_outcome` выбирает ACP-`optionId` (**fail-closed cancelled**, если нет allow-опции) → `Response`. Маппинг chunk→`Final`(accum) / tool_call→`ToolCall` / tool_call_update→`ToolResult`(failed→is_error). `cancel`→`session/cancel`; `pause`/`resume`→`Err` (ACP v1 без pause); `undo`→`Ok(0)` (агент пишет в своей песочнице). Выбор бэкенда: `ai.connection.mode()=="acp"`→`AcpBackend` (через тот же `select_agent_backend`); иначе embedded/local байт-идентично.
+- **Конфиг**: `ai.connection.{acp_command:Vec<String>, acp_cwd:Option<String>}` (snake_case на диске), толерантные десериализаторы — мусор→`None`, **не роняет** `ai.chat`/`ai.embedding`.
+- **Честные ограничения R1–R6** (в спеке + комментариях): R1 без истории/переноса автономии · R2 vault владеет агент (его cwd) · R3 без undo/pause · R4 один прогон на соединение (гард) · R5 без reconnect · R6 session/fork (unstable) выключен.
+- **E2E против реального подпроцесса** (`crates/nexus-core/tests/acp_e2e.rs` + `examples/mock_acp_agent.rs` — независимая реализация контракта, оракул дрейфа): спавн через `StdioTransport` + драйв `AcpClient`'ом весь путь до `end_turn`. Покрывает связку, не покрытую юнитами (процесс + pipe-framing + bidirectional loop).
+
 ### Агент · CONN-4 — UI-селектор подключения агента (Embedded/Local) 🔴 BETA
 
 Режим подключения агента теперь выбирается в Настройках — без правки `local.json`. Делает CONN-2 пригодным к использованию.

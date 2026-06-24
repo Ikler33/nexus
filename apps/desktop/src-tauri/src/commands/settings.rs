@@ -459,6 +459,7 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
                 nexus_core::ai::ConnectionMode::Embedded => "embedded",
                 nexus_core::ai::ConnectionMode::Local => "local",
                 nexus_core::ai::ConnectionMode::Remote => "remote",
+                nexus_core::ai::ConnectionMode::Acp => "acp",
             }
             .into(),
             socket: cfg.ai.connection.socket.clone(),
@@ -709,6 +710,7 @@ pub async fn set_agent_connection(
                 nexus_core::ai::ConnectionMode::Embedded => "embedded",
                 nexus_core::ai::ConnectionMode::Local => "local",
                 nexus_core::ai::ConnectionMode::Remote => "remote",
+                nexus_core::ai::ConnectionMode::Acp => "acp",
             };
             (m.to_string(), c.ai.connection.socket.clone())
         })
