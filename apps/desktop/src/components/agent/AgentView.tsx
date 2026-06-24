@@ -24,7 +24,9 @@ import { useTranslation } from 'react-i18next';
 import { BrandThinking } from '../chrome/BrandThinking';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
 import { useToastStore } from '../../stores/toast';
-import type { AgentPerms, AgentTurn, ChangesetFile } from '../../stores/agent';
+import type { AgentPerms, AgentStep, AgentTurn, ChangesetFile } from '../../stores/agent';
+import { lineDiff, type DiffLine } from '../../lib/diff';
+import { tauriApi, type AgentFileStatus } from '../../lib/tauri-api';
 import styles from './AgentView.module.css';
 
 /** Доступные модели для отображаемого селектора (per-run политика UI; реальный выбор — конфиг бэка). */
@@ -473,6 +475,7 @@ function TurnView({
       {turn.changeset.length > 0 && (
         <Changeset
           files={turn.changeset}
+          proposed={proposedContentByPath(turn.steps)}
           autonomy={autonomy}
           awaiting={isLast && status === 'awaiting'}
           approving={isLast && approving}
@@ -521,6 +524,8 @@ function TurnView({
 
 interface ChangesetProps {
   files: ChangesetFile[];
+  /** W-15: предложенный контент по vault-rel пути (из tool-вызовов хода) — для inline-диффа. */
+  proposed: Map<string, string>;
   autonomy: 'confirm' | 'auto';
   awaiting: boolean;
   approving: boolean;
@@ -529,9 +534,60 @@ interface ChangesetProps {
   onApprove: () => void;
 }
 
-function Changeset({ files, autonomy, awaiting, approving, onFile, onBulk, onApprove }: ChangesetProps) {
+/** W-15: предложенный контент по пути из tool-вызовов хода (`note.create`/`note.edit` несут
+ *  `{path, content}`). Последний вызов на путь побеждает. Для inline-диффа в окне подтверждения. */
+function proposedContentByPath(steps: AgentStep[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const st of steps) {
+    if (st.kind !== 'note.create' && st.kind !== 'note.edit') continue;
+    try {
+      const a = JSON.parse(st.args) as { path?: string; content?: string };
+      if (a.path && typeof a.content === 'string') m.set(a.path, a.content);
+    } catch {
+      /* кривой args — пропускаем (диффа нет, счётчики ±N остаются) */
+    }
+  }
+  return m;
+}
+
+function Changeset({
+  files,
+  proposed,
+  autonomy,
+  awaiting,
+  approving,
+  onFile,
+  onBulk,
+  onApprove,
+}: ChangesetProps) {
   const { t } = useTranslation();
   const auto = autonomy === 'auto';
+  // W-15: какой файл раскрыт для inline-диффа + кэш вычисленных диффов (current с диска ⟷ proposed).
+  const [openDiff, setOpenDiff] = useState<string | null>(null);
+  const [diffCache, setDiffCache] = useState<Record<string, DiffLine[]>>({});
+  const toggleDiff = (path: string, status: AgentFileStatus) => {
+    if (openDiff === path) {
+      setOpenDiff(null);
+      return;
+    }
+    setOpenDiff(path);
+    if (diffCache[path]) return;
+    const next = proposed.get(path) ?? '';
+    // Новый файл — текущего контента нет → чистый add-дифф (без lineDiff('',…), который дал бы
+    // ложную ведущую пустую `del`-строку, ревью W-15). Правка — читаем текущее с диска.
+    if (status === 'new') {
+      const lines: DiffLine[] =
+        next === '' ? [] : next.split('\n').map((text) => ({ type: 'add', text }));
+      setDiffCache((c) => ({ ...c, [path]: lines }));
+      return;
+    }
+    void tauriApi.vault
+      .readFile(path)
+      .catch(() => '')
+      .then((current) => {
+        setDiffCache((c) => ({ ...c, [path]: lineDiff(current, next) }));
+      });
+  };
   const totAdd = files.reduce((a, f) => a + f.add, 0);
   const totDel = files.reduce((a, f) => a + f.del, 0);
   const pending = auto ? 0 : files.filter((f) => f.decision === undefined && f.actionId >= 0).length;
@@ -573,9 +629,11 @@ function Changeset({ files, autonomy, awaiting, approving, onFile, onBulk, onApp
       <div className={styles.csFiles}>
         {files.map((f) => {
           const decision = auto ? 'applied' : f.decision;
+          const hasDiff = proposed.has(f.path); // inline-дифф доступен для note.create/edit
+          const diffOpen = openDiff === f.path;
           return (
+            <div key={`${f.path}:${f.actionId}`} className={styles.cfBlock}>
             <div
-              key={`${f.path}:${f.actionId}`}
               className={`${styles.csFile} ${decision === 'applied' ? styles.csApplied : decision === 'rejected' ? styles.csRejected : ''}`}
             >
               <span className={styles.cfIc}>
@@ -596,6 +654,23 @@ function Changeset({ files, autonomy, awaiting, approving, onFile, onBulk, onApp
                 {f.del ? <b className={styles.csDel}> −{f.del}</b> : null}
               </span>
               <div className={styles.cfActs}>
+                {/* W-15: inline-дифф контента (а не только ±N) — раскрывается по клику. */}
+                {hasDiff && (
+                  <button
+                    type="button"
+                    className={`${styles.cfBtn} ${diffOpen ? styles.cfDiffOn : ''}`}
+                    onClick={() => toggleDiff(f.path, f.status)}
+                    title={t('agent.changeset.toggleDiff')}
+                    aria-label={t('agent.changeset.toggleDiff')}
+                    aria-expanded={diffOpen}
+                  >
+                    <ChevronRight
+                      size={13}
+                      aria-hidden
+                      className={diffOpen ? styles.cfDiffChevOpen : undefined}
+                    />
+                  </button>
+                )}
                 {decision === 'applied' ? (
                   <span className={`${styles.cfBadge} ${styles.cfOk}`}>
                     {auto ? <OrbitIcon size={12} aria-hidden /> : <Check size={12} aria-hidden />}
@@ -630,6 +705,38 @@ function Changeset({ files, autonomy, awaiting, approving, onFile, onBulk, onApp
                   </>
                 )}
               </div>
+            </div>
+            {/* W-15: раскрытый inline-дифф (current с диска ⟷ proposed из tool-args). */}
+            {diffOpen && (
+              <pre className={styles.cfDiff} aria-label={t('agent.changeset.toggleDiff')}>
+                {diffCache[f.path] ? (
+                  diffCache[f.path].length === 0 ||
+                  diffCache[f.path].every((d) => d.type === 'same') ? (
+                    <div className={styles.dEmpty}>{t('agent.changeset.diffEmpty')}</div>
+                  ) : (
+                    diffCache[f.path].map((d, i) => (
+                      <div
+                        key={i}
+                        className={
+                          d.type === 'add'
+                            ? styles.dAdd
+                            : d.type === 'del'
+                              ? styles.dDel
+                              : styles.dSame
+                        }
+                      >
+                        <span className={styles.dGut} aria-hidden>
+                          {d.type === 'add' ? '+' : d.type === 'del' ? '−' : ' '}
+                        </span>
+                        {d.text}
+                      </div>
+                    ))
+                  )
+                ) : (
+                  <div className={styles.dEmpty}>{t('agent.changeset.diffLoading')}</div>
+                )}
+              </pre>
+            )}
             </div>
           );
         })}

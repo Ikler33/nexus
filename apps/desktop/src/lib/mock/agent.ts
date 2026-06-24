@@ -120,6 +120,22 @@ export function run(
         isError: false,
       });
 
+      // W-15: note.create-вызов несёт {path, content} → фронт строит inline-дифф changeset'а (зеркало
+      // реального бэка: предложения файлов РОЖДАЮТСЯ из note.create/edit tool-вызовов). Путь совпадает
+      // с первым файлом proposal, чтобы дифф был доступен в превью.
+      const writeId = 'mock-w1';
+      onEvent({
+        type: 'toolCall',
+        id: writeId,
+        kind: 'note.create',
+        args: JSON.stringify({
+          path: files[0].path,
+          content: '# Идея — кэш контекста\n\nКэшировать контекст агентов между ходами.\n',
+        }),
+      });
+      await sleep(STEP_MS * 2);
+      onEvent({ type: 'toolResult', id: writeId, content: 'proposed', isError: false });
+
       // 3. Загрузка контекстного окна (`contextUsage`) — питает %-бар шапки.
       onEvent({ type: 'contextUsage', used: 24_000, window: 64_000 });
       await sleep(STEP_MS);

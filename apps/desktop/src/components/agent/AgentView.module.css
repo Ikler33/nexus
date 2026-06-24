@@ -625,7 +625,9 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--color-border);
 }
-.csFile:last-child {
+/* W-15: строки обёрнуты в .cfBlock — целимся в .csFile последнего блока (иначе :last-child матчил
+   КАЖДУЮ свёрнутую строку и убирал все разделители). */
+.cfBlock:last-child .csFile {
   border-bottom: none;
 }
 .csFile.csApplied {
@@ -1092,4 +1094,53 @@
 }
 .artBtn:hover {
   filter: brightness(1.05);
+}
+
+/* W-15: inline-дифф файла в changeset (current ⟷ proposed). */
+.cfBlock {
+  display: flex;
+  flex-direction: column;
+}
+.cfDiffChevOpen {
+  transform: rotate(90deg);
+  transition: transform var(--motion-fast, 120ms) ease;
+}
+.cfBtn.cfDiffOn {
+  color: var(--color-accent);
+}
+.cfDiff {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cfDiff .dGut {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 8px;
+  color: var(--color-text-faint);
+  user-select: none;
+}
+.cfDiff .dAdd {
+  background: color-mix(in oklch, var(--color-success) 14%, transparent);
+  color: var(--color-text);
+}
+.cfDiff .dDel {
+  background: color-mix(in oklch, var(--color-danger) 14%, transparent);
+  color: var(--color-text);
+}
+.cfDiff .dSame {
+  color: var(--color-text-muted);
+}
+.cfDiff .dEmpty {
+  color: var(--color-text-muted);
+  font-style: italic;
 }
