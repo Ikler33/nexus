@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Агент · W-28 — терминальный агент `nexus agent` (срез 1) 🔴 BETA
+
+Запуск агента из **терминала**, отдельно от десктоп-GUI — для разработки и тестирования самого агента (как Hermes). Срез 1: one-shot.
+
+- **`nexus agent [--vault P] "<задача>"`** (новый модуль `crates/nexus-cli/src/agent.rs`) — третий потребитель транспорт-агностичного ядра `run_agent_session` рядом с desktop и agentd. Сборка зависимостей зеркалит `nexus-agentd --sandbox-run` (egress-политика + audit + общий `build_agent_tool_provider`), но без песочницы.
+- **Вывод**: `StdoutForwarder` стримит события прогона в терминал — токены ответа инлайн, вызовы инструментов/результаты/changeset/план/финал — строками (`render_line`, char-safe усечение; catch-all под `#[non_exhaustive]`).
+- **SAFE BY DEFAULT**: `actuator_enabled=false` → агент на стабах, **vault не трогается** (write-инструменты структурно не регистрируются), `PolicyDefault` fail-closed. Egress — allowlist из конфига. Единственный side-effect — строка `agent_runs` (без джобы → демоном не подхватывается).
+- **0 изменений ядра.** Adversarial-ревью (correctness + safety, 2 линзы): 0 critical / 0 major. Гейт: build + clippy (workspace) + fmt + 8 юнит-тестов (разбор аргументов, рендер событий, unicode-усечение).
+- Следующие срезы: W-29 (TTY-аппрув + живой актуатор), W-30 (REPL + slash-команды).
+
 ### Агент · W-15 — inline-дифф в окне подтверждения 🔴 BETA
 
 Окно подтверждения changeset показывало только ±N строк. Теперь — разворачиваемый **inline-дифф контента** по клику.
