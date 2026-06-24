@@ -344,6 +344,18 @@ export interface ChatSessionInfo {
   updatedAt: number;
 }
 
+/** Совпадение поиска по переписке (#58, зеркалит Rust `chat_log::ChatSearchHit`). */
+export interface ChatSearchHit {
+  sessionId: number;
+  title: string;
+  role: 'user' | 'assistant';
+  /** Фрагмент с подсветкой совпадений (FTS5 snippet, `[...]`). */
+  snippet: string;
+  createdAt: number;
+  /** Саммари эпизода сессии (EP), если есть. */
+  summary: string | null;
+}
+
 /** Сообщение сессии из БД (зеркалит `chat_log::StoredMessage`). */
 export interface StoredChatMessage {
   role: 'user' | 'assistant';
@@ -1293,6 +1305,11 @@ export const tauriApi = {
     sessions: {
       list: (): Promise<ChatSessionInfo[]> =>
         isTauri() ? invoke<ChatSessionInfo[]>('chat_sessions_list') : mockSessions.list(),
+      /** #58 session-search: полнотекстовый поиск по переписке (snippet-подсветка + заголовок/саммари). */
+      search: (query: string, limit?: number): Promise<ChatSearchHit[]> =>
+        isTauri()
+          ? invoke<ChatSearchHit[]>('chat_search', { query, limit })
+          : mockSessions.search(query, limit),
       messages: (id: number): Promise<StoredChatMessage[]> =>
         isTauri()
           ? invoke<StoredChatMessage[]>('chat_session_messages', { id })

@@ -253,6 +253,64 @@
   font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
+
+/* #58 (W-8): поиск по переписке внутри дропдауна истории. */
+.histSearch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.histSearchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  outline: none;
+}
+.histHit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.histHit:hover {
+  background: var(--color-surface-hover, var(--color-chrome));
+}
+.histHitTitle {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.histHitSnip {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snipMark {
+  background: color-mix(in oklch, var(--color-accent) 24%, transparent);
+  color: var(--color-text);
+  border-radius: 3px;
+  padding: 0 1px;
+}
 .histRow {
   display: flex;
   align-items: center;

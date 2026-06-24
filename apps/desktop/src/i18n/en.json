@@ -713,6 +713,9 @@
     "memoryAi": "assistant",
     "history": "Session history",
     "historyEmpty": "Nothing yet — ask your first question.",
+    "searchSessions": "Search conversations",
+    "searchPlaceholder": "Search conversations…",
+    "searchEmpty": "No matches.",
     "newSession": "New session",
     "toNote": "Save to notes",
     "hist": {

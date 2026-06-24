@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Check,
   FilePlus2,
+  Search,
   HardDrive,
   History,
   Maximize2,
@@ -13,7 +14,7 @@ import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { logUi } from '../../lib/debug-log';
-import { tauriApi, type ChatSessionInfo } from '../../lib/tauri-api';
+import { tauriApi, type ChatSearchHit, type ChatSessionInfo } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { useChatStore } from '../../stores/chat';
 import { useUIStore } from '../../stores/ui';
@@ -62,6 +63,22 @@ function bucketOf(updatedAt: number, now: number): 'today' | 'yesterday' | 'week
 }
 
 /**
+ * #58 (W-8, ревью): бэкенд-snippet оборачивает совпадения литеральными скобками `[...]` (FTS5
+ * `snippet()`). Разбираем их в `<mark>` (CSP-safe, без innerHTML), убирая сами скобки.
+ */
+function renderSnippet(snippet: string, markClass: string) {
+  return snippet.split(/\[([^\]]*)\]/g).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className={markClass}>
+        {part}
+      </mark>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+/**
  * История сессий (решение владельца 2026-06-12, вариант А «как в Claude/ChatGPT»): кнопка-часы
  * в шапке панели → glass-дропдаун с группировкой по датам; клик — загрузить сессию; на ховере
  * строки — «Сохранить в заметки» (экспорт в `Chats/…md`). Ничего не удаляем — это память
@@ -72,6 +89,11 @@ function SessionHistory() {
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<ChatSessionInfo[]>([]);
   const [savedId, setSavedId] = useState<number | null>(null);
+  // #58 (W-8): полнотекстовый поиск по переписке.
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<ChatSearchHit[]>([]);
+  // searched — поиск ПО ТЕКУЩЕМУ запросу уже завершился (ревью: иначе «Совпадений нет» мигает до дебаунса).
+  const [searched, setSearched] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const sessionId = useChatStore((s) => s.sessionId);
   const loadSession = useChatStore((s) => s.loadSession);
@@ -87,6 +109,42 @@ function SessionHistory() {
     };
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  // #58: дебаунс-поиск по переписке (пустой запрос → показываем обычную историю по бакетам).
+  useEffect(() => {
+    const q = query.trim();
+    setSearched(false); // запрос изменился — результат ещё не получен
+    if (!q) {
+      setHits([]);
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      void tauriApi.chat.sessions
+        .search(q, 50)
+        .then((h) => {
+          if (alive) {
+            setHits(h);
+            setSearched(true);
+          }
+        })
+        .catch(() => {
+          if (alive) {
+            setHits([]);
+            setSearched(true);
+          }
+        });
+    }, 220);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  // Сброс поиска при закрытии меню.
+  useEffect(() => {
+    if (!open) setQuery('');
   }, [open]);
 
   const toNote = (id: number) => {
@@ -120,8 +178,50 @@ function SessionHistory() {
       {open && (
         <div className={styles.histMenu} role="menu" aria-label={t('chat.history')}>
           <div className={styles.histHead}>{t('chat.history')}</div>
-          {buckets.length === 0 && <div className={styles.histEmpty}>{t('chat.historyEmpty')}</div>}
-          {buckets.map(([bucket, list]) => (
+          {/* #58 (W-8): поиск по переписке. */}
+          <div className={styles.histSearch}>
+            <Search size={13} aria-hidden />
+            <input
+              type="text"
+              className={styles.histSearchInput}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('chat.searchPlaceholder')}
+              aria-label={t('chat.searchSessions')}
+              spellCheck={false}
+            />
+          </div>
+          {/* Поиск активен → результаты-совпадения; иначе — обычная история по бакетам. */}
+          {query.trim() ? (
+            hits.length > 0 ? (
+              hits.map((h, i) => (
+                <button
+                  key={`${h.sessionId}-${h.createdAt}-${i}`}
+                  type="button"
+                  role="menuitem"
+                  className={styles.histHit}
+                  onClick={() => {
+                    setOpen(false);
+                    logUi('chat:search-load-session', String(h.sessionId));
+                    void loadSession(h.sessionId);
+                  }}
+                >
+                  <span className={styles.histHitTitle}>{h.title}</span>
+                  <span className={styles.histHitSnip}>
+                    {renderSnippet(h.snippet, styles.snipMark)}
+                  </span>
+                </button>
+              ))
+            ) : searched ? (
+              // Пусто показываем ТОЛЬКО после завершения поиска (ревью: иначе мигает до дебаунса).
+              <div className={styles.histEmpty}>{t('chat.searchEmpty')}</div>
+            ) : null
+          ) : (
+            <>
+              {buckets.length === 0 && (
+                <div className={styles.histEmpty}>{t('chat.historyEmpty')}</div>
+              )}
+              {buckets.map(([bucket, list]) => (
             <div key={bucket}>
               <div className={styles.histBucket}>{t(`chat.hist.${bucket}`)}</div>
               {list.map((sess, i) => (
@@ -158,7 +258,9 @@ function SessionHistory() {
                 </div>
               ))}
             </div>
-          ))}
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

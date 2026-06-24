@@ -1,4 +1,4 @@
-import type { ChatSessionInfo, StoredChatMessage } from '../tauri-api';
+import type { ChatSearchHit, ChatSessionInfo, StoredChatMessage } from '../tauri-api';
 
 /** In-memory мок сессий чата (превью/тесты вне Tauri): живая история без бэкенда. */
 let nextId = 3;
@@ -30,6 +30,38 @@ export async function messages_(id: number): Promise<StoredChatMessage[]> {
   return messages.get(id) ?? [];
 }
 export { messages_ as messages };
+
+/**
+ * #58 session-search мок: подстроковый поиск по телам сообщений (зеркалит FTS5-поиск бэкенда —
+ * совпавшие сообщения со snippet-фрагментом, заголовком сессии). Пустой запрос → пусто.
+ */
+export async function search(query: string, limit = 50): Promise<ChatSearchHit[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const hits: ChatSearchHit[] = [];
+  for (const s of sessions) {
+    for (const m of messages.get(s.id) ?? []) {
+      const idx = m.content.toLowerCase().indexOf(q);
+      if (idx < 0) continue;
+      const start = Math.max(0, idx - 20);
+      const snippet =
+        (start > 0 ? '…' : '') +
+        m.content.slice(start, idx) +
+        `[${m.content.slice(idx, idx + query.length)}]` +
+        m.content.slice(idx + query.length, idx + query.length + 30);
+      hits.push({
+        sessionId: s.id,
+        title: s.title,
+        role: m.role,
+        snippet,
+        createdAt: m.createdAt,
+        summary: null,
+      });
+      if (hits.length >= limit) return hits;
+    }
+  }
+  return hits;
+}
 
 export async function logExchange(
   sessionId: number | null,

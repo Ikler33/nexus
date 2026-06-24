@@ -724,6 +724,9 @@
     "memoryAi": "ассистент",
     "history": "История сессий",
     "historyEmpty": "Пока пусто — задайте первый вопрос.",
+    "searchSessions": "Поиск по переписке",
+    "searchPlaceholder": "Поиск по переписке…",
+    "searchEmpty": "Совпадений нет.",
     "newSession": "Новая сессия",
     "toNote": "Сохранить в заметки",
     "hist": {
