@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -11,7 +11,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
 import { openVaultFlow } from '../../lib/commands-core';
-import { isTauri, tauriApi } from '../../lib/tauri-api';
+import { isTauri, tauriApi, type AiEndpoint } from '../../lib/tauri-api';
 import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
@@ -21,6 +21,11 @@ import styles from './Onboarding.module.css';
 
 type Step = 'welcome' | 'vault' | 'ai' | 'index';
 type Health = 'none' | 'checking' | 'ok' | 'bad';
+
+// W-7/W-11: дефолтные локальные эндпоинты (прод-риг .28) — предзаполняют форму онбординга, чтобы
+// новый пользователь запускался без ручной возни. Local-first: можно изменить или оставить пустыми.
+const DEFAULT_CHAT_URL = 'http://192.168.0.28:8080';
+const DEFAULT_EMBED_URL = 'http://192.168.0.28:8083';
 
 /** Индикатор шагов 1–3 (vault → AI → индексация), как в макете. */
 function StepDots({ step }: { step: Step }) {
@@ -66,8 +71,21 @@ export function Onboarding() {
   const [health, setHealth] = useState<Health>('none');
   const [aiUrl, setAiUrl] = useState<string | null>(null);
   const [indexed, setIndexed] = useState(false);
+  // W-7: редактируемые эндпоинты + сохранение моделей (не затираем уже настроенные). saving — блок кнопки.
+  const [chatUrl, setChatUrl] = useState('');
+  const [embedUrl, setEmbedUrl] = useState('');
+  const [chatModel, setChatModel] = useState<string | null>(null);
+  const [embedModel, setEmbedModel] = useState<string | null>(null);
+  // W-7 (ревью): сохраняем `ai.fast` нетронутым — set_ai_config с fast=null УДАЛИЛ бы его (data-loss).
+  const [fastEp, setFastEp] = useState<AiEndpoint | null>(null);
+  const [saving, setSaving] = useState(false);
+  // W-7 (ревью): сменили embedding → нужен перезапуск/переиндексация (индексатор стартует на open_vault
+  // со старым embedder). Показываем подсказку (как SettingsView), иначе сигнал теряется.
+  const [needRestart, setNeedRestart] = useState(false);
+  // W-7 (ревью): предзаполняем форму ОДИН раз — иначе re-entry шага AI (Назад→снова) затрёт правки юзера.
+  const prefilledRef = useRef(false);
 
-  // Шаг AI: читаем конфиг открытого vault и пробуем эндпоинт chat-модели.
+  // Шаг AI: читаем конфиг открытого vault, предзаполняем форму (или дефолтами .28) и пробуем chat-эндпоинт.
   useEffect(() => {
     if (step !== 'ai') return;
     let alive = true;
@@ -77,6 +95,17 @@ export function Onboarding() {
         const url = cfg.chat?.url ?? null;
         if (!alive) return;
         setAiUrl(url);
+        setNeedRestart(false); // свежий заход на шаг — старую подсказку убираем
+        // Предзаполнение ОДИН раз (ревью): настроенное → как есть; пусто → дефолты .28 (W-11); модели
+        // сохраняем. Re-entry не затирает несохранённые правки юзера.
+        if (!prefilledRef.current) {
+          prefilledRef.current = true;
+          setChatUrl(cfg.chat?.url ?? DEFAULT_CHAT_URL);
+          setEmbedUrl(cfg.embedding?.url ?? DEFAULT_EMBED_URL);
+          setChatModel(cfg.chat?.model ?? null);
+          setEmbedModel(cfg.embedding?.model ?? null);
+          setFastEp(cfg.fast ?? null);
+        }
         if (!url) {
           setHealth('none');
           return;
@@ -92,6 +121,35 @@ export function Onboarding() {
       alive = false;
     };
   }, [step]);
+
+  // W-7: сохранить введённые эндпоинты в `.nexus/local.json` и сразу проверить связь (ST-A3).
+  const saveAndTest = async () => {
+    const chat = chatUrl.trim();
+    const embedding = embedUrl.trim();
+    setSaving(true);
+    setNeedRestart(false);
+    setHealth('checking');
+    try {
+      const res = await tauriApi.settings.setAiConfig(
+        chat ? { url: chat, model: chatModel } : null,
+        embedding ? { url: embedding, model: embedModel } : null,
+        fastEp, // ревью: сохраняем существующий ai.fast (иначе set_ai_config его удалит)
+      );
+      // Смена embedding не применяется на лету (индексатор держит старый embedder до перезапуска).
+      setNeedRestart(res.embeddingChanged);
+      setAiUrl(chat || null);
+      if (!chat) {
+        setHealth('none');
+        return;
+      }
+      await tauriApi.settings.testConnection(chat);
+      setHealth('ok');
+    } catch {
+      setHealth('bad');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // Шаг индексации: «Готово» по первому `vault:changed` (реиндекс завершён); вне Tauri — мок-таймер.
   useEffect(() => {
@@ -236,6 +294,44 @@ export function Onboarding() {
                 <span className={styles.optSub}>{t('onboarding.aiSub')}</span>
               </span>
               {healthPill()}
+            </div>
+            {/* W-7: ввод эндпоинтов + сохранение и проверка (ST-A3) — чтобы новый юзер настроил AI
+                прямо в онбординге, а не уходил в Настройки. Предзаполнено дефолтами .28. */}
+            <div className={styles.aiForm}>
+              <label className={styles.aiField}>
+                <span>{t('onboarding.aiChatUrl')}</span>
+                <input
+                  type="text"
+                  className={styles.aiInput}
+                  value={chatUrl}
+                  onChange={(e) => setChatUrl(e.target.value)}
+                  placeholder={DEFAULT_CHAT_URL}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </label>
+              <label className={styles.aiField}>
+                <span>{t('onboarding.aiEmbedUrl')}</span>
+                <input
+                  type="text"
+                  className={styles.aiInput}
+                  value={embedUrl}
+                  onChange={(e) => setEmbedUrl(e.target.value)}
+                  placeholder={DEFAULT_EMBED_URL}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </label>
+              <button
+                type="button"
+                className={styles.aiSave}
+                onClick={() => void saveAndTest()}
+                disabled={saving}
+              >
+                {saving ? t('onboarding.aiSaving') : t('onboarding.aiSaveTest')}
+              </button>
+              {/* W-7 (ревью): смена embedding требует перезапуска/переиндексации — не теряем сигнал. */}
+              {needRestart && <p className={styles.aiRestart}>{t('settings.aiSec.restart')}</p>}
             </div>
             <p className={styles.note}>{t('onboarding.aiNote')}</p>
             <div className={styles.actions}>
