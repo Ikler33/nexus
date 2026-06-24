@@ -16,6 +16,7 @@ import {
   Share2,
   ShieldCheck,
   Square,
+  Terminal,
   X,
 } from 'lucide-react';
 import { OrbitIcon } from '../chrome/BrandGlyphs';
@@ -862,14 +863,54 @@ function SubagentTree() {
 }
 
 /**
- * Содержимое дока «Граф»: живое дерево субагентов (W-24), если они есть в последнем ходе; иначе —
- * статичный демо-граф (контракт graph-данных пока не несёт топологию research-раундов).
+ * Список exec-предложений песочницы (W-26, ТОЛЬКО ОТОБРАЖЕНИЕ): силуэт команды + exit-код + finalized.
+ * Живые данные из `turn.execItems` (события execProposal/execResult). Приватность §5.6: только силуэт
+ * `summary` + exitCode, БЕЗ сырого stdout/argv. NB: exec структурно Linux-only (rootless-Podman sandbox);
+ * на macOS-десктопе этот список ПУСТ — наполняется лишь при реальных exec-событиях (Linux-сборка /
+ * будущий коннектор к agentd). Аппрува тут НЕТ намеренно: на десктопе нет exec-decision-пути (решение
+ * host-side в песочнице/коннекторе) — кнопка была бы мёртвой/вводящей в заблуждение.
+ */
+function ExecList() {
+  const { t } = useTranslation();
+  const turns = useAgentStore((s) => s.turns);
+  const turn = turns.length ? turns[turns.length - 1] : null;
+  const items = turn?.execItems ?? [];
+  if (items.length === 0) return null;
+  const piCls = (it: { finalized: boolean; exitCode: number | null }): string =>
+    !it.finalized ? styles.piRun : it.exitCode === 0 ? styles.piDone : styles.piErr;
+  return (
+    <div className={styles.planList}>
+      {items.map((it) => (
+        <div key={it.actionId} className={`${styles.planItem} ${piCls(it)}`}>
+          <span className={styles.planIc}>
+            <Terminal size={12} aria-hidden />
+          </span>
+          <span className={styles.planLabel}>{it.summary || t('agent.exec.untitled')}</span>
+          <span className={styles.rcMeta}>
+            {!it.finalized ? t('agent.exec.running') : t('agent.exec.exit', { code: it.exitCode ?? '?' })}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Содержимое дока «Граф»: живое дерево субагентов (W-24) и/или список exec-команд (W-26), если они
+ * есть в последнем ходе; иначе — статичный демо-граф (контракт graph-данных пока не несёт топологию).
  */
 function GraphDock() {
   const turns = useAgentStore((s) => s.turns);
   const turn = turns.length ? turns[turns.length - 1] : null;
   const hasSubs = (turn?.subagents?.length ?? 0) > 0;
-  return hasSubs ? <SubagentTree /> : <ResearchGraph />;
+  const hasExec = (turn?.execItems?.length ?? 0) > 0;
+  if (!hasSubs && !hasExec) return <ResearchGraph />;
+  return (
+    <>
+      {hasSubs && <SubagentTree />}
+      {hasExec && <ExecList />}
+    </>
+  );
 }
 
 // ── Правый dock: Граф выполнения (демо-структура) ────────────────────────────────────────────────

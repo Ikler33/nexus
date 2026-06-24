@@ -654,6 +654,11 @@
         "paused": "paused"
       }
     },
+    "exec": {
+      "untitled": "command",
+      "running": "running",
+      "exit": "exit {{code}}"
+    },
     "graph": {
       "demoNote": "Demo execution graph (research tasks)",
       "title": "Execution graph",
