@@ -18,6 +18,8 @@ let config: AiConfigDto = {
   sandboxEnabled: false,
   shellEnable: false,
   webAllowPublicFetch: false,
+  skillsLearningEnabled: false,
+  agentSkillsDir: null,
   shellSupported: false,
 };
 

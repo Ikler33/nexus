@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Агент · W-10 — панель самообучения (навыки) 🔴 BETA
+
+Видимость авто-навыков агента (#SL). Из scoping-анализа: полноценный «вкл/выкл/удалить» НЕ делаем честно сегодня (у модели навыков нет per-skill enabled; `discover_skills` грузит ВСЕ SKILL.md независимо от state — архив≠выкл; нет SkillDelete-примитива). Поэтому: список + мастер-свитч самообучения + каталог + обратимый archive/pin.
+
+- **backend** (`commands/settings.rs`): `skills_learning_enabled` + `agent_skills_dir` в AgentFlagsDto/AiConfigDto + `get_ai_config`/`apply_agent_flags` (`ai.skills.learning_enabled` + `ai.agent_skills_dir`, owner-gated default-OFF).
+- **backend** (`commands/agent.rs`): `agent_list_skills` (диск `discover_skills` ⟕ телеметрия `usage`), `agent_skill_set_pinned`/`agent_skill_set_archived` (обратимо; ядро структурно no-op на vendor/user).
+- **frontend** (SettingsView → AI): SkillsBlock — тоггл самообучения, поле каталога (persist на blur), список навыков (tier-бейдж, использования, pin/archive). Честно: «Архивировать» НЕ «Выключить» (агент всё ещё видит навык — фильтрации по state нет).
+- **deferred** (BACKLOG, документировано): реальное «выключить» (нужна фильтрация каталога) + удаление файла (нужен guarded SkillDelete + trash).
+- Adversarial-ревью (3 измерения × verify, 9 находок / 1 подтверждено — parseErrors-предупреждение пряталось при полном провале парса, исправлено). Гейт: clippy / `cargo test` 191 / typecheck / eslint / vitest 965 (+3 теста).
+- _Чистка: 4 gitignored клон-дубля (`* 2.*`) ломали tsc — перенесены в scratch (вне git)._
+
 ### Данные · W-9 — backup/restore в UI (#59) 🔴 BETA
 
 Команды экспорта/импорта «второго мозга» (#59) были в бэкенде, не в UI. Теперь — секция Настройки → Данные с кнопками Экспорт/Импорт.

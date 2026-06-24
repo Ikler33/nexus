@@ -218,6 +218,8 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       sandboxEnabled: false,
       shellEnable: false,
       webAllowPublicFetch: false,
+      skillsLearningEnabled: false,
+      agentSkillsDir: null,
     });
   });
 
@@ -280,6 +282,20 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     render(<SettingsView />);
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(useUIStore.getState().tweaksOpen).toBe(false);
+  });
+
+  // W-10 (#SL): AI-секция показывает список авто-навыков + pin зовёт команду.
+  it('Самообучение: список навыков + закрепление (W-10)', async () => {
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+    // Навыки из мока (agent + vendor) видны.
+    expect(await screen.findByText('summarize-pr')).toBeInTheDocument();
+    expect(screen.getByText('obsidian-markdown')).toBeInTheDocument();
+    // «Закрепить» (только у agent-навыка) зовёт setSkillPinned.
+    const pinSpy = vi.spyOn(tauriApi.agent, 'setSkillPinned');
+    fireEvent.click(screen.getByRole('button', { name: /^Закрепить$|^Pin$/i }));
+    await vi.waitFor(() => expect(pinSpy).toHaveBeenCalledWith('summarize-pr', true));
+    pinSpy.mockRestore();
   });
 
   // W-9 (#59): секция «Данные» — экспорт зовёт backup.exportToFile; импорт показывает отчёт.

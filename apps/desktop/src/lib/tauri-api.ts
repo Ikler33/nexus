@@ -678,6 +678,10 @@ export interface AiConfigDto {
   shellEnable: boolean;
   /** `ai.web.allow_public_fetch`: снимает allowlist с агентского `web.fetch` (публичный egress). */
   webAllowPublicFetch: boolean;
+  /** W-10 `ai.skills.learning_enabled`: owner-gated самообучение (агент авторствует навыки). */
+  skillsLearningEnabled: boolean;
+  /** W-10 `ai.agent_skills_dir`: каталог SKILL.md (отн. vault или абсолютный). `null` — навыков нет. */
+  agentSkillsDir: string | null;
   /** Поддержана ли песочница/host-exec на ЭТОЙ платформе (Linux-only) — фронт дизейблит sandbox/shell. */
   shellSupported: boolean;
 }
@@ -691,7 +695,37 @@ export interface AgentFlagsDto {
   sandboxEnabled: boolean;
   shellEnable: boolean;
   webAllowPublicFetch: boolean;
+  /** W-10 `ai.skills.learning_enabled` (owner-gated, default-OFF). */
+  skillsLearningEnabled: boolean;
+  /** W-10 `ai.agent_skills_dir`: каталог навыков (пусто/`null` → ключ убирается). */
+  agentSkillsDir: string | null;
 }
+
+/** W-10 строка навыка для SL-панели (зеркалит Rust `commands::agent::SkillRowDto`). */
+export interface SkillRow {
+  name: string;
+  description: string;
+  /** `'vendor'` (hash-pinned bundle) | `'local'` (TrustedLocal). */
+  tier: 'vendor' | 'local';
+  relPath: string;
+  isVendor: boolean;
+  useCount: number;
+  lastUsedAt: number | null;
+  createdBy: string | null;
+  isAgentCreated: boolean;
+  pinned: boolean;
+  /** `'active'|'stale'|'archived'` (advisory lifecycle) | null. */
+  state: 'active' | 'stale' | 'archived' | null;
+  license: string | null;
+}
+/** W-10 снимок SL-панели (зеркалит Rust `commands::agent::SkillListDto`). */
+export interface SkillList {
+  learningEnabled: boolean;
+  skillsDir: string | null;
+  skills: SkillRow[];
+  parseErrors: number;
+}
+
 /** Снимок политики эгресса ядра (зеркалит Rust `net::EgressState`; срез 2 net.md). */
 export interface EgressState {
   /** Kill-switch «офлайн» (E2): публичные хосты отрезаны, LAN/loopback живут. */
@@ -1661,6 +1695,19 @@ export const tauriApi = {
     /** Откат применённых действий прогона (AGENT-4) → число откаченных. */
     undo: (runId: number): Promise<number> =>
       isTauri() ? invoke<number>('agent_undo', { runId }) : mockAgent.undo(runId),
+    /** W-10: список авто-навыков агента (read-only) + состояние самообучения. */
+    listSkills: (): Promise<SkillList> =>
+      isTauri() ? invoke<SkillList>('agent_list_skills') : mockAgent.listSkills(),
+    /** W-10: закрепить/открепить навык (no-op на vendor/user). */
+    setSkillPinned: (name: string, pinned: boolean): Promise<boolean> =>
+      isTauri()
+        ? invoke<boolean>('agent_skill_set_pinned', { name, pinned })
+        : mockAgent.setSkillPinned(name, pinned),
+    /** W-10: архивировать/разархивировать навык (обратимо; НЕ «выключить»). */
+    setSkillArchived: (name: string, archived: boolean): Promise<boolean> =>
+      isTauri()
+        ? invoke<boolean>('agent_skill_set_archived', { name, archived })
+        : mockAgent.setSkillArchived(name, archived),
   },
 
   episode: {

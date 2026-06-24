@@ -28,6 +28,7 @@ import type {
   AgentFlagsDto,
   BackupImportReport,
   EgressState,
+  SkillList,
   WebSearchConfig,
 } from '../../lib/tauri-api';
 import { useAiFeaturesStore } from '../../stores/aiFeatures';
@@ -929,6 +930,9 @@ function HeadlessAgentBlock() {
   const flagsRef = useRef<AgentFlagsDto | null>(null);
   flagsRef.current = flags;
   const seqRef = useRef(0);
+  // W-10: черновик пути каталога навыков — персистим на blur (не на каждый ввод → не пишем local.json
+  // и не перечитываем список на каждую клавишу).
+  const [dirDraft, setDirDraft] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -936,12 +940,15 @@ function HeadlessAgentBlock() {
       .getAiConfig()
       .then((c) => {
         if (!alive) return;
+        setDirDraft(c.agentSkillsDir ?? '');
         setFlags({
           agentAutonomy: c.agentAutonomy,
           agentActuatorEnabled: c.agentActuatorEnabled,
           sandboxEnabled: c.sandboxEnabled,
           shellEnable: c.shellEnable,
           webAllowPublicFetch: c.webAllowPublicFetch,
+          skillsLearningEnabled: c.skillsLearningEnabled,
+          agentSkillsDir: c.agentSkillsDir,
         });
         setShellSupported(c.shellSupported);
       })
@@ -1051,9 +1058,123 @@ function HeadlessAgentBlock() {
         <p className={styles.warnText}>{t('settings.agent.publicFetchWarn')}</p>
       )}
 
+      {/* W-10: самообучение навыкам (owner-gated, default-OFF) + каталог + список авто-навыков. */}
+      <SectionHeader title={t('settings.skills.title')} sub={t('settings.skills.intro')} nested />
+      <EgressRow
+        label={t('settings.skills.learning')}
+        desc={t('settings.skills.learningDesc')}
+        value={flags.skillsLearningEnabled}
+        onChange={(v) => persist({ skillsLearningEnabled: v })}
+      />
+      <label className={styles.skillsField}>
+        <span>{t('settings.skills.dir')}</span>
+        <input
+          type="text"
+          className={styles.skillsInput}
+          value={dirDraft}
+          onChange={(e) => setDirDraft(e.target.value)}
+          onBlur={() => {
+            const next = dirDraft.trim() || null;
+            if (next !== (flags.agentSkillsDir ?? null)) persist({ agentSkillsDir: next });
+          }}
+          placeholder=".nexus/skills"
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </label>
+      <SkillsList skillsDir={flags.agentSkillsDir} />
+
       {saved && <span className={styles.okText}>{t('settings.web.saved')}</span>}
       {err && <p className={styles.warnText}>{t('settings.web.saveError', { msg: err })}</p>}
     </>
+  );
+}
+
+/**
+ * W-10: список авто-навыков агента (read-only) + pin/archive (обратимо, gated agent-created). НЕ «выкл»:
+ * агент видит навык в каталоге независимо от archive (фильтрации по state нет — см. BACKLOG).
+ */
+function SkillsList({ skillsDir }: { skillsDir: string | null }) {
+  const { t } = useTranslation();
+  const [data, setData] = useState<SkillList | null>(null);
+
+  const refresh = () => {
+    void tauriApi.agent
+      .listSkills()
+      .then(setData)
+      .catch(() => setData(null));
+  };
+  // Перечитываем при смене каталога (key через skillsDir в зависимости).
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skillsDir]);
+
+  if (!data) return null;
+  if (!data.skillsDir) {
+    return <p className={styles.rowDesc}>{t('settings.skills.noDir')}</p>;
+  }
+  return (
+    <div className={styles.skillsList}>
+      {/* parseErrors показываем ВСЕГДА когда каталог просканирован — даже если ВСЕ SKILL.md не
+          распознались (skills=[]); иначе «навыков нет» скрыло бы факт пропуска (ревью W-10). */}
+      {data.parseErrors > 0 && (
+        <p className={styles.warnText}>
+          {t('settings.skills.parseErrors', { count: data.parseErrors })}
+        </p>
+      )}
+      {data.skills.length === 0 && (
+        <p className={styles.rowDesc}>{t('settings.skills.empty')}</p>
+      )}
+      {data.skills.map((s) => (
+        <div key={s.relPath} className={styles.skillRow}>
+          <div className={styles.skillMain}>
+            <div className={styles.skillName}>
+              {s.name}
+              <span className={styles.skillTier}>
+                {s.isVendor ? t('settings.skills.tierVendor') : t('settings.skills.tierLocal')}
+              </span>
+              {s.pinned && <span className={styles.skillPinned}>{t('settings.skills.pinned')}</span>}
+              {s.state === 'archived' && (
+                <span className={styles.skillArchived}>{t('settings.skills.archived')}</span>
+              )}
+            </div>
+            <div className={styles.skillDesc}>{s.description}</div>
+            <div className={styles.skillMeta}>
+              {t('settings.skills.uses', { count: s.useCount })}
+              {s.isAgentCreated ? ` · ${t('settings.skills.byAgent')}` : ''}
+            </div>
+          </div>
+          {/* pin/archive — только для agent-навыков (на vendor/user ядро всё равно no-op). */}
+          {s.isAgentCreated && (
+            <div className={styles.skillActions}>
+              <button
+                type="button"
+                className={styles.skillBtn}
+                onClick={() =>
+                  void tauriApi.agent.setSkillPinned(s.name, !s.pinned).then(refresh)
+                }
+              >
+                {s.pinned ? t('settings.skills.unpin') : t('settings.skills.pin')}
+              </button>
+              <button
+                type="button"
+                className={styles.skillBtn}
+                onClick={() =>
+                  void tauriApi.agent
+                    .setSkillArchived(s.name, s.state !== 'archived')
+                    .then(refresh)
+                }
+              >
+                {s.state === 'archived'
+                  ? t('settings.skills.unarchive')
+                  : t('settings.skills.archive')}
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

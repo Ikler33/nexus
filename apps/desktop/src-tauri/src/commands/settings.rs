@@ -51,6 +51,12 @@ pub struct AiConfigDto {
     pub shell_enable: bool,
     /// `ai.web.allow_public_fetch`: снимает allowlist с агентского `web.fetch` (публичный egress).
     pub web_allow_public_fetch: bool,
+    /// W-10 `ai.skills.learning_enabled`: owner-gated мастер-свитч самообучения (агент авторствует
+    /// навыки через гейт Confirm-never-Auto). Default-OFF — skill.save HardBlocked, пока выключен.
+    pub skills_learning_enabled: bool,
+    /// W-10 `ai.agent_skills_dir`: каталог SKILL.md (относительно vault или абсолютный). `None` — навыков
+    /// нет (агент без скиллов, без регрессии).
+    pub agent_skills_dir: Option<String>,
     /// Может ли песочница/host-exec В ПРИНЦИПЕ работать на ЭТОЙ платформе (Linux-only). Фронт гейтит
     /// (disabled) тогглы sandbox/shell этим флагом — на macOS/Windows они структурно инертны.
     pub shell_supported: bool,
@@ -67,6 +73,10 @@ pub struct AgentFlagsDto {
     pub sandbox_enabled: bool,
     pub shell_enable: bool,
     pub web_allow_public_fetch: bool,
+    /// W-10 `ai.skills.learning_enabled` (owner-gated, default-OFF).
+    pub skills_learning_enabled: bool,
+    /// W-10 `ai.agent_skills_dir`: каталог навыков (пустая строка/`None` → ключ убирается).
+    pub agent_skills_dir: Option<String>,
 }
 
 /// Может ли host-exec/песочница работать на платформе сборки десктопа (Linux-only — rootless-Podman).
@@ -195,6 +205,32 @@ fn apply_agent_flags(doc: &mut serde_json::Value, flags: &AgentFlagsDto) -> Resu
             serde_json::Value::Bool(flags.web_allow_public_fetch),
         );
     }
+
+    // W-10 `ai.skills.learning_enabled` (owner-gated): пишем в объект `ai.skills` (создаём при нужде,
+    // как `ai.web`). Default-OFF не меняем — флип это явное действие владельца из UI.
+    if !ai.get("skills").map(|v| v.is_object()).unwrap_or(false) {
+        ai.insert("skills".into(), serde_json::json!({}));
+    }
+    ai.get_mut("skills")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai.skills не объект")?
+        .insert(
+            "learning_enabled".into(),
+            serde_json::Value::Bool(flags.skills_learning_enabled),
+        );
+
+    // W-10 `ai.agent_skills_dir`: непустой путь → пишем; пусто/None → убираем ключ (без шум-значений).
+    match flags.agent_skills_dir.as_deref().map(str::trim) {
+        Some(dir) if !dir.is_empty() => {
+            ai.insert(
+                "agent_skills_dir".into(),
+                serde_json::Value::String(dir.to_string()),
+            );
+        }
+        _ => {
+            ai.remove("agent_skills_dir");
+        }
+    }
     Ok(())
 }
 
@@ -311,6 +347,8 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
             .as_ref()
             .map(|w| w.allow_public_fetch)
             .unwrap_or(false),
+        skills_learning_enabled: cfg.ai.skills.learning_enabled,
+        agent_skills_dir: cfg.ai.agent_skills_dir.clone(),
         shell_supported: shell_supported(),
     })
 }
@@ -505,6 +543,14 @@ pub async fn set_agent_flags(
         sandbox_enabled: flags.sandbox_enabled,
         shell_enable: flags.shell_enable && flags.sandbox_enabled,
         web_allow_public_fetch: flags.web_allow_public_fetch,
+        skills_learning_enabled: flags.skills_learning_enabled,
+        // Эхо нормализованного пути: пусто → None (ключ не пишется).
+        agent_skills_dir: flags
+            .agent_skills_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
     })
 }
 
@@ -593,7 +639,34 @@ mod tests {
             sandbox_enabled: sandbox,
             shell_enable: shell,
             web_allow_public_fetch: public_fetch,
+            skills_learning_enabled: false,
+            agent_skills_dir: None,
         }
+    }
+
+    /// W-10: `apply_agent_flags` пишет `ai.skills.learning_enabled` (создаёт `ai.skills`) +
+    /// `ai.agent_skills_dir` (trim; пусто → ключ убирается). Round-trip через `LocalConfig`.
+    #[test]
+    fn apply_agent_flags_writes_skills_learning_and_dir() {
+        let mut doc = serde_json::json!({});
+        let mut f = flags(Some("confirm"), false, false, false);
+        f.skills_learning_enabled = true;
+        f.agent_skills_dir = Some("  .nexus/skills  ".into());
+        apply_agent_flags(&mut doc, &f).unwrap();
+        assert_eq!(doc.pointer("/ai/skills/learning_enabled").unwrap(), true);
+        assert_eq!(
+            doc.pointer("/ai/agent_skills_dir").unwrap(),
+            ".nexus/skills"
+        );
+        let cfg = crate::ai::LocalConfig::parse(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(cfg.ai.skills.learning_enabled);
+        assert_eq!(cfg.ai.agent_skills_dir.as_deref(), Some(".nexus/skills"));
+
+        // Пустой/пробельный dir → ключ убирается (без шум-значений).
+        f.agent_skills_dir = Some("   ".into());
+        apply_agent_flags(&mut doc, &f).unwrap();
+        assert!(doc.pointer("/ai/agent_skills_dir").is_none());
+        assert_eq!(doc.pointer("/ai/skills/learning_enabled").unwrap(), true);
     }
 
     /// AGENT-0.6: `apply_agent_flags` пишет `ai.agent_actuator_enabled` (мастер-свитч записи агента),
@@ -607,6 +680,8 @@ mod tests {
             sandbox_enabled: false,
             shell_enable: false,
             web_allow_public_fetch: false,
+            skills_learning_enabled: false,
+            agent_skills_dir: None,
         };
         apply_agent_flags(&mut doc, &f).unwrap();
         assert_eq!(doc["ai"]["agent_actuator_enabled"], serde_json::json!(true));

@@ -607,6 +607,156 @@ async fn load_local_config(root: &std::path::Path) -> Option<nexus_core::ai::Loc
         .ok()
 }
 
+// ── W-10: SL-панель (просмотр авто-навыков агента) ─────────────────────────────────────────────────
+
+/// Навык для UI: данные с диска (SKILL.md) ЛЕВО-СОЕДИНЁННЫЕ с телеметрией БД (`agent_skill_usage`).
+/// `state`/`pinned`/`createdBy` — `None`/0, если у навыка ещё нет строки телеметрии (создаётся лениво).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRowDto {
+    name: String,
+    description: String,
+    /// `"vendor"` (hash-pinned bundle) | `"local"` (TrustedLocal — владельца/агента).
+    tier: String,
+    rel_path: String,
+    is_vendor: bool,
+    use_count: i64,
+    last_used_at: Option<i64>,
+    created_by: Option<String>,
+    is_agent_created: bool,
+    pinned: bool,
+    /// `"active"|"stale"|"archived"` (advisory lifecycle), либо `None`.
+    state: Option<String>,
+    license: Option<String>,
+}
+
+/// Снимок для SL-панели: состояние самообучения + каталог навыков (или пусто/каталог не задан).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillListDto {
+    learning_enabled: bool,
+    skills_dir: Option<String>,
+    skills: Vec<SkillRowDto>,
+    /// Сколько SKILL.md не распознано (для честной пометки в UI, как у news).
+    parse_errors: usize,
+}
+
+/// W-10: список авто-навыков агента (read-only) — диск (`discover_skills`) ⟕ телеметрия (usage).
+#[tauri::command]
+pub async fn agent_list_skills(state: State<'_, AppState>) -> AppResult<SkillListDto> {
+    let (root, reader) = {
+        let ctx = state.vault().await?;
+        (ctx.root.clone(), ctx.db.reader().clone())
+    };
+    let cfg = load_local_config(&root).await;
+    let learning_enabled = cfg
+        .as_ref()
+        .map(|c| c.ai.skills.learning_enabled)
+        .unwrap_or(false);
+    let skills_dir = cfg.as_ref().and_then(|c| c.ai.agent_skills_dir.clone());
+
+    let empty = |dir: Option<String>| SkillListDto {
+        learning_enabled,
+        skills_dir: dir,
+        skills: Vec::new(),
+        parse_errors: 0,
+    };
+    let Some(dir) = skills_dir.clone() else {
+        return Ok(empty(None));
+    };
+    let p = std::path::Path::new(&dir);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
+    let Ok(canon) = abs.canonicalize() else {
+        return Ok(empty(Some(dir))); // каталог не существует → пустой список (UI подскажет)
+    };
+
+    let catalog = nexus_core::skills::discover_skills(&canon);
+    let parse_errors = catalog.errors().len();
+    let overlay = nexus_core::skills::usage::ranked_overlay(&reader)
+        .await
+        .unwrap_or_default();
+    let by_name: std::collections::HashMap<&str, &nexus_core::skills::usage::UsageRecord> =
+        overlay.iter().map(|r| (r.skill_name.as_str(), r)).collect();
+
+    let skills = catalog
+        .skills()
+        .iter()
+        .map(|s| {
+            let u = by_name.get(s.name.as_str()).copied();
+            let is_vendor = matches!(s.tier, nexus_core::skills::TrustTier::Vendor);
+            SkillRowDto {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                tier: if is_vendor { "vendor" } else { "local" }.to_string(),
+                rel_path: s.rel_path.clone(),
+                is_vendor,
+                use_count: u.map(|r| r.use_count).unwrap_or(0),
+                last_used_at: u.and_then(|r| r.last_used_at),
+                created_by: u.and_then(|r| r.created_by.clone()),
+                is_agent_created: u.map(|r| r.is_agent_created()).unwrap_or(false),
+                pinned: u.map(|r| r.pinned).unwrap_or(false),
+                state: u.and_then(|r| {
+                    r.state.map(|st| {
+                        use nexus_core::skills::usage::SkillState::*;
+                        match st {
+                            Active => "active",
+                            Stale => "stale",
+                            Archived => "archived",
+                        }
+                        .to_string()
+                    })
+                }),
+                license: s.license.clone(),
+            }
+        })
+        .collect();
+
+    Ok(SkillListDto {
+        learning_enabled,
+        skills_dir: Some(dir),
+        skills,
+        parse_errors,
+    })
+}
+
+/// W-10: закрепить/открепить навык (защита от авто-архивации curator'ом). Ядро no-op'ит на
+/// не-agent-навыках (vendor/user) — структурный гейт `created_by='agent'`.
+#[tauri::command]
+pub async fn agent_skill_set_pinned(
+    state: State<'_, AppState>,
+    name: String,
+    pinned: bool,
+) -> AppResult<bool> {
+    let writer = state.vault().await?.db.writer().clone();
+    Ok(nexus_core::skills::usage::set_pinned(&writer, &name, pinned).await?)
+}
+
+/// W-10: архивировать/разархивировать навык (ОБРАТИМО). Это НЕ «выключить»: агент всё ещё видит
+/// навык в каталоге (фильтрации по state нет — см. BACKLOG). Ядро no-op'ит на не-agent-навыках.
+#[tauri::command]
+pub async fn agent_skill_set_archived(
+    state: State<'_, AppState>,
+    name: String,
+    archived: bool,
+) -> AppResult<bool> {
+    let writer = state.vault().await?.db.writer().clone();
+    let ok = if archived {
+        nexus_core::skills::usage::archive(&writer, &name).await?
+    } else {
+        nexus_core::skills::usage::set_state(
+            &writer,
+            &name,
+            nexus_core::skills::usage::SkillState::Active,
+        )
+        .await?
+    };
+    Ok(ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

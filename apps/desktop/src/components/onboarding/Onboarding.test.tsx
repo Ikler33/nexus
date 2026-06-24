@@ -35,6 +35,8 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       sandboxEnabled: false,
       shellEnable: false,
       webAllowPublicFetch: false,
+      skillsLearningEnabled: false,
+      agentSkillsDir: null,
       shellSupported: false,
     });
     await gotoAiStep();
@@ -54,6 +56,8 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       sandboxEnabled: false,
       shellEnable: false,
       webAllowPublicFetch: false,
+      skillsLearningEnabled: false,
+      agentSkillsDir: null,
       shellSupported: false,
     });
     const setCfg = vi
@@ -87,6 +91,8 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       sandboxEnabled: false,
       shellEnable: false,
       webAllowPublicFetch: false,
+      skillsLearningEnabled: false,
+      agentSkillsDir: null,
       shellSupported: false,
     });
     const setCfg = vi
@@ -113,6 +119,8 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       sandboxEnabled: false,
       shellEnable: false,
       webAllowPublicFetch: false,
+      skillsLearningEnabled: false,
+      agentSkillsDir: null,
       shellSupported: false,
     });
     const setCfg = vi

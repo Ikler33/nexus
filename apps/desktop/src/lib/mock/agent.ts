@@ -17,6 +17,7 @@ import type {
   AgentAutonomy,
   AgentHistoryMsg,
   AgentStreamEvent,
+  SkillList,
 } from '../tauri-api';
 
 /** Файлы демо-changeset'а (зеркало `proposal.files` контракта). `actionId` — синтетический адрес
@@ -236,4 +237,58 @@ export function __reset(): void {
     run.resolveDecisions = null;
   }
   runs.clear();
+}
+
+// W-10: SL-панель в браузер-превью/тестах. Один agent-навык + один vendor — для рендера UI.
+const mockSkills = new Map<string, { pinned: boolean; archived: boolean }>([
+  ['summarize-pr', { pinned: false, archived: false }],
+]);
+export async function listSkills(): Promise<SkillList> {
+  return {
+    learningEnabled: true,
+    skillsDir: '.nexus/skills',
+    parseErrors: 0,
+    skills: [
+      {
+        name: 'summarize-pr',
+        description: 'Кратко резюмирует diff пул-реквеста',
+        tier: 'local',
+        relPath: 'summarize-pr/SKILL.md',
+        isVendor: false,
+        useCount: 4,
+        lastUsedAt: 1781170000,
+        createdBy: 'agent',
+        isAgentCreated: true,
+        pinned: mockSkills.get('summarize-pr')!.pinned,
+        state: mockSkills.get('summarize-pr')!.archived ? 'archived' : 'active',
+        license: null,
+      },
+      {
+        name: 'obsidian-markdown',
+        description: 'Конвенции Obsidian-Markdown (вендоренный kepano)',
+        tier: 'vendor',
+        relPath: 'vendor/kepano/obsidian-markdown/SKILL.md',
+        isVendor: true,
+        useCount: 0,
+        lastUsedAt: null,
+        createdBy: 'vendor',
+        isAgentCreated: false,
+        pinned: false,
+        state: null,
+        license: 'MIT',
+      },
+    ],
+  };
+}
+export async function setSkillPinned(name: string, pinned: boolean): Promise<boolean> {
+  const s = mockSkills.get(name);
+  if (!s) return false;
+  s.pinned = pinned;
+  return true;
+}
+export async function setSkillArchived(name: string, archived: boolean): Promise<boolean> {
+  const s = mockSkills.get(name);
+  if (!s) return false;
+  s.archived = archived;
+  return true;
 }

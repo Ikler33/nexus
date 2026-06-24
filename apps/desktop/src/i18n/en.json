@@ -219,6 +219,26 @@
       "saved": "Saved.",
       "saveError": "Not saved: {{msg}}"
     },
+    "skills": {
+      "title": "Self-learning & skills",
+      "intro": "When on, the agent can author its own SKILL.md files (through the approval gate, never auto). Off by default. Below: the skills folder and the agent's learned skills.",
+      "learning": "Self-learning",
+      "learningDesc": "Allow the agent to create/update skills. Owner-gated, off by default.",
+      "dir": "Skills folder",
+      "noDir": "No skills folder set — point it at a folder of SKILL.md files (e.g. .nexus/skills) to see the agent's skills here.",
+      "empty": "No skills yet — they appear as the agent learns.",
+      "parseErrors": "⚠ {{count}} SKILL.md file(s) couldn't be parsed and were skipped.",
+      "tierVendor": "vendor",
+      "tierLocal": "local",
+      "pinned": "pinned",
+      "archived": "archived",
+      "uses": "{{count}} use(s)",
+      "byAgent": "by the agent",
+      "pin": "Pin",
+      "unpin": "Unpin",
+      "archive": "Archive",
+      "unarchive": "Unarchive"
+    },
     "agent": {
       "title": "Autonomous (server) agent",
       "intro": "Settings for the autonomous agent run via the connector (e.g. the nexus-agentd server). Stored in .nexus/local.json. The desktop AI chat and agent panel are NOT affected — they pick autonomy per run and use the web settings above.",
