@@ -87,3 +87,96 @@ describe('agent store — мультитёрн история (W-4)', () => {
     expect(lastHistory[0]).not.toEqual({ role: 'user', text: 'задача 0' });
   });
 });
+
+/**
+ * W-23: фронт ДОЛЖЕН принимать ВСЕ варианты контракта `AgentStreamEvent` (план/субагенты/exec/отчёт),
+ * а не молча терять их (раньше TS-юнион нёс 8 из 14 → 6 событий бэкенда не разбирались). Тут проверяем,
+ * что каждое событие аккумулируется в СВОЁМ ходе. Рендер этих полей — W-24/25/26.
+ */
+describe('agent store — приём всех событий контракта (W-23)', () => {
+  let onEvent: (e: AgentStreamEvent) => void;
+
+  beforeEach(() => {
+    useAgentStore.setState({ turns: [], context: null, approving: false });
+    vi.spyOn(tauriApi.agent, 'run').mockImplementation((_task, _autonomy, cb) => {
+      onEvent = cb;
+      return Promise.resolve(1);
+    });
+    useAgentStore.getState().run('задача');
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const turn = () => useAgentStore.getState().turns[0];
+
+  it('planProposed сохраняет план, planStepStatus обновляет шаг по id', () => {
+    onEvent({
+      type: 'planProposed',
+      runId: 1,
+      steps: [
+        { id: 'a', label: 'Шаг A', status: 'running' },
+        { id: 'b', label: 'Шаг B', status: 'pending' },
+      ],
+    });
+    expect(turn().plan.map((s) => s.id)).toEqual(['a', 'b']);
+    onEvent({ type: 'planStepStatus', id: 'a', status: 'done' });
+    expect(turn().plan.find((s) => s.id === 'a')?.status).toBe('done');
+    // Другой шаг не затронут.
+    expect(turn().plan.find((s) => s.id === 'b')?.status).toBe('pending');
+  });
+
+  it('subagentStatus делает upsert по childRunId', () => {
+    onEvent({
+      type: 'subagentStatus',
+      parentRunId: 1,
+      childRunId: 1001,
+      goal: 'подзадача',
+      status: 'running',
+    });
+    expect(turn().subagents).toHaveLength(1);
+    expect(turn().subagents[0].status).toBe('running');
+    // Повторное событие того же ребёнка — обновляет, не дублирует.
+    onEvent({
+      type: 'subagentStatus',
+      parentRunId: 1,
+      childRunId: 1001,
+      goal: 'подзадача',
+      status: 'done',
+      summary: 'итог',
+    });
+    expect(turn().subagents).toHaveLength(1);
+    expect(turn().subagents[0].status).toBe('done');
+    expect(turn().subagents[0].summary).toBe('итог');
+  });
+
+  it('execProposal заводит запись, execResult проставляет exit-код по actionId', () => {
+    onEvent({ type: 'execProposal', runId: 1, actionId: 77, summary: 'shell.run (2 args)' });
+    expect(turn().execItems).toHaveLength(1);
+    expect(turn().execItems[0]).toMatchObject({ actionId: 77, exitCode: null, finalized: false });
+    onEvent({ type: 'execResult', runId: 1, actionId: 77, exitCode: 0, finalized: true });
+    expect(turn().execItems).toHaveLength(1); // обновление, не дубль
+    expect(turn().execItems[0]).toMatchObject({ actionId: 77, exitCode: 0, finalized: true });
+  });
+
+  it('execResult без предложения заводит запись (факт исполнения не теряется)', () => {
+    onEvent({ type: 'execResult', runId: 1, actionId: 9, exitCode: 1, finalized: true });
+    expect(turn().execItems).toHaveLength(1);
+    expect(turn().execItems[0]).toMatchObject({ actionId: 9, exitCode: 1, finalized: true, summary: '' });
+  });
+
+  it('report сохраняет карточку отчёта deep-research', () => {
+    onEvent({
+      type: 'report',
+      runId: 1,
+      title: 'Отчёт по теме',
+      path: 'Research/тема-2026-06-24.md',
+      sourcesCount: 12,
+      rounds: 3,
+    });
+    expect(turn().researchReport).toMatchObject({
+      title: 'Отчёт по теме',
+      path: 'Research/тема-2026-06-24.md',
+      sourcesCount: 12,
+      rounds: 3,
+    });
+  });
+});

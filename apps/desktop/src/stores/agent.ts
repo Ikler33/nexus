@@ -8,7 +8,9 @@ import type {
   AgentAutonomy,
   AgentFileStatus,
   AgentHistoryMsg,
+  AgentPlanStep,
   AgentStreamEvent,
+  AgentSubagentState,
 } from '../lib/tauri-api';
 
 /**
@@ -63,6 +65,36 @@ export interface ContextUsage {
   window: number;
 }
 
+/** Узел дерева делегирования (из `subagentStatus`; upsert по `childRunId`). Рендер — W-24. */
+export interface SubagentNode {
+  childRunId: number;
+  parentRunId: number;
+  goal: string;
+  status: AgentSubagentState;
+  /** Редакция-безопасный итог ребёнка (опускается, пока не пришёл). */
+  summary?: string;
+}
+
+/** Exec-предложение песочницы (из `execProposal`; `execResult` дополняет exit-код). Рендер — W-26.
+ *  `summary` — силуэт (имя инструмента + счётчики), БЕЗ сырых argv/env. `exitCode`/`finalized` —
+ *  `null`/`false`, пока exec не завершён (приватность §5.6: сырого stdout тут нет by-design). */
+export interface ExecItem {
+  runId: number;
+  actionId: number;
+  summary: string;
+  exitCode: number | null;
+  finalized: boolean;
+}
+
+/** Отчёт deep-research (из `report`) — карточка дока. Рендер — W-25. */
+export interface ResearchReportDoc {
+  runId: number;
+  title: string;
+  path: string;
+  sourcesCount: number;
+  rounds: number;
+}
+
 /** Права в хранилище (per-run политика; зеркало макета `perms`). Read/Write/Web — для шапки/настроек. */
 export interface AgentPerms {
   read: boolean;
@@ -88,6 +120,14 @@ export interface AgentTurn {
   steps: AgentStep[];
   /** Файлы changeset'а (из `proposal`; `diff` дополняет счётчики). */
   changeset: ChangesetFile[];
+  /** План прогона (из `planProposed`; `planStepStatus` обновляет статусы по `id`). Рендер — W-24/25. */
+  plan: AgentPlanStep[];
+  /** Дерево субагентов (из `subagentStatus`, upsert по `childRunId`). Рендер — W-24. */
+  subagents: SubagentNode[];
+  /** Exec-предложения песочницы (из `execProposal`/`execResult`, по `actionId`). Рендер — W-26. */
+  execItems: ExecItem[];
+  /** Отчёт deep-research (из `report`). Рендер — W-25. */
+  researchReport: ResearchReportDoc | null;
   /** Итоговый ответ (`final`). */
   report: string | null;
   /** Текст ошибки (`error`-событие / сбой `agent_run`). */
@@ -199,6 +239,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           assistantText: '',
           steps: [],
           changeset: [],
+          plan: [],
+          subagents: [],
+          execItems: [],
+          researchReport: null,
           report: null,
           error: null,
           status: 'running' as AgentStatus,
@@ -282,6 +326,94 @@ export const useAgentStore = create<AgentState>((set, get) => ({
               ],
             };
           });
+          break;
+        case 'planProposed':
+          // Предложен план (SUB-2/RES) → док «План/Граф». Полностью заменяет (новый план хода).
+          patch((t0) => ({ ...t0, plan: event.steps }));
+          break;
+        case 'planStepStatus':
+          // Обновление статуса ОДНОГО шага плана по стабильному id.
+          patch((t0) => ({
+            ...t0,
+            plan: t0.plan.map((s) => (s.id === event.id ? { ...s, status: event.status } : s)),
+          }));
+          break;
+        case 'subagentStatus':
+          // Узел дерева делегирования — upsert по childRunId (повторное событие обновляет статус/итог).
+          patch((t0) => {
+            const node: SubagentNode = {
+              childRunId: event.childRunId,
+              parentRunId: event.parentRunId,
+              goal: event.goal,
+              status: event.status,
+              summary: event.summary,
+            };
+            const exists = t0.subagents.some((s) => s.childRunId === event.childRunId);
+            return {
+              ...t0,
+              subagents: exists
+                ? t0.subagents.map((s) => (s.childRunId === event.childRunId ? node : s))
+                : [...t0.subagents, node],
+            };
+          });
+          break;
+        case 'execProposal':
+          // Exec-предложение песочницы — заводим запись (по actionId), exit-код придёт в execResult.
+          patch((t0) => {
+            if (t0.execItems.some((e) => e.actionId === event.actionId)) return t0;
+            return {
+              ...t0,
+              execItems: [
+                ...t0.execItems,
+                {
+                  runId: event.runId,
+                  actionId: event.actionId,
+                  summary: event.summary,
+                  exitCode: null,
+                  finalized: false,
+                },
+              ],
+            };
+          });
+          break;
+        case 'execResult':
+          // Результат exec по actionId: проставляем exit-код/finalized. Нет предложения (силуэт мог
+          // не дойти) — заводим запись без summary, чтобы факт исполнения не потерялся.
+          patch((t0) => {
+            const exists = t0.execItems.some((e) => e.actionId === event.actionId);
+            return {
+              ...t0,
+              execItems: exists
+                ? t0.execItems.map((e) =>
+                    e.actionId === event.actionId
+                      ? { ...e, exitCode: event.exitCode, finalized: event.finalized }
+                      : e,
+                  )
+                : [
+                    ...t0.execItems,
+                    {
+                      runId: event.runId,
+                      actionId: event.actionId,
+                      summary: '',
+                      exitCode: event.exitCode,
+                      finalized: event.finalized,
+                    },
+                  ],
+            };
+          });
+          break;
+        case 'report':
+          // Отчёт deep-research (RES-5) — карточка дока (рендер W-25).
+          patch((t0) => ({
+            ...t0,
+            researchReport: {
+              runId: event.runId,
+              title: event.title,
+              path: event.path,
+              sourcesCount: event.sourcesCount,
+              rounds: event.rounds,
+            },
+          }));
           break;
         case 'final':
           patch((t0) => ({ ...t0, report: event.text, status: 'done' }));

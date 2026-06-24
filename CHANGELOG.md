@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · W-23 — wire-контракт `AgentStreamEvent` (TS) + agent-store (фундамент UI) 🔴 BETA
+
+Фронт научился ПРИНИМАТЬ все события агента — раньше 6 из 14 молча терялись (TS-юнион отставал от Rust).
+
+- **Контракт** (`apps/desktop/src/lib/tauri-api.ts`): TS-юнион `AgentStreamEvent` дополнен 6 вариантами — `execProposal`/`execResult`/`planProposed`/`planStepStatus`/`subagentStatus`/`report` (+ типы `AgentPlanStep`, `AgentPlanStepState`, `AgentSubagentState`). Байт-в-байт зеркало Rust `agent::connect::wire::AgentStreamEvent`.
+- **Стор** (`apps/desktop/src/stores/agent.ts`): `AgentTurn` дополнен полями `plan`/`subagents`/`execItems`/`researchReport`; switch-хендлеры аккумулируют события (plan replace, planStepStatus по id, subagent upsert по childRunId, exec по actionId, report-карточка). Приватность §5.6: `execItems` без сырого stdout (только силуэт+exit-код).
+- **Мок** дополнен эмиссией plan/subagent (mock-must-match-backend); существующий W-15 diff-flow цел.
+- Это ФУНДАМЕНТ: разблокирует W-24 (субагенты), W-25 (ресёрч), W-26 (exec) — рендер в них. Adversarial-ревью: **0 critical / 0 major** (контракт-паритет проверен поле-в-поле). Гейт: typecheck/lint/vitest **973** (+5 тестов стора).
+
 ### Агент · W-30 — терминальный агент: REPL + история + slash-команды (срез 3) 🔴 BETA
 
 `nexus agent` без задачи открывает **диалоговый REPL** — как у Hermes.

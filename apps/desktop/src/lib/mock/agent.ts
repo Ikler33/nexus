@@ -136,6 +136,31 @@ export function run(
       await sleep(STEP_MS * 2);
       onEvent({ type: 'toolResult', id: writeId, content: 'proposed', isError: false });
 
+      // W-23: план/субагенты (SUB-2) — отдельные поля хода (рендер в W-24/25). Мок зеркалит контракт:
+      // planProposed (шаги) → planStepStatus (прогресс по id) → subagentStatus (узел делегирования).
+      if (run.cancelled) return;
+      onEvent({
+        type: 'planProposed',
+        runId,
+        steps: [
+          { id: 's1', label: 'Прочитать Inbox', status: 'done' },
+          { id: 's2', label: 'Создать заметки', status: 'running' },
+          { id: 's3', label: 'Связать с проектами', status: 'pending' },
+        ],
+      });
+      await sleep(STEP_MS);
+      onEvent({ type: 'planStepStatus', id: 's2', status: 'done' });
+      onEvent({ type: 'planStepStatus', id: 's3', status: 'running' });
+      onEvent({
+        type: 'subagentStatus',
+        parentRunId: runId,
+        childRunId: runId * 1000 + 1,
+        goal: 'Сводка по проекту RMS-B2B',
+        status: 'done',
+        summary: 'Готово: 4 заметки, 2 связи.',
+      });
+      await sleep(STEP_MS);
+
       // 3. Загрузка контекстного окна (`contextUsage`) — питает %-бар шапки.
       onEvent({ type: 'contextUsage', used: 24_000, window: 64_000 });
       await sleep(STEP_MS);

@@ -619,12 +619,32 @@ export interface AgentProposedFile {
   actionId: number;
 }
 
+/** Статус шага плана (зеркало Rust `AgentPlanStepState`) — для дока «План/Граф» (SUB-2/RES). */
+export type AgentPlanStepState = 'pending' | 'running' | 'done' | 'failed';
+
+/** Статус субагента в дереве делегирования (зеркало Rust `AgentSubagentState`). */
+export type AgentSubagentState = 'spawned' | 'running' | 'done' | 'failed' | 'paused';
+
+/** Один шаг плана прогона (зеркало Rust `AgentPlanStep`) — узел дока плана. */
+export interface AgentPlanStep {
+  /** Стабильный id шага (адрес обновления статуса `planStepStatus`). */
+  id: string;
+  /** Человекочитаемая подпись шага. */
+  label: string;
+  status: AgentPlanStepState;
+}
+
 /**
- * Событие агент-стрима (зеркалит Rust `commands::agent::AgentStreamEvent`, тег `type`, camelCase) —
- * СТАБИЛЬНЫЙ контракт UI-1a. Реалтайм-поток: `assistantToken` (дельты модели), `toolCall`/`toolResult`
+ * Событие агент-стрима (зеркалит Rust `agent::connect::wire::AgentStreamEvent`, тег `type`, camelCase) —
+ * СТАБИЛЬНЫЙ контракт. Реалтайм-поток: `assistantToken` (дельты модели), `toolCall`/`toolResult`
  * (вызов инструмента ДО/ПОСЛЕ, корреляция по `id`), `contextUsage` (загрузка окна → %-бар),
  * `proposal` (changeset, ждёт решения — каждый файл уже `proposed` в ledger) + `diff` (по файлу),
  * `final` (итог хода), `error` (терминальная ошибка хода).
+ *
+ * W-23 — паритет с бэкендом: `planProposed`/`planStepStatus` (план/граф SUB-2), `subagentStatus`
+ * (дерево делегирования SUB-2), `execProposal`/`execResult` (exec-песочница SANDBOX-6c — силуэт+exit-код,
+ * БЕЗ сырого stdout: приватность §5.6), `report` (отчёт deep-research RES-5). Рендерятся в W-24/25/26;
+ * здесь — приём в контракт + аккумуляция в сторе (иначе события молча терялись).
  */
 export type AgentStreamEvent =
   | { type: 'assistantToken'; text: string }
@@ -634,7 +654,27 @@ export type AgentStreamEvent =
   | { type: 'proposal'; runId: number; files: AgentProposedFile[] }
   | { type: 'diff'; path: string; add: number; del: number; status: AgentFileStatus }
   | { type: 'final'; text: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'execProposal'; runId: number; actionId: number; summary: string }
+  | { type: 'execResult'; runId: number; actionId: number; exitCode: number; finalized: boolean }
+  | { type: 'planProposed'; runId: number; steps: AgentPlanStep[] }
+  | { type: 'planStepStatus'; id: string; status: AgentPlanStepState }
+  | {
+      type: 'subagentStatus';
+      parentRunId: number;
+      childRunId: number;
+      goal: string;
+      status: AgentSubagentState;
+      summary?: string;
+    }
+  | {
+      type: 'report';
+      runId: number;
+      title: string;
+      path: string;
+      sourcesCount: number;
+      rounds: number;
+    };
 
 /** Решение по одному предложенному действию (вход `agent_approve`, зеркало Rust `ApprovalDecision`). */
 export interface AgentApprovalDecision {
