@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use nexus_core::agent::{AgentEvent, AgentEventForwarder};
+use nexus_core::ai::ChatMessage;
 
 /// Опции прогона из флагов командной строки (W-29).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -45,14 +46,20 @@ pub(crate) fn cmd_agent(args: &[&str]) -> Result<(), String> {
     let vault = crate::resolve_vault(args)?;
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
-    rt.block_on(run_agent(vault, task, opts))
+    // Пустая задача → диалоговый REPL (W-30); иначе — one-shot (W-28/29).
+    if task.trim().is_empty() {
+        rt.block_on(run_repl(vault, opts))
+    } else {
+        rt.block_on(run_once(vault, task, opts))
+    }
 }
 
 /// Известные булевы флаги подкоманды (без значения) — пропускаются при сборке задачи.
 const BOOL_FLAGS: &[&str] = &["--actuator", "--auto", "--yes"];
 
 /// Извлекает задачу из аргументов: пропускает `--vault <val>` и булевы флаги [`BOOL_FLAGS`], отвергает
-/// прочие `--флаги`, остальное склеивает пробелом. Пусто → ошибка. Отдельная функция — для юнит-тестов.
+/// прочие `--флаги`, остальное склеивает пробелом. **Пустая задача допустима** → вызывающий уходит в
+/// REPL (W-30). Отдельная функция — для юнит-тестов.
 fn parse_task(args: &[&str]) -> Result<String, String> {
     let mut parts: Vec<&str> = Vec::new();
     let mut i = 0;
@@ -71,11 +78,7 @@ fn parse_task(args: &[&str]) -> Result<String, String> {
             }
         }
     }
-    let task = parts.join(" ");
-    if task.trim().is_empty() {
-        return Err("нужна задача: nexus agent [флаги] \"что сделать\"".into());
-    }
-    Ok(task)
+    Ok(parts.join(" "))
 }
 
 /// Какой источник решений по changeset'у использовать (чистый выбор — для юнит-теста).
@@ -101,33 +104,39 @@ fn select_decision_mode(opts: AgentOpts) -> DecisionMode {
     }
 }
 
-/// Гонит один прогон агента и финализирует его в `run_store` (зеркало desktop `drive_run` +
-/// `finish_in_store`, минус Channel/UI-DecisionSource — здесь stdout + терминальный источник решений).
-async fn run_agent(root: PathBuf, task: String, opts: AgentOpts) -> Result<(), String> {
-    use nexus_core::actuator::{ApproveAll, DecisionSource, PolicyDefault, OVERWRITE_THRESHOLD};
-    use nexus_core::agent::{run_agent_session, run_store, BudgetKind, LoopOutcome, SessionSpec};
+/// Общие зависимости прогона: строятся ОДИН раз, в REPL переиспользуются между ходами.
+struct Deps {
+    db: nexus_core::db::Database,
+    provider: Arc<dyn nexus_core::ai::tools::ToolCapableProvider>,
+    canon_root: PathBuf,
+    model: String,
+    context_window: Option<usize>,
+}
+
+/// Исход одного хода. `run_id` — для `/undo` и истории; `done` — терминал `done` (иначе cancelled/error).
+struct TurnOutcome {
+    run_id: i64,
+    text: String,
+    done: bool,
+}
+
+/// Собирает зависимости из vault: БД + egress-граница + общий tool-провайдер (зеркало `--sandbox-run`).
+/// `None`-провайдер (нет ai.chat) → внятная ошибка.
+async fn build_deps(root: PathBuf) -> Result<Deps, String> {
     use nexus_core::ai::tools::build_agent_tool_provider;
-    use nexus_core::ai::AiConfig;
     use nexus_core::db::Database;
     use nexus_core::net::{EgressAudit, EgressPolicy};
-
-    // --yes/--auto без --actuator — no-op (предлагать нечего): честно предупреждаем.
-    if !opts.actuator && (opts.yes || opts.auto) {
-        eprintln!("nexus agent: --yes/--auto без --actuator ничего не меняют (актуатор выключен)");
-    }
 
     let db = Database::open(root.join(".nexus").join("nexus.db"))
         .await
         .map_err(|e| format!("открытие БД {}: {e}", root.display()))?;
     let cfg = load_local_config(&root)?;
 
-    // Egress-граница (как `--sandbox-run`): политика + audit + allowlist из конфига.
     let egress_policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
     let egress_audit = Arc::new(EgressAudit::default());
     egress_audit.set_writer(db.writer().clone());
     egress_policy.set_allowlist(cfg.egress_hosts());
 
-    // Общий tool-провайдер (ai/tools.rs) — тот же, что зовёт desktop. None → нет ai.chat.
     let provider = build_agent_tool_provider(&cfg, &egress_policy, &egress_audit).ok_or(
         "нет ai.chat в .nexus/local.json (url/model) — агенту нечем думать; задай эндпоинт LLM",
     )?;
@@ -136,60 +145,77 @@ async fn run_agent(root: PathBuf, task: String, opts: AgentOpts) -> Result<(), S
         .and_then(|c| c.model.clone())
         .unwrap_or_else(|| "chat".into());
     let context_window = chat.and_then(|c| c.context_window);
+    Ok(Deps {
+        db,
+        provider,
+        canon_root: root,
+        model,
+        context_window,
+    })
+}
 
-    // Строка `agent_runs` (ledger-корреляция). NB: создаём ТОЛЬКО строку, БЕЗ джобы `KIND_AGENT_RUN`
-    // — поэтому при прерывании CLI (Ctrl-C до finish_run) осиротевшая `queued`-строка демоном НЕ
-    // подхватится: agentd-воркер клеймит ДЖОБЫ (jobs.KIND_AGENT_RUN payload=run_id), а не сканирует
-    // `agent_runs.status` (job.rs:431). Журнал append-only, реапера в one-shot нет — безвредно.
-    let autonomy = if opts.auto { "auto" } else { "confirm" };
-    let run_id = run_store::create_run(db.writer(), &task, Some(&model), Some(autonomy))
+/// Источник решений по текущему состоянию (`actuator` + `--yes`). Все варианты fail-closed (см.
+/// [`select_decision_mode`]/[`TtyDecisionSource`]). `auto` тут не важен (он про автономию, не про решение).
+fn make_decision(actuator: bool, yes: bool) -> Arc<dyn nexus_core::actuator::DecisionSource> {
+    use nexus_core::actuator::{ApproveAll, PolicyDefault};
+    let mode = select_decision_mode(AgentOpts {
+        actuator,
+        yes,
+        auto: false,
+    });
+    match mode {
+        DecisionMode::Stub => Arc::new(PolicyDefault),
+        DecisionMode::TtyConfirm => Arc::new(TtyDecisionSource),
+        DecisionMode::ApproveAllYes => Arc::new(ApproveAll),
+    }
+}
+
+/// Гонит ОДИН ход агента (create_run → сессия → finish_run). Переиспользуется one-shot и REPL.
+/// `Err` — только сбой подготовки (create_run); сам исход прогона (cancelled/error) едет в `TurnOutcome`.
+async fn run_turn(
+    deps: &Deps,
+    task: &str,
+    history: Vec<ChatMessage>,
+    autonomy: &str,
+    actuator: bool,
+    decision: Arc<dyn nexus_core::actuator::DecisionSource>,
+) -> Result<TurnOutcome, String> {
+    use nexus_core::actuator::OVERWRITE_THRESHOLD;
+    use nexus_core::agent::{run_agent_session, run_store, BudgetKind, LoopOutcome, SessionSpec};
+    use nexus_core::ai::AiConfig;
+
+    // NB: создаём строку `agent_runs` БЕЗ джобы `KIND_AGENT_RUN` → осиротевшая `queued`-строка (Ctrl-C
+    // до finish_run) демоном НЕ подхватится: воркер клеймит ДЖОБЫ, а не сканирует `agent_runs.status`
+    // (job.rs:431). Журнал append-only, реапера в one-shot нет — безвредно.
+    let run_id = run_store::create_run(deps.db.writer(), task, Some(&deps.model), Some(autonomy))
         .await
         .map_err(|e| format!("create_run: {e}"))?;
 
-    let mode = select_decision_mode(opts);
-    let (actuator_label, decision_label) = match mode {
-        DecisionMode::Stub => ("OFF (stub)", "—"),
-        DecisionMode::TtyConfirm => ("ON", "TTY y/N"),
-        DecisionMode::ApproveAllYes => ("ON", "--yes (auto-approve)"),
-    };
-    eprintln!(
-        "nexus agent · vault={} · model={model} · run_id={run_id} · actuator={actuator_label} · \
-         autonomy={autonomy} · решение={decision_label}\n── задача ──\n{task}\n",
-        root.display()
-    );
-
     let spec = SessionSpec {
         run_id,
-        task,
-        history: Vec::new(),
+        task: task.to_string(),
+        history,
         autonomy: Some(autonomy.to_string()),
-        actuator_enabled: opts.actuator, // --actuator → живые правки через гейт; иначе стабы
+        actuator_enabled: actuator, // --actuator → живые правки через гейт; иначе стабы
         overwrite_threshold: OVERWRITE_THRESHOLD,
         blast_cap: AiConfig::DEFAULT_BLAST_RADIUS_CAP,
-        context_window,
-        canon_root: root.clone(),
+        context_window: deps.context_window,
+        canon_root: deps.canon_root.clone(),
         skills_learning_enabled: false,
     };
     let paused = Arc::new(AtomicBool::new(false));
     let cancel = Arc::new(AtomicBool::new(false));
     let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(StdoutForwarder::new());
-    // Источник решений по флагам: Stub→PolicyDefault (стабы не спрашивают), TtyConfirm→интерактивный
-    // y/N, ApproveAllYes→ApproveAll. Все fail-closed по построению (не-«да»/EOF → Reject).
-    let decision: Arc<dyn DecisionSource> = match mode {
-        DecisionMode::Stub => Arc::new(PolicyDefault),
-        DecisionMode::TtyConfirm => Arc::new(TtyDecisionSource),
-        DecisionMode::ApproveAllYes => Arc::new(ApproveAll),
-    };
 
     let outcome = run_agent_session(
         &spec,
-        provider.as_ref(),
-        None, // memory — recall пуст (срез 1; VaultAgentMemory придёт позже)
+        deps.provider.as_ref(),
+        None, // memory
         None, // skills
         None, // web
         decision,
-        db.writer(),
-        db.reader(),
+        deps.db.writer(),
+        deps.db.reader(),
         &paused,
         &cancel,
         forwarder,
@@ -215,13 +241,208 @@ async fn run_agent(root: PathBuf, task: String, opts: AgentOpts) -> Result<(), S
         ),
         LoopOutcome::Error(e) => (run_store::STATUS_ERROR, e.clone()),
     };
-    let _ = run_store::finish_run(db.writer(), run_id, status, Some(&text)).await;
+    let _ = run_store::finish_run(deps.db.writer(), run_id, status, Some(&text)).await;
+    Ok(TurnOutcome {
+        run_id,
+        text,
+        done: status == run_store::STATUS_DONE,
+    })
+}
+
+/// ONE-SHOT: один ход и выход (W-28/29). Код возврата: done→0, иначе→ошибка.
+async fn run_once(root: PathBuf, task: String, opts: AgentOpts) -> Result<(), String> {
+    // --yes/--auto без --actuator — no-op (предлагать нечего): честно предупреждаем.
+    if !opts.actuator && (opts.yes || opts.auto) {
+        eprintln!("nexus agent: --yes/--auto без --actuator ничего не меняют (актуатор выключен)");
+    }
+    let deps = build_deps(root).await?;
+    let autonomy = if opts.auto { "auto" } else { "confirm" };
+    let (actuator_label, decision_label) = match select_decision_mode(opts) {
+        DecisionMode::Stub => ("OFF (stub)", "—"),
+        DecisionMode::TtyConfirm => ("ON", "TTY y/N"),
+        DecisionMode::ApproveAllYes => ("ON", "--yes (auto-approve)"),
+    };
+    eprintln!(
+        "nexus agent · vault={} · model={} · actuator={actuator_label} · autonomy={autonomy} · \
+         решение={decision_label}\n── задача ──\n{task}\n",
+        deps.canon_root.display(),
+        deps.model
+    );
+    let decision = make_decision(opts.actuator, opts.yes);
+    let t = run_turn(&deps, &task, Vec::new(), autonomy, opts.actuator, decision).await?;
     println!(); // завершающий перевод строки
-    if status == run_store::STATUS_DONE {
+    if t.done {
         Ok(())
     } else {
-        Err(format!("прогон завершился: {status} — {text}"))
+        Err(t.text)
     }
+}
+
+/// REPL (W-30): диалоговый режим. Задачи построчно, история между ходами; slash-команды управляют
+/// сессией. `Deps` строятся один раз и переиспользуются. EOF (Ctrl-D) / `/quit` → выход.
+async fn run_repl(root: PathBuf, opts: AgentOpts) -> Result<(), String> {
+    /// Кэп истории переписки (сообщений) — как desktop ограничивает мультитёрн-окно.
+    const HISTORY_MAX_MSGS: usize = 16;
+
+    let deps = build_deps(root).await?;
+    let mut autonomy_auto = opts.auto;
+    let mut actuator = opts.actuator;
+    let mut history: Vec<ChatMessage> = Vec::new();
+    let mut last_run_id: Option<i64> = None;
+
+    eprintln!(
+        "nexus agent REPL · vault={} · model={} · actuator={} · autonomy={}{}\n\
+         задачи вводи построчно; /help — команды, /quit — выход.\n",
+        deps.canon_root.display(),
+        deps.model,
+        if actuator { "ON" } else { "OFF" },
+        if autonomy_auto { "auto" } else { "confirm" },
+        // Честное раскрытие: --yes взведён на всю сессию и сработает, как только actuator=ON.
+        if opts.yes {
+            " · ⚠ --yes: при actuator=ON ВСЕ правки одобряются АВТОМАТИЧЕСКИ, без запроса [y/N]"
+        } else {
+            ""
+        },
+    );
+
+    loop {
+        let Some(raw) = read_line("agent> ").await else {
+            break; // EOF (Ctrl-D)
+        };
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('/') {
+            match parse_slash(line) {
+                SlashCmd::Quit => break,
+                SlashCmd::Help => print_repl_help(),
+                SlashCmd::New => {
+                    history.clear();
+                    eprintln!("· история диалога очищена");
+                }
+                SlashCmd::ToggleAuto => {
+                    autonomy_auto = !autonomy_auto;
+                    eprintln!(
+                        "· autonomy = {}",
+                        if autonomy_auto { "auto" } else { "confirm" }
+                    );
+                }
+                SlashCmd::ToggleActuator => {
+                    actuator = !actuator;
+                    // Сообщение ЧЕСТНО отражает режим решения: при --yes правки НЕ спрашивают.
+                    let note = if !actuator {
+                        " — стабы, vault не трогается"
+                    } else if opts.yes {
+                        " — АВТО-ОДОБРЕНИЕ всех правок (--yes), БЕЗ запроса [y/N]"
+                    } else {
+                        " — правки в vault требуют подтверждения [y/N]"
+                    };
+                    eprintln!(
+                        "· actuator = {}{}",
+                        if actuator { "ON" } else { "OFF" },
+                        note
+                    );
+                }
+                SlashCmd::Undo => match last_run_id {
+                    Some(rid) => {
+                        let n = undo_last_run(&deps, rid).await;
+                        eprintln!("· откат прогона {rid}: восстановлено {n} действий");
+                    }
+                    None => eprintln!("· нет прогона для отката в этой сессии"),
+                },
+                SlashCmd::Unknown(c) => eprintln!("· неизвестная команда «{c}» (см. /help)"),
+            }
+            continue;
+        }
+
+        // Обычный ход агента.
+        let autonomy = if autonomy_auto { "auto" } else { "confirm" };
+        let decision = make_decision(actuator, opts.yes);
+        match run_turn(&deps, line, history.clone(), autonomy, actuator, decision).await {
+            Ok(t) => {
+                println!();
+                last_run_id = Some(t.run_id);
+                if t.done {
+                    // История держится ТОЛЬКО на успешных ходах (мультитёрн-контекст для модели).
+                    history.push(ChatMessage::user(line));
+                    history.push(ChatMessage::assistant(&t.text));
+                    if history.len() > HISTORY_MAX_MSGS {
+                        let drop = history.len() - HISTORY_MAX_MSGS;
+                        history.drain(0..drop);
+                    }
+                } else {
+                    eprintln!("· ход не завершён: {}", t.text);
+                }
+            }
+            Err(e) => eprintln!("· ошибка хода: {e}"),
+        }
+    }
+    eprintln!("· до встречи");
+    Ok(())
+}
+
+/// Печатает приглашение в stderr и читает строку из stdin (через `spawn_blocking`). `None` — EOF/ошибка.
+async fn read_line(prompt: &str) -> Option<String> {
+    use std::io::Write;
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    tokio::task::spawn_blocking(|| {
+        let mut s = String::new();
+        match std::io::stdin().read_line(&mut s) {
+            Ok(0) => None, // EOF
+            Ok(_) => Some(s),
+            Err(_) => None,
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Откатывает применённые действия прогона `run_id` (зеркало desktop `agent_undo`: `actuator::undo_run`
+/// над тем же writer/reader). Возвращает число восстановленных действий. Идемпотентно.
+async fn undo_last_run(deps: &Deps, run_id: i64) -> usize {
+    use nexus_core::actuator::{undo_run, AuditSink};
+    let ledger = AuditSink::new(deps.db.writer().clone(), deps.db.reader().clone());
+    undo_run(run_id, &deps.canon_root, &ledger).await.restored()
+}
+
+/// Slash-команда REPL (разбор — чистая функция, для юнит-теста).
+#[derive(Debug, PartialEq, Eq)]
+enum SlashCmd {
+    Help,
+    Quit,
+    New,
+    ToggleAuto,
+    ToggleActuator,
+    Undo,
+    Unknown(String),
+}
+
+fn parse_slash(line: &str) -> SlashCmd {
+    match line.trim() {
+        "/help" | "/h" | "/?" => SlashCmd::Help,
+        "/quit" | "/exit" | "/q" => SlashCmd::Quit,
+        "/new" | "/reset" => SlashCmd::New,
+        "/auto" => SlashCmd::ToggleAuto,
+        "/actuator" => SlashCmd::ToggleActuator,
+        "/undo" => SlashCmd::Undo,
+        other => SlashCmd::Unknown(other.to_string()),
+    }
+}
+
+fn print_repl_help() {
+    eprintln!(
+        "команды REPL:\n  \
+         /help            эта справка\n  \
+         /auto            переключить автономию confirm↔auto (low-risk без спроса)\n  \
+         /actuator        включить/выключить живые правки vault (по умолчанию из флага --actuator)\n  \
+         /undo            откатить последний прогон (применённые правки)\n  \
+         /new             очистить историю диалога\n  \
+         /quit            выход (или Ctrl-D)\n\
+         (пауза мид-рана недоступна в построчном REPL — это kill-switch GUI/agentd)"
+    );
 }
 
 /// Читает/парсит `.nexus/local.json` (зеркало desktop/agentd `load_local_config`, но СИНХРОННО —
@@ -400,7 +621,8 @@ fn print_agent_help() {
     eprintln!(
         "nexus agent — запуск агента в терминале (one-shot)\n\n\
          ИСПОЛЬЗОВАНИЕ:\n  \
-         nexus agent [ФЛАГИ] \"<задача>\"\n\n\
+         nexus agent [ФЛАГИ] \"<задача>\"   one-shot: один ход и выход\n  \
+         nexus agent [ФЛАГИ]               REPL: диалог построчно, история между ходами (/help внутри)\n\n\
          ФЛАГИ:\n  \
          --vault PATH   корень vault (по умолчанию — текущий каталог)\n  \
          --actuator     включить живые правки vault (через гейт подтверждения); без него — стабы\n  \
@@ -433,9 +655,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_task_empty_is_error() {
-        assert!(parse_task(&[]).is_err());
-        assert!(parse_task(&["--vault", "/tmp/v"]).is_err());
+    fn parse_task_empty_ok_for_repl() {
+        // W-30: пустая задача допустима (→ REPL), не ошибка.
+        assert_eq!(parse_task(&[]).unwrap(), "");
+        assert_eq!(parse_task(&["--vault", "/tmp/v"]).unwrap(), "");
+        assert_eq!(parse_task(&["--actuator"]).unwrap(), "");
+    }
+
+    #[test]
+    fn parse_slash_commands() {
+        assert_eq!(parse_slash("/help"), SlashCmd::Help);
+        assert_eq!(parse_slash("/h"), SlashCmd::Help);
+        assert_eq!(parse_slash("/quit"), SlashCmd::Quit);
+        assert_eq!(parse_slash("/q"), SlashCmd::Quit);
+        assert_eq!(parse_slash("/exit"), SlashCmd::Quit);
+        assert_eq!(parse_slash("/new"), SlashCmd::New);
+        assert_eq!(parse_slash("/auto"), SlashCmd::ToggleAuto);
+        assert_eq!(parse_slash("/actuator"), SlashCmd::ToggleActuator);
+        assert_eq!(parse_slash("  /undo  "), SlashCmd::Undo);
+        assert_eq!(parse_slash("/bogus"), SlashCmd::Unknown("/bogus".into()));
     }
 
     #[test]
