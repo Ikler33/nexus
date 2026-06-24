@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Агент · CONN-1 — фундамент расцепления: `AgentBackend` + `agent.connection` 🔴 BETA
+
+Первый срез ACP-эпика (самостоятельные app+агент + подключение Hermes). Чистый рефактор, **0 видимых изменений**.
+
+- **`AgentBackend` trait** (`apps/desktop/src-tauri/src/agent_backend.rs`) + `EmbeddedBackend` (ZST): 6 агент-команд (`agent_run/approve/pause/resume/cancel/undo`) стали тонкими шимами, делегирующими через `state.agent_backend()`. Тела перенесены в `*_impl(&AppState, …)` **байт-в-байт** (только `State<AppState>`→`&AppState`). `drive_run`/хелперы/тесты не тронуты; имена/параметры/возвраты команд идентичны → фронт-контракт цел. На этом срезе подключён только `Embedded` (= сегодняшнее поведение).
+- **Конфиг `ai.connection`** (`config.rs`): `{ mode, socket, url, auth_ref }` (всё default-OFF, отсутствие → `embedded`). `mode()`-аксессор: `None`/неизвестное → `Embedded` (SAFE). **Тип-толерантный десериализатор** на всех полях: мусорный/неверного-типа `mode` (напр. `42`) НЕ роняет `LocalConfig::parse` и НЕ теряет `ai.chat` (тот же data-loss класс, на котором проект горел). `ConnectionConfig`/`ConnectionMode` реэкспортированы из `ai::` для CONN-2.
+- Adversarial-ревью (regression + serde-safety, 2 линзы): regression **0/0** (embedded байт-идентичен), config поймал **2 major** (wrong-type nuke + export-gap) — **оба исправлены**. Гейт: cargo core **1038** (+wrong-type-тест) / desktop **194** (вкл. W-12 E2E) / clippy(ws) / fmt.
+
 ### Агент · W-12 — детерминированный E2E критпути агента в CI 🔴 BETA
 
 Полный путь агента задача→tool→proposal→approve→**запись**→**undo** теперь проверяется в CI на каждом PR/push.

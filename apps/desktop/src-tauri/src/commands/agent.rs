@@ -157,9 +157,26 @@ pub struct HistoryMsg {
     pub text: String,
 }
 
+/// CONN-1: тонкий шим — делегирует активному [`AgentBackend`] (по умолчанию `EmbeddedBackend` =
+/// сегодняшний in-process путь, байт-в-байт). Имя/параметры/возврат команды неизменны (фронт-контракт цел).
 #[tauri::command]
 pub async fn agent_run(
     state: State<'_, AppState>,
+    task: String,
+    autonomy: String,
+    history: Vec<HistoryMsg>,
+    channel: Channel<AgentStreamEvent>,
+) -> AppResult<i64> {
+    state
+        .agent_backend()
+        .run(&state, task, autonomy, history, channel)
+        .await
+}
+
+/// EMBEDDED-реализация `agent_run` (CONN-1): прежнее тело команды без изменений (только `State`→`&AppState`).
+/// Зовётся из [`crate::agent_backend::EmbeddedBackend::run`].
+pub(crate) async fn run_impl(
+    state: &AppState,
     task: String,
     autonomy: String,
     // W-4: история прошлых ходов сессии (из стора `turns[]`); фронт всегда шлёт (пустой массив для
@@ -425,6 +442,18 @@ pub async fn agent_approve(
     run_id: i64,
     decisions: Vec<ApprovalDecision>,
 ) -> AppResult<()> {
+    state
+        .agent_backend()
+        .approve(&state, run_id, decisions)
+        .await
+}
+
+/// EMBEDDED-реализация `agent_approve` (CONN-1): прежнее тело (только `State`→`&AppState`).
+pub(crate) async fn approve_impl(
+    state: &AppState,
+    run_id: i64,
+    decisions: Vec<ApprovalDecision>,
+) -> AppResult<()> {
     let Some(tx) = state.agent_decision_sender(run_id) else {
         return Err(AppError::Msg(format!(
             "agent_approve: прогон {run_id} не активен (нет в реестре)"
@@ -451,6 +480,11 @@ pub async fn agent_approve(
 /// текущего цикла — пауза проверяется fail-safe на каждом шаге).
 #[tauri::command]
 pub async fn agent_pause(state: State<'_, AppState>, run_id: i64) -> AppResult<()> {
+    state.agent_backend().pause(&state, run_id).await
+}
+
+/// EMBEDDED-реализация `agent_pause` (CONN-1).
+pub(crate) async fn pause_impl(state: &AppState, run_id: i64) -> AppResult<()> {
     if state.set_agent_paused(run_id, true) {
         Ok(())
     } else {
@@ -464,6 +498,11 @@ pub async fn agent_pause(state: State<'_, AppState>, run_id: i64) -> AppResult<(
 /// продолжит со следующего хода.
 #[tauri::command]
 pub async fn agent_resume(state: State<'_, AppState>, run_id: i64) -> AppResult<()> {
+    state.agent_backend().resume(&state, run_id).await
+}
+
+/// EMBEDDED-реализация `agent_resume` (CONN-1).
+pub(crate) async fn resume_impl(state: &AppState, run_id: i64) -> AppResult<()> {
     if state.set_agent_paused(run_id, false) {
         Ok(())
     } else {
@@ -477,6 +516,11 @@ pub async fn agent_resume(state: State<'_, AppState>, run_id: i64) -> AppResult<
 /// хода (партиал не теряется — он в outcome).
 #[tauri::command]
 pub async fn agent_cancel(state: State<'_, AppState>, run_id: i64) -> AppResult<()> {
+    state.agent_backend().cancel(&state, run_id).await
+}
+
+/// EMBEDDED-реализация `agent_cancel` (CONN-1).
+pub(crate) async fn cancel_impl(state: &AppState, run_id: i64) -> AppResult<()> {
     if state.cancel_agent_run(run_id) {
         Ok(())
     } else {
@@ -491,6 +535,11 @@ pub async fn agent_cancel(state: State<'_, AppState>, run_id: i64) -> AppResult<
 /// откаченных действий. Требует открытого vault (канонизированный корень — предусловие apply-рубежа).
 #[tauri::command]
 pub async fn agent_undo(state: State<'_, AppState>, run_id: i64) -> AppResult<usize> {
+    state.agent_backend().undo(&state, run_id).await
+}
+
+/// EMBEDDED-реализация `agent_undo` (CONN-1): прежнее тело (только `State`→`&AppState`).
+pub(crate) async fn undo_impl(state: &AppState, run_id: i64) -> AppResult<usize> {
     let (canon_root, writer, reader) = {
         let ctx = state.vault().await?;
         (

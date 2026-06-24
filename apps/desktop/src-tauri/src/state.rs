@@ -70,6 +70,11 @@ pub struct AppState {
     /// переносим через границу `tokio::spawn`); `std::Mutex` — захват короткий и синхронный (вставка/
     /// удаление/клон каналов), реальная работа (стрим/решения) идёт по клонированным каналам вне лока.
     pub agent_runs: Arc<Mutex<HashMap<i64, AgentRunEntry>>>,
+
+    /// CONN-1: активный агент-бэкенд (in-process Embedded по умолчанию). Команды агента делегируют сюда.
+    /// На этом срезе всегда [`crate::agent_backend::EmbeddedBackend`] (Connected/ACP — CONN-2+); поле
+    /// устанавливается раз в `new()`. Future (CONN-4): свап по `ai.connection.mode` при смене настроек.
+    pub agent_backend: Arc<dyn crate::agent_backend::AgentBackend>,
 }
 
 /// RAII-гард активной интерактивной LLM-операции: на `Drop` уменьшает счётчик (S5 backpressure).
@@ -96,7 +101,13 @@ impl AppState {
             egress_offline,
             egress_audit: Arc::new(crate::net::EgressAudit::default()),
             agent_runs: Arc::new(Mutex::new(HashMap::new())),
+            agent_backend: Arc::new(crate::agent_backend::EmbeddedBackend),
         }
+    }
+
+    /// CONN-1: активный агент-бэкенд (клон `Arc` — методы берут `&AppState` отдельным шаредом).
+    pub fn agent_backend(&self) -> Arc<dyn crate::agent_backend::AgentBackend> {
+        self.agent_backend.clone()
     }
 
     /// Контекст открытого vault — или [`AppError::NoVault`], если vault не открыт (кросс-план #9).

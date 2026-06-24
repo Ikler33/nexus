@@ -23,7 +23,8 @@ pub use chat::{
     FENCE_MAX_BYTES,
 };
 pub use config::{
-    AiConfig, ChatConfig, DelegationConfig, EmbeddingConfig, LocalConfig, ResearchConfig,
+    AiConfig, ChatConfig, ConnectionConfig, ConnectionMode, DelegationConfig, EmbeddingConfig,
+    LocalConfig, ResearchConfig,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use embedder::MockEmbedder;

@@ -22,6 +22,8 @@ pub use nexus_core::{
     vault, vector, watcher,
 };
 
+/// CONN-1: абстракция агент-бэкенда (Embedded по умолчанию; Connected/ACP — CONN-2+).
+pub mod agent_backend;
 /// Канбан-доска (BOARD-2, спека `docs/specs/kanban-board.md`): выборка заметок-задач (frontmatter `status`).
 pub mod board;
 /// Tauri IPC-команды.

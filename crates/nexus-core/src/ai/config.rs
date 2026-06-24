@@ -123,6 +123,67 @@ pub struct AiConfig {
     /// при `enabled` И `ai.delegation.enabled` И включённом web (RES-4) — структурно инертен иначе.
     #[serde(default)]
     pub research: ResearchConfig,
+
+    /// **CONN-1 (ACP/расцепление, фундамент), SAFE BY DEFAULT.** Как app/agentd получает агент-бэкенд.
+    /// Отсутствие `ai.connection` → embedded (serde Default) = байт-в-байт сегодняшнее поведение (агент
+    /// in-process). Connected/ACP-транспорты приходят в CONN-2+; на этом срезе подключён ТОЛЬКО Embedded.
+    #[serde(default)]
+    pub connection: ConnectionConfig,
+}
+
+/// Выбор агент-бэкенда (CONN-1). Дефолт — embedded (in-process), без регрессии. `mode` — `Option<String>`
+/// (НЕ enum) НАМЕРЕННО: мусорное/неизвестное значение НИКОГДА не уронит `LocalConfig::parse` (не потеряем
+/// chat/embedding-конфиг) — нормализуется в [`ConnectionMode::Embedded`] (как `agent_autonomy`/normalize).
+/// Толерантный к ТИПУ десериализатор `Option<String>`: любое НЕ-строковое значение (число/булево/
+/// массив/объект) → `None` вместо ОШИБКИ парса. Keystone-защита: мусорный `ai.connection.*` (напр.
+/// `"mode": 42` при ручной правке) НЕ должен ронять весь `LocalConfig::parse` и терять `ai.chat`/
+/// `ai.embedding` (тот же класс data-loss, на котором проект горел — см. `WebConfig.url`). Голый
+/// `Option<String>` + `#[serde(default)]` спасает только от ОТСУТСТВИЯ поля, не от неверного типа.
+fn de_tolerant_opt_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|val| val.as_str().map(str::to_string)))
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ConnectionConfig {
+    /// `"embedded"` (ДЕФОЛТ) | `"local"` (AF_UNIX-сокет, CONN-2) | `"remote"` (url+токен, CONN-3).
+    /// `None`/неизвестное → embedded. Тип-толерантный десериализатор: мусор → None, не роняет конфиг.
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub mode: Option<String>,
+    /// AF_UNIX-путь для `mode="local"` (CONN-2). Игнорируется для embedded.
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub socket: Option<String>,
+    /// URL для `mode="remote"` (CONN-3). Игнорируется для embedded.
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub url: Option<String>,
+    /// Ссылка на секрет/токен auth (keyring ref / env, CONN-3). Игнорируется для embedded.
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub auth_ref: Option<String>,
+}
+
+/// Нормализованный режим коннекта. `Default` = `Embedded` → отсутствие/неизвестное значение безопасно.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnectionMode {
+    #[default]
+    Embedded,
+    Local,
+    Remote,
+}
+
+impl ConnectionConfig {
+    /// Нормализованный режим: `None`/неизвестное → [`ConnectionMode::Embedded`] (SAFE-default — мусорный
+    /// `mode` не активирует внешний транспорт и не роняет конфиг).
+    pub fn mode(&self) -> ConnectionMode {
+        match self.mode.as_deref() {
+            Some("local") => ConnectionMode::Local,
+            Some("remote") => ConnectionMode::Remote,
+            _ => ConnectionMode::Embedded,
+        }
+    }
 }
 
 /// Конфиг самообучения навыкам (SELF-LEARNING). Дефолт-OFF: пустой `ai.skills` → `learning_enabled=false`.
@@ -403,6 +464,56 @@ mod tests {
         let cfg = LocalConfig::parse(r#"{"ai":{"embedding":{"url":"http://x:8081"}}}"#).unwrap();
         assert!(cfg.ai.chat.is_none());
         assert_eq!(cfg.ai.embedding.unwrap().dim, None);
+    }
+
+    #[test]
+    fn conn1_absent_connection_is_embedded() {
+        // CONN-1: нет `ai.connection` → embedded (нулевая регрессия — агент in-process).
+        let cfg = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Embedded);
+    }
+
+    #[test]
+    fn conn1_parses_connection_local() {
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"connection":{"mode":"local","socket":"/tmp/agentd.sock"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Local);
+        assert_eq!(
+            cfg.ai.connection.socket.as_deref(),
+            Some("/tmp/agentd.sock")
+        );
+    }
+
+    #[test]
+    fn conn1_unknown_mode_falls_back_and_keeps_chat() {
+        // КЛЮЧЕВОЙ serde-safety инвариант: мусорный mode НЕ роняет parse и НЕ теряет ai.chat.
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"connection":{"mode":"garbage"},"chat":{"url":"http://h:8080"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Embedded);
+        assert_eq!(cfg.ai.chat.unwrap().url, "http://h:8080");
+    }
+
+    #[test]
+    fn conn1_wrong_type_mode_does_not_nuke_config() {
+        // Ревью CONN-1: НЕВЕРНЫЙ ТИП mode (число/булево/массив) НЕ должен ронять parse и терять ai.chat
+        // (голый Option<String> ронял; тип-толерантный десериализатор → None). Тот же класс data-loss.
+        for bad in [
+            r#"{"ai":{"connection":{"mode":42},"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"connection":{"mode":true},"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"connection":{"mode":["x"]},"socket":99,"chat":{"url":"http://h:8080"}}}"#,
+        ] {
+            let cfg =
+                LocalConfig::parse(bad).unwrap_or_else(|e| panic!("parse упал на {bad}: {e}"));
+            assert_eq!(cfg.ai.connection.mode(), ConnectionMode::Embedded);
+            assert_eq!(
+                cfg.ai.chat.expect("ai.chat должен выжить").url,
+                "http://h:8080"
+            );
+        }
     }
 
     /// E4: авто-allowlist берёт ИМЕННО хосты явных `ai.*.url` (chat/embedding/fast), без порта;
