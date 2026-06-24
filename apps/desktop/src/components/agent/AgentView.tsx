@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
+  AlertTriangle,
   ArrowUp,
   Check,
   ChevronRight,
@@ -326,7 +327,7 @@ export function AgentView() {
             </div>
             <div className={styles.dockScroll}>
               {aside === 'plan' ? (
-                <PlanDemo />
+                <PlanLive />
               ) : aside === 'graph' ? (
                 <ResearchGraph />
               ) : (
@@ -654,46 +655,57 @@ function Changeset({ files, autonomy, awaiting, approving, onFile, onBulk, onApp
   );
 }
 
-// ── Правый dock: План (демо-структура) ───────────────────────────────────────────────────────────
+// ── Правый dock: План (W-14 — реальные шаги прогона) ────────────────────────────────────────────
 
 /**
- * План — ДОКУМЕНТИРОВАННАЯ статичная демо-структура (контракт UI-1a НЕ несёт plan-шагов; см. CONTRACT-NOTES
- * §«Следствия для бэкенда» — PlanProposed/PlanStepStatus отнесены к «позже»). Когда события появятся, рендер
- * перейдёт на реальные данные. Сейчас отражает дизайн-эталон, помечен demoNote (без выдумывания backend-данных).
+ * W-14: План = РЕАЛЬНЫЕ шаги активного хода (его tool-вызовы из стора). Раньше была статичная демо-
+ * заглушка (ST-G6) — теперь каждый `toolCall` = пункт плана: `result==null` → выполняется
+ * (BrandThinking), `isError` → ошибка, иначе → готово. Прогресс-бар = доля завершённых. Нет шагов
+ * (ход без действий / только чат) → честный пустой стейт, без выдуманных пунктов.
  */
-function PlanDemo() {
+function PlanLive() {
   const { t } = useTranslation();
-  const steps: { s: 'done' | 'run' | 'pend'; label: string }[] = [
-    { s: 'done', label: t('agent.graph.center') },
-    { s: 'done', label: 'match.projects' },
-    { s: 'run', label: 'note.create' },
-    { s: 'pend', label: 'links [[ ]]' },
-    { s: 'pend', label: 'tags' },
-  ];
-  const done = steps.filter((p) => p.s === 'done').length;
-  const piCls: Record<'done' | 'run' | 'pend', string> = {
+  const turns = useAgentStore((s) => s.turns);
+  const turn = turns.length ? turns[turns.length - 1] : null;
+  const steps = turn?.steps ?? [];
+
+  if (steps.length === 0) {
+    return (
+      <div className={styles.plan}>
+        <div className={styles.planEmpty}>{t('agent.plan.empty')}</div>
+      </div>
+    );
+  }
+
+  type S = 'done' | 'run' | 'err';
+  const stateOf = (st: { result: string | null; isError: boolean }): S =>
+    st.result == null ? 'run' : st.isError ? 'err' : 'done';
+  const done = steps.filter((st) => st.result != null && !st.isError).length;
+  const piCls: Record<S, string> = {
     done: styles.piDone,
     run: styles.piRun,
-    pend: styles.piPend,
+    err: styles.piErr,
   };
   return (
     <div className={styles.plan}>
-      <div className={styles.demoNote}>{t('agent.plan.demoNote')}</div>
       <div className={styles.planList}>
-        {steps.map((p, i) => (
-          <div key={i} className={`${styles.planItem} ${piCls[p.s]}`}>
-            <span className={styles.planIc}>
-              {p.s === 'done' ? (
-                <Check size={12} aria-hidden />
-              ) : p.s === 'run' ? (
-                <BrandThinking size={13} />
-              ) : (
-                <i className={styles.planDot} />
-              )}
-            </span>
-            <span className={styles.planLabel}>{p.label}</span>
-          </div>
-        ))}
+        {steps.map((st) => {
+          const s = stateOf(st);
+          return (
+            <div key={st.id} className={`${styles.planItem} ${piCls[s]}`}>
+              <span className={styles.planIc}>
+                {s === 'done' ? (
+                  <Check size={12} aria-hidden />
+                ) : s === 'err' ? (
+                  <AlertTriangle size={12} aria-hidden />
+                ) : (
+                  <BrandThinking size={13} />
+                )}
+              </span>
+              <span className={styles.planLabel}>{st.kind}</span>
+            </div>
+          );
+        })}
       </div>
       <div className={styles.planBar}>
         <i style={{ width: `${Math.round((done / steps.length) * 100)}%` }} />

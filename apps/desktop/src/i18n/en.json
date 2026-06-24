@@ -626,8 +626,7 @@
       "close": "Close"
     },
     "plan": {
-      "demoNote": "Demo plan structure (plan events will arrive later)",
-      "empty": "The plan will appear as the run proceeds."
+      "empty": "No steps yet — the agent hasn't taken any actions in this run."
     },
     "graph": {
       "demoNote": "Demo execution graph (research tasks)",

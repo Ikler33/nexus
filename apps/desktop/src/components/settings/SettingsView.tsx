@@ -1104,10 +1104,9 @@ function SkillsList({ skillsDir }: { skillsDir: string | null }) {
       .then(setData)
       .catch(() => setData(null));
   };
-  // Перечитываем при смене каталога (key через skillsDir в зависимости).
+  // Перечитываем при смене каталога (refresh стабилен по поведению; зависим только от skillsDir).
   useEffect(() => {
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skillsDir]);
 
   if (!data) return null;

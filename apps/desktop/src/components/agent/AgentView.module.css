@@ -941,15 +941,22 @@
   place-items: center;
   color: var(--color-success);
 }
-.planItem.piPend .planIc,
 .planItem.piRun .planIc {
   color: var(--color-ai);
 }
-.planDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  border: 1.5px solid var(--color-text-faint);
+/* W-14: шаг с ошибкой (tool вернул isError) — danger-цвет иконки/лейбла. */
+.planItem.piErr .planIc {
+  color: var(--color-danger);
+}
+.planItem.piErr .planLabel {
+  color: var(--color-danger);
+}
+/* W-14: честный пустой стейт плана (ход без действий / только чат). */
+.planEmpty {
+  padding: 16px 4px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  text-align: center;
 }
 .planLabel {
   color: var(--color-text);
@@ -960,9 +967,6 @@
 }
 .planItem.piDone .planLabel {
   color: var(--color-text-muted);
-}
-.planItem.piPend .planLabel {
-  color: var(--color-text-faint);
 }
 .planBar {
   margin-top: 14px;
