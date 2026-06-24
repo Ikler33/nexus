@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Навигация/Бренд · W-6 — переходы из любого слоя + иконка Orvin 🔴 BETA
+
+Репорт владельца: ST-D1 «переход срабатывает только из определённого раздела»; ST-D3 «остался старый логотип».
+
+- **навигация** (`stores/ui.ts`): main-вью opens гасили только `MAIN_VIEWS_CLOSED`, а граф (absolute-слой) + Tasks/Inbox/Sync/Plugins (top-overlays) ОСТАВАЛИСЬ поверх → клик по нав-иконке менял вью ПОД ними, визуально «не срабатывал». Новый `SWITCH_MAIN` (+ граф/plugins/sync/digest/contradictions/trap-оверлеи) в open/toggle Home/News/Board/Today/Agent **и** (фикс ревью) openChat/toggleChat/openInspectorSection. conflict/versions (модальные safe-flow) НЕ трогаем.
+- **бренд** (`tauri.conf.json`): `productName` Nexus → Orvin (`identifier` app.nexus.desktop НЕ трогаем — namespace данных). App-иконки были Qasr-эпохи (#356) → перегенерил из `public/favicon.svg` (Orvin orbit-mark на ember-плитке) через `tauri icon`. Titlebar-комментарий Nexus→Orvin. (favicon/BrandMark/app.name/window-title уже были Orvin.)
+- Adversarial-ревью (3 измерения × verify, 11 находок / 1 подтверждено — analogous chat/inspector-пути исправлены в срезе). Гейт: typecheck / eslint / vitest 956 (ui-store +5 nav-тестов + afterEach-hygiene) / csp-conf-тест.
+
 ### Агент · W-4 — мультитёрн: история переписки (changeset-гейт на 2-м/3-м ходу) 🔴 BETA
 
 Репорт владельца: окно подтверждения (changeset) появляется на 1-м сообщении, но не на 2-м/3-м той же сессии. Диагностика (мультиагент): НЕ stale-channel — бэк пересобирает всё свежо per `run_id`. Корень — **история переписки не прокидывалась между ходами**: `run_agent_session` строил контекст = преамбул+recall+skill_menu+task (one-shot), follow-up не помнил, что прошлый ход правил заметку → модель отвечала прозой, write-tool не звался → не было proposal/гейта.

@@ -43,7 +43,7 @@ function themeIcon(theme: Theme) {
 }
 
 /**
- * Верхний titlebar по макету `app.jsx` (DP-13): бренд «лого + Nexus» (клик → Home),
+ * Верхний titlebar по макету `app.jsx` (DP-13): бренд «лого + Orvin» (клик → Home),
  * центральная поисковая пилюля (⌘K), справа ТОЛЬКО AI-инсайты (sparkles▾) | divider |
  * режим чтения | RU/EN | тема | panel-right (AI-панель). Граф/новости/sync/настройки
  * переехали в вертикальный ActivityBar; плагины и «Открыть vault» — команды палитры.

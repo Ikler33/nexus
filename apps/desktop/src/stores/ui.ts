@@ -204,6 +204,22 @@ const MAIN_VIEWS_CLOSED = {
   agentOpen: false,
 } as const;
 
+/**
+ * W-6: переход на полноэкранную main-вью (Home/News/Board/Today/Agent) обязан ПОГАСИТЬ и плавающие
+ * слои, которые иначе остаются ПОВЕРХ main-области и навигация «не срабатывает» из них (ST-D1: граф —
+ * absolute-слой; Tasks/Inbox/Sync/Plugins/Goals/Memory/Episodes/палитра/шпаргалка/Настройки — top-
+ * overlays в App.tsx). Не трогаем conflict/versions (модальные safe-flow редактора — закрываются явно).
+ */
+const SWITCH_MAIN = {
+  ...MAIN_VIEWS_CLOSED,
+  ...TRAP_OVERLAYS_CLOSED, // palette/goals/tasks/inbox/cheatsheet/memory/episodes/tweaks
+  graphOpen: false,
+  pluginsOpen: false,
+  syncOpen: false,
+  digestOpen: false,
+  contradictionsOpen: false,
+} as const;
+
 /** Глобальное UI-состояние оболочки (Command Palette, граф, RAG-чат и пр.). */
 export const useUIStore = create<UIState>((set) => ({
   paletteOpen: false,
@@ -248,16 +264,31 @@ export const useUIStore = create<UIState>((set) => ({
   // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
   openChat: () => {
     logUi('chat:open');
-    set({ chatOpen: true, ...MAIN_VIEWS_CLOSED });
+    // W-6: SWITCH_MAIN (а не только MAIN_VIEWS_CLOSED) — иначе панель «открыта», но скрыта под графом/
+    // оверлеем (тот же ST-D1, что у main-нав). Чат — workspace-панель, гасим блокирующие слои.
+    set({ ...SWITCH_MAIN, chatOpen: true });
   },
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () =>
     set((s) => {
       logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
-      if (!s.chatOpen) return { chatOpen: true, ...MAIN_VIEWS_CLOSED };
-      // Панель уже «открыта», но скрыта за Home/News/Board/Today/Agent → клик возвращает её в поле зрения.
-      if (s.homeOpen || s.newsOpen || s.boardOpen || s.todayOpen || s.agentOpen)
-        return { ...MAIN_VIEWS_CLOSED };
+      if (!s.chatOpen) return { ...SWITCH_MAIN, chatOpen: true };
+      // Панель уже «открыта», но скрыта за main-вью ИЛИ плавающим слоем (граф/Tasks/Inbox/Sync/…) →
+      // клик возвращает её в поле зрения (W-6: учитываем и оверлеи, не только main-вью).
+      if (
+        s.homeOpen ||
+        s.newsOpen ||
+        s.boardOpen ||
+        s.todayOpen ||
+        s.agentOpen ||
+        s.graphOpen ||
+        s.tasksOpen ||
+        s.inboxOpen ||
+        s.syncOpen ||
+        s.pluginsOpen ||
+        s.tweaksOpen
+      )
+        return { ...SWITCH_MAIN };
       return { chatOpen: false };
     }),
   openPlugins: () => set({ pluginsOpen: true }),
@@ -346,51 +377,51 @@ export const useUIStore = create<UIState>((set) => ({
     }),
   // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board ↔ today ↔ agent (редактор — когда все закрыты).
   closeNews: () => set({ newsOpen: false }),
-  toggleNews: () => set((s) => ({ ...MAIN_VIEWS_CLOSED, newsOpen: !s.newsOpen })),
+  toggleNews: () => set((s) => ({ ...SWITCH_MAIN, newsOpen: !s.newsOpen })),
   openNews: () => {
     logUi('news:open');
-    set({ ...MAIN_VIEWS_CLOSED, newsOpen: true });
+    set({ ...SWITCH_MAIN, newsOpen: true });
   },
   closeBoard: () => set({ boardOpen: false }),
   toggleBoard: () =>
     set((s) => {
       logUi('board:toggle', s.boardOpen ? 'close' : 'open');
-      return { ...MAIN_VIEWS_CLOSED, boardOpen: !s.boardOpen };
+      return { ...SWITCH_MAIN, boardOpen: !s.boardOpen };
     }),
   openBoard: () => {
     logUi('board:open');
-    set({ ...MAIN_VIEWS_CLOSED, boardOpen: true });
+    set({ ...SWITCH_MAIN, boardOpen: true });
   },
   // «Сегодня» (TODAY-1) — полная main-вью, взаимоисключаема с home/news/board/agent (как они меж собой).
   closeToday: () => set({ todayOpen: false }),
   toggleToday: () =>
     set((s) => {
       logUi('today:toggle', s.todayOpen ? 'close' : 'open');
-      return { ...MAIN_VIEWS_CLOSED, todayOpen: !s.todayOpen };
+      return { ...SWITCH_MAIN, todayOpen: !s.todayOpen };
     }),
   openToday: () => {
     logUi('today:open');
-    set({ ...MAIN_VIEWS_CLOSED, todayOpen: true });
+    set({ ...SWITCH_MAIN, todayOpen: true });
   },
   // «Агент» (UI-1) — полная main-вью, взаимоисключаема с home/news/board/today (как они меж собой).
   closeAgent: () => set({ agentOpen: false }),
   toggleAgent: () =>
     set((s) => {
       logUi('agent:toggle', s.agentOpen ? 'close' : 'open');
-      return { ...MAIN_VIEWS_CLOSED, agentOpen: !s.agentOpen };
+      return { ...SWITCH_MAIN, agentOpen: !s.agentOpen };
     }),
   openAgent: () => {
     logUi('agent:open');
-    set({ ...MAIN_VIEWS_CLOSED, agentOpen: true });
+    set({ ...SWITCH_MAIN, agentOpen: true });
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () =>
     set((s) => {
       logUi('home:toggle', s.homeOpen ? 'close' : 'open');
-      return { ...MAIN_VIEWS_CLOSED, homeOpen: !s.homeOpen };
+      return { ...SWITCH_MAIN, homeOpen: !s.homeOpen };
     }),
-  openHome: () => set({ ...MAIN_VIEWS_CLOSED, homeOpen: true }),
+  openHome: () => set({ ...SWITCH_MAIN, homeOpen: true }),
   startOnboarding: () => set({ onboardingActive: true }),
   finishOnboarding: () => {
     try {
@@ -418,7 +449,8 @@ export const useUIStore = create<UIState>((set) => ({
   // Закрываем оверлейные вью + выходим из reading (там инспектор-рейл скрыт, как у openTagFilter),
   // чтобы показался редактор с рейлом, и просим открыть секцию.
   openInspectorSection: (section) =>
-    set({ ...MAIN_VIEWS_CLOSED, reading: false, pendingInspectorSection: section }),
+    // W-6: ведёт в редактор+inspector-rail → гасим граф/оверлеи (SWITCH_MAIN), иначе цель скрыта под ними.
+    set({ ...SWITCH_MAIN, reading: false, pendingInspectorSection: section }),
   consumeInspectorSection: () => set({ pendingInspectorSection: null }),
   revealTarget: null,
   // Дерево видно только при открытом сайдбаре и не в reading — иначе скролл произойдёт незаметно.
