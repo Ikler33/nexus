@@ -16,6 +16,8 @@ nexus-core = { path = "../nexus-core" }
 # `status` подключается к AF_UNIX-сокету агента → нужен async-рантайм + `#[tokio::main]`.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 serde_json = { workspace = true }
+# W-29: `TtyDecisionSource` реализует async-трейт `DecisionSource` ядра (#[async_trait]).
+async-trait = { workspace = true }
 # Локация HOME / config-dir для пути сервис-юнита (LaunchAgents / systemd --user). Уже workspace-зависимость.
 dirs = { workspace = true }
 

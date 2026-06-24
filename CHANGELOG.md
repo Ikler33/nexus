@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Агент · W-29 — терминальный агент: TTY-аппрув + живой актуатор (срез 2) 🔴 BETA
+
+Терминальный агент научился **писать в vault** — под подтверждением `[y/N]` прямо в терминале.
+
+- **Флаги** (`crates/nexus-cli/src/agent.rs`): `--actuator` (включить живые правки через гейт), `--auto` (автономия `auto` — low-risk без спроса, Confirm-тир всё равно спрашивает), `--yes` (неинтерактивно одобрять всё, только с `--actuator`).
+- **`TtyDecisionSource`** — реализует ядровый `DecisionSource`: на каждое предложение печатает путь+тир+±diff и спрашивает `[y/N]` (приглашение в stderr, ответ из stdin через `spawn_blocking`). **Fail-closed**: пусто/EOF/ошибка/не-«да» → Reject (плюс второй рубеж `BatchDecision::decision_for`).
+- Выбор источника решений: без `--actuator` → стабы (vault не трогается, как срез 1); `--yes` → `ApproveAll`; иначе → `TtyDecisionSource`. `--auto` **не** обходит Confirm-тир.
+- Adversarial-ревью (safety + correctness, 2 линзы): **0 critical / 0 major** — дефолт остаётся stub/без записи, все non-affirmative пути отклоняют, `--auto` доказуемо не байпасит Confirm. Гейт: build/clippy(workspace)/fmt + 11 юнит-тестов (+ выбор решения, fail-closed разбор ответа, разбор флагов).
+
 ### Агент · W-28 — терминальный агент `nexus agent` (срез 1) 🔴 BETA
 
 Запуск агента из **терминала**, отдельно от десктоп-GUI — для разработки и тестирования самого агента (как Hermes). Срез 1: one-shot.

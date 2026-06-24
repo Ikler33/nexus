@@ -18,33 +18,51 @@ use std::sync::{Arc, Mutex};
 
 use nexus_core::agent::{AgentEvent, AgentEventForwarder};
 
-/// Подкоманда `nexus agent [--vault P] "<задача>"`. Задача = позиционные аргументы, склеенные
-/// пробелом (флаги `--vault`/`--help` отфильтрованы). Vault по умолчанию — текущий каталог.
+/// Опции прогона из флагов командной строки (W-29).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AgentOpts {
+    /// `--actuator` — включить АКТУАТОР (живые правки vault через гейт). По умолчанию OFF (стабы).
+    actuator: bool,
+    /// `--auto` — автономия `auto` (low-risk применяется без спроса; Confirm-тир всё равно спрашивает).
+    auto: bool,
+    /// `--yes` — неинтерактивно одобрять ВСЕ предложения (`ApproveAll`). Имеет смысл только с `--actuator`.
+    yes: bool,
+}
+
+/// Подкоманда `nexus agent [флаги] "<задача>"`. Задача = позиционные аргументы, склеенные пробелом
+/// (флаги отфильтрованы). Vault по умолчанию — текущий каталог.
 pub(crate) fn cmd_agent(args: &[&str]) -> Result<(), String> {
     if args.iter().any(|a| matches!(*a, "--help" | "-h")) {
         print_agent_help();
         return Ok(());
     }
+    let opts = AgentOpts {
+        actuator: crate::has_flag(args, "--actuator"),
+        auto: crate::has_flag(args, "--auto"),
+        yes: crate::has_flag(args, "--yes"),
+    };
     let task = parse_task(args)?;
     let vault = crate::resolve_vault(args)?;
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
-    rt.block_on(run_agent(vault, task))
+    rt.block_on(run_agent(vault, task, opts))
 }
 
-/// Извлекает задачу из аргументов: пропускает `--vault <val>`, отвергает прочие `--флаги` (зарезерв.
-/// под срезы 2+: `--actuator`/`--auto`/`--yes`), остальное склеивает пробелом. Пусто → ошибка.
-/// Выделено отдельной функцией для юнит-тестов разбора.
+/// Известные булевы флаги подкоманды (без значения) — пропускаются при сборке задачи.
+const BOOL_FLAGS: &[&str] = &["--actuator", "--auto", "--yes"];
+
+/// Извлекает задачу из аргументов: пропускает `--vault <val>` и булевы флаги [`BOOL_FLAGS`], отвергает
+/// прочие `--флаги`, остальное склеивает пробелом. Пусто → ошибка. Отдельная функция — для юнит-тестов.
 fn parse_task(args: &[&str]) -> Result<String, String> {
     let mut parts: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i] {
             "--vault" => i += 2, // флаг + значение (обрабатывает resolve_vault)
+            t if BOOL_FLAGS.contains(&t) => i += 1, // булев флаг — не часть задачи
             t if t.starts_with("--") => {
                 return Err(format!(
-                    "неизвестный флаг {t} (в срезе 1 поддержан только --vault; \
-                     --actuator/--auto/--yes придут в W-29)"
+                    "неизвестный флаг {t} (поддержаны: --vault, --actuator, --auto, --yes)"
                 ))
             }
             t => {
@@ -55,20 +73,48 @@ fn parse_task(args: &[&str]) -> Result<String, String> {
     }
     let task = parts.join(" ");
     if task.trim().is_empty() {
-        return Err("нужна задача: nexus agent [--vault P] \"что сделать\"".into());
+        return Err("нужна задача: nexus agent [флаги] \"что сделать\"".into());
     }
     Ok(task)
 }
 
+/// Какой источник решений по changeset'у использовать (чистый выбор — для юнит-теста).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecisionMode {
+    /// Актуатор выключен → стабы не предлагают → источник не спрашивается (fail-closed `PolicyDefault`).
+    Stub,
+    /// Актуатор включён, интерактивно → `TtyDecisionSource` (y/N по каждому айтему).
+    TtyConfirm,
+    /// Актуатор включён + `--yes` → `ApproveAll` (неинтерактивно одобрить всё).
+    ApproveAllYes,
+}
+
+/// Выбор режима решения по флагам. Без `--actuator` — всегда `Stub` (vault не трогается), даже если
+/// заданы `--yes`/`--auto` (они тогда no-op — предупреждаем отдельно).
+fn select_decision_mode(opts: AgentOpts) -> DecisionMode {
+    if !opts.actuator {
+        DecisionMode::Stub
+    } else if opts.yes {
+        DecisionMode::ApproveAllYes
+    } else {
+        DecisionMode::TtyConfirm
+    }
+}
+
 /// Гонит один прогон агента и финализирует его в `run_store` (зеркало desktop `drive_run` +
-/// `finish_in_store`, минус Channel/UI-DecisionSource — здесь stdout + PolicyDefault).
-async fn run_agent(root: PathBuf, task: String) -> Result<(), String> {
-    use nexus_core::actuator::{DecisionSource, PolicyDefault, OVERWRITE_THRESHOLD};
+/// `finish_in_store`, минус Channel/UI-DecisionSource — здесь stdout + терминальный источник решений).
+async fn run_agent(root: PathBuf, task: String, opts: AgentOpts) -> Result<(), String> {
+    use nexus_core::actuator::{ApproveAll, DecisionSource, PolicyDefault, OVERWRITE_THRESHOLD};
     use nexus_core::agent::{run_agent_session, run_store, BudgetKind, LoopOutcome, SessionSpec};
     use nexus_core::ai::tools::build_agent_tool_provider;
     use nexus_core::ai::AiConfig;
     use nexus_core::db::Database;
     use nexus_core::net::{EgressAudit, EgressPolicy};
+
+    // --yes/--auto без --actuator — no-op (предлагать нечего): честно предупреждаем.
+    if !opts.actuator && (opts.yes || opts.auto) {
+        eprintln!("nexus agent: --yes/--auto без --actuator ничего не меняют (актуатор выключен)");
+    }
 
     let db = Database::open(root.join(".nexus").join("nexus.db"))
         .await
@@ -95,13 +141,20 @@ async fn run_agent(root: PathBuf, task: String) -> Result<(), String> {
     // — поэтому при прерывании CLI (Ctrl-C до finish_run) осиротевшая `queued`-строка демоном НЕ
     // подхватится: agentd-воркер клеймит ДЖОБЫ (jobs.KIND_AGENT_RUN payload=run_id), а не сканирует
     // `agent_runs.status` (job.rs:431). Журнал append-only, реапера в one-shot нет — безвредно.
-    let run_id = run_store::create_run(db.writer(), &task, Some(&model), Some("confirm"))
+    let autonomy = if opts.auto { "auto" } else { "confirm" };
+    let run_id = run_store::create_run(db.writer(), &task, Some(&model), Some(autonomy))
         .await
         .map_err(|e| format!("create_run: {e}"))?;
 
+    let mode = select_decision_mode(opts);
+    let (actuator_label, decision_label) = match mode {
+        DecisionMode::Stub => ("OFF (stub)", "—"),
+        DecisionMode::TtyConfirm => ("ON", "TTY y/N"),
+        DecisionMode::ApproveAllYes => ("ON", "--yes (auto-approve)"),
+    };
     eprintln!(
-        "nexus agent · vault={} · model={model} · run_id={run_id} · actuator=OFF (stub)\n\
-         ── задача ──\n{task}\n",
+        "nexus agent · vault={} · model={model} · run_id={run_id} · actuator={actuator_label} · \
+         autonomy={autonomy} · решение={decision_label}\n── задача ──\n{task}\n",
         root.display()
     );
 
@@ -109,8 +162,8 @@ async fn run_agent(root: PathBuf, task: String) -> Result<(), String> {
         run_id,
         task,
         history: Vec::new(),
-        autonomy: Some("confirm".into()),
-        actuator_enabled: false, // срез 1: стабы, vault не трогается
+        autonomy: Some(autonomy.to_string()),
+        actuator_enabled: opts.actuator, // --actuator → живые правки через гейт; иначе стабы
         overwrite_threshold: OVERWRITE_THRESHOLD,
         blast_cap: AiConfig::DEFAULT_BLAST_RADIUS_CAP,
         context_window,
@@ -120,9 +173,13 @@ async fn run_agent(root: PathBuf, task: String) -> Result<(), String> {
     let paused = Arc::new(AtomicBool::new(false));
     let cancel = Arc::new(AtomicBool::new(false));
     let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(StdoutForwarder::new());
-    // Стабы не предлагают changeset → PolicyDefault (fail-closed) ни разу не спрашивается; TTY-аппрув
-    // появится в W-29 вместе с живым актуатором.
-    let decision: Arc<dyn DecisionSource> = Arc::new(PolicyDefault);
+    // Источник решений по флагам: Stub→PolicyDefault (стабы не спрашивают), TtyConfirm→интерактивный
+    // y/N, ApproveAllYes→ApproveAll. Все fail-closed по построению (не-«да»/EOF → Reject).
+    let decision: Arc<dyn DecisionSource> = match mode {
+        DecisionMode::Stub => Arc::new(PolicyDefault),
+        DecisionMode::TtyConfirm => Arc::new(TtyDecisionSource),
+        DecisionMode::ApproveAllYes => Arc::new(ApproveAll),
+    };
 
     let outcome = run_agent_session(
         &spec,
@@ -180,6 +237,64 @@ fn load_local_config(root: &Path) -> Result<nexus_core::ai::LocalConfig, String>
     })?;
     nexus_core::ai::LocalConfig::parse(&raw)
         .map_err(|e| format!("{}: битый JSON ({e})", path.display()))
+}
+
+// ── TTY-аппрув (W-29) ───────────────────────────────────────────────────────────────────────────
+
+/// Источник решений по changeset'у через ТЕРМИНАЛ: на каждый предложенный айтем спрашивает `[y/N]`
+/// (приглашение в stderr, ответ из stdin). **Fail-closed:** не-«да» / EOF / ошибка чтения → Reject —
+/// диск не трогаем (рубеж 2 [`BatchDecision`] тоже отклоняет не-перечисленные). Прямой аналог desktop
+/// `UiDecisionSource`, но вход — stdin вместо mpsc. К моменту вызова `StdoutForwarder` уже напечатал
+/// сам changeset (Proposal/Diff), поэтому приглашение краткое (путь + тир + ±).
+struct TtyDecisionSource;
+
+#[async_trait::async_trait]
+impl nexus_core::actuator::DecisionSource for TtyDecisionSource {
+    async fn decide(
+        &self,
+        batch: &nexus_core::actuator::ProposalBatch,
+    ) -> nexus_core::actuator::BatchDecision {
+        use nexus_core::actuator::ItemDecision;
+        let mut pairs: Vec<(i64, ItemDecision)> = Vec::with_capacity(batch.items.len());
+        for item in &batch.items {
+            let prompt = format!(
+                "  применить запись в {} (+{}/-{}, тир {:?})? [y/N] ",
+                item.target_rel, item.add, item.del, item.tier
+            );
+            let approved = prompt_yes_no(&prompt).await;
+            pairs.push((
+                item.action_id,
+                if approved {
+                    ItemDecision::Approve
+                } else {
+                    ItemDecision::Reject
+                },
+            ));
+        }
+        nexus_core::actuator::BatchDecision::from_pairs(pairs)
+    }
+}
+
+/// Печатает приглашение в stderr и читает строку из stdin (через `spawn_blocking`, чтобы не блокировать
+/// исполнитель). EOF/ошибка → `false` (fail-closed). Разбор ответа — [`parse_answer`].
+async fn prompt_yes_no(prompt: &str) -> bool {
+    use std::io::Write;
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    let line = tokio::task::spawn_blocking(|| {
+        let mut s = String::new();
+        std::io::stdin().read_line(&mut s).ok().map(|_| s)
+    })
+    .await
+    .ok()
+    .flatten();
+    line.map(|s| parse_answer(&s)).unwrap_or(false)
+}
+
+/// «Да» только при явном y/yes/да/д (регистронезависимо). Всё прочее (пусто, n, мусор) → false
+/// (fail-closed: молчание/опечатка НЕ применяет changeset).
+fn parse_answer(s: &str) -> bool {
+    matches!(s.trim().to_lowercase().as_str(), "y" | "yes" | "д" | "да")
 }
 
 // ── Рендер потока событий в терминал ────────────────────────────────────────────────────────────
@@ -283,16 +398,20 @@ fn render_line(ev: &AgentEvent) -> Option<String> {
 
 fn print_agent_help() {
     eprintln!(
-        "nexus agent — запуск агента в терминале (срез 1: one-shot, без записи)\n\n\
+        "nexus agent — запуск агента в терминале (one-shot)\n\n\
          ИСПОЛЬЗОВАНИЕ:\n  \
-         nexus agent [--vault PATH] \"<задача>\"\n\n\
+         nexus agent [ФЛАГИ] \"<задача>\"\n\n\
          ФЛАГИ:\n  \
          --vault PATH   корень vault (по умолчанию — текущий каталог)\n  \
+         --actuator     включить живые правки vault (через гейт подтверждения); без него — стабы\n  \
+         --auto         автономия `auto` (low-risk применяется без спроса; Confirm-тир всё равно спрашивает)\n  \
+         --yes          неинтерактивно одобрять ВСЕ предложения (только с --actuator)\n  \
          -h, --help     эта справка\n\n\
-         ПРИМЕР:\n  \
-         nexus agent --vault ~/SA-Vault \"перечисли мои заметки про Rust\"\n\n\
-         Срез 1: actuator ВЫКЛЮЧЕН (стабы) — vault не изменяется. Нужен .nexus/local.json с ai.chat \
-         (url/model). Живые правки с подтверждением — в следующем срезе (--actuator)."
+         ПРИМЕРЫ:\n  \
+         nexus agent --vault ~/SA-Vault \"перечисли мои заметки про Rust\"\n  \
+         nexus agent --vault ~/SA-Vault --actuator \"создай заметку Идеи.md\"   # спросит [y/N] перед записью\n\n\
+         Без --actuator vault НЕ изменяется (стабы). Нужен .nexus/local.json с ai.chat (url/model).\n  \
+         С --actuator каждая запись требует подтверждения [y/N] (fail-closed: не-«да» = отказ)."
     );
 }
 
@@ -321,8 +440,61 @@ mod tests {
 
     #[test]
     fn parse_task_rejects_unknown_flag() {
-        let e = parse_task(&["--actuator", "do"]).unwrap_err();
+        let e = parse_task(&["--bogus", "do"]).unwrap_err();
         assert!(e.contains("неизвестный флаг"), "got: {e}");
+    }
+
+    #[test]
+    fn parse_task_skips_bool_flags() {
+        // W-29: булевы флаги не попадают в текст задачи и не считаются неизвестными.
+        assert_eq!(
+            parse_task(&["--actuator", "--auto", "--yes", "создай", "X"]).unwrap(),
+            "создай X"
+        );
+        assert_eq!(
+            parse_task(&["--vault", "/v", "--actuator", "пиши"]).unwrap(),
+            "пиши"
+        );
+    }
+
+    #[test]
+    fn select_decision_mode_by_flags() {
+        let off = AgentOpts::default();
+        assert_eq!(select_decision_mode(off), DecisionMode::Stub);
+        // --yes/--auto без актуатора всё равно Stub (vault не трогается).
+        assert_eq!(
+            select_decision_mode(AgentOpts {
+                yes: true,
+                auto: true,
+                ..off
+            }),
+            DecisionMode::Stub
+        );
+        assert_eq!(
+            select_decision_mode(AgentOpts {
+                actuator: true,
+                ..off
+            }),
+            DecisionMode::TtyConfirm
+        );
+        assert_eq!(
+            select_decision_mode(AgentOpts {
+                actuator: true,
+                yes: true,
+                ..off
+            }),
+            DecisionMode::ApproveAllYes
+        );
+    }
+
+    #[test]
+    fn parse_answer_is_fail_closed() {
+        for yes in ["y", "Y", "yes", "YES", " да ", "Д"] {
+            assert!(parse_answer(yes), "{yes:?} должно быть да");
+        }
+        for no in ["", "n", "no", "нет", "x", "yep", "yeah"] {
+            assert!(!parse_answer(no), "{no:?} должно быть НЕ-да (fail-closed)");
+        }
     }
 
     #[test]
