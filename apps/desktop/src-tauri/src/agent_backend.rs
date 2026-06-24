@@ -448,7 +448,9 @@ mod acp_backend {
     use nexus_core::agent::connect::acp::{
         acp_kind_to_display, schema, AcpClient, InboundPermission, ACP_PROTOCOL_VERSION,
     };
-    use nexus_core::agent::connect::{AgentFileStatus, AgentProposedFile, StdioTransport};
+    use nexus_core::agent::connect::{
+        AgentFileStatus, AgentPlanStep, AgentPlanStepState, AgentProposedFile, StdioTransport,
+    };
 
     /// Текущий канал событий активного прогона. `None` после терминала (R4-слот свободен).
     type SharedChannel = Arc<Mutex<Option<Channel<AgentStreamEvent>>>>;
@@ -501,17 +503,35 @@ mod acp_backend {
         }
     }
 
-    /// Извлекает поверхность аппрува из tool_call'а permission-запроса: путь + грубый счёт строк + статус.
-    /// (ACP-1: счёт строк грубый — full-replace; точный line-diff — refinement.)
-    fn extract_proposal(tc: &schema::ToolCallUpdate) -> (String, u32, u32, AgentFileStatus) {
-        let diff = tc.content.as_ref().and_then(|c| {
-            c.iter().find_map(|x| match x {
-                schema::ToolCallContent::Diff(d) => Some(d),
-                _ => None,
+    /// ACP-1b: извлекает ВСЕ файлы permission-запроса (по одному на `Diff`-content-блок): путь + грубый
+    /// счёт строк + статус. Раньше (ACP-1) показывался только ПЕРВЫЙ diff → мульти-файловый permission
+    /// под-репортил scope юзеру. Нет ни одного diff (exec/fetch-permission) → деградируем к одной строке
+    /// с заголовком. (Счёт строк грубый — full-replace; точный line-diff — refinement.)
+    fn extract_files(tc: &schema::ToolCallUpdate) -> Vec<(String, u32, u32, AgentFileStatus)> {
+        let diffs: Vec<_> = tc
+            .content
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .filter_map(|x| match x {
+                        schema::ToolCallContent::Diff(d) => Some(d),
+                        _ => None,
+                    })
+                    .collect()
             })
-        });
-        match diff {
-            Some(d) => {
+            .unwrap_or_default();
+        if diffs.is_empty() {
+            // нет diff (exec/fetch-permission) → деградируем: показываем заголовок (action_id всё равно есть).
+            return vec![(
+                tc.title.clone().unwrap_or_else(|| "действие агента".into()),
+                0,
+                0,
+                AgentFileStatus::Edit,
+            )];
+        }
+        diffs
+            .into_iter()
+            .map(|d| {
                 let add = d.new_text.lines().count() as u32;
                 let del = d
                     .old_text
@@ -524,15 +544,8 @@ mod acp_backend {
                     AgentFileStatus::Edit
                 };
                 (d.path.to_string_lossy().into_owned(), add, del, status)
-            }
-            // нет diff (exec/fetch-permission) → деградируем: показываем заголовок (action_id всё равно есть).
-            None => (
-                tc.title.clone().unwrap_or_else(|| "действие агента".into()),
-                0,
-                0,
-                AgentFileStatus::Edit,
-            ),
-        }
+            })
+            .collect()
     }
 
     /// Входящий permission → синтетический `action_id` + регистрация в `pending_perms` + `Proposal` в UI.
@@ -543,8 +556,21 @@ mod acp_backend {
         run_id: i64,
         inbound: InboundPermission,
     ) {
+        // ACP-1b: одна ACP-permission = ОДНО атомарное решение (один Response). Поэтому ВСЕ файлы делят
+        // ОДИН синтетический action_id (одобрить любой = одобрить весь permission); моделировать per-file
+        // action_id было бы ложью (`agent_approve` шлёт один outcome на весь запрос). `approve` снимает
+        // pending_perms по этому единственному id (дубль-решения от стора дедуплицируются — см. store).
         let action_id = next_action.fetch_add(1, Ordering::Relaxed);
-        let (path, add, del, status) = extract_proposal(&inbound.params.tool_call);
+        let files: Vec<AgentProposedFile> = extract_files(&inbound.params.tool_call)
+            .into_iter()
+            .map(|(path, add, del, status)| AgentProposedFile {
+                path,
+                add,
+                del,
+                status,
+                action_id,
+            })
+            .collect();
         pending_perms.lock().await.insert(
             action_id,
             PendingPerm {
@@ -557,20 +583,7 @@ mod acp_backend {
                     .collect(),
             },
         );
-        send_ev(
-            current,
-            AgentStreamEvent::Proposal {
-                run_id,
-                files: vec![AgentProposedFile {
-                    path,
-                    add,
-                    del,
-                    status,
-                    action_id,
-                }],
-            },
-        )
-        .await;
+        send_ev(current, AgentStreamEvent::Proposal { run_id, files }).await;
     }
 
     /// Выбирает ACP-outcome по решению юзера: approve → AllowOnce|AllowAlways; reject → RejectOnce|RejectAlways.
@@ -599,8 +612,11 @@ mod acp_backend {
     }
 
     /// Маппит одно `session/update` в события для UI (кроме accum-текста — он копится в drive-цикле).
-    fn map_update(update: schema::SessionUpdate) -> Vec<AgentStreamEvent> {
-        use schema::{ContentBlock, SessionUpdate as U, ToolCallContent, ToolCallStatus};
+    /// `run_id` нужен для `Plan`-события (ACP-1b).
+    fn map_update(run_id: i64, update: schema::SessionUpdate) -> Vec<AgentStreamEvent> {
+        use schema::{
+            AcpPlanStatus, ContentBlock, SessionUpdate as U, ToolCallContent, ToolCallStatus,
+        };
         match update {
             U::AgentMessageChunk { .. } | U::AgentThoughtChunk { .. } => Vec::new(), // обрабатываются в цикле (accum)
             U::ToolCall(tc) => vec![AgentStreamEvent::ToolCall {
@@ -632,6 +648,26 @@ mod acp_backend {
                 }
                 _ => Vec::new(), // pending/in_progress апдейты — не финализируем tool
             },
+            // ACP-1b: план (полный список каждым апдейтом) → PlanProposed. id синтезируем по индексу
+            // (позиционно стабилен в ходе). ACP не шлёт инкрементальный статус → только PlanProposed.
+            U::Plan { entries } => vec![AgentStreamEvent::PlanProposed {
+                run_id,
+                steps: entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, e)| AgentPlanStep {
+                        id: format!("p{i}"),
+                        label: e.content,
+                        status: match e.status {
+                            AcpPlanStatus::InProgress => AgentPlanStepState::Running,
+                            AcpPlanStatus::Completed => AgentPlanStepState::Done,
+                            AcpPlanStatus::Pending | AcpPlanStatus::Other => {
+                                AgentPlanStepState::Pending
+                            }
+                        },
+                    })
+                    .collect(),
+            }],
             U::Other => Vec::new(),
         }
     }
@@ -693,7 +729,7 @@ mod acp_backend {
                             answer.push_str(t);
                             send_ev(&current, AgentStreamEvent::AssistantToken { text: t.to_string() }).await;
                         } else {
-                            for ev in map_update(notif.update) { send_ev(&current, ev).await; }
+                            for ev in map_update(run_id, notif.update) { send_ev(&current, ev).await; }
                         }
                     }
                     None => break AgentStreamEvent::Error { message: "ACP-агент отключился".into() },
@@ -717,7 +753,7 @@ mod acp_backend {
                 )
                 .await;
             } else {
-                for ev in map_update(notif.update) {
+                for ev in map_update(run_id, notif.update) {
                     send_ev(&current, ev).await;
                 }
             }
@@ -906,23 +942,25 @@ mod acp_backend {
         }
 
         #[test]
-        fn extract_proposal_new_file_from_diff() {
-            let (path, add, del, status) = extract_proposal(&tc_update_with_diff(None, "a\nb\nc"));
+        fn extract_files_new_file_from_diff() {
+            let files = extract_files(&tc_update_with_diff(None, "a\nb\nc"));
+            assert_eq!(files.len(), 1);
+            let (path, add, del, status) = &files[0];
             assert_eq!(path, "Notes/A.md");
-            assert_eq!((add, del), (3, 0));
-            assert_eq!(status, AgentFileStatus::New);
+            assert_eq!((*add, *del), (3, 0));
+            assert_eq!(*status, AgentFileStatus::New);
         }
 
         #[test]
-        fn extract_proposal_edit_from_diff() {
-            let (_, add, del, status) =
-                extract_proposal(&tc_update_with_diff(Some("a\nb"), "a\nb\nc\nd"));
-            assert_eq!((add, del), (4, 2));
-            assert_eq!(status, AgentFileStatus::Edit);
+        fn extract_files_edit_from_diff() {
+            let files = extract_files(&tc_update_with_diff(Some("a\nb"), "a\nb\nc\nd"));
+            let (_, add, del, status) = &files[0];
+            assert_eq!((*add, *del), (4, 2));
+            assert_eq!(*status, AgentFileStatus::Edit);
         }
 
         #[test]
-        fn extract_proposal_degraded_without_diff() {
+        fn extract_files_degraded_without_diff() {
             let tc = ToolCallUpdate {
                 tool_call_id: "t1".into(),
                 status: None,
@@ -930,10 +968,73 @@ mod acp_backend {
                 title: Some("run `ls`".into()),
                 kind: None,
             };
-            let (path, add, del, status) = extract_proposal(&tc);
+            let files = extract_files(&tc);
+            assert_eq!(files.len(), 1);
+            let (path, add, del, status) = &files[0];
             assert_eq!(path, "run `ls`");
-            assert_eq!((add, del), (0, 0));
-            assert_eq!(status, AgentFileStatus::Edit);
+            assert_eq!((*add, *del), (0, 0));
+            assert_eq!(*status, AgentFileStatus::Edit);
+        }
+
+        #[test]
+        fn extract_files_returns_all_diffs() {
+            // ACP-1b: мульти-файловый permission → ВСЕ Diff-блоки (не только первый).
+            let tc = ToolCallUpdate {
+                tool_call_id: "t1".into(),
+                status: None,
+                content: Some(vec![
+                    ToolCallContent::Diff(Diff {
+                        path: "Notes/A.md".into(),
+                        old_text: None,
+                        new_text: "alpha".into(),
+                    }),
+                    ToolCallContent::Diff(Diff {
+                        path: "Notes/B.md".into(),
+                        old_text: Some("x".into()),
+                        new_text: "beta".into(),
+                    }),
+                ]),
+                title: Some("multi".into()),
+                kind: None,
+            };
+            let files = extract_files(&tc);
+            assert_eq!(files.len(), 2);
+            assert_eq!(files[0].0, "Notes/A.md");
+            assert_eq!(files[0].3, AgentFileStatus::New);
+            assert_eq!(files[1].0, "Notes/B.md");
+            assert_eq!(files[1].3, AgentFileStatus::Edit);
+        }
+
+        #[test]
+        fn map_update_plan_maps_to_plan_proposed() {
+            // ACP-1b: plan → PlanProposed (id по индексу, статусы).
+            let upd = SessionUpdate::Plan {
+                entries: vec![
+                    schema::PlanEntry {
+                        content: "step one".into(),
+                        priority: schema::AcpPlanPriority::High,
+                        status: schema::AcpPlanStatus::InProgress,
+                    },
+                    schema::PlanEntry {
+                        content: "step two".into(),
+                        priority: schema::AcpPlanPriority::Medium,
+                        status: schema::AcpPlanStatus::Pending,
+                    },
+                ],
+            };
+            let evs = map_update(7, upd);
+            match evs.first() {
+                Some(AgentStreamEvent::PlanProposed { run_id, steps }) => {
+                    assert_eq!(*run_id, 7);
+                    assert_eq!(steps.len(), 2);
+                    assert_eq!(steps[0].id, "p0");
+                    assert_eq!(steps[0].label, "step one");
+                    assert_eq!(steps[0].status, AgentPlanStepState::Running);
+                    assert_eq!(steps[1].id, "p1");
+                    assert_eq!(steps[1].status, AgentPlanStepState::Pending);
+                }
+                other => panic!("ожидался PlanProposed, получено {other:?}"),
+            }
         }
 
         #[test]
@@ -946,7 +1047,7 @@ mod acp_backend {
                 content: vec![],
                 raw_input: Some(serde_json::json!({"q": "rust"})),
             };
-            let evs = map_update(SessionUpdate::ToolCall(tc));
+            let evs = map_update(1, SessionUpdate::ToolCall(tc));
             assert!(matches!(
                 evs.first(),
                 Some(AgentStreamEvent::ToolCall { kind, .. }) if kind == "search"
@@ -961,7 +1062,7 @@ mod acp_backend {
                 title: None,
                 kind: None,
             };
-            let evs = map_update(SessionUpdate::ToolCallUpdate(done));
+            let evs = map_update(1, SessionUpdate::ToolCallUpdate(done));
             assert!(matches!(
                 evs.first(),
                 Some(AgentStreamEvent::ToolResult { content, is_error: false, .. }) if content == "ok"
@@ -975,7 +1076,7 @@ mod acp_backend {
                 title: None,
                 kind: None,
             };
-            assert!(map_update(SessionUpdate::ToolCallUpdate(pending)).is_empty());
+            assert!(map_update(1, SessionUpdate::ToolCallUpdate(pending)).is_empty());
         }
 
         #[test]
@@ -988,7 +1089,7 @@ mod acp_backend {
                 kind: None,
             };
             assert!(matches!(
-                map_update(SessionUpdate::ToolCallUpdate(failed)).first(),
+                map_update(1, SessionUpdate::ToolCallUpdate(failed)).first(),
                 Some(AgentStreamEvent::ToolResult { is_error: true, .. })
             ));
         }

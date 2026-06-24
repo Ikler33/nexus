@@ -39,7 +39,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null },
+      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
       shellSupported: false,
     });
     await gotoAiStep();
@@ -63,7 +63,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null },
+      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
       shellSupported: false,
     });
     const setCfg = vi
@@ -101,7 +101,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null },
+      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
       shellSupported: false,
     });
     const setCfg = vi
@@ -132,7 +132,7 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null },
+      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
       shellSupported: false,
     });
     const setCfg = vi

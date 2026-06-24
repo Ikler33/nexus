@@ -25,7 +25,10 @@ pub mod wire;
 pub use client::{ConnectClient, ConnectError};
 pub use handler::{ConnectAgentHandler, ConnectDeps};
 pub use stdio::StdioTransport;
-pub use wire::{map_agent_event, AgentFileStatus, AgentProposedFile, AgentStreamEvent};
+pub use wire::{
+    map_agent_event, AgentFileStatus, AgentPlanStep, AgentPlanStepState, AgentProposedFile,
+    AgentStreamEvent,
+};
 
 // AF_UNIX-хостинг коннектора (P0b-2c) — Unix-only (на Windows `tokio::net::Unix*` отсутствует).
 #[cfg(unix)]

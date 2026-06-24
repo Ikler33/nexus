@@ -28,7 +28,7 @@ let config: AiConfigDto = {
   agentSkillsDir: null,
   delegationEnabled: false,
   researchEnabled: false,
-  connection: { mode: 'embedded', socket: null },
+  connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
   shellSupported: false,
 };
 
@@ -70,24 +70,35 @@ export async function testConnection(url: string): Promise<void> {
   // В превью любой синтаксически верный URL считаем достижимым.
 }
 
-/** CONN-4: зеркало Rust `set_agent_connection` — нормализует mode (мусор → embedded), хранит сокет
- *  (только при Some; null → не трогаем). Возвращает записанное. */
+/** CONN-4/ACP-1b: зеркало Rust `set_agent_connection` — нормализует mode (мусор → embedded), хранит
+ *  сокет/acpCommand/acpCwd (только при Some; null → не трогаем). Возвращает записанное. */
 export async function setAgentConnection(
   mode: AgentConnectionDto['mode'],
   socket: string | null,
+  acpCommand: string | null = null,
+  acpCwd: string | null = null,
 ): Promise<AgentConnectionDto> {
   const m: AgentConnectionDto['mode'] =
-    mode === 'local' ? 'local' : mode === 'remote' ? 'remote' : 'embedded';
+    mode === 'local'
+      ? 'local'
+      : mode === 'remote'
+        ? 'remote'
+        : mode === 'acp'
+          ? 'acp'
+          : 'embedded';
   const next: AgentConnectionDto = {
     mode: m,
     socket: socket === null ? config.connection.socket : socket.trim() || null,
+    acpCommand:
+      acpCommand === null ? config.connection.acpCommand : acpCommand.trim() || null,
+    acpCwd: acpCwd === null ? config.connection.acpCwd : acpCwd.trim() || null,
   };
   config = { ...config, connection: next };
   return next;
 }
 
-/** CONN-4: в браузер-превью/vitest сокета agentd нет — честно «недоступен» (mock-must-match-backend:
- *  реальная команда тоже вернёт ошибку без запущенного демона). */
+/** CONN-4/ACP-1b: в браузер-превью/vitest ни сокета agentd, ни процесса ACP-агента нет — честно
+ *  «недоступен» (mock-must-match-backend: реальная команда тоже вернёт ошибку без демона/агента). */
 export async function testAgentConnection(): Promise<string> {
-  throw new Error('agentd не запущен (превью)');
+  throw new Error('подключение недоступно (превью)');
 }

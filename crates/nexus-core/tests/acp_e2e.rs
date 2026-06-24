@@ -14,38 +14,42 @@ use nexus_core::agent::connect::acp::AcpClient;
 use nexus_core::agent::connect::StdioTransport;
 use serde_json::json;
 
-/// Путь к собранному примеру `mock_acp_agent` (`target/<profile>/examples/mock_acp_agent[.exe]`).
-fn mock_agent_path() -> PathBuf {
-    let mut dir = std::env::current_exe().expect("current_exe");
-    dir.pop(); // имя тест-бинаря
-    if dir.ends_with("deps") {
-        dir.pop(); // deps/ → target/<profile>/
-    }
-    let exe = if cfg!(windows) {
-        "mock_acp_agent.exe"
-    } else {
-        "mock_acp_agent"
-    };
-    dir.join("examples").join(exe)
-}
-
-/// Гарантирует, что пример собран. Полный `cargo test` собирает examples сам, но `--test acp_e2e` — нет;
-/// досборка on-demand делает тест устойчивым к любому способу запуска. Внешний build-lock к моменту
-/// ПРОГОНА теста уже отпущен (тесты идут после сборки) → вложенный `cargo build` безопасен (+0 deps).
+/// Собирает пример `mock_acp_agent` и возвращает ТОЧНЫЙ путь его бинаря из `cargo`-вывода
+/// (`compiler-artifact.executable`). Через `--message-format=json` — устойчиво к любому target-dir:
+/// `--test acp_e2e` (examples не собраны) И **`cargo llvm-cov`** (свой `target/llvm-cov-target/`, где
+/// производный-от-`current_exe` путь не совпал бы → спавн падал, ловлено в CI Coverage-job). Внешний
+/// build-lock к моменту ПРОГОНА теста уже отпущен → вложенный `cargo build` безопасен (+0 deps).
 fn ensure_mock_built() -> PathBuf {
-    let path = mock_agent_path();
-    if path.exists() {
-        return path;
-    }
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "--example", "mock_acp_agent", "-p", "nexus-core"])
-        .status()
+    let out = std::process::Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--example",
+            "mock_acp_agent",
+            "-p",
+            "nexus-core",
+            "--message-format=json",
+        ])
+        .output()
         .expect("запуск cargo build --example");
     assert!(
-        status.success(),
-        "сборка примера mock_acp_agent провалилась"
+        out.status.success(),
+        "сборка примера mock_acp_agent провалилась: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    path
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for line in stdout.lines().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v["reason"] == "compiler-artifact" {
+            if let Some(exe) = v["executable"].as_str() {
+                if exe.contains("mock_acp_agent") {
+                    return PathBuf::from(exe);
+                }
+            }
+        }
+    }
+    panic!("не нашёл executable mock_acp_agent в выводе cargo build --message-format=json");
 }
 
 #[tokio::test]
@@ -94,9 +98,37 @@ async fn acp_e2e_real_subprocess_full_run() {
             first.update,
             SessionUpdate::AgentMessageChunk { .. }
         ));
+        // ACP-1b: следующий апдейт — план хода (2 записи, статусы/приоритеты).
+        let plan = updates.recv().await.expect("plan update");
+        match plan.update {
+            SessionUpdate::Plan { entries } => {
+                assert_eq!(entries.len(), 2, "план из 2 шагов");
+                use nexus_core::agent::connect::acp::schema::AcpPlanStatus;
+                assert_eq!(entries[0].status, AcpPlanStatus::InProgress);
+            }
+            other => panic!("ожидался plan, получено {other:?}"),
+        }
         // входящий permission → аппрувим allow_once
         let p = perms.recv().await.expect("permission");
         assert_eq!(p.params.options.len(), 2);
+        // ACP-1b: permission несёт ДВА diff'а (мульти-файл A+B).
+        let diffs = p
+            .params
+            .tool_call
+            .content
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .filter(|x| {
+                        matches!(
+                            x,
+                            nexus_core::agent::connect::acp::schema::ToolCallContent::Diff(_)
+                        )
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(diffs, 2, "мульти-файловый permission: 2 diff'а");
         let allow = p
             .params
             .options

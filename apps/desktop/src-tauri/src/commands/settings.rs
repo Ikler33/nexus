@@ -34,6 +34,11 @@ pub struct EndpointDto {
 pub struct AgentConnectionDto {
     pub mode: String,
     pub socket: Option<String>,
+    /// ACP-1b: команда спавна ACP-агента как ОДНА строка (UI редактирует как командную строку, бэк
+    /// парсит в argv по пробелам). `None`/пусто для не-acp. Зеркалит `ai.connection.acp_command` (Vec).
+    pub acp_command: Option<String>,
+    /// ACP-1b: cwd ACP-сессии (`None` → корень vault).
+    pub acp_cwd: Option<String>,
 }
 
 impl Default for AgentConnectionDto {
@@ -41,6 +46,8 @@ impl Default for AgentConnectionDto {
         Self {
             mode: "embedded".into(),
             socket: None,
+            acp_command: None,
+            acp_cwd: None,
         }
     }
 }
@@ -319,6 +326,7 @@ fn apply_connection(
     let norm = match mode {
         "local" => "local",
         "remote" => "remote",
+        "acp" => "acp",
         _ => "embedded",
     };
     conn.insert("mode".into(), serde_json::Value::String(norm.into()));
@@ -333,6 +341,64 @@ fn apply_connection(
             conn.remove("socket"); // явная очистка пустым
         }
         None => {} // не трогаем существующий socket
+    }
+    Ok(())
+}
+
+/// ACP-1b: парсит командную строку ACP-агента в argv (минимальный сплит по пробелам — БЕЗ shell-quoting;
+/// аргументы с пробелами не поддерживаются, см. i18n-хинт). `hermes acp` → `["hermes","acp"]`.
+fn parse_argv(cmd: &str) -> Vec<String> {
+    cmd.split_whitespace().map(str::to_string).collect()
+}
+
+/// ACP-1b: пишет `ai.connection.{acp_command,acp_cwd}` (тот же объект `ai.connection`, что и `apply_connection`).
+/// `acp_command`: `Some(непустой)` → парсим argv и пишем JSON-массивом строк (как ждёт `de_tolerant_string_vec`);
+/// `Some("")`/пустой-argv → убираем ключ; `None` → НЕ трогаем. `acp_cwd`: tolerant как socket. Не трогает
+/// прочие `ai.connection.*` (mode/socket/url/auth_ref). Чистая — тестируется без `State`.
+fn apply_acp(
+    doc: &mut serde_json::Value,
+    acp_command: Option<&str>,
+    acp_cwd: Option<&str>,
+) -> Result<(), String> {
+    if !doc.get("ai").map(|v| v.is_object()).unwrap_or(false) {
+        doc["ai"] = serde_json::json!({});
+    }
+    let ai = doc
+        .get_mut("ai")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai не объект")?;
+    if !ai.get("connection").map(|v| v.is_object()).unwrap_or(false) {
+        ai.insert("connection".into(), serde_json::json!({}));
+    }
+    let conn = ai
+        .get_mut("connection")
+        .and_then(|v| v.as_object_mut())
+        .ok_or("ai.connection не объект")?;
+    // Ключи snake_case: ConnectionConfig БЕЗ rename_all → десериализует `acp_command`/`acp_cwd` (как
+    // socket/mode/url). camelCase не прочитался бы (→ None) — round-trip-reject это ловит в тесте.
+    // `None` → НЕ трогаем существующую acp_command (смена режима не сюрприз-удаляет).
+    if let Some(s) = acp_command {
+        let argv = parse_argv(s);
+        if argv.is_empty() {
+            conn.remove("acp_command"); // пустая команда → очистка
+        } else {
+            conn.insert(
+                "acp_command".into(),
+                serde_json::Value::Array(argv.into_iter().map(serde_json::Value::String).collect()),
+            );
+        }
+    }
+    match acp_cwd {
+        Some(s) if !s.trim().is_empty() => {
+            conn.insert(
+                "acp_cwd".into(),
+                serde_json::Value::String(s.trim().to_string()),
+            );
+        }
+        Some(_) => {
+            conn.remove("acp_cwd");
+        }
+        None => {}
     }
     Ok(())
 }
@@ -463,6 +529,9 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
             }
             .into(),
             socket: cfg.ai.connection.socket.clone(),
+            // ACP-1b: Vec<String> argv → одна командная строка для UI (join по пробелу).
+            acp_command: cfg.ai.connection.acp_command.as_ref().map(|v| v.join(" ")),
+            acp_cwd: cfg.ai.connection.acp_cwd.clone(),
         },
         shell_supported: shell_supported(),
     })
@@ -679,6 +748,9 @@ pub async fn set_agent_connection(
     state: State<'_, AppState>,
     mode: String,
     socket: Option<String>,
+    // ACP-1b: командная строка + cwd ACP-агента (None → не трогаем).
+    acp_command: Option<String>,
+    acp_cwd: Option<String>,
 ) -> AppResult<AgentConnectionDto> {
     let root = state.vault().await?.root.clone();
     let dir = root.join(".nexus");
@@ -691,6 +763,7 @@ pub async fn set_agent_connection(
         serde_json::from_str(&raw).map_err(|e| AppError::Msg(format!("local.json не JSON: {e}")))?
     };
     apply_connection(&mut doc, &mode, socket.as_deref())?;
+    apply_acp(&mut doc, acp_command.as_deref(), acp_cwd.as_deref())?;
     let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
     let path2 = path.clone();
     let bytes = pretty.clone().into_bytes();
@@ -703,22 +776,22 @@ pub async fn set_agent_connection(
     *state.agent_backend.write().await =
         crate::agent_backend::select_agent_backend(parsed.as_ref(), &root);
     // Эхо нормализованного (что реально записано/распарсено) — фронт берёт за источник истины.
-    let (mode_echo, socket_echo) = parsed
+    let echo = parsed
         .as_ref()
-        .map(|c| {
-            let m = match c.ai.connection.mode() {
+        .map(|c| AgentConnectionDto {
+            mode: match c.ai.connection.mode() {
                 nexus_core::ai::ConnectionMode::Embedded => "embedded",
                 nexus_core::ai::ConnectionMode::Local => "local",
                 nexus_core::ai::ConnectionMode::Remote => "remote",
                 nexus_core::ai::ConnectionMode::Acp => "acp",
-            };
-            (m.to_string(), c.ai.connection.socket.clone())
+            }
+            .to_string(),
+            socket: c.ai.connection.socket.clone(),
+            acp_command: c.ai.connection.acp_command.as_ref().map(|v| v.join(" ")),
+            acp_cwd: c.ai.connection.acp_cwd.clone(),
         })
-        .unwrap_or_else(|| ("embedded".to_string(), None));
-    Ok(AgentConnectionDto {
-        mode: mode_echo,
-        socket: socket_echo,
-    })
+        .unwrap_or_default();
+    Ok(echo)
 }
 
 /// CONN-4: классификация сокета ДО connect (внятная диагностика). Чистая — тестируется без демона.
@@ -738,19 +811,35 @@ fn classify_socket(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
-/// CONN-4: проверка связи с локальным agentd по AF_UNIX — handshake `initialize`. Возвращает версию
-/// протокола или внятную ошибку (зеркало `nexus status`). Лёгкая проба: без read-loop/forward-таска.
-#[cfg(unix)]
+/// CONN-4/ACP-1b: проверка связи с агент-бэкендом. Ветвится по `ai.connection.mode()`:
+/// `local` → handshake `initialize` по AF_UNIX (только Unix); `acp` → спавн ACP-агента подпроцессом +
+/// ACP `initialize` + kill; `embedded`/`remote` → проверять нечего. Кросс-платформенная (acp-проба не
+/// требует Unix). Возвращает версию протокола или внятную ошибку.
 #[tauri::command]
 pub async fn test_agent_connection(state: State<'_, AppState>) -> AppResult<String> {
-    use nexus_core::agent::connect::{connect_unix, RpcMessage, Transport};
     let root = state.vault().await?.root.clone();
     let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
         .await
         .unwrap_or_default();
-    let socket = LocalConfig::parse(&raw)
-        .ok()
-        .and_then(|c| c.ai.connection.socket.clone())
+    let cfg = LocalConfig::parse(&raw).unwrap_or_default();
+    match cfg.ai.connection.mode() {
+        nexus_core::ai::ConnectionMode::Local => probe_local_socket(&cfg, &root).await,
+        nexus_core::ai::ConnectionMode::Acp => probe_acp(&cfg, &root).await,
+        nexus_core::ai::ConnectionMode::Embedded | nexus_core::ai::ConnectionMode::Remote => Err(
+            AppError::Msg("проверка доступна для режимов «локальный» и «ACP-агент»".into()),
+        ),
+    }
+}
+
+/// CONN-4: проба локального agentd по AF_UNIX (`initialize`). Лёгкая: без read-loop/forward-таска.
+#[cfg(unix)]
+async fn probe_local_socket(cfg: &LocalConfig, root: &std::path::Path) -> AppResult<String> {
+    use nexus_core::agent::connect::{connect_unix, RpcMessage, Transport};
+    let socket = cfg
+        .ai
+        .connection
+        .socket
+        .clone()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| root.join(".nexus").join("agentd.sock"));
     classify_socket(&socket).map_err(AppError::Msg)?;
@@ -785,11 +874,60 @@ pub async fn test_agent_connection(state: State<'_, AppState>) -> AppResult<Stri
 
 /// CONN-4: на не-Unix локальный коннектор (AF_UNIX) недоступен — структурно.
 #[cfg(not(unix))]
-#[tauri::command]
-pub async fn test_agent_connection(_state: State<'_, AppState>) -> AppResult<String> {
+async fn probe_local_socket(_cfg: &LocalConfig, _root: &std::path::Path) -> AppResult<String> {
     Err(AppError::Msg(
         "локальный коннектор (AF_UNIX) доступен только на Unix".into(),
     ))
+}
+
+/// ACP-1b: проба ACP-агента — спавн подпроцесса + ACP `initialize` (10с) + версия. Подпроцесс
+/// убивается при дропе (`kill_on_drop`). Кросс-платформенная. Пустая команда / не найден бинарь /
+/// провал handshake → внятная ошибка.
+async fn probe_acp(cfg: &LocalConfig, root: &std::path::Path) -> AppResult<String> {
+    use nexus_core::agent::connect::acp::{AcpClient, ACP_PROTOCOL_VERSION};
+    use nexus_core::agent::connect::StdioTransport;
+    use std::sync::Arc;
+    let cmd = cfg
+        .ai
+        .connection
+        .acp_command
+        .clone()
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| AppError::Msg("ACP-агент не задан (ai.connection.acpCommand)".into()))?;
+    let cwd = cfg
+        .ai
+        .connection
+        .acp_cwd
+        .clone()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.to_path_buf());
+    let (program, args) = cmd
+        .split_first()
+        .expect("acp_command непустой (проверено выше)");
+    let transport = StdioTransport::spawn(program, args, &cwd)
+        .await
+        .map_err(|e| AppError::Msg(format!("ACP-агент не запустился (`{program}`): {e}")))?;
+    let (client, _updates, _perms) = AcpClient::new(Arc::new(transport));
+    let res = client
+        .request(
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": ACP_PROTOCOL_VERSION,
+                "clientCapabilities": {
+                    "fs": { "readTextFile": false, "writeTextFile": false },
+                    "terminal": false
+                }
+            }),
+            Some(std::time::Duration::from_secs(10)),
+        )
+        .await
+        .map_err(|e| AppError::Msg(format!("ACP initialize не прошёл: {}", e.message)))?;
+    let v = res
+        .get("protocolVersion")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    Ok(format!("ACP v{v}"))
+    // client + transport дропаются здесь → read-loop abort + kill_on_drop убивает подпроцесс.
 }
 
 /// Проверка связи с LLM-эндпоинтом: пробный GET `/v1/models` (OpenAI-совместимо). Любой ответ сервера →
@@ -967,6 +1105,50 @@ mod tests {
         apply_connection(&mut doc, "embedded", None).unwrap();
         assert_eq!(doc.pointer("/ai/connection/mode").unwrap(), "embedded");
         assert_eq!(doc.pointer("/ai/connection/socket").unwrap(), "/tmp/b.sock");
+    }
+
+    /// ACP-1b: `apply_acp` пишет `ai.connection.{acp_command(массив),acp_cwd}`, не трогая mode/socket/url;
+    /// пустая команда → ключ удалён; `None` → существующее не тронуто; итог парсится `LocalConfig`.
+    #[test]
+    fn apply_acp_round_trips_command_and_cwd() {
+        let mut doc = serde_json::json!({
+            "ai": { "connection": { "mode": "acp", "socket": "/tmp/s.sock", "url": "wss://x" } }
+        });
+        apply_acp(&mut doc, Some("hermes acp --stdio"), Some("/vault/root")).unwrap();
+        assert_eq!(
+            doc.pointer("/ai/connection/acp_command").unwrap(),
+            &serde_json::json!(["hermes", "acp", "--stdio"])
+        );
+        assert_eq!(
+            doc.pointer("/ai/connection/acp_cwd").unwrap(),
+            "/vault/root"
+        );
+        // mode/socket/url НЕ тронуты.
+        assert_eq!(doc.pointer("/ai/connection/socket").unwrap(), "/tmp/s.sock");
+        assert_eq!(doc.pointer("/ai/connection/url").unwrap(), "wss://x");
+        let cfg = LocalConfig::parse(&doc.to_string()).unwrap();
+        assert_eq!(
+            cfg.ai.connection.acp_command.as_deref(),
+            Some(["hermes".to_string(), "acp".into(), "--stdio".into()].as_slice())
+        );
+        assert_eq!(cfg.ai.connection.acp_cwd.as_deref(), Some("/vault/root"));
+
+        // None → existing untouched; пустая команда/cwd → ключ удалён.
+        apply_acp(&mut doc, None, None).unwrap();
+        assert!(doc.pointer("/ai/connection/acp_command").is_some());
+        apply_acp(&mut doc, Some("   "), Some("")).unwrap();
+        assert!(doc.pointer("/ai/connection/acp_command").is_none());
+        assert!(doc.pointer("/ai/connection/acp_cwd").is_none());
+    }
+
+    /// ACP-1b: probe без заданной команды → внятная ошибка (не паника, не spawn).
+    #[tokio::test]
+    async fn probe_acp_without_command_errors() {
+        let cfg = LocalConfig::parse("{}").unwrap();
+        let e = probe_acp(&cfg, std::path::Path::new("/tmp"))
+            .await
+            .unwrap_err();
+        assert!(format!("{e}").contains("ACP-агент не задан"), "got: {e}");
     }
 
     /// CONN-4: `classify_socket` без демона → внятная «не запущен» ошибка (не паника, не connect).

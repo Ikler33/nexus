@@ -482,9 +482,21 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!last || last.runId == null || last.status !== 'awaiting' || get().approving) return;
     // decisions[]: одобренные = applied; всё прочее (rejected / нерешённое) = reject (fail-closed,
     // как бэкенд трактует отсутствующий айтем). Только адресуемые файлы (actionId >= 0).
-    const decisions: AgentApprovalDecision[] = last.changeset
-      .filter((f) => f.actionId >= 0)
-      .map((f) => ({ actionId: f.actionId, approve: f.decision === 'applied' }));
+    //
+    // ACP-1b: один ACP-permission = ОДНО атомарное решение, поэтому N файлов делят ОДИН actionId.
+    // Дедуплицируем по actionId и шлём ОДНО решение на группу (бэкенд снимает pending_perms по id
+    // единожды — дубль был бы no-op, но честнее не слать). Семантика группы — fail-closed AND:
+    // approve только если ВСЕ файлы группы applied (любой reject/нерешённый → reject всей атомарной
+    // permission). Для embedded (уникальные id) каждая группа = один файл → поведение без изменений.
+    const byAction = new Map<number, boolean>();
+    for (const f of last.changeset) {
+      if (f.actionId < 0) continue;
+      const ok = f.decision === 'applied';
+      byAction.set(f.actionId, (byAction.get(f.actionId) ?? true) && ok);
+    }
+    const decisions: AgentApprovalDecision[] = [...byAction.entries()].map(
+      ([actionId, approve]) => ({ actionId, approve }),
+    );
     if (!decisions.length) return;
     const runId = last.runId;
     const lastKey = last.key;

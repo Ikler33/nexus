@@ -59,19 +59,28 @@ fn drive_prompt(
         out,
         json!({"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi "}}),
     );
+    // (a2) ACP-1b: план хода (todo-список) ДО действий — клиент маппит в PlanProposed.
+    notify(
+        out,
+        json!({"sessionId":"s1","sessionUpdate":"plan","entries":[
+            {"content":"edit A and B","priority":"high","status":"in_progress"},
+            {"content":"finish","priority":"medium","status":"pending"}
+        ]}),
+    );
     // (b) tool_call (edit-намерение)
     notify(
         out,
         json!({"sessionId":"s1","sessionUpdate":"tool_call","toolCallId":"t1","title":"edit Notes/A.md",
                "kind":"edit","status":"pending"}),
     );
-    // (c) запрос разрешения с diff — БЛОКИРУЕМСЯ до Response клиента (как ACP request_permission)
+    // (c) запрос разрешения с ДВУМЯ diff (мульти-файл, ACP-1b) — БЛОКИРУЕМСЯ до Response клиента.
     send(
         out,
         json!({"jsonrpc":"2.0","id":777,"method":"session/request_permission","params":{
             "sessionId":"s1",
-            "toolCall":{"toolCallId":"t1","title":"edit Notes/A.md",
-                        "content":[{"type":"diff","path":"Notes/A.md","newText":"alpha\nbeta"}]},
+            "toolCall":{"toolCallId":"t1","title":"edit Notes/A.md и Notes/B.md",
+                        "content":[{"type":"diff","path":"Notes/A.md","newText":"alpha\nbeta"},
+                                   {"type":"diff","path":"Notes/B.md","oldText":"old","newText":"gamma"}]},
             "options":[{"optionId":"a","name":"Allow","kind":"allow_once"},
                        {"optionId":"d","name":"Deny","kind":"reject_once"}]
         }}),

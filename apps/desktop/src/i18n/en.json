@@ -273,17 +273,24 @@
       "intro": "The current vault's LLM endpoints and their reachability.",
       "check": "Re-check",
       "mode": "Agent mode",
-      "modeDesc": "Where the agent runs: embedded (in-app) or an external daemon.",
+      "modeDesc": "Where the agent runs: embedded (in-app), an external daemon, or an ACP agent.",
       "modeOpts": {
         "embedded": "Embedded",
         "local": "Local (agentd)",
+        "acp": "ACP agent",
         "remote": "Remote — soon"
       },
       "socket": "Socket path",
       "socketHint": "Default: <vault>/.nexus/agentd.sock",
+      "acpCommand": "ACP agent command",
+      "acpCommandHint": "Command that launches the ACP agent (e.g. \"hermes acp\"). Split on whitespace — quotes and environment variables are not supported.",
+      "acpCwd": "Working directory",
+      "acpCwdPlaceholder": "defaults to the vault root",
+      "acpCwdHint": "Directory the agent process is launched from. Empty → the current vault root.",
       "test": "Check",
       "testOk": "Reachable · v{{version}}",
-      "localWarn": "Local mode: the agent runs one-shot — no conversation history and no per-run autonomy (the daemon uses its own config). The agentd daemon must open the SAME vault, otherwise edits go to the wrong place. Restarting agentd drops the current run — start the task again."
+      "localWarn": "Local mode: the agent runs one-shot — no conversation history and no per-run autonomy (the daemon uses its own config). The agentd daemon must open the SAME vault, otherwise edits go to the wrong place. Restarting agentd drops the current run — start the task again.",
+      "acpWarn": "ACP mode: the app launches an external ACP agent and hands it the turn. You get the connected agent's brain (its model, tools, skills), not the embedded Castor. Action requests go through your approval; the agent performs file operations itself in its working directory — point it at the intended vault root. Each turn is a separate one-shot run with no conversation memory; pause/resume and turn undo are not supported. Ending the turn terminates the agent process."
     }
   },
   "sidebar": {

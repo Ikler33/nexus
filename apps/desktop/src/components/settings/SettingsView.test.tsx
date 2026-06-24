@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { SettingsView } from './SettingsView';
 import { tauriApi } from '../../lib/tauri-api';
+import type { AgentConnectionDto } from '../../lib/tauri-api';
 import { commands } from '../../lib/commands';
 import { registerCoreCommands } from '../../lib/commands-core';
 import { usePrefsStore } from '../../stores/prefs';
@@ -201,7 +202,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null },
+      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
       shellSupported: false,
     });
     const testSpy = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -233,7 +234,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
 
   // CONN-4: селектор режима подключения. Переключение на «Локальный» → setAgentConnection +
   // раскрывает поле сокета + честное предупреждение о лимитах (one-shot/vault-coherence).
-  const cfgWith = (connection: { mode: 'embedded' | 'local' | 'remote'; socket: string | null }) => ({
+  const cfgWith = (connection: AgentConnectionDto) => ({
     chat: { url: 'http://h:8080', model: 'qwen' },
     embedding: null,
     fast: null,
@@ -254,10 +255,10 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     const { tauriApi } = await import('../../lib/tauri-api');
     const getCfg = vi
       .spyOn(tauriApi.settings, 'getAiConfig')
-      .mockResolvedValue(cfgWith({ mode: 'embedded', socket: null }));
+      .mockResolvedValue(cfgWith({ mode: 'embedded', socket: null, acpCommand: null, acpCwd: null }));
     const setConn = vi
       .spyOn(tauriApi.settings, 'setAgentConnection')
-      .mockResolvedValue({ mode: 'local', socket: null });
+      .mockResolvedValue({ mode: 'local', socket: null, acpCommand: null, acpCwd: null });
     useUIStore.setState({ settingsSection: 'ai' });
     render(<SettingsView />);
 
@@ -265,7 +266,9 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       name: /(локальный|local) \(agentd\)/i,
     });
     fireEvent.click(localBtn);
-    await vi.waitFor(() => expect(setConn).toHaveBeenCalledWith('local', expect.anything()));
+    await vi.waitFor(() =>
+      expect(setConn).toHaveBeenCalledWith('local', expect.anything(), null, null),
+    );
     // Поле сокета + предупреждение R1/R2 появились.
     expect(await screen.findByPlaceholderText(/agentd\.sock/)).toBeInTheDocument();
     expect(screen.getByText(/один ход|one-shot|тот же vault|same vault/i)).toBeInTheDocument();
@@ -278,7 +281,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     const { tauriApi } = await import('../../lib/tauri-api');
     const getCfg = vi
       .spyOn(tauriApi.settings, 'getAiConfig')
-      .mockResolvedValue(cfgWith({ mode: 'local', socket: '/tmp/x.sock' }));
+      .mockResolvedValue(cfgWith({ mode: 'local', socket: '/tmp/x.sock', acpCommand: null, acpCwd: null }));
     const testSpy = vi
       .spyOn(tauriApi.settings, 'testAgentConnection')
       .mockRejectedValue(new Error('agentd не запущен'));

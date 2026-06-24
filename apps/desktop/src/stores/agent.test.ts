@@ -180,3 +180,62 @@ describe('agent store — приём всех событий контракта 
     });
   });
 });
+
+/**
+ * ACP-1b: один ACP `request_permission` = ОДНО атомарное решение, поэтому N файлов делят ОДИН
+ * actionId. Стор дедуплицирует решения по actionId (одно на группу) и применяет fail-closed AND:
+ * любой rejected/нерешённый файл в группе → reject ВСЕЙ permission. БЕЗОПАСНОСТЬ: нельзя частично
+ * одобрить атомарную permission и нельзя авто-одобрить файл, который пользователь отклонил.
+ */
+describe('agent store — atomic ACP-permission approve (общий actionId)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const seed = (d0?: 'applied' | 'rejected', d1?: 'applied' | 'rejected') => {
+    useAgentStore.setState({
+      approving: false,
+      turns: [
+        {
+          key: 0,
+          epoch: 1,
+          runId: 1,
+          task: 'acp',
+          assistantText: '',
+          steps: [],
+          changeset: [
+            { path: 'A.md', add: 1, del: 0, status: 'new', actionId: 300, decision: d0 },
+            { path: 'B.md', add: 2, del: 1, status: 'edit', actionId: 300, decision: d1 },
+          ],
+          plan: [],
+          subagents: [],
+          execItems: [],
+          researchReport: null,
+          report: null,
+          error: null,
+          status: 'awaiting',
+        },
+      ],
+    });
+  };
+
+  it('оба applied → ОДНО решение approve=true (дедуп, не два)', async () => {
+    const spy = vi.spyOn(tauriApi.agent, 'approve').mockResolvedValue(undefined);
+    seed('applied', 'applied');
+    await useAgentStore.getState().approve();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: true }]);
+  });
+
+  it('частичный reject → reject ВСЕЙ группы (fail-closed AND, не авто-одобрить отклонённый)', async () => {
+    const spy = vi.spyOn(tauriApi.agent, 'approve').mockResolvedValue(undefined);
+    seed('applied', 'rejected');
+    await useAgentStore.getState().approve();
+    expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: false }]);
+  });
+
+  it('нерешённый файл в группе → reject всей группы (fail-closed)', async () => {
+    const spy = vi.spyOn(tauriApi.agent, 'approve').mockResolvedValue(undefined);
+    seed('applied', undefined);
+    await useAgentStore.getState().approve();
+    expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: false }]);
+  });
+});

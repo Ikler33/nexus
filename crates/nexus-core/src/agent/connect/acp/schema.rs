@@ -128,8 +128,48 @@ pub enum SessionUpdate {
     },
     ToolCall(ToolCall),
     ToolCallUpdate(ToolCallUpdate),
-    /// user_message_chunk / plan / available_commands_update / current_mode_update и пр. — десериализуем,
-    /// но в первом срезе игнорируем (отложено).
+    /// ACP-1b: план (todo-список). ACP шлёт ПОЛНЫЙ список записей каждым апдейтом (нет инкрементального
+    /// статуса) → маппим в `PlanProposed` (id синтезируем по индексу — позиционно стабилен в ходе).
+    Plan {
+        #[serde(default)]
+        entries: Vec<PlanEntry>,
+    },
+    /// user_message_chunk / available_commands_update / current_mode_update и пр. — десериализуем,
+    /// но игнорируем (отложено).
+    #[serde(other)]
+    Other,
+}
+
+/// ACP-1b: запись плана. `priority` парсится (forward-compat), но в маппинг не идёт (наш `PlanStep` его
+/// не несёт). `status` → `AgentPlanStepState`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanEntry {
+    pub content: String,
+    #[serde(default)]
+    pub priority: AcpPlanPriority,
+    #[serde(default)]
+    pub status: AcpPlanStatus,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpPlanPriority {
+    High,
+    #[default]
+    Medium,
+    Low,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpPlanStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
     #[serde(other)]
     Other,
 }
@@ -312,6 +352,73 @@ mod tests {
                 assert!(matches!(tc.content.first(), Some(ToolCallContent::Diff(_))));
             }
             _ => panic!("expected tool_call"),
+        }
+
+        // ACP-1b: session/update tool_call с ДВУМЯ diff'ами (мульти-файловый permission).
+        let n2b: SessionNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t2",
+            "content": [
+                {"type": "diff", "path": "Notes/A.md", "oldText": null, "newText": "x"},
+                {"type": "diff", "path": "Notes/B.md", "oldText": "p", "newText": "q\nr"}
+            ]
+        }))
+        .unwrap();
+        match n2b.update {
+            SessionUpdate::ToolCallUpdate(u) => {
+                let diffs: Vec<_> = u
+                    .content
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|c| match c {
+                        ToolCallContent::Diff(d) => Some(d),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(diffs.len(), 2);
+                assert_eq!(diffs[0].path.to_string_lossy(), "Notes/A.md");
+                assert!(diffs[0].old_text.is_none());
+                assert_eq!(diffs[1].path.to_string_lossy(), "Notes/B.md");
+                assert_eq!(diffs[1].old_text.as_deref(), Some("p"));
+            }
+            _ => panic!("expected tool_call_update"),
+        }
+
+        // ACP-1b: session/update plan (полный список записей со статусами/приоритетами).
+        let np: SessionNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "sessionUpdate": "plan",
+            "entries": [
+                {"content": "research", "priority": "high", "status": "in_progress"},
+                {"content": "write", "priority": "medium", "status": "pending"}
+            ]
+        }))
+        .unwrap();
+        match np.update {
+            SessionUpdate::Plan { entries } => {
+                assert_eq!(entries.len(), 2);
+                assert_eq!(entries[0].content, "research");
+                assert_eq!(entries[0].priority, AcpPlanPriority::High);
+                assert_eq!(entries[0].status, AcpPlanStatus::InProgress);
+                assert_eq!(entries[1].status, AcpPlanStatus::Pending);
+            }
+            _ => panic!("expected plan"),
+        }
+
+        // ACP-1b: plan с неизвестными priority/status → Other (forward-compat, не ошибка).
+        let np2: SessionNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "sessionUpdate": "plan",
+            "entries": [{"content": "x", "priority": "urgent", "status": "blocked"}]
+        }))
+        .unwrap();
+        match np2.update {
+            SessionUpdate::Plan { entries } => {
+                assert_eq!(entries[0].priority, AcpPlanPriority::Other);
+                assert_eq!(entries[0].status, AcpPlanStatus::Other);
+            }
+            _ => panic!("expected plan"),
         }
 
         // unknown sessionUpdate variant → Other (forward-compat, не ошибка)

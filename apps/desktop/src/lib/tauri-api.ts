@@ -703,8 +703,12 @@ export interface AiEndpoint {
 /** CONN-4: подключение агента (`ai.connection`) для UI-селектора. `mode` нормализован; `socket` — путь
  *  AF_UNIX для local (`null` → дефолт `<vault>/.nexus/agentd.sock`). `url`/`auth_ref` (CONN-3) не сюда. */
 export interface AgentConnectionDto {
-  mode: 'embedded' | 'local' | 'remote';
+  mode: 'embedded' | 'local' | 'remote' | 'acp';
   socket: string | null;
+  /** ACP-1b `ai.connection.acpCommand`: командная строка ACP-агента (split по пробелам). `null` → не задан. */
+  acpCommand: string | null;
+  /** ACP-1b `ai.connection.acpCwd`: рабочая папка спавна ACP-агента. `null` → корень vault. */
+  acpCwd: string | null;
 }
 
 export interface AiConfigDto {
@@ -1851,18 +1855,26 @@ export const tauriApi = {
         ? invoke<AgentFlagsDto>('set_agent_flags', { flags })
         : mockSettings.setAgentFlags(flags),
 
-    /** CONN-4: персистит режим подключения агента (`ai.connection`) + немедленно свопает бэкенд.
-     *  `mode` нормализуется (мусор → embedded); `socket=null` → не трогает путь. Возвращает записанное. */
+    /** CONN-4/ACP-1b: персистит режим подключения агента (`ai.connection`) + немедленно свопает бэкенд.
+     *  `mode` нормализуется (мусор → embedded); `socket=null`/`acpCommand=null`/`acpCwd=null` → не трогают
+     *  соответствующее поле. Возвращает записанное. */
     setAgentConnection: (
-      mode: 'embedded' | 'local' | 'remote',
+      mode: 'embedded' | 'local' | 'remote' | 'acp',
       socket: string | null,
+      acpCommand: string | null = null,
+      acpCwd: string | null = null,
     ): Promise<AgentConnectionDto> =>
       isTauri()
-        ? invoke<AgentConnectionDto>('set_agent_connection', { mode, socket })
-        : mockSettings.setAgentConnection(mode, socket),
+        ? invoke<AgentConnectionDto>('set_agent_connection', {
+            mode,
+            socket,
+            acpCommand,
+            acpCwd,
+          })
+        : mockSettings.setAgentConnection(mode, socket, acpCommand, acpCwd),
 
-    /** CONN-4: проверка связи с локальным agentd (AF_UNIX handshake `initialize`). Резолвится версией
-     *  протокола; throw = недоступен / не Unix. */
+    /** CONN-4/ACP-1b: проверка связи (local: AF_UNIX handshake; acp: spawn+initialize). Резолвится строкой
+     *  версии протокола; throw = недоступен / неверный режим. */
     testAgentConnection: (): Promise<string> =>
       isTauri()
         ? invoke<string>('test_agent_connection')

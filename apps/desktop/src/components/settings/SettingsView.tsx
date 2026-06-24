@@ -1058,6 +1058,8 @@ function ConnectionModeBlock() {
   connRef.current = conn;
   const seqRef = useRef(0);
   const [socketDraft, setSocketDraft] = useState('');
+  const [acpCommandDraft, setAcpCommandDraft] = useState('');
+  const [acpCwdDraft, setAcpCwdDraft] = useState('');
   const [testState, setTestState] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle');
   const [testMsg, setTestMsg] = useState('');
   const testReq = useRef(0);
@@ -1070,6 +1072,8 @@ function ConnectionModeBlock() {
         if (!alive) return;
         setConn(c.connection);
         setSocketDraft(c.connection.socket ?? '');
+        setAcpCommandDraft(c.connection.acpCommand ?? '');
+        setAcpCwdDraft(c.connection.acpCwd ?? '');
       })
       .catch(() => {});
     return () => {
@@ -1079,23 +1083,35 @@ function ConnectionModeBlock() {
 
   if (!conn) return null;
 
-  // Оптимистичный персист + немедленный своп бэкенда на бэке. `socket=null` → бэк не трогает путь.
-  const persist = (mode: AgentConnectionDto['mode'], socket: string | null) => {
+  // Оптимистичный персист + немедленный своп бэкенда на бэке. `null`-поля → бэк их не трогает.
+  const persist = (
+    mode: AgentConnectionDto['mode'],
+    socket: string | null,
+    acpCommand: string | null = null,
+    acpCwd: string | null = null,
+  ) => {
     const next: AgentConnectionDto = {
       mode,
       socket: socket === null ? (connRef.current?.socket ?? null) : socket.trim() || null,
+      acpCommand:
+        acpCommand === null
+          ? (connRef.current?.acpCommand ?? null)
+          : acpCommand.trim() || null,
+      acpCwd: acpCwd === null ? (connRef.current?.acpCwd ?? null) : acpCwd.trim() || null,
     };
     setConn(next);
     connRef.current = next;
     setTestState('idle');
     const seq = ++seqRef.current;
     void tauriApi.settings
-      .setAgentConnection(mode, socket)
+      .setAgentConnection(mode, socket, acpCommand, acpCwd)
       .then((applied) => {
         if (seq !== seqRef.current) return;
         setConn(applied);
         connRef.current = applied;
         setSocketDraft(applied.socket ?? '');
+        setAcpCommandDraft(applied.acpCommand ?? '');
+        setAcpCwdDraft(applied.acpCwd ?? '');
       })
       .catch(() => {});
   };
@@ -1117,17 +1133,45 @@ function ConnectionModeBlock() {
       });
   };
 
+  // CONN-4/ACP-1b: общая тест-полоса (spawn+initialize для acp / AF_UNIX handshake для local).
+  const testBar = (
+    <div className={styles.saveBar}>
+      <button
+        type="button"
+        className={styles.ghostBtn}
+        onClick={runTest}
+        disabled={testState === 'running'}
+      >
+        {testState === 'running' && <Loader2 size={14} className={styles.spin} aria-hidden />}
+        {t('settings.conn.test')}
+      </button>
+      {testState !== 'idle' && (
+        <span
+          className={`${styles.badge} ${
+            testState === 'ok' ? styles.badgeOk : testState === 'fail' ? styles.badgeFail : ''
+          }`}
+          title={testMsg}
+        >
+          {testState === 'ok' ? `✓ ${testMsg}` : testState === 'fail' ? `✗ ${testMsg}` : '…'}
+        </span>
+      )}
+    </div>
+  );
+
   return (
     <>
       <SectionHeader title={t('settings.conn.mode')} sub={t('settings.conn.modeDesc')} nested />
       <section className={styles.group}>
         <div className={styles.seg}>
-          {(['embedded', 'local'] as const).map((m) => (
+          {(['embedded', 'local', 'acp'] as const).map((m) => (
             <button
               key={m}
               type="button"
               className={`${styles.segBtn} ${conn.mode === m ? styles.on : ''}`}
-              onClick={() => conn.mode !== m && persist(m, m === 'local' ? socketDraft : null)}
+              onClick={() =>
+                conn.mode !== m &&
+                persist(m, m === 'local' ? socketDraft : null, m === 'acp' ? acpCommandDraft : null)
+              }
             >
               {t(`settings.conn.modeOpts.${m}`)}
             </button>
@@ -1153,28 +1197,39 @@ function ConnectionModeBlock() {
             />
             <span className={styles.rowDesc}>{t('settings.conn.socketHint')}</span>
           </label>
-          <div className={styles.saveBar}>
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              onClick={runTest}
-              disabled={testState === 'running'}
-            >
-              {testState === 'running' && <Loader2 size={14} className={styles.spin} aria-hidden />}
-              {t('settings.conn.test')}
-            </button>
-            {testState !== 'idle' && (
-              <span
-                className={`${styles.badge} ${
-                  testState === 'ok' ? styles.badgeOk : testState === 'fail' ? styles.badgeFail : ''
-                }`}
-                title={testMsg}
-              >
-                {testState === 'ok' ? `✓ ${testMsg}` : testState === 'fail' ? `✗ ${testMsg}` : '…'}
-              </span>
-            )}
-          </div>
+          {testBar}
           <p className={styles.warnText}>{t('settings.conn.localWarn')}</p>
+        </>
+      )}
+
+      {conn.mode === 'acp' && (
+        <>
+          <label className={styles.skillsField}>
+            <span className={styles.label}>{t('settings.conn.acpCommand')}</span>
+            <input
+              type="text"
+              className={styles.skillsInput}
+              placeholder="hermes acp"
+              value={acpCommandDraft}
+              onChange={(e) => setAcpCommandDraft(e.target.value)}
+              onBlur={() => persist('acp', null, acpCommandDraft)}
+            />
+            <span className={styles.rowDesc}>{t('settings.conn.acpCommandHint')}</span>
+          </label>
+          <label className={styles.skillsField}>
+            <span className={styles.label}>{t('settings.conn.acpCwd')}</span>
+            <input
+              type="text"
+              className={styles.skillsInput}
+              placeholder={t('settings.conn.acpCwdPlaceholder')}
+              value={acpCwdDraft}
+              onChange={(e) => setAcpCwdDraft(e.target.value)}
+              onBlur={() => persist('acp', null, null, acpCwdDraft)}
+            />
+            <span className={styles.rowDesc}>{t('settings.conn.acpCwdHint')}</span>
+          </label>
+          {testBar}
+          <p className={styles.warnText}>{t('settings.conn.acpWarn')}</p>
         </>
       )}
     </>
