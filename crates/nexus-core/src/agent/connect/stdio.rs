@@ -54,10 +54,13 @@ impl StdioTransport {
 }
 
 /// Построчно сливает stderr подпроцесса в `tracing` (анти-дедлок piped-stderr + наблюдаемость агента).
+/// Уровень `debug`, НЕ `warn`: stderr внешнего ACP-агента — это ЕГО логи (Hermes льёт десятки строк
+/// INFO/MCP/mem0 на запрос), а не наши предупреждения; на `warn` они флудят консоль приложения.
+/// Реальный сбой агента всё равно всплывёт как `Error`-событие (transport.recv → None).
 async fn drain_stderr(stderr: ChildStderr, agent: String) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        tracing::warn!(target: "agent::connect::stdio", %agent, "{line}");
+        tracing::debug!(target: "agent::connect::stdio", %agent, "{line}");
     }
 }
 

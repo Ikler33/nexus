@@ -672,14 +672,14 @@ mod acp_backend {
         }
     }
 
-    /// Достаёт текст из чанка ассистента/мышления (для accum в Final).
+    /// Достаёт текст ОТВЕТА из чанка (`agent_message_chunk`) для стрима/accum в Final.
+    /// `agent_thought_chunk` (reasoning) НАМЕРЕННО НЕ извлекаем: внешние агенты (Hermes) льют длинные
+    /// рассуждения, и при склейке они мешались с ответом. Решение владельца — скрыть размышления
+    /// (виден индикатор хода, пока агент думает); в ответ идёт только сам ответ.
     fn chunk_text(update: &schema::SessionUpdate) -> Option<&str> {
         use schema::{ContentBlock, SessionUpdate as U};
         match update {
             U::AgentMessageChunk {
-                content: ContentBlock::Text { text },
-            }
-            | U::AgentThoughtChunk {
                 content: ContentBlock::Text { text },
             } => Some(text.as_str()),
             _ => None,
@@ -1095,17 +1095,18 @@ mod acp_backend {
         }
 
         #[test]
-        fn chunk_text_extracts_message_and_thought() {
+        fn chunk_text_extracts_message_skips_thought() {
             let msg = SessionUpdate::AgentMessageChunk {
                 content: ContentBlock::Text { text: "hi".into() },
             };
             assert_eq!(chunk_text(&msg), Some("hi"));
+            // reasoning НЕ извлекаем (скрыт): thought-чанк → None, не попадает в ответ.
             let thought = SessionUpdate::AgentThoughtChunk {
                 content: ContentBlock::Text {
                     text: "thinking".into(),
                 },
             };
-            assert_eq!(chunk_text(&thought), Some("thinking"));
+            assert_eq!(chunk_text(&thought), None);
         }
 
         #[test]
