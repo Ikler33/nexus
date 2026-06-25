@@ -8,19 +8,15 @@
 export function BrandThinking({
   size = 24,
   className = '',
+  animate = true,
 }: {
   size?: number;
   className?: string;
+  animate?: boolean;
 }) {
+  const cls = ['brand-thinking', animate ? '' : 'static', className].filter(Boolean).join(' ');
   return (
-    <svg
-      className={`brand-thinking ${className}`.trim()}
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      aria-hidden
-    >
+    <svg className={cls} width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden>
       <g className="bt-orbit">
         <path
           className="bt-ring"

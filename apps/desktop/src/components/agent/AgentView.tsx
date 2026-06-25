@@ -122,7 +122,7 @@ export function AgentView() {
     <main className={styles.agentv}>
       {/* ── Шапка ── */}
       <header className={styles.head}>
-        <BrandThinking size={18} />
+        <BrandThinking size={18} animate={active} />
         <div className={styles.title}>{t('agent.title')}</div>
         <span className={styles.sid}>
           {runId != null ? `#${runId} · ` : ''}
@@ -147,7 +147,7 @@ export function AgentView() {
           disabled={active}
           title={t('agent.newSession')}
         >
-          <BrandThinking size={13} />
+          <BrandThinking size={13} animate={false} />
           {t('agent.newSession')}
         </button>
         <div className={styles.gear} ref={gearRef}>
@@ -231,40 +231,42 @@ export function AgentView() {
       {/* ── Тело: лента + правый dock ── */}
       <div className={styles.body}>
         <div className={styles.session}>
-          {!started ? (
-            <div className={styles.empty}>
-              <BrandThinking size={34} />
-              <div className={styles.emptyTitle}>{t('agent.empty.title')}</div>
-              <div className={styles.emptyHint}>{t('agent.empty.hint')}</div>
-            </div>
-          ) : (
-            <>
-              {/* Мультитёрн: лента ходов сессии (каждое сообщение = новый ход, прошлое НЕ стирается). */}
-              {turns.map((turn, i) => (
-                <TurnView
-                  key={turn.key}
-                  turn={turn}
-                  isLast={i === turns.length - 1}
-                  autonomy={autonomy}
-                  approving={approving}
-                  onFile={setFileDecision}
-                  onBulk={(d) => {
-                    setAllDecisions(d);
-                    toast(
-                      d === 'applied'
-                        ? t('agent.changeset.applyToast')
-                        : t('agent.changeset.rejectToast'),
-                    );
-                  }}
-                  onApprove={() => void approve()}
-                  onPause={() => void pause()}
-                  onResume={() => void resume()}
-                  onCancel={() => void cancel()}
-                  onUndo={() => void doUndo()}
-                />
-              ))}
-            </>
-          )}
+          <div className={styles.scroll}>
+            {!started ? (
+              <div className={styles.empty}>
+                <BrandThinking size={34} animate={false} />
+                <div className={styles.emptyTitle}>{t('agent.empty.title')}</div>
+                <div className={styles.emptyHint}>{t('agent.empty.hint')}</div>
+              </div>
+            ) : (
+              <>
+                {/* Мультитёрн: лента ходов сессии (каждое сообщение = новый ход, прошлое НЕ стирается). */}
+                {turns.map((turn, i) => (
+                  <TurnView
+                    key={turn.key}
+                    turn={turn}
+                    isLast={i === turns.length - 1}
+                    autonomy={autonomy}
+                    approving={approving}
+                    onFile={setFileDecision}
+                    onBulk={(d) => {
+                      setAllDecisions(d);
+                      toast(
+                        d === 'applied'
+                          ? t('agent.changeset.applyToast')
+                          : t('agent.changeset.rejectToast'),
+                      );
+                    }}
+                    onApprove={() => void approve()}
+                    onPause={() => void pause()}
+                    onResume={() => void resume()}
+                    onCancel={() => void cancel()}
+                    onUndo={() => void doUndo()}
+                  />
+                ))}
+              </>
+            )}
+          </div>
 
           {/* Композер */}
           <div className={styles.composer}>
@@ -303,7 +305,7 @@ export function AgentView() {
             </div>
             <div className={styles.foot}>
               <span className={styles.footTag}>
-                <BrandThinking size={12} />
+                <BrandThinking size={12} animate={active} />
                 {model}
               </span>
               <span className={styles.footTag}>{autonomy === 'confirm' ? t('agent.confirm') : t('agent.auto')}</span>
@@ -431,7 +433,7 @@ function TurnView({
       {(turn.assistantText || active) && (
         <div className={`${styles.msg} ${styles.msgBot}`}>
           <div className={styles.who}>
-            <BrandThinking size={14} />
+            <BrandThinking size={14} animate={active} />
             {t('agent.who.agent')}
           </div>
           {active || !turn.assistantText ? (
@@ -494,6 +496,7 @@ function TurnView({
           autonomy={autonomy}
           awaiting={isLast && status === 'awaiting'}
           approving={isLast && approving}
+          active={active}
           onFile={onFile}
           onBulk={onBulk}
           onApprove={onApprove}
@@ -544,6 +547,8 @@ interface ChangesetProps {
   autonomy: 'confirm' | 'auto';
   awaiting: boolean;
   approving: boolean;
+  /** Ход активен (running/paused/awaiting) — гейт анимации авто-бейджа Castor. */
+  active: boolean;
   onFile: (actionId: number, decision: 'applied' | 'rejected') => void;
   onBulk: (decision: 'applied' | 'rejected') => void;
   onApprove: () => void;
@@ -571,6 +576,7 @@ function Changeset({
   autonomy,
   awaiting,
   approving,
+  active,
   onFile,
   onBulk,
   onApprove,
@@ -641,7 +647,7 @@ function Changeset({
         <span className={styles.csDel}>−{totDel}</span>
         {auto ? (
           <span className={styles.csAuto}>
-            <BrandThinking size={13} />
+            <BrandThinking size={13} animate={active} />
             {t('agent.changeset.autoBadge')}
           </span>
         ) : (
