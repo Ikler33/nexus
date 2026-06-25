@@ -939,20 +939,7 @@
   color: var(--color-accent);
 }
 
-/* демо-пометка (план/граф — статичная демо-структура, контракт не несёт данных) */
-.demoNote {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--color-text-faint);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 5px 8px;
-  margin-bottom: 12px;
-  line-height: 1.4;
-}
-
-/* план (демо) */
+/* план (реальные шаги хода — PlanLive) */
 .plan {
   display: flex;
   flex-direction: column;
@@ -1020,69 +1007,105 @@
   transition: width var(--motion-base);
 }
 
-/* граф выполнения (демо) */
-.research {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.rcH {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 0 8px;
-}
+/* мета-строка карточки отчёта (счётчики источников/раундов) */
 .rcMeta {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--color-text-faint);
 }
-.rgSvg {
+
+/* граф выполнения (ExecGraph) — вертикальное дерево-таймлайн над состоянием хода (реальные данные) */
+.flow {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+.flowSvg {
   display: block;
-  width: 100%;
-  height: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: radial-gradient(120% 90% at 50% 45%, var(--color-accent-soft), transparent 60%);
 }
-.rgEdge {
+/* рёбра */
+.fgEdgeSeq {
   stroke: var(--color-border-strong);
-  stroke-width: 1;
-}
-.rgCenter {
-  fill: var(--color-accent);
-}
-.rgHub {
-  fill: var(--color-bg-elevated);
-  stroke: var(--color-accent);
   stroke-width: 1.5;
 }
-.rgDot {
-  fill: var(--color-accent);
-  opacity: 0.45;
+.fgEdgeBranch {
+  stroke: var(--color-ai);
+  stroke-width: 1.5;
+  opacity: 0.7;
 }
-.rgLabel {
-  fill: var(--color-text-faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
+.fgEdgeReturn {
+  stroke: var(--color-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.4;
 }
-.rgClabel {
-  fill: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
+/* узел: кружок (status-канал = обводка/заливка) + иконка (category-канал) + подпись */
+.fgNode .fgDot {
+  fill: var(--color-bg-elevated);
+  stroke: var(--color-border-strong);
+  stroke-width: 1.5;
 }
-.rcFoot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 2px 0;
+.fgNode.fgRun .fgDot {
+  stroke: var(--color-ai);
+  fill: var(--color-ai-soft);
+}
+.fgNode.fgDone .fgDot {
+  stroke: var(--color-success);
+}
+.fgNode.fgErr .fgDot {
+  stroke: var(--color-danger);
+}
+.fgNode.fgPaused .fgDot {
+  stroke-dasharray: 2 2;
+}
+.fgIcon {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--color-text-muted);
+}
+.fgNode.fgRun .fgIcon {
+  color: var(--color-ai);
+}
+.fgNode.fgErr .fgIcon {
+  color: var(--color-danger);
+}
+.fgNode.fgDone .fgIcon {
+  color: var(--color-success);
+}
+.fgLabel {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  line-height: 18px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fgNode.fgDone .fgLabel {
+  color: var(--color-text-muted);
+}
+.fgNode.fgErr .fgLabel {
+  color: var(--color-danger);
+}
+/* субагент-лейн (depth>0) — иконка/подпись акцентного AI-цвета */
+.fgSub .fgIcon {
+  color: var(--color-ai);
+}
+.fgSub .fgLabel {
+  color: var(--color-text);
+}
+.fgDetail {
   color: var(--color-text-faint);
 }
-.rcRun {
-  color: var(--color-accent);
+/* честный пустой стейт графа (нет действий) — зеркало .planEmpty */
+.fgEmpty {
+  padding: 16px 4px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  text-align: center;
 }
 
 /* отчёт (реальные данные из final) */

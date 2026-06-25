@@ -183,7 +183,10 @@
       "memoryConsolidationDesc": "When you confirm a fact, the AI suggests merging it with a similar one or replacing an outdated one (showing «before → after»). Every merge/replace goes through your confirmation and is reversible. Off by default; requires agent memory on.",
       "consolidationMode": "Consolidation mode",
       "consolidationModeDesc": "«Propose» — every merge/replace via a chip. «Auto» — apply silently (except your EXPLICIT facts — always via a chip), with «Undo» in the toast.",
-      "consolidationModeOpts": { "propose": "Propose", "auto": "Auto" },
+      "consolidationModeOpts": {
+        "propose": "Propose",
+        "auto": "Auto"
+      },
       "manageMemory": "AI memory…",
       "episodicMemory": "Episodic memory",
       "episodicMemoryDesc": "Mix short summaries of your past sessions («what we talked about before») into AI answers. Off by default — privacy. Manage episodes below.",
@@ -244,7 +247,10 @@
       "intro": "Settings for the autonomous agent run via the connector (e.g. the nexus-agentd server). Stored in .nexus/local.json. The desktop AI chat and agent panel are NOT affected — they pick autonomy per run and use the web settings above.",
       "autonomy": "Connector autonomy",
       "autonomyDesc": "Default posture for the headless connector. «Confirm» — every change is proposed for approval. «Auto» — the agent auto-applies low-risk changes; risky or large writes are still proposed.",
-      "autonomyOpts": { "confirm": "Confirm", "auto": "Auto" },
+      "autonomyOpts": {
+        "confirm": "Confirm",
+        "auto": "Auto"
+      },
       "autonomyWarn": "Auto: the server agent applies low-risk changes without asking. Risky or large writes are still proposed; everything is logged and reversible.",
       "actuator": "Agent vault actions",
       "actuatorDesc": "Let the agent actually create and edit notes (through the approval gate). Off — the agent only reads and answers; write tools are stubs.",
@@ -674,27 +680,10 @@
     "plan": {
       "empty": "No steps yet — the agent hasn't taken any actions in this run."
     },
-    "subagents": {
-      "empty": "No subagents — delegation is off or none have been spawned.",
-      "status": {
-        "spawned": "spawned",
-        "running": "running",
-        "done": "done",
-        "failed": "failed",
-        "paused": "paused"
-      }
-    },
-    "exec": {
-      "untitled": "command",
-      "running": "running",
-      "exit": "exit {{code}}"
-    },
     "graph": {
-      "demoNote": "Demo execution graph (research tasks)",
       "title": "Execution graph",
-      "meta": "round 8 · 98 sources",
-      "center": "inbox triage",
-      "running": "writing report"
+      "empty": "The graph will appear as the agent acts.",
+      "aria": "Agent execution graph"
     },
     "report": {
       "empty": "The report will appear when the run completes.",
