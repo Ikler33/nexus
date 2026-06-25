@@ -8,6 +8,9 @@ import {
   type StaleNote,
   type Widget,
 } from '../lib/tauri-api';
+import i18n from '../i18n/setup';
+import { logUi } from '../lib/debug-log';
+import { useToastStore } from './toast';
 
 /** Сколько узлов берём в мини-граф карточки (визуальная виньетка, не полноценный граф). */
 const MINI_GRAPH_NODES = 48;
@@ -32,6 +35,9 @@ interface HomeState {
   loading: boolean;
   /** Ключи виджетов, по которым крутится фоновая генерация («thinking» на карточке). */
   generating: Record<string, boolean>;
+  /** P0-4: ТОЛЬКО фатальный провал `load()` (весь дашборд не загрузился) → глобальный баннер. Провал
+   *  пер-виджетного reload/refresh сюда НЕ пишется (показывается тостом) — иначе ошибка одного виджета
+   *  вешала бы баннер поверх рабочего дашборда. Успешный `load()`/`reloadWidget` сбрасывает в null. */
   error: string | null;
   load: () => Promise<void>;
   /** Перечитать один виджет (по событию `home:widget-updated`). */
@@ -115,10 +121,15 @@ export const useHomeStore = create<HomeState>((set, get) => ({
         const stale = await tauriApi.home.staleRadar();
         set((s) => ({ stale, generating: { ...s.generating, stale_radar: false } }));
       }
+      // P0-4: успешное обновление виджета снимает прежний фатальный баннер (дашборд снова в порядке).
+      if (get().error !== null) set({ error: null });
     } catch (e) {
-      // Фетч виджета упал (бэкенд недоступен/ошибка) — гасим спиннер «генерирую…», иначе он
-      // висел бы вечно, обещая результат, которого не будет (audit honesty/stuck-state).
-      set((s) => ({ error: String(e), generating: { ...s.generating, [key]: false } }));
+      // P0-4: пер-виджетный провал — НЕ глобальный баннер (иначе ошибка одного виджета перекрывает
+      // рабочий дашборд). Гасим спиннер «генерирую…» (иначе висел бы вечно, обещая результат, которого
+      // не будет — audit honesty/stuck-state) и показываем ЛОКАЛЬНЫЙ тост.
+      set((s) => ({ generating: { ...s.generating, [key]: false } }));
+      useToastStore.getState().addToast(i18n.t('home.widgetError'), { kind: 'error' });
+      logUi('home:widget-error', `${key}: ${String(e).slice(0, 200)}`);
     }
   },
 
@@ -131,7 +142,10 @@ export const useHomeStore = create<HomeState>((set, get) => ({
       // Вне Tauri события не прилетают — мок «завершает» refresh отложенным refetch'ом.
       if (!isTauriEnv()) setTimeout(() => void get().reloadWidget(key), 900);
     } catch (e) {
-      set((s) => ({ error: String(e), generating: { ...s.generating, [key]: false } }));
+      // P0-4: провал запуска обновления виджета — локальный тост, НЕ глобальный баннер (как reloadWidget).
+      set((s) => ({ generating: { ...s.generating, [key]: false } }));
+      useToastStore.getState().addToast(i18n.t('home.widgetError'), { kind: 'error' });
+      logUi('home:widget-error', `${key}: ${String(e).slice(0, 200)}`);
     }
   },
 }));
