@@ -641,15 +641,12 @@
     },
     "status": {
       "running": "Working…",
-      "paused": "Paused",
       "awaiting": "Waiting for your decision on changes",
       "done": "Done",
       "error": "Error",
       "cancelled": "Cancelled"
     },
     "controls": {
-      "pause": "Pause",
-      "resume": "Resume",
       "cancel": "Stop",
       "undo": "Undo changes"
     },
