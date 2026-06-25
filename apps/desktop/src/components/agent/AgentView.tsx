@@ -8,8 +8,6 @@ import {
   FileText,
   GitBranch,
   ListChecks,
-  Pause,
-  Play,
   RotateCcw,
   Settings,
   Share2,
@@ -67,8 +65,6 @@ export function AgentView() {
   const setFileDecision = useAgentStore((s) => s.setFileDecision);
   const setAllDecisions = useAgentStore((s) => s.setAllDecisions);
   const approve = useAgentStore((s) => s.approve);
-  const pause = useAgentStore((s) => s.pause);
-  const resume = useAgentStore((s) => s.resume);
   const cancel = useAgentStore((s) => s.cancel);
   const undo = useAgentStore((s) => s.undo);
   const newSession = useAgentStore((s) => s.newSession);
@@ -261,8 +257,6 @@ export function AgentView() {
                       );
                     }}
                     onApprove={() => void approve()}
-                    onPause={() => void pause()}
-                    onResume={() => void resume()}
                     onCancel={() => void cancel()}
                     onUndo={() => void doUndo()}
                   />
@@ -399,8 +393,6 @@ interface TurnViewProps {
   onFile: (actionId: number, decision: 'applied' | 'rejected') => void;
   onBulk: (decision: 'applied' | 'rejected') => void;
   onApprove: () => void;
-  onPause: () => void;
-  onResume: () => void;
   onCancel: () => void;
   onUndo: () => void;
 }
@@ -413,8 +405,6 @@ function TurnView({
   onFile,
   onBulk,
   onApprove,
-  onPause,
-  onResume,
   onCancel,
   onUndo,
 }: TurnViewProps) {
@@ -511,28 +501,23 @@ function TurnView({
       {/* Ошибка хода */}
       {turn.error && <div className={styles.error}>{turn.error}</div>}
 
-      {/* Контролы прогона — только у последнего хода (пауза/продолжить/стоп/откат) */}
-      {isLast && (active || status === 'done' || status === 'cancelled') && (
+      {/* Контролы прогона — только у последнего хода (стоп/откат). P0-1: Pause/Resume убраны —
+          десктоп-модель (один tokio::spawn) структурно не умеет resume (pause → BudgetExhausted →
+          STATUS_ERROR + дерегистрация → resume = no-op), не шипим сломанное; остаётся Cancel.
+          P0-3: errored-прогон (применил N файлов в auto, затем упал) тоже показывает статус + Undo —
+          откат работает на любом run_id; покрывает и kill-switch-pause→error. */}
+      {isLast && (active || status === 'done' || status === 'cancelled' || status === 'error') && (
         <div className={styles.controls}>
           <span className={styles.statusPill} data-status={status}>
             {t(`agent.status.${status}`)}
           </span>
           <div className={styles.spacer} />
-          {status === 'paused' ? (
-            <button type="button" className={styles.ctrlBtn} onClick={onResume}>
-              <Play size={14} aria-hidden /> {t('agent.controls.resume')}
-            </button>
-          ) : status === 'running' || status === 'awaiting' ? (
-            <button type="button" className={styles.ctrlBtn} onClick={onPause}>
-              <Pause size={14} aria-hidden /> {t('agent.controls.pause')}
-            </button>
-          ) : null}
           {active && (
             <button type="button" className={styles.ctrlBtn} onClick={onCancel}>
               <Square size={13} aria-hidden /> {t('agent.controls.cancel')}
             </button>
           )}
-          {(status === 'done' || status === 'cancelled') && (
+          {(status === 'done' || status === 'cancelled' || status === 'error') && (
             <button type="button" className={styles.ctrlBtn} onClick={onUndo}>
               <RotateCcw size={13} aria-hidden /> {t('agent.controls.undo')}
             </button>

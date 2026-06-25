@@ -168,8 +168,6 @@ interface AgentState {
   /** Собирает `decisions[]` из per-file решений активного хода и шлёт `agent_approve`. Нерешённые
    *  файлы по умолчанию = reject (fail-closed, как бэкенд: отсутствующий айтем = Reject). */
   approve: () => Promise<void>;
-  pause: () => Promise<void>;
-  resume: () => Promise<void>;
   cancel: () => Promise<void>;
   /** Откат применённых действий активного/последнего хода (AGENT-4) → число откаченных. */
   undo: () => Promise<number>;
@@ -555,43 +553,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  async pause() {
-    const last = get().turns[get().turns.length - 1];
-    if (!last || last.runId == null || (last.status !== 'running' && last.status !== 'awaiting'))
-      return;
-    const lastKey = last.key;
-    try {
-      await tauriApi.agent.pause(last.runId);
-      set((s) => ({
-        turns: s.turns.map((tn) => (tn.key === lastKey ? { ...tn, status: 'paused' } : tn)),
-      }));
-    } catch {
-      /* прогон не активен — статус не трогаем */
-    }
-  },
-  async resume() {
-    const last = get().turns[get().turns.length - 1];
-    if (!last || last.runId == null || last.status !== 'paused') return;
-    const lastKey = last.key;
-    try {
-      await tauriApi.agent.resume(last.runId);
-      // Возвращаемся в running (если ждали аппрув — changeset всё ещё на ревью, кнопки активны).
-      set((s) => ({
-        turns: s.turns.map((tn) =>
-          tn.key === lastKey
-            ? {
-                ...tn,
-                status: tn.changeset.some((f) => f.decision === undefined && f.actionId >= 0)
-                  ? 'awaiting'
-                  : 'running',
-              }
-            : tn,
-        ),
-      }));
-    } catch {
-      /* no-op */
-    }
-  },
   async cancel() {
     const last = get().turns[get().turns.length - 1];
     if (!last || last.runId == null || !isActive(last.status)) return;
