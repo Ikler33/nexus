@@ -48,7 +48,7 @@ describe('agent store — мультитёрн история (W-4)', () => {
     calls[1].onEvent({
       type: 'proposal',
       runId: 2,
-      files: [{ path: 'A.md', add: 3, del: 0, status: 'new', actionId: 201 }],
+      files: [{ path: 'A.md', add: 3, del: 0, status: 'new', kind: 'file', actionId: 201 }],
     });
     const turns = useAgentStore.getState().turns;
     expect(turns).toHaveLength(2);
@@ -56,6 +56,22 @@ describe('agent store — мультитёрн история (W-4)', () => {
     expect(turns[1].changeset.map((f) => f.path)).toEqual(['A.md']);
     // 1-й ход не затронут поздним proposal-ом 2-го.
     expect(turns[0].changeset).toEqual([]);
+  });
+
+  // ACP-EXEC: proposal с exec-файлом → changeset несёт kind:'exec' (карточка рисует его командой).
+  it('proposal с exec-permission маппит kind:exec в changeset', async () => {
+    useAgentStore.getState().run('собери');
+    calls[0].onEvent({
+      type: 'proposal',
+      runId: 1,
+      files: [
+        { path: 'A.md', add: 3, del: 0, status: 'new', kind: 'file', actionId: 1 },
+        { path: 'cargo build', add: 0, del: 0, status: 'edit', kind: 'exec', actionId: 2 },
+      ],
+    });
+    const cs = useAgentStore.getState().turns[0].changeset;
+    expect(cs.map((f) => f.kind)).toEqual(['file', 'exec']);
+    expect(cs.find((f) => f.path === 'cargo build')?.kind).toBe('exec');
   });
 
   // W-4 (ревью): errored/cancelled ход не должен ломать альтернацию ролей (часть LLM-серверов 400-ит
@@ -202,8 +218,8 @@ describe('agent store — atomic ACP-permission approve (общий actionId)', 
           assistantText: '',
           steps: [],
           changeset: [
-            { path: 'A.md', add: 1, del: 0, status: 'new', actionId: 300, decision: d0 },
-            { path: 'B.md', add: 2, del: 1, status: 'edit', actionId: 300, decision: d1 },
+            { path: 'A.md', add: 1, del: 0, status: 'new', kind: 'file', actionId: 300, decision: d0 },
+            { path: 'B.md', add: 2, del: 1, status: 'edit', kind: 'file', actionId: 300, decision: d1 },
           ],
           plan: [],
           subagents: [],

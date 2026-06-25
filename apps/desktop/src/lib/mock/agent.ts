@@ -16,17 +16,20 @@ import type {
   AgentApprovalDecision,
   AgentAutonomy,
   AgentHistoryMsg,
+  AgentProposedKind,
   AgentStreamEvent,
   SkillList,
 } from '../tauri-api';
 
 /** Файлы демо-changeset'а (зеркало `proposal.files` контракта). `actionId` — синтетический адрес
- *  решения (как id строки `agent_actions`); approve адресует именно его. */
+ *  решения (как id строки `agent_actions`); approve адресует именно его. `kind` — `file` (правка/
+ *  создание) | `exec` (командная строка, ACP-EXEC: рисуется как `$ cmd`). */
 interface MockFile {
   path: string;
   add: number;
   del: number;
   status: 'new' | 'edit';
+  kind: AgentProposedKind;
   actionId: number;
 }
 
@@ -86,9 +89,11 @@ export function run(
   void history; // принимаем по контракту; детерминированный мок-proposal от истории не зависит
   const runId = nextRunId++;
   const files: MockFile[] = [
-    { path: 'RMS-B2B/Идея — кэш контекста.md', add: 8, del: 0, status: 'new', actionId: runId * 100 + 1 },
-    { path: 'RMS-B2B/00 — Карта проекта.md', add: 2, del: 1, status: 'edit', actionId: runId * 100 + 2 },
-    { path: 'PaymentService/Inbox-2.md', add: 5, del: 0, status: 'new', actionId: runId * 100 + 3 },
+    { path: 'RMS-B2B/Идея — кэш контекста.md', add: 8, del: 0, status: 'new', kind: 'file', actionId: runId * 100 + 1 },
+    { path: 'RMS-B2B/00 — Карта проекта.md', add: 2, del: 1, status: 'edit', kind: 'file', actionId: runId * 100 + 2 },
+    { path: 'PaymentService/Inbox-2.md', add: 5, del: 0, status: 'new', kind: 'file', actionId: runId * 100 + 3 },
+    // ACP-EXEC: exec-permission (внешний ACP-агент) — командная строка, без ±строк/диффа.
+    { path: 'git status --short', add: 0, del: 0, status: 'edit', kind: 'exec', actionId: runId * 100 + 4 },
   ];
   const run: MockRun = {
     autonomy,
@@ -175,12 +180,15 @@ export function run(
             add: f.add,
             del: f.del,
             status: f.status,
+            kind: f.kind,
             actionId: f.actionId,
           })),
         });
-        // Дифы по каждому файлу (эмитятся после proposal, по одному — как реальный гейт).
+        // Дифы по каждому ФАЙЛУ (эмитятся после proposal, по одному — как реальный гейт). Exec-строки
+        // диффов не имеют (реальный бэк шлёт по ним execProposal/execResult, не diff) — пропускаем.
         for (const f of files) {
           if (run.cancelled) return;
+          if (f.kind === 'exec') continue;
           await sleep(STEP_MS);
           onEvent({ type: 'diff', path: f.path, add: f.add, del: f.del, status: f.status });
         }
@@ -194,15 +202,18 @@ export function run(
           }
         });
         if (run.cancelled) return;
-        run.applied = files.filter((f) => decisions.get(f.actionId)).length;
+        // applied = одобренные ФАЙЛЫ (exec не «файл на диске» — у него нет undo-леджера).
+        run.applied = files.filter((f) => f.kind !== 'exec' && decisions.get(f.actionId)).length;
       } else {
         // Auto-тир: применяется без аппрува (proposal НЕ эмитится — как гейт под autonomy=auto).
+        // Exec-строки диффов не имеют — пропускаем (как реальный бэк: для них execProposal/execResult).
         for (const f of files) {
           if (run.cancelled) return;
+          if (f.kind === 'exec') continue;
           await sleep(STEP_MS);
           onEvent({ type: 'diff', path: f.path, add: f.add, del: f.del, status: f.status });
         }
-        run.applied = files.length;
+        run.applied = files.filter((f) => f.kind !== 'exec').length;
       }
 
       await waitWhilePaused(run);

@@ -29,6 +29,21 @@ impl From<FileStatus> for AgentFileStatus {
     }
 }
 
+/// Род предложенного действия для клиента — `"file"` (правка/создание заметки: путь + ±строки +
+/// раскрываемый дифф) | `"exec"` (команда/процесс: рисуется как командная строка `$ cmd`, БЕЗ
+/// ±строк и диффа). Питает различение карточки аппрува (ACP-EXEC): exec-permission внешнего агента
+/// раньше рисовался как фейковый файл (путь = заголовок, 0/0 строк) — вводило в заблуждение.
+/// `#[serde(default)]` на поле-носителе (`File` по умолчанию) → forward/backward-совместимо на проводе.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProposedKind {
+    /// Правка/создание файла (vault-заметка) — путь + ±строки + дифф.
+    #[default]
+    File,
+    /// Команда/процесс (exec/fetch-permission) — командная строка, без ±строк/диффа.
+    Exec,
+}
+
 /// Статус шага плана для клиента (зеркало [`PlanStepState`]) — `pending|running|done|failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +119,9 @@ pub struct AgentProposedFile {
     pub del: u32,
     /// new | edit.
     pub status: AgentFileStatus,
+    /// file | exec — род действия (ACP-EXEC). `#[serde(default)]` → старый/чужой провод без поля = File.
+    #[serde(default)]
+    pub kind: AgentProposedKind,
     /// `id` строки `agent_actions` (state=proposed) — адрес решения Approve/Reject.
     pub action_id: i64,
 }
@@ -244,6 +262,8 @@ pub fn map_agent_event(ev: &AgentEvent) -> Option<AgentStreamEvent> {
                     add: f.add,
                     del: f.del,
                     status: f.status.into(),
+                    // Vault-правки ядра ВСЕГДА файлы (exec-силуэты идут отдельным ExecProposal-вариантом).
+                    kind: AgentProposedKind::File,
                     action_id: f.action_id,
                 })
                 .collect(),
@@ -392,7 +412,7 @@ mod tests {
         assert_eq!(
             to_json(&ev),
             json!({"type":"proposal","runId":42,"files":[
-                {"path":"Notes/a.md","add":3,"del":1,"status":"edit","actionId":7}
+                {"path":"Notes/a.md","add":3,"del":1,"status":"edit","kind":"file","actionId":7}
             ]})
         );
         assert_eq!(
@@ -404,6 +424,32 @@ mod tests {
             }),
             json!({"type":"diff","path":"Notes/a.md","add":3,"del":1,"status":"new"})
         );
+    }
+
+    /// ACP-EXEC: `kind` сериализуется snake_case (`file`/`exec`); отсутствие поля на проводе (старый/
+    /// чужой агент) парсится как `File` (`#[serde(default)]`) — forward/backward-совместимость.
+    #[test]
+    fn proposed_file_kind_serde_and_default() {
+        // exec-файл сериализуется с kind:"exec"
+        let exec = AgentProposedFile {
+            path: "$ ls -la".into(),
+            add: 0,
+            del: 0,
+            status: AgentFileStatus::Edit,
+            kind: AgentProposedKind::Exec,
+            action_id: 3,
+        };
+        let v = serde_json::to_value(&exec).unwrap();
+        assert_eq!(v["kind"], "exec");
+        assert_eq!(
+            serde_json::from_value::<AgentProposedFile>(v).unwrap(),
+            exec
+        );
+
+        // провод БЕЗ поля kind (старый агент) → File по умолчанию (совместимость)
+        let legacy = json!({"path":"Notes/a.md","add":1,"del":0,"status":"new","actionId":9});
+        let parsed: AgentProposedFile = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.kind, AgentProposedKind::File);
     }
 
     #[test]

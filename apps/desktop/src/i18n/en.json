@@ -641,7 +641,7 @@
     },
     "changeset": {
       "title": "Changes",
-      "files": "{{count}} files ·",
+      "files": "{{count}} changes ·",
       "applyAll": "Apply all",
       "reject": "Reject",
       "apply": "Apply",
@@ -651,6 +651,7 @@
       "diffEmpty": "No content changes.",
       "new": "new",
       "edit": "edit",
+      "execLabel": "Run command",
       "applied": "applied",
       "rejected": "rejected",
       "autoBadge": "Auto · agent self-reviews",

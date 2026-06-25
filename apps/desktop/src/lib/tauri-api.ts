@@ -605,16 +605,23 @@ export interface AgentHistoryMsg {
 /** Статус файла changeset'а (зеркало Rust `AgentFileStatus`): `new` — новая заметка; `edit` — правка. */
 export type AgentFileStatus = 'new' | 'edit';
 
+/** Род предложенного действия (зеркало Rust `AgentProposedKind`, serde snake_case): `file` — правка/
+ *  создание заметки (путь + ±строки + раскрываемый дифф); `exec` — команда/процесс (рисуется как `$ cmd`
+ *  exec-стилем, без ±строк/диффа). ACP-EXEC: exec-permission внешнего ACP-агента (напр. Hermes). */
+export type AgentProposedKind = 'file' | 'exec';
+
 /** Один предложенный файл (поверхность аппрува; зеркало Rust `AgentProposedFile`). `actionId` —
  *  адрес решения Approve/Reject (id строки `agent_actions`, передаётся в `agent_approve`). */
 export interface AgentProposedFile {
-  /** vault-rel путь цели. */
+  /** vault-rel путь цели (для `kind:'exec'` — командная строка). */
   path: string;
-  /** Добавлено строк (line-diff current → proposed). */
+  /** Добавлено строк (line-diff current → proposed). Для exec — 0. */
   add: number;
-  /** Удалено строк. */
+  /** Удалено строк. Для exec — 0. */
   del: number;
   status: AgentFileStatus;
+  /** file | exec — род действия (ACP-EXEC). Отсутствие на старом проводе → бэкенд дефолтит в `file`. */
+  kind: AgentProposedKind;
   /** id строки ledger (state=proposed) — адрес решения в `agent_approve`. */
   actionId: number;
 }

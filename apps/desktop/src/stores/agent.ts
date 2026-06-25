@@ -9,6 +9,7 @@ import type {
   AgentFileStatus,
   AgentHistoryMsg,
   AgentPlanStep,
+  AgentProposedKind,
   AgentStreamEvent,
   AgentSubagentState,
 } from '../lib/tauri-api';
@@ -49,12 +50,14 @@ export interface AgentStep {
 /** Решение пользователя по файлу changeset'а. `undefined` — ещё не решено (на ревью). */
 export type FileDecision = 'applied' | 'rejected' | undefined;
 
-/** Файл changeset'а в рендер-модели: контракт `proposal.files[]` + локальное решение. */
+/** Файл changeset'а в рендер-модели: контракт `proposal.files[]` + локальное решение. `kind` —
+ *  `file` (путь + ±строки + дифф) | `exec` (командная строка `$ cmd`, без ±/диффа), ACP-EXEC. */
 export interface ChangesetFile {
   path: string;
   add: number;
   del: number;
   status: AgentFileStatus;
+  kind: AgentProposedKind;
   actionId: number;
   decision: FileDecision;
 }
@@ -300,6 +303,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
               add: f.add,
               del: f.del,
               status: f.status,
+              kind: f.kind,
               actionId: f.actionId,
               decision: undefined,
             })),
@@ -320,6 +324,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
                   add: event.add,
                   del: event.del,
                   status: event.status,
+                  kind: 'file', // diff'ы — всегда файловые изменения (exec идёт через execProposal)
                   actionId: -1, // auto-diff без proposal: не адресуется аппрувом
                   decision: 'applied',
                 },

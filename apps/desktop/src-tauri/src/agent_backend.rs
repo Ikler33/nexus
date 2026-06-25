@@ -455,8 +455,8 @@ mod acp_backend {
         acp_kind_to_display, schema, AcpClient, InboundPermission, ACP_PROTOCOL_VERSION,
     };
     use nexus_core::agent::connect::{
-        AgentFileStatus, AgentPlanStep, AgentPlanStepState, AgentProposedFile, StdioTransport,
-        Transport,
+        AgentFileStatus, AgentPlanStep, AgentPlanStepState, AgentProposedFile, AgentProposedKind,
+        StdioTransport, Transport,
     };
 
     /// Текущий канал событий активного прогона. `None` после терминала (R4-слот свободен).
@@ -566,10 +566,14 @@ mod acp_backend {
     }
 
     /// ACP-1b: извлекает ВСЕ файлы permission-запроса (по одному на `Diff`-content-блок): путь + грубый
-    /// счёт строк + статус. Раньше (ACP-1) показывался только ПЕРВЫЙ diff → мульти-файловый permission
-    /// под-репортил scope юзеру. Нет ни одного diff (exec/fetch-permission) → деградируем к одной строке
-    /// с заголовком. (Счёт строк грубый — full-replace; точный line-diff — refinement.)
-    fn extract_files(tc: &schema::ToolCallUpdate) -> Vec<(String, u32, u32, AgentFileStatus)> {
+    /// счёт строк + статус + род (ACP-EXEC). Раньше (ACP-1) показывался только ПЕРВЫЙ diff →
+    /// мульти-файловый permission под-репортил scope юзеру. Нет ни одного diff (exec/fetch-permission) →
+    /// деградируем к одной строке-КОМАНДЕ (`AgentProposedKind::Exec`): фронт рисует её как `$ cmd`
+    /// exec-стилем (без ±строк/диффа), а не как фейковый файл. Diff-блоки → `File`. (Счёт строк грубый —
+    /// full-replace; точный line-diff — refinement.)
+    fn extract_files(
+        tc: &schema::ToolCallUpdate,
+    ) -> Vec<(String, u32, u32, AgentFileStatus, AgentProposedKind)> {
         let diffs: Vec<_> = tc
             .content
             .as_ref()
@@ -583,13 +587,12 @@ mod acp_backend {
             })
             .unwrap_or_default();
         if diffs.is_empty() {
-            // нет diff (exec/fetch-permission) → деградируем: показываем заголовок (action_id всё равно есть).
-            return vec![(
-                tc.title.clone().unwrap_or_else(|| "действие агента".into()),
-                0,
-                0,
-                AgentFileStatus::Edit,
-            )];
+            // нет diff (exec/fetch-permission) → деградируем к строке-КОМАНДЕ (kind=Exec). Чистим
+            // очевидный префикс заголовка («terminal: ») для опрятного `$ cmd`; статус Edit для exec
+            // не используется фронтом (exec-строка рисуется без ±/диффа). action_id всё равно есть.
+            let raw = tc.title.clone().unwrap_or_else(|| "действие агента".into());
+            let cmd = raw.strip_prefix("terminal: ").unwrap_or(&raw).to_string();
+            return vec![(cmd, 0, 0, AgentFileStatus::Edit, AgentProposedKind::Exec)];
         }
         diffs
             .into_iter()
@@ -605,7 +608,13 @@ mod acp_backend {
                 } else {
                     AgentFileStatus::Edit
                 };
-                (d.path.to_string_lossy().into_owned(), add, del, status)
+                (
+                    d.path.to_string_lossy().into_owned(),
+                    add,
+                    del,
+                    status,
+                    AgentProposedKind::File,
+                )
             })
             .collect()
     }
@@ -625,11 +634,12 @@ mod acp_backend {
         let action_id = next_action.fetch_add(1, Ordering::Relaxed);
         let files: Vec<AgentProposedFile> = extract_files(&inbound.params.tool_call)
             .into_iter()
-            .map(|(path, add, del, status)| AgentProposedFile {
+            .map(|(path, add, del, status, kind)| AgentProposedFile {
                 path,
                 add,
                 del,
                 status,
+                kind,
                 action_id,
             })
             .collect();
@@ -1063,22 +1073,26 @@ mod acp_backend {
         fn extract_files_new_file_from_diff() {
             let files = extract_files(&tc_update_with_diff(None, "a\nb\nc"));
             assert_eq!(files.len(), 1);
-            let (path, add, del, status) = &files[0];
+            let (path, add, del, status, kind) = &files[0];
             assert_eq!(path, "Notes/A.md");
             assert_eq!((*add, *del), (3, 0));
             assert_eq!(*status, AgentFileStatus::New);
+            // ACP-EXEC: diff-блок → File (рисуется как путь + ±строки + дифф).
+            assert_eq!(*kind, AgentProposedKind::File);
         }
 
         #[test]
         fn extract_files_edit_from_diff() {
             let files = extract_files(&tc_update_with_diff(Some("a\nb"), "a\nb\nc\nd"));
-            let (_, add, del, status) = &files[0];
+            let (_, add, del, status, kind) = &files[0];
             assert_eq!((*add, *del), (4, 2));
             assert_eq!(*status, AgentFileStatus::Edit);
+            assert_eq!(*kind, AgentProposedKind::File);
         }
 
         #[test]
-        fn extract_files_degraded_without_diff() {
+        fn extract_files_degraded_without_diff_is_exec() {
+            // ACP-EXEC: нет diff (exec-permission) → строка-КОМАНДА kind=Exec, 0/0 строк.
             let tc = ToolCallUpdate {
                 tool_call_id: "t1".into(),
                 status: None,
@@ -1088,10 +1102,43 @@ mod acp_backend {
             };
             let files = extract_files(&tc);
             assert_eq!(files.len(), 1);
-            let (path, add, del, status) = &files[0];
+            let (path, add, del, status, kind) = &files[0];
             assert_eq!(path, "run `ls`");
             assert_eq!((*add, *del), (0, 0));
-            assert_eq!(*status, AgentFileStatus::Edit);
+            assert_eq!(*status, AgentFileStatus::Edit); // не используется фронтом для exec
+            assert_eq!(*kind, AgentProposedKind::Exec);
+        }
+
+        #[test]
+        fn extract_files_exec_strips_terminal_prefix() {
+            // ACP-EXEC: очевидный префикс «terminal: » срезается для опрятного `$ cmd`.
+            let tc = ToolCallUpdate {
+                tool_call_id: "t1".into(),
+                status: None,
+                content: None,
+                title: Some("terminal: cargo build --release".into()),
+                kind: None,
+            };
+            let files = extract_files(&tc);
+            let (path, _, _, _, kind) = &files[0];
+            assert_eq!(path, "cargo build --release");
+            assert_eq!(*kind, AgentProposedKind::Exec);
+        }
+
+        #[test]
+        fn extract_files_exec_fallback_title_when_missing() {
+            // ACP-EXEC: нет заголовка → фолбэк-строка, всё ещё Exec.
+            let tc = ToolCallUpdate {
+                tool_call_id: "t1".into(),
+                status: None,
+                content: None,
+                title: None,
+                kind: None,
+            };
+            let files = extract_files(&tc);
+            let (path, _, _, _, kind) = &files[0];
+            assert_eq!(path, "действие агента");
+            assert_eq!(*kind, AgentProposedKind::Exec);
         }
 
         #[test]

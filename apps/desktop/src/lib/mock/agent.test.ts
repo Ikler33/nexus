@@ -75,8 +75,12 @@ describe('mock/agent — зеркало контракта UI-1a', () => {
       expect(typeof f.add).toBe('number');
       expect(typeof f.del).toBe('number');
       expect(['new', 'edit']).toContain(f.status);
+      expect(['file', 'exec']).toContain(f.kind); // ACP-EXEC: род действия на проводе
       expect(typeof f.actionId).toBe('number');
     }
+    // ACP-EXEC: мок несёт хотя бы один exec-permission (без ±строк) и файлы.
+    expect(proposal.files.some((f) => f.kind === 'exec')).toBe(true);
+    expect(proposal.files.some((f) => f.kind === 'file')).toBe(true);
 
     const usage = events.find((e) => e.type === 'contextUsage');
     if (usage?.type !== 'contextUsage') throw new Error('нет contextUsage');

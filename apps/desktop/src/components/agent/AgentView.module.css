@@ -653,6 +653,24 @@
 .csFile.csRejected .cfPath {
   text-decoration: line-through;
 }
+/* ACP-EXEC: командная строка exec-permission («$ cmd») — моно-код, как .cfPath, но командного стиля. */
+.cfCmd {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.cfCmdDollar {
+  color: var(--color-text-faint);
+  user-select: none;
+}
+.csFile.csRejected .cfCmd {
+  text-decoration: line-through;
+}
 .cfStat {
   flex: 0 0 auto;
   font-family: var(--font-mono);

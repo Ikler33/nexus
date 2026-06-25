@@ -635,30 +635,51 @@ function Changeset({
       <div className={styles.csFiles}>
         {files.map((f) => {
           const decision = auto ? 'applied' : f.decision;
-          const hasDiff = proposed.has(f.path); // inline-дифф доступен для note.create/edit
+          const isExec = f.kind === 'exec';
+          // ACP-EXEC: exec-строки рисуются как команда `$ cmd` (без ±строк/диффа). inline-дифф —
+          // только для файловых правок (note.create/edit несут контент).
+          const hasDiff = !isExec && proposed.has(f.path);
           const diffOpen = openDiff === f.path;
           return (
             <div key={`${f.path}:${f.actionId}`} className={styles.cfBlock}>
             <div
               className={`${styles.csFile} ${decision === 'applied' ? styles.csApplied : decision === 'rejected' ? styles.csRejected : ''}`}
             >
-              <span className={styles.cfIc}>
-                {f.status === 'new' ? (
-                  <FilePlus2 size={14} aria-hidden />
-                ) : (
-                  <FileText size={14} aria-hidden />
-                )}
-              </span>
-              <span className={styles.cfPath} title={f.path}>
-                {f.path}
-              </span>
-              <span className={styles.cfStat}>
-                {f.status === 'new' ? t('agent.changeset.new') : t('agent.changeset.edit')}
-              </span>
-              <span className={styles.cfCounts}>
-                <b className={styles.csAdd}>+{f.add}</b>
-                {f.del ? <b className={styles.csDel}> −{f.del}</b> : null}
-              </span>
+              {isExec ? (
+                // ACP-EXEC: командная строка exec-стилем — `$ cmd` + ярлык «Выполнить команду», без ±/диффа.
+                <>
+                  <span className={styles.cfIc}>
+                    <Terminal size={14} aria-hidden />
+                  </span>
+                  <code className={styles.cfCmd} title={f.path}>
+                    <span className={styles.cfCmdDollar} aria-hidden>
+                      ${' '}
+                    </span>
+                    {f.path}
+                  </code>
+                  <span className={styles.cfStat}>{t('agent.changeset.execLabel')}</span>
+                </>
+              ) : (
+                <>
+                  <span className={styles.cfIc}>
+                    {f.status === 'new' ? (
+                      <FilePlus2 size={14} aria-hidden />
+                    ) : (
+                      <FileText size={14} aria-hidden />
+                    )}
+                  </span>
+                  <span className={styles.cfPath} title={f.path}>
+                    {f.path}
+                  </span>
+                  <span className={styles.cfStat}>
+                    {f.status === 'new' ? t('agent.changeset.new') : t('agent.changeset.edit')}
+                  </span>
+                  <span className={styles.cfCounts}>
+                    <b className={styles.csAdd}>+{f.add}</b>
+                    {f.del ? <b className={styles.csDel}> −{f.del}</b> : null}
+                  </span>
+                </>
+              )}
               <div className={styles.cfActs}>
                 {/* W-15: inline-дифф контента (а не только ±N) — раскрывается по клику. */}
                 {hasDiff && (
