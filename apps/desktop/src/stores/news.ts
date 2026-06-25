@@ -155,7 +155,13 @@ export const useNewsStore = create<NewsState>((set, get) => ({
   },
 
   setEnabled: async (enabled) => {
-    const current = get().config ?? { enabled: false, sources: {}, keywords: null, extraHosts: [] };
+    const current = get().config ?? {
+      enabled: false,
+      sources: {},
+      keywords: null,
+      extraHosts: [],
+      modelPref: null,
+    };
     try {
       const config = await tauriApi.news.setConfig({ ...current, enabled });
       set({ config });

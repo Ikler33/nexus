@@ -765,3 +765,59 @@
 .skillBtn:hover {
   background: var(--color-surface-hover);
 }
+
+/* W-40 «Новости»: текстовое поле ключевых слов + ввод доп. хоста (ширина на всю строку). */
+.newsInput {
+  width: 100%;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--motion-fast);
+  resize: vertical;
+}
+.newsInput::placeholder {
+  color: var(--color-text-faint);
+}
+.newsInput:focus {
+  border-color: var(--color-accent);
+}
+/* Строка хоста: имя слева, кнопка «снять» справа. */
+.newsHostRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.newsHostName {
+  font-size: var(--text-sm);
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+/* Строка-источник: чекбокс + название (кликается весь ряд как label). */
+.newsSourceRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.newsSourceRow input {
+  accent-color: var(--color-accent);
+}
+.newsSourceName {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}

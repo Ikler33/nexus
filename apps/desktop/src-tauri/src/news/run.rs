@@ -275,15 +275,38 @@ fn percent_encode(s: &str) -> String {
 /// выключенная фича → штатный no-op `Ok` (НЕ failed — это consent-состояние, не сбой).
 pub struct NewsFeedHandler {
     pub fetcher: Arc<dyn FeedFetcher>,
-    pub chat: Arc<dyn ChatProvider>,
+    /// W-40: ОБА слота модели — выбор на КАЖДЫЙ прогон по `news.json::model_pref` (горячее
+    /// переключение, как `enabled`/keywords). `chat_util` = ai.fast (дефолт/`"fast"`),
+    /// `chat_fast` = ai.chat (`"main"`). Зеркалит `select_news_chat` (on-demand ридер) — теперь
+    /// плановый сбор/анализ/дайджест честно идёт выбранной моделью, а не жёстко fast.
+    pub chat_util: Option<Arc<dyn ChatProvider>>,
+    pub chat_fast: Option<Arc<dyn ChatProvider>>,
     pub writer: WriteActor,
     pub reader: ReadPool,
     /// Путь `news.json` (OS config-dir; резолвится в open_vault — у хендлера нет AppHandle).
     pub config_path: std::path::PathBuf,
     /// Сток этапного прогресса (`news:progress` для UI); тестам — no-op.
     pub progress: Arc<NewsProgress>,
-    /// W-2: URL LLM-эндпоинта оценки (ai.fast/ai.chat) — для видимой ошибки при недоступности.
-    pub chat_endpoint: Option<String>,
+    /// W-2/W-40: URL утилитарной (ai.fast) и основной (ai.chat) моделей — для видимой ошибки по
+    /// ВЫБРАННОЙ модели при недоступности.
+    pub url_util: Option<String>,
+    pub url_fast: Option<String>,
+}
+
+/// W-40: выбор слота модели новостей по `model_pref` — `"main"` → основной слот (ai.chat) с
+/// фолбэком на утилитарный; иначе (`"fast"`/`None`/прочее) → утилитарный (ai.fast). Параметризован
+/// по `T`, чтобы провайдер и его URL выбирались СОГЛАСОВАННО. Зеркалит `select_news_chat`
+/// (on-demand ридер) — плановый прогон теперь честно идёт ВЫБРАННОЙ моделью, а не жёстко fast.
+fn pick_news_by_pref<T: Clone>(
+    util: &Option<T>,
+    fast: &Option<T>,
+    pref: Option<&str>,
+) -> Option<T> {
+    if matches!(pref, Some("main")) {
+        fast.clone().or_else(|| util.clone())
+    } else {
+        util.clone().or_else(|| fast.clone())
+    }
 }
 
 #[async_trait]
@@ -294,17 +317,25 @@ impl JobHandler for NewsFeedHandler {
             tracing::debug!("news: фича выключена — прогон пропущен (consent, AC-NF-7)");
             return Ok(());
         }
+        // W-40: модель прогона по `model_pref` (читается на КАЖДЫЙ прогон → горячее переключение).
+        // Провайдер и его URL выбираются СОГЛАСОВАННО одним правилом (`pick_news_by_pref`).
+        let pref = cfg.model_pref.as_deref();
+        let chat_endpoint = pick_news_by_pref(&self.url_util, &self.url_fast, pref);
+        let Some(chat) = pick_news_by_pref(&self.chat_util, &self.chat_fast, pref) else {
+            tracing::warn!("news: нет настроенного chat-провайдера — прогон пропущен");
+            return Ok(());
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         let run = run_news_pipeline(
             &*self.fetcher,
-            &self.chat,
+            &chat,
             &self.writer,
             &self.reader,
             &cfg,
             crate::scheduler::now_secs(),
             &cancel,
             &*self.progress,
-            self.chat_endpoint.as_deref(),
+            chat_endpoint.as_deref(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -580,6 +611,22 @@ mod tests {
         assert!(llm_unavailable_msg(Some("   "), 1, 0).contains("эндпоинт ИИ не задан"));
     }
 
+    /// W-40: выбор слота модели по `model_pref` — `"main"`→основной (ai.chat), иначе→утилитарный
+    /// (ai.fast, дефолт = прежнее поведение); фолбэки при отсутствии слота; оба None → None.
+    #[test]
+    fn pick_news_by_pref_routes_by_model_pref() {
+        let util: Option<&str> = Some("util");
+        let fast: Option<&str> = Some("fast");
+        let none: Option<&str> = None;
+        assert_eq!(pick_news_by_pref(&util, &fast, None), Some("util"));
+        assert_eq!(pick_news_by_pref(&util, &fast, Some("fast")), Some("util"));
+        assert_eq!(pick_news_by_pref(&util, &fast, Some("bogus")), Some("util"));
+        assert_eq!(pick_news_by_pref(&util, &fast, Some("main")), Some("fast"));
+        assert_eq!(pick_news_by_pref(&none, &fast, Some("fast")), Some("fast"));
+        assert_eq!(pick_news_by_pref(&util, &none, Some("main")), Some("util"));
+        assert_eq!(pick_news_by_pref(&none, &none, Some("main")), None);
+    }
+
     /// AC-NF-6/7: выключенная фича → хендлер штатно no-op (Ok, не failed) и ничего не фетчит.
     #[tokio::test]
     async fn handler_noops_when_disabled() {
@@ -592,14 +639,16 @@ mod tests {
         });
         let handler = NewsFeedHandler {
             fetcher: fetcher.clone(),
-            chat: Arc::new(YesChat {
+            chat_util: Some(Arc::new(YesChat {
                 eval_calls: AtomicUsize::new(0),
-            }),
+            })),
+            chat_fast: None,
             writer: db.writer().clone(),
             reader: db.reader().clone(),
             config_path,
             progress: Arc::new(|_, _, _| {}),
-            chat_endpoint: None,
+            url_util: None,
+            url_fast: None,
         };
         let job = Job {
             id: 1,
