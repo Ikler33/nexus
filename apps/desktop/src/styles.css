@@ -15,6 +15,8 @@
   --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
   /* «читательский» шрифт (reader/daily-note) — тот же Source Serif 4 stack (Hermes-6 --font-reading). */
   --font-reading: var(--font-serif);
+  /* тело заметки в read-режиме (Hermes-8 «Редакция») — Source Serif 4 (--note в хэндоффе). */
+  --font-note: var(--font-serif);
   /* editorial display face — высококонтрастный Garamond, ТОЛЬКО на крупных размерах (>=24px) */
   --font-headline: 'Cormorant', 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
   /* display/wordmark font — переопределяется антик-темами (Cinzel) */
@@ -81,15 +83,16 @@
   --ui-hue: 70;
 
   --color-bg: #ECE6DA;            /* signature Paper */
-  --color-chrome: #E4DDCE;
+  --color-chrome: #F4F0E8;        /* Hermes-8 paper-2 — мягче, ближе к листу */
   --color-chrome-2: #DBD2C0;
   --color-bg-elevated: #FBF8F1;
-  --color-surface: #F4F0E8;
-  --color-surface-hover: #E6DECF;
+  --color-surface: #F1EBDF;       /* Hermes-8 surface — между листом и канвой */
+  --color-surface-hover: #E3D9C6;
   --color-selected: #DDD3BE;      /* warm taupe, one unified selection */
   --color-selected-hover: #D3C8B0;
 
   --color-text: #211D17;          /* ink */
+  --color-note-ink: #2b2419;      /* Hermes-8 — тело заметки, чуть мягче ink */
   --color-text-muted: #6B6358;
   --color-text-faint: #9A9082;
 
@@ -133,15 +136,16 @@
   color-scheme: dark;
 
   --color-bg: #16140F;            /* signature Ink */
-  --color-chrome: #1C190F;
+  --color-chrome: #1A170F;        /* Hermes-8 paper-2 */
   --color-chrome-2: #131109;
-  --color-bg-elevated: #262219;
-  --color-surface: #1E1B14;
-  --color-surface-hover: #2A2518;
+  --color-bg-elevated: #1E1B14;   /* Hermes-8 paper — фон листа */
+  --color-surface: #262219;       /* Hermes-8 surface (был перепутан местами с paper) */
+  --color-surface-hover: #332E20;
   --color-selected: #332B1B;       /* warm ember-tinted selection */
   --color-selected-hover: #3E3522;
 
   --color-text: #EDE7DA;
+  --color-note-ink: #E2DBCD;      /* Hermes-8 — тело заметки, чуть мягче ink */
   --color-text-muted: #A39A88;
   --color-text-faint: #6E6655;
 
@@ -191,6 +195,8 @@
   --color-selected-hover: oklch(0.335 0.030 264);
 
   --color-text: oklch(0.925 0.010 264);
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: oklch(0.72 0.014 264);
   --color-text-faint: oklch(0.54 0.016 264);
 
@@ -242,6 +248,8 @@
   --color-selected-hover: oklch(0.382 0.016 250);
 
   --color-text: oklch(0.945 0.005 250);
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: oklch(0.74 0.008 250);
   --color-text-faint: oklch(0.56 0.009 250);
 
@@ -290,6 +298,8 @@
   --color-selected-hover: oklch(0.865 0.007 75);
 
   --color-text: oklch(0.225 0.006 75);          /* ink — near-black, faintly warm */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: oklch(0.43 0.007 75);
   --color-text-faint: oklch(0.60 0.007 75);
 
@@ -341,6 +351,8 @@
   --color-selected-hover: #46415f;
 
   --color-text: #cdd6f4;           /* text */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #a6adc8;     /* subtext0 */
   --color-text-faint: #7f849c;     /* overlay1 */
 
@@ -389,6 +401,8 @@
   --color-selected: #434c5e;
   --color-selected-hover: #4c566a;/* polar night 3 */
   --color-text: #eceff4;         /* snow storm 2 */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #d8dee9;   /* snow storm 0 */
   --color-text-faint: #9aa4b8;
   --color-border: oklch(0.46 0.03 250 / calc(0.5 + 0.5 * var(--chrome)));
@@ -429,6 +443,8 @@
   --color-selected: #2d3352;     /* blue-violet wash */
   --color-selected-hover: #353c63;
   --color-text: #c0caf5;
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #9aa5ce;
   --color-text-faint: #6d7299;
   --color-border: oklch(0.40 0.04 268 / calc(0.5 + 0.5 * var(--chrome)));
@@ -469,6 +485,8 @@
   --color-selected: #2f2b45;
   --color-selected-hover: #393552;
   --color-text: #e0def4;         /* text */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #908caa;   /* subtle */
   --color-text-faint: #6e6a86;   /* muted */
   --color-border: oklch(0.40 0.03 320 / calc(0.5 + 0.5 * var(--chrome)));
@@ -509,6 +527,8 @@
   --color-selected: #ddcfa8;     /* warm amber wash */
   --color-selected-hover: #d4c399;
   --color-text: #433422;         /* warm sepia ink */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #6b5840;
   --color-text-faint: #8a7659;
   --color-border: oklch(0.78 0.035 78 / calc(0.6 + 0.4 * var(--chrome)));
@@ -549,6 +569,8 @@
   --color-selected: #26313f;     /* clear blue selection — high contrast */
   --color-selected-hover: #324155;
   --color-text: #ffffff;         /* pure white — max contrast */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #c2c8d4;
   --color-text-faint: #8b93a3;
   --color-border: oklch(0.42 0.02 230 / calc(0.6 + 0.4 * var(--chrome)));
@@ -593,6 +615,8 @@
   --color-selected-hover: #352f1d;
 
   --color-text: #ece4d2;          /* warm marble white */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #a99a7c;
   --color-text-faint: #7a6e57;
 
@@ -643,6 +667,8 @@
   --color-selected-hover: #d2c096;
 
   --color-text: #2a2418;          /* ink */
+  --color-note-ink: var(--color-text);
+  --color-note-ink: color-mix(in oklch, var(--color-text) 90%, var(--color-bg));
   --color-text-muted: #6b5f47;
   --color-text-faint: #8a7c63;
 

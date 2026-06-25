@@ -1,12 +1,14 @@
-/* Read-only markdown preview (#20): типографика «документа», уважает читаемую ширину (--editor-max-width). */
+/* Read-only markdown preview (#20): типографика «документа», уважает читаемую ширину (--editor-max-width).
+   Hermes-8 S1 «Редакция»: тело read-режима — Source Serif (--font-note), 18.5px/1.72, мягкий note-ink.
+   Заголовки/код/блоки сохраняют свои правила ниже (отдельные срезы); source-CM/edit не затрагиваются. */
 .preview {
   max-width: var(--editor-max-width, none);
   margin-inline: auto;
   padding: var(--space-4) var(--space-4) var(--space-6);
-  font-family: var(--font-editor);
-  font-size: var(--text-base);
-  line-height: var(--leading-relaxed, 1.7);
-  color: var(--color-text);
+  font-family: var(--font-note);
+  font-size: 18.5px;
+  line-height: 1.72;
+  color: var(--color-note-ink);
   overflow-wrap: anywhere;
 }
 
@@ -20,6 +22,8 @@
 .preview h4,
 .preview h5,
 .preview h6 {
+  /* S1: тело перешло на сериф — заголовки держим прежний UI-шрифт/ink до S2/S5 (явный пин, не наследование). */
+  font-family: var(--font-editor);
   font-weight: 700;
   line-height: 1.25;
   margin: 1.4em 0 0.5em;
