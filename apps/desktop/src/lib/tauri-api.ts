@@ -655,7 +655,7 @@ export interface AgentPlanStep {
  */
 export type AgentStreamEvent =
   | { type: 'assistantToken'; text: string }
-  | { type: 'toolCall'; id: string; kind: string; args: string }
+  | { type: 'toolCall'; id: string; kind: string; args: string; title?: string | null }
   | { type: 'toolResult'; id: string; content: string; isError: boolean }
   | { type: 'contextUsage'; used: number; window: number }
   | { type: 'proposal'; runId: number; files: AgentProposedFile[] }

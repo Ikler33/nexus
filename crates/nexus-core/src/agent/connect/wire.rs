@@ -139,6 +139,11 @@ pub enum AgentStreamEvent {
         id: String,
         kind: String,
         args: String,
+        /// Человекочитаемая подпись действия от агента (ACP `tool_call.title`, напр. «Fetching
+        /// docs.rs»), если он её прислал. `None` для нативного Кастора — фронт строит подпись из
+        /// `kind`+`args` (`describeStep`). serde-default → обратная совместимость со старым потоком.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
     /// Результат исполнения инструмента. `id` == `id` соответствующего `toolCall`. `isError` —
     /// инструмент вернул ошибку (модель может восстановиться). serde `rename_all` контейнера НЕ
@@ -239,6 +244,8 @@ pub fn map_agent_event(ev: &AgentEvent) -> Option<AgentStreamEvent> {
             id: id.clone(),
             kind: kind.clone(),
             args: args.clone(),
+            // Нативный Кастор не несёт человеко-подписи — фронт строит её из kind+args.
+            title: None,
         },
         AgentEvent::ToolResult {
             id,

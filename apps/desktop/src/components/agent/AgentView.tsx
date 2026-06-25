@@ -22,6 +22,7 @@ import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
+import { describeStep } from './describeStep';
 import { ExecGraph } from './ExecGraph';
 import { Markdown } from '../common/Markdown';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
@@ -463,7 +464,7 @@ function TurnView({
                 <span className={styles.stMain}>
                   <span className={styles.stLabel}>
                     <ChevronRight size={12} className={styles.stTw} aria-hidden />
-                    <span className={styles.stKind}>{st.kind}</span>
+                    <span className={styles.stKind}>{describeStep(st, t)}</span>
                   </span>
                 </span>
                 <span className={`${styles.stTag} ${st.result == null ? styles.tagRun : ''}`}>

@@ -40,6 +40,24 @@ describe('agent store — мультитёрн история (W-4)', () => {
     ]);
   });
 
+  it('toolCall сохраняет title (ACP/Hermes), без title → null (нативный Кастор)', () => {
+    useAgentStore.getState().run('задача');
+    // ACP-событие несёт человеко-подпись.
+    calls[0].onEvent({
+      type: 'toolCall',
+      id: 't1',
+      kind: 'fetch',
+      args: '{"url":"docs.rs"}',
+      title: 'Fetching docs.rs',
+    });
+    // Нативное событие — без title.
+    calls[0].onEvent({ type: 'toolCall', id: 't2', kind: 'note.edit', args: '{"path":"A.md"}' });
+    const steps = useAgentStore.getState().turns[0].steps;
+    expect(steps).toHaveLength(2);
+    expect(steps[0].title).toBe('Fetching docs.rs');
+    expect(steps[1].title).toBeNull();
+  });
+
   it('proposal на 2-м ходу рисует changeset (status awaiting) этого хода', async () => {
     useAgentStore.getState().run('задача 1');
     calls[0].onEvent({ type: 'final', text: 'ответ 1' });

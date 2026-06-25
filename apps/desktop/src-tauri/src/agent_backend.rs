@@ -695,6 +695,9 @@ mod acp_backend {
                 id: tc.tool_call_id,
                 kind: acp_kind_to_display(tc.kind).to_string(),
                 args: tc.raw_input.map(|v| v.to_string()).unwrap_or_default(),
+                // Hermes/ACP даёт человеко-подпись (напр. «Fetching docs.rs»); пустую → None (фронт
+                // достроит из kind+args).
+                title: Some(tc.title).filter(|s| !s.is_empty()),
             }],
             U::ToolCallUpdate(u) => match u.status {
                 Some(ToolCallStatus::Completed) | Some(ToolCallStatus::Failed) => {
