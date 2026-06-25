@@ -195,6 +195,19 @@ pub struct ConnectionConfig {
     /// ACP-1: рабочий каталог (`cwd`) для ACP-сессии (`session/new`). Дефолт — корень vault. Только `mode="acp"`.
     #[serde(default, deserialize_with = "de_tolerant_opt_string")]
     pub acp_cwd: Option<String>,
+    /// ACP-транспорт: `"local"` (ДЕФОЛТ, спавн `acp_command`) | `"ssh"` (собрать ssh-команду из полей ниже).
+    /// `None`/неизвестное → как `"local"` (см. [`ConnectionConfig::acp_spawn_argv`]). Тип-толерантно.
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub acp_transport: Option<String>,
+    /// SSH: `"user@host"` (для `acp_transport="ssh"`).
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub acp_ssh_host: Option<String>,
+    /// SSH: путь к приватному ключу (опц.; пусто → ключ по умолчанию ssh).
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub acp_ssh_key: Option<String>,
+    /// SSH: команда запуска ACP-сервера НА ХОСТЕ, напр. `"docker exec -i hermes hermes acp"` (split по пробелам).
+    #[serde(default, deserialize_with = "de_tolerant_opt_string")]
+    pub acp_remote_command: Option<String>,
 }
 
 /// Нормализованный режим коннекта. `Default` = `Embedded` → отсутствие/неизвестное значение безопасно.
@@ -217,6 +230,43 @@ impl ConnectionConfig {
             Some("remote") => ConnectionMode::Remote,
             Some("acp") => ConnectionMode::Acp,
             _ => ConnectionMode::Embedded,
+        }
+    }
+
+    /// ACP-REMOTE-SSH: итоговый argv для спавна ACP-агента. При `acp_transport="ssh"` собирает
+    /// `ssh [-i key] user@host <remote_command…>` (remote split по пробелам, БЕЗ shell-quoting — как
+    /// `acp_command`); иначе возвращает локальный `acp_command`. `None` → не сконфигурировано
+    /// (для ssh не задан host/команда; для local пуст `acp_command`) — вызывающий выдаёт внятную ошибку.
+    ///
+    /// SSH-опции `StrictHostKeyChecking=no`+`BatchMode=yes`: спавн НЕинтерактивный (stdin занят ACP
+    /// JSON-RPC) — без BatchMode ssh завис бы на парольном/known-hosts промпте; host-key-проверка
+    /// в headless-сценарии (Docker на LAN) только повесила бы первый коннект.
+    pub fn acp_spawn_argv(&self) -> Option<Vec<String>> {
+        if self.acp_transport.as_deref() == Some("ssh") {
+            let host = self
+                .acp_ssh_host
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())?;
+            let remote = self
+                .acp_remote_command
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())?;
+            let mut argv = vec![
+                "ssh".into(),
+                "-o".into(),
+                "StrictHostKeyChecking=no".into(),
+                "-o".into(),
+                "BatchMode=yes".into(),
+            ];
+            if let Some(key) = self.acp_ssh_key.as_deref().filter(|s| !s.trim().is_empty()) {
+                argv.push("-i".into());
+                argv.push(key.into());
+            }
+            argv.push(host.into());
+            argv.extend(remote.split_whitespace().map(str::to_string));
+            Some(argv)
+        } else {
+            self.acp_command.clone().filter(|v| !v.is_empty())
         }
     }
 }
@@ -588,6 +638,124 @@ mod tests {
                 "http://h:8080"
             );
         }
+    }
+
+    /// ACP-REMOTE-SSH: `acp_spawn_argv` собирает ssh-команду при `acp_transport="ssh"` (с ключом и без),
+    /// падает в `None` при отсутствии host/команды, и откатывается к `acp_command` для local/дефолта.
+    #[test]
+    fn acp_spawn_argv_resolves_transport() {
+        let cfg = |json: &str| LocalConfig::parse(json).unwrap().ai.connection;
+
+        // ssh С ключом: ssh -o … -o … -i key user@host <remote split по пробелам>.
+        let ssh_key = cfg(r#"{"ai":{"connection":{"mode":"acp","acp_transport":"ssh",
+                 "acp_ssh_host":"artanov@192.168.0.28","acp_ssh_key":"~/.ssh/id_ed25519",
+                 "acp_remote_command":"docker exec -i hermes hermes acp"}}}"#);
+        assert_eq!(
+            ssh_key.acp_spawn_argv().unwrap(),
+            vec![
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "-i",
+                "~/.ssh/id_ed25519",
+                "artanov@192.168.0.28",
+                "docker",
+                "exec",
+                "-i",
+                "hermes",
+                "hermes",
+                "acp"
+            ]
+        );
+
+        // ssh БЕЗ ключа (пусто/нет) → -i не добавляется (ключ по умолчанию ssh).
+        let ssh_nokey = cfg(r#"{"ai":{"connection":{"mode":"acp","acp_transport":"ssh",
+                 "acp_ssh_host":"h","acp_ssh_key":"   ","acp_remote_command":"hermes acp"}}}"#);
+        assert_eq!(
+            ssh_nokey.acp_spawn_argv().unwrap(),
+            vec![
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "h",
+                "hermes",
+                "acp"
+            ]
+        );
+
+        // ssh без host → None (не сконфигурировано); ssh без remote-команды → None.
+        let ssh_no_host = cfg(
+            r#"{"ai":{"connection":{"mode":"acp","acp_transport":"ssh","acp_remote_command":"hermes acp"}}}"#,
+        );
+        assert!(ssh_no_host.acp_spawn_argv().is_none(), "нет host → None");
+        let ssh_no_cmd =
+            cfg(r#"{"ai":{"connection":{"mode":"acp","acp_transport":"ssh","acp_ssh_host":"h"}}}"#);
+        assert!(
+            ssh_no_cmd.acp_spawn_argv().is_none(),
+            "нет remote-команды → None"
+        );
+
+        // local-транспорт → откат к acp_command; ssh-поля игнорируются.
+        let local = cfg(
+            r#"{"ai":{"connection":{"mode":"acp","acp_transport":"local","acp_command":["hermes","acp"],
+                 "acp_ssh_host":"unused"}}}"#,
+        );
+        assert_eq!(
+            local.acp_spawn_argv().unwrap(),
+            vec!["hermes".to_string(), "acp".into()]
+        );
+
+        // Отсутствие transport (None) → дефолт local → acp_command.
+        let default_tr =
+            cfg(r#"{"ai":{"connection":{"mode":"acp","acp_command":["hermes","acp"]}}}"#);
+        assert_eq!(
+            default_tr.acp_spawn_argv().unwrap(),
+            vec!["hermes".to_string(), "acp".into()]
+        );
+
+        // local без acp_command → None.
+        let local_empty = cfg(r#"{"ai":{"connection":{"mode":"acp","acp_transport":"local"}}}"#);
+        assert!(
+            local_empty.acp_spawn_argv().is_none(),
+            "local без команды → None"
+        );
+    }
+
+    /// ACP-REMOTE-SSH: 4 новых поля round-trip'ятся через JSON (snake_case), и мусорный тип любого из них
+    /// не роняет parse / не теряет ai.chat (та же data-loss-защита, что у acp_command).
+    #[test]
+    fn acp_ssh_fields_round_trip_snake_case() {
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"connection":{"mode":"acp","acp_transport":"ssh",
+                 "acp_ssh_host":"artanov@192.168.0.28","acp_ssh_key":"~/.ssh/id_ed25519",
+                 "acp_remote_command":"docker exec -i hermes hermes acp"}}}"#,
+        )
+        .unwrap()
+        .ai
+        .connection;
+        assert_eq!(cfg.acp_transport.as_deref(), Some("ssh"));
+        assert_eq!(cfg.acp_ssh_host.as_deref(), Some("artanov@192.168.0.28"));
+        assert_eq!(cfg.acp_ssh_key.as_deref(), Some("~/.ssh/id_ed25519"));
+        assert_eq!(
+            cfg.acp_remote_command.as_deref(),
+            Some("docker exec -i hermes hermes acp")
+        );
+
+        // Мусорный тип (число/массив/объект) → None, parse не падает, ai.chat выживает.
+        let bad = LocalConfig::parse(
+            r#"{"ai":{"connection":{"mode":"acp","acp_transport":42,"acp_ssh_host":["x"],
+                 "acp_ssh_key":{"k":1},"acp_remote_command":true},"chat":{"url":"http://h:8080"}}}"#,
+        )
+        .unwrap();
+        assert!(bad.ai.connection.acp_transport.is_none());
+        assert!(bad.ai.connection.acp_ssh_host.is_none());
+        assert!(bad.ai.connection.acp_ssh_key.is_none());
+        assert!(bad.ai.connection.acp_remote_command.is_none());
+        assert_eq!(bad.ai.chat.expect("ai.chat выживает").url, "http://h:8080");
     }
 
     /// E4: авто-allowlist берёт ИМЕННО хосты явных `ai.*.url` (chat/embedding/fast), без порта;

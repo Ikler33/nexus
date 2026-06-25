@@ -202,7 +202,16 @@ describe('SettingsView (кросс-план #11, оболочка раздела
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
+      connection: {
+        mode: 'embedded',
+        socket: null,
+        acpCommand: null,
+        acpCwd: null,
+        acpTransport: null,
+        acpSshHost: null,
+        acpSshKey: null,
+        acpRemoteCommand: null,
+      },
       shellSupported: false,
     });
     const testSpy = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -251,14 +260,27 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     shellSupported: false,
   });
 
+  // ACP-REMOTE-SSH: хелпер-конструктор AgentConnectionDto с null-дефолтами новых ACP-полей.
+  const acpConn = (over: Partial<AgentConnectionDto>): AgentConnectionDto => ({
+    mode: 'embedded',
+    socket: null,
+    acpCommand: null,
+    acpCwd: null,
+    acpTransport: null,
+    acpSshHost: null,
+    acpSshKey: null,
+    acpRemoteCommand: null,
+    ...over,
+  });
+
   it('AI-секция: переключение на «Локальный» (CONN-4) → setAgentConnection + поле сокета + предупреждение', async () => {
     const { tauriApi } = await import('../../lib/tauri-api');
     const getCfg = vi
       .spyOn(tauriApi.settings, 'getAiConfig')
-      .mockResolvedValue(cfgWith({ mode: 'embedded', socket: null, acpCommand: null, acpCwd: null }));
+      .mockResolvedValue(cfgWith(acpConn({ mode: 'embedded' })));
     const setConn = vi
       .spyOn(tauriApi.settings, 'setAgentConnection')
-      .mockResolvedValue({ mode: 'local', socket: null, acpCommand: null, acpCwd: null });
+      .mockResolvedValue(acpConn({ mode: 'local' }));
     useUIStore.setState({ settingsSection: 'ai' });
     render(<SettingsView />);
 
@@ -267,7 +289,16 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     });
     fireEvent.click(localBtn);
     await vi.waitFor(() =>
-      expect(setConn).toHaveBeenCalledWith('local', expect.anything(), null, null),
+      expect(setConn).toHaveBeenCalledWith(
+        'local',
+        expect.anything(),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      ),
     );
     // Поле сокета + предупреждение R1/R2 появились.
     expect(await screen.findByPlaceholderText(/agentd\.sock/)).toBeInTheDocument();
@@ -281,7 +312,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     const { tauriApi } = await import('../../lib/tauri-api');
     const getCfg = vi
       .spyOn(tauriApi.settings, 'getAiConfig')
-      .mockResolvedValue(cfgWith({ mode: 'local', socket: '/tmp/x.sock', acpCommand: null, acpCwd: null }));
+      .mockResolvedValue(cfgWith(acpConn({ mode: 'local', socket: '/tmp/x.sock' })));
     const testSpy = vi
       .spyOn(tauriApi.settings, 'testAgentConnection')
       .mockRejectedValue(new Error('agentd не запущен'));
@@ -295,6 +326,79 @@ describe('SettingsView (кросс-план #11, оболочка раздела
 
     getCfg.mockRestore();
     testSpy.mockRestore();
+  });
+
+  // ACP-REMOTE-SSH: в acp-режиме выбор транспорта «Удалённый (SSH)» раскрывает 3 ssh-поля (host/key/
+  // remote-command) вместо поля локальной команды.
+  it('AI-секция: ACP + транспорт SSH (ACP-REMOTE-SSH) → 3 ssh-поля вместо локальной команды', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const getCfg = vi
+      .spyOn(tauriApi.settings, 'getAiConfig')
+      .mockResolvedValue(cfgWith(acpConn({ mode: 'acp', acpTransport: 'local', acpCommand: 'hermes acp' })));
+    const setConn = vi
+      .spyOn(tauriApi.settings, 'setAgentConnection')
+      .mockImplementation((...args) =>
+        Promise.resolve(acpConn({ mode: 'acp', acpTransport: args[4] === 'ssh' ? 'ssh' : 'local' })),
+      );
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    // Старт: local-транспорт → поле локальной команды видно, ssh-полей нет.
+    expect(await screen.findByDisplayValue('hermes acp')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/artanov@/)).not.toBeInTheDocument();
+
+    // Переключаем транспорт на SSH. Имя-строка для getByRole = точное совпадение accessible-name
+    // (regex цеплял бы соседнюю кнопку сегмента подстрочно).
+    const transportLabel = await screen.findByText(/^(транспорт|transport)$/i);
+    const sshBtn = within(transportLabel.closest('label') as HTMLElement).getByRole('button', {
+      name: 'Удалённый (SSH)',
+    });
+    fireEvent.click(sshBtn);
+
+    // setAgentConnection вызван с transport='ssh' (5-й позиционный аргумент).
+    await vi.waitFor(() =>
+      expect(setConn).toHaveBeenCalledWith('acp', null, null, null, 'ssh', null, null, null),
+    );
+    // 3 ssh-поля появились (host/key/remote-command по плейсхолдерам).
+    expect(await screen.findByPlaceholderText(/artanov@/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/id_ed25519/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/docker exec/)).toBeInTheDocument();
+
+    getCfg.mockRestore();
+    setConn.mockRestore();
+  });
+
+  // ACP-REMOTE-SSH: ввод ssh-полей персистится через setAgentConnection (host на blur передаётся 6-м арг).
+  it('AI-секция: ACP-SSH — заполнение хоста персистит ssh-поле в setAgentConnection', async () => {
+    const { tauriApi } = await import('../../lib/tauri-api');
+    const getCfg = vi
+      .spyOn(tauriApi.settings, 'getAiConfig')
+      .mockResolvedValue(cfgWith(acpConn({ mode: 'acp', acpTransport: 'ssh' })));
+    const setConn = vi
+      .spyOn(tauriApi.settings, 'setAgentConnection')
+      .mockResolvedValue(acpConn({ mode: 'acp', acpTransport: 'ssh', acpSshHost: 'artanov@192.168.0.28' }));
+    useUIStore.setState({ settingsSection: 'ai' });
+    render(<SettingsView />);
+
+    const hostInput = await screen.findByPlaceholderText(/artanov@/);
+    fireEvent.change(hostInput, { target: { value: 'artanov@192.168.0.28' } });
+    fireEvent.blur(hostInput);
+
+    await vi.waitFor(() =>
+      expect(setConn).toHaveBeenCalledWith(
+        'acp',
+        null,
+        null,
+        null,
+        null,
+        'artanov@192.168.0.28',
+        null,
+        null,
+      ),
+    );
+
+    getCfg.mockRestore();
+    setConn.mockRestore();
   });
 
   // Регрессия стейл-замыкания: два тоггла РАЗНЫХ контролов в одном батче (до ре-рендера) не должны

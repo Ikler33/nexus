@@ -1060,6 +1060,11 @@ function ConnectionModeBlock() {
   const [socketDraft, setSocketDraft] = useState('');
   const [acpCommandDraft, setAcpCommandDraft] = useState('');
   const [acpCwdDraft, setAcpCwdDraft] = useState('');
+  // ACP-REMOTE-SSH: транспорт ('local' | 'ssh', дефолт 'local') + ssh-поля.
+  const [acpTransportDraft, setAcpTransportDraft] = useState<'local' | 'ssh'>('local');
+  const [acpSshHostDraft, setAcpSshHostDraft] = useState('');
+  const [acpSshKeyDraft, setAcpSshKeyDraft] = useState('');
+  const [acpRemoteCommandDraft, setAcpRemoteCommandDraft] = useState('');
   const [testState, setTestState] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle');
   const [testMsg, setTestMsg] = useState('');
   const testReq = useRef(0);
@@ -1074,6 +1079,10 @@ function ConnectionModeBlock() {
         setSocketDraft(c.connection.socket ?? '');
         setAcpCommandDraft(c.connection.acpCommand ?? '');
         setAcpCwdDraft(c.connection.acpCwd ?? '');
+        setAcpTransportDraft(c.connection.acpTransport === 'ssh' ? 'ssh' : 'local');
+        setAcpSshHostDraft(c.connection.acpSshHost ?? '');
+        setAcpSshKeyDraft(c.connection.acpSshKey ?? '');
+        setAcpRemoteCommandDraft(c.connection.acpRemoteCommand ?? '');
       })
       .catch(() => {});
     return () => {
@@ -1089,22 +1098,39 @@ function ConnectionModeBlock() {
     socket: string | null,
     acpCommand: string | null = null,
     acpCwd: string | null = null,
+    acpTransport: string | null = null,
+    acpSshHost: string | null = null,
+    acpSshKey: string | null = null,
+    acpRemoteCommand: string | null = null,
   ) => {
+    // None → keep existing; непустой → trimmed; пустой → null (clear) — зеркало apply_acp на бэке.
+    const keep = (val: string | null, cur: string | null | undefined) =>
+      val === null ? (cur ?? null) : val.trim() || null;
     const next: AgentConnectionDto = {
       mode,
-      socket: socket === null ? (connRef.current?.socket ?? null) : socket.trim() || null,
-      acpCommand:
-        acpCommand === null
-          ? (connRef.current?.acpCommand ?? null)
-          : acpCommand.trim() || null,
-      acpCwd: acpCwd === null ? (connRef.current?.acpCwd ?? null) : acpCwd.trim() || null,
+      socket: keep(socket, connRef.current?.socket),
+      acpCommand: keep(acpCommand, connRef.current?.acpCommand),
+      acpCwd: keep(acpCwd, connRef.current?.acpCwd),
+      acpTransport: keep(acpTransport, connRef.current?.acpTransport),
+      acpSshHost: keep(acpSshHost, connRef.current?.acpSshHost),
+      acpSshKey: keep(acpSshKey, connRef.current?.acpSshKey),
+      acpRemoteCommand: keep(acpRemoteCommand, connRef.current?.acpRemoteCommand),
     };
     setConn(next);
     connRef.current = next;
     setTestState('idle');
     const seq = ++seqRef.current;
     void tauriApi.settings
-      .setAgentConnection(mode, socket, acpCommand, acpCwd)
+      .setAgentConnection(
+        mode,
+        socket,
+        acpCommand,
+        acpCwd,
+        acpTransport,
+        acpSshHost,
+        acpSshKey,
+        acpRemoteCommand,
+      )
       .then((applied) => {
         if (seq !== seqRef.current) return;
         setConn(applied);
@@ -1112,6 +1138,10 @@ function ConnectionModeBlock() {
         setSocketDraft(applied.socket ?? '');
         setAcpCommandDraft(applied.acpCommand ?? '');
         setAcpCwdDraft(applied.acpCwd ?? '');
+        setAcpTransportDraft(applied.acpTransport === 'ssh' ? 'ssh' : 'local');
+        setAcpSshHostDraft(applied.acpSshHost ?? '');
+        setAcpSshKeyDraft(applied.acpSshKey ?? '');
+        setAcpRemoteCommandDraft(applied.acpRemoteCommand ?? '');
       })
       .catch(() => {});
   };
@@ -1204,18 +1234,89 @@ function ConnectionModeBlock() {
 
       {conn.mode === 'acp' && (
         <>
+          {/* ACP-REMOTE-SSH: суб-сегмент транспорта (Локальная команда | Удалённый SSH). Смена транспорта
+              персистится сразу (пишет acpTransport); поля транспорта остаются — бэк их не трогает. */}
           <label className={styles.skillsField}>
-            <span className={styles.label}>{t('settings.conn.acpCommand')}</span>
-            <input
-              type="text"
-              className={styles.skillsInput}
-              placeholder="hermes acp"
-              value={acpCommandDraft}
-              onChange={(e) => setAcpCommandDraft(e.target.value)}
-              onBlur={() => persist('acp', null, acpCommandDraft)}
-            />
-            <span className={styles.rowDesc}>{t('settings.conn.acpCommandHint')}</span>
+            <span className={styles.label}>{t('settings.conn.acpTransport')}</span>
+            <div className={styles.seg}>
+              {(['local', 'ssh'] as const).map((tr) => (
+                <button
+                  key={tr}
+                  type="button"
+                  className={`${styles.segBtn} ${acpTransportDraft === tr ? styles.on : ''}`}
+                  onClick={() => {
+                    if (acpTransportDraft === tr) return;
+                    setAcpTransportDraft(tr);
+                    persist('acp', null, null, null, tr);
+                  }}
+                >
+                  {t(
+                    tr === 'ssh'
+                      ? 'settings.conn.acpTransportSsh'
+                      : 'settings.conn.acpTransportLocal',
+                  )}
+                </button>
+              ))}
+            </div>
           </label>
+
+          {acpTransportDraft === 'local' && (
+            <label className={styles.skillsField}>
+              <span className={styles.label}>{t('settings.conn.acpCommand')}</span>
+              <input
+                type="text"
+                className={styles.skillsInput}
+                placeholder="hermes acp"
+                value={acpCommandDraft}
+                onChange={(e) => setAcpCommandDraft(e.target.value)}
+                onBlur={() => persist('acp', null, acpCommandDraft)}
+              />
+              <span className={styles.rowDesc}>{t('settings.conn.acpCommandHint')}</span>
+            </label>
+          )}
+
+          {acpTransportDraft === 'ssh' && (
+            <>
+              <label className={styles.skillsField}>
+                <span className={styles.label}>{t('settings.conn.acpSshHost')}</span>
+                <input
+                  type="text"
+                  className={styles.skillsInput}
+                  placeholder="artanov@192.168.0.28"
+                  value={acpSshHostDraft}
+                  onChange={(e) => setAcpSshHostDraft(e.target.value)}
+                  onBlur={() => persist('acp', null, null, null, null, acpSshHostDraft)}
+                />
+              </label>
+              <label className={styles.skillsField}>
+                <span className={styles.label}>{t('settings.conn.acpSshKey')}</span>
+                <input
+                  type="text"
+                  className={styles.skillsInput}
+                  placeholder="~/.ssh/id_ed25519"
+                  value={acpSshKeyDraft}
+                  onChange={(e) => setAcpSshKeyDraft(e.target.value)}
+                  onBlur={() => persist('acp', null, null, null, null, null, acpSshKeyDraft)}
+                />
+                <span className={styles.rowDesc}>{t('settings.conn.acpSshKeyHint')}</span>
+              </label>
+              <label className={styles.skillsField}>
+                <span className={styles.label}>{t('settings.conn.acpRemoteCommand')}</span>
+                <input
+                  type="text"
+                  className={styles.skillsInput}
+                  placeholder="docker exec -i hermes hermes acp"
+                  value={acpRemoteCommandDraft}
+                  onChange={(e) => setAcpRemoteCommandDraft(e.target.value)}
+                  onBlur={() =>
+                    persist('acp', null, null, null, null, null, null, acpRemoteCommandDraft)
+                  }
+                />
+                <span className={styles.rowDesc}>{t('settings.conn.acpRemoteCommandHint')}</span>
+              </label>
+            </>
+          )}
+
           <label className={styles.skillsField}>
             <span className={styles.label}>{t('settings.conn.acpCwd')}</span>
             <input

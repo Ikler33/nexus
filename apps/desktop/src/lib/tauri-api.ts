@@ -709,6 +709,15 @@ export interface AgentConnectionDto {
   acpCommand: string | null;
   /** ACP-1b `ai.connection.acpCwd`: рабочая папка спавна ACP-агента. `null` → корень vault. */
   acpCwd: string | null;
+  /** ACP-REMOTE-SSH `ai.connection.acpTransport`: `"local"` (спавн команды) | `"ssh"` (сборка ssh-команды).
+   *  `null`/пусто → как `"local"`. */
+  acpTransport: string | null;
+  /** ACP-REMOTE-SSH `ai.connection.acpSshHost` (ssh): `"user@host"`. */
+  acpSshHost: string | null;
+  /** ACP-REMOTE-SSH `ai.connection.acpSshKey` (ssh): путь к приватному ключу; `null`/пусто → ключ по умолчанию. */
+  acpSshKey: string | null;
+  /** ACP-REMOTE-SSH `ai.connection.acpRemoteCommand` (ssh): команда запуска ACP-агента НА ХОСТЕ (split по пробелам). */
+  acpRemoteCommand: string | null;
 }
 
 export interface AiConfigDto {
@@ -1855,14 +1864,19 @@ export const tauriApi = {
         ? invoke<AgentFlagsDto>('set_agent_flags', { flags })
         : mockSettings.setAgentFlags(flags),
 
-    /** CONN-4/ACP-1b: персистит режим подключения агента (`ai.connection`) + немедленно свопает бэкенд.
-     *  `mode` нормализуется (мусор → embedded); `socket=null`/`acpCommand=null`/`acpCwd=null` → не трогают
-     *  соответствующее поле. Возвращает записанное. */
+    /** CONN-4/ACP-1b/ACP-REMOTE-SSH: персистит режим подключения агента (`ai.connection`) + немедленно
+     *  свопает бэкенд. `mode` нормализуется (мусор → embedded); `null`-поля → бэк не трогает соответствующее
+     *  поле. Для acp-ssh передаются transport/host/key/remoteCommand; для acp-local — acpCommand. Возвращает
+     *  записанное. */
     setAgentConnection: (
       mode: 'embedded' | 'local' | 'remote' | 'acp',
       socket: string | null,
       acpCommand: string | null = null,
       acpCwd: string | null = null,
+      acpTransport: string | null = null,
+      acpSshHost: string | null = null,
+      acpSshKey: string | null = null,
+      acpRemoteCommand: string | null = null,
     ): Promise<AgentConnectionDto> =>
       isTauri()
         ? invoke<AgentConnectionDto>('set_agent_connection', {
@@ -1870,8 +1884,21 @@ export const tauriApi = {
             socket,
             acpCommand,
             acpCwd,
+            acpTransport,
+            acpSshHost,
+            acpSshKey,
+            acpRemoteCommand,
           })
-        : mockSettings.setAgentConnection(mode, socket, acpCommand, acpCwd),
+        : mockSettings.setAgentConnection(
+            mode,
+            socket,
+            acpCommand,
+            acpCwd,
+            acpTransport,
+            acpSshHost,
+            acpSshKey,
+            acpRemoteCommand,
+          ),
 
     /** CONN-4/ACP-1b: проверка связи (local: AF_UNIX handshake; acp: spawn+initialize). Резолвится строкой
      *  версии протокола; throw = недоступен / неверный режим. */

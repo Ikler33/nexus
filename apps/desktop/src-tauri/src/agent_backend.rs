@@ -122,7 +122,10 @@ pub fn select_agent_backend(
             Arc::new(EmbeddedBackend)
         }
         nexus_core::ai::ConnectionMode::Acp => {
-            let command = cfg.and_then(|c| c.ai.connection.acp_command.clone());
+            // ACP-REMOTE-SSH: итоговый argv через резолвер транспорта (ssh-сборка при
+            // acp_transport="ssh", иначе локальный acp_command). AcpBackend по-прежнему получает
+            // Option<Vec<String>> — спавн/реюз/UI-контракт неизменны.
+            let command = cfg.and_then(|c| c.ai.connection.acp_spawn_argv());
             let cwd = cfg
                 .and_then(|c| c.ai.connection.acp_cwd.clone())
                 .map(std::path::PathBuf::from)

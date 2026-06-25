@@ -28,7 +28,16 @@ let config: AiConfigDto = {
   agentSkillsDir: null,
   delegationEnabled: false,
   researchEnabled: false,
-  connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
+  connection: {
+    mode: 'embedded',
+    socket: null,
+    acpCommand: null,
+    acpCwd: null,
+    acpTransport: null,
+    acpSshHost: null,
+    acpSshKey: null,
+    acpRemoteCommand: null,
+  },
   shellSupported: false,
 };
 
@@ -70,13 +79,18 @@ export async function testConnection(url: string): Promise<void> {
   // В превью любой синтаксически верный URL считаем достижимым.
 }
 
-/** CONN-4/ACP-1b: зеркало Rust `set_agent_connection` — нормализует mode (мусор → embedded), хранит
- *  сокет/acpCommand/acpCwd (только при Some; null → не трогаем). Возвращает записанное. */
+/** CONN-4/ACP-1b/ACP-REMOTE-SSH: зеркало Rust `set_agent_connection` — нормализует mode (мусор →
+ *  embedded), хранит сокет/acpCommand/acpCwd + ssh-поля (только при Some; null → не трогаем). Возвращает
+ *  записанное (mock-must-match-backend: те же None→keep/empty→clear семантики, что apply_acp). */
 export async function setAgentConnection(
   mode: AgentConnectionDto['mode'],
   socket: string | null,
   acpCommand: string | null = null,
   acpCwd: string | null = null,
+  acpTransport: string | null = null,
+  acpSshHost: string | null = null,
+  acpSshKey: string | null = null,
+  acpRemoteCommand: string | null = null,
 ): Promise<AgentConnectionDto> {
   const m: AgentConnectionDto['mode'] =
     mode === 'local'
@@ -86,12 +100,18 @@ export async function setAgentConnection(
         : mode === 'acp'
           ? 'acp'
           : 'embedded';
+  // None → keep existing; непустой → trimmed; пустой → null (clear) — как apply_acp на бэке.
+  const keep = (val: string | null, cur: string | null) =>
+    val === null ? cur : val.trim() || null;
   const next: AgentConnectionDto = {
     mode: m,
-    socket: socket === null ? config.connection.socket : socket.trim() || null,
-    acpCommand:
-      acpCommand === null ? config.connection.acpCommand : acpCommand.trim() || null,
-    acpCwd: acpCwd === null ? config.connection.acpCwd : acpCwd.trim() || null,
+    socket: keep(socket, config.connection.socket),
+    acpCommand: keep(acpCommand, config.connection.acpCommand),
+    acpCwd: keep(acpCwd, config.connection.acpCwd),
+    acpTransport: keep(acpTransport, config.connection.acpTransport),
+    acpSshHost: keep(acpSshHost, config.connection.acpSshHost),
+    acpSshKey: keep(acpSshKey, config.connection.acpSshKey),
+    acpRemoteCommand: keep(acpRemoteCommand, config.connection.acpRemoteCommand),
   };
   config = { ...config, connection: next };
   return next;

@@ -27,7 +27,16 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
+      connection: {
+        mode: 'embedded',
+        socket: null,
+        acpCommand: null,
+        acpCwd: null,
+        acpTransport: null,
+        acpSshHost: null,
+        acpSshKey: null,
+        acpRemoteCommand: null,
+      },
       shellSupported: false,
     });
     const probe = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -51,7 +60,16 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
+      connection: {
+        mode: 'embedded',
+        socket: null,
+        acpCommand: null,
+        acpCwd: null,
+        acpTransport: null,
+        acpSshHost: null,
+        acpSshKey: null,
+        acpRemoteCommand: null,
+      },
       shellSupported: false,
     });
     vi.spyOn(tauriApi.settings, 'testConnection').mockImplementation(async (url: string) => {
@@ -79,7 +97,16 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
+      connection: {
+        mode: 'embedded',
+        socket: null,
+        acpCommand: null,
+        acpCwd: null,
+        acpTransport: null,
+        acpSshHost: null,
+        acpSshKey: null,
+        acpRemoteCommand: null,
+      },
       shellSupported: false,
     });
     vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
@@ -103,7 +130,16 @@ describe('SelfCheck — dev self-check (W-21)', () => {
       agentSkillsDir: null,
       delegationEnabled: false,
       researchEnabled: false,
-      connection: { mode: 'embedded', socket: null, acpCommand: null, acpCwd: null },
+      connection: {
+        mode: 'embedded',
+        socket: null,
+        acpCommand: null,
+        acpCwd: null,
+        acpTransport: null,
+        acpSshHost: null,
+        acpSshKey: null,
+        acpRemoteCommand: null,
+      },
       shellSupported: false,
     });
     vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();

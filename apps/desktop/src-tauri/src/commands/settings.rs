@@ -39,6 +39,16 @@ pub struct AgentConnectionDto {
     pub acp_command: Option<String>,
     /// ACP-1b: cwd ACP-сессии (`None` → корень vault).
     pub acp_cwd: Option<String>,
+    /// ACP-REMOTE-SSH: транспорт ACP (`"local"` — спавн `acp_command`; `"ssh"` — сборка ssh-команды).
+    /// `None`/пусто → как `"local"`. Зеркалит `ai.connection.acp_transport`.
+    pub acp_transport: Option<String>,
+    /// ACP-REMOTE-SSH (ssh): `"user@host"`. Зеркалит `ai.connection.acp_ssh_host`.
+    pub acp_ssh_host: Option<String>,
+    /// ACP-REMOTE-SSH (ssh): путь к приватному ключу (опц.; пусто → ключ по умолчанию). `acp_ssh_key`.
+    pub acp_ssh_key: Option<String>,
+    /// ACP-REMOTE-SSH (ssh): команда запуска ACP-агента НА ХОСТЕ как ОДНА строка (split по пробелам на
+    /// бэке). `acp_remote_command`.
+    pub acp_remote_command: Option<String>,
 }
 
 impl Default for AgentConnectionDto {
@@ -48,6 +58,10 @@ impl Default for AgentConnectionDto {
             socket: None,
             acp_command: None,
             acp_cwd: None,
+            acp_transport: None,
+            acp_ssh_host: None,
+            acp_ssh_key: None,
+            acp_remote_command: None,
         }
     }
 }
@@ -351,14 +365,20 @@ fn parse_argv(cmd: &str) -> Vec<String> {
     cmd.split_whitespace().map(str::to_string).collect()
 }
 
-/// ACP-1b: пишет `ai.connection.{acp_command,acp_cwd}` (тот же объект `ai.connection`, что и `apply_connection`).
+/// ACP-1b/ACP-REMOTE-SSH: пишет ACP-поля `ai.connection.*` (тот же объект, что `apply_connection`).
 /// `acp_command`: `Some(непустой)` → парсим argv и пишем JSON-массивом строк (как ждёт `de_tolerant_string_vec`);
-/// `Some("")`/пустой-argv → убираем ключ; `None` → НЕ трогаем. `acp_cwd`: tolerant как socket. Не трогает
-/// прочие `ai.connection.*` (mode/socket/url/auth_ref). Чистая — тестируется без `State`.
+/// `Some("")`/пустой-argv → убираем ключ; `None` → НЕ трогаем. `acp_cwd`/`acp_transport`/`acp_ssh_host`/
+/// `acp_ssh_key`/`acp_remote_command`: tolerant-строки (Some-непустой → пишем; Some-пусто → убираем ключ;
+/// `None` → не трогаем). Не трогает прочие `ai.connection.*` (mode/socket/url/auth_ref). Чистая.
+#[allow(clippy::too_many_arguments)]
 fn apply_acp(
     doc: &mut serde_json::Value,
     acp_command: Option<&str>,
     acp_cwd: Option<&str>,
+    acp_transport: Option<&str>,
+    acp_ssh_host: Option<&str>,
+    acp_ssh_key: Option<&str>,
+    acp_remote_command: Option<&str>,
 ) -> Result<(), String> {
     if !doc.get("ai").map(|v| v.is_object()).unwrap_or(false) {
         doc["ai"] = serde_json::json!({});
@@ -374,7 +394,7 @@ fn apply_acp(
         .get_mut("connection")
         .and_then(|v| v.as_object_mut())
         .ok_or("ai.connection не объект")?;
-    // Ключи snake_case: ConnectionConfig БЕЗ rename_all → десериализует `acp_command`/`acp_cwd` (как
+    // Ключи snake_case: ConnectionConfig БЕЗ rename_all → десериализует `acp_command`/`acp_cwd`/… (как
     // socket/mode/url). camelCase не прочитался бы (→ None) — round-trip-reject это ловит в тесте.
     // `None` → НЕ трогаем существующую acp_command (смена режима не сюрприз-удаляет).
     if let Some(s) = acp_command {
@@ -388,18 +408,22 @@ fn apply_acp(
             );
         }
     }
-    match acp_cwd {
+    // Хелпер для tolerant-строковых ACP-полей (cwd/transport/ssh_host/ssh_key/remote_command):
+    // Some(непустой после trim) → пишем (trimmed); Some(пусто) → убираем ключ; None → не трогаем.
+    let mut set_opt = |key: &str, val: Option<&str>| match val {
         Some(s) if !s.trim().is_empty() => {
-            conn.insert(
-                "acp_cwd".into(),
-                serde_json::Value::String(s.trim().to_string()),
-            );
+            conn.insert(key.into(), serde_json::Value::String(s.trim().to_string()));
         }
         Some(_) => {
-            conn.remove("acp_cwd");
+            conn.remove(key);
         }
         None => {}
-    }
+    };
+    set_opt("acp_cwd", acp_cwd);
+    set_opt("acp_transport", acp_transport);
+    set_opt("acp_ssh_host", acp_ssh_host);
+    set_opt("acp_ssh_key", acp_ssh_key);
+    set_opt("acp_remote_command", acp_remote_command);
     Ok(())
 }
 
@@ -532,6 +556,10 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> AppResult<AiConfigDto>
             // ACP-1b: Vec<String> argv → одна командная строка для UI (join по пробелу).
             acp_command: cfg.ai.connection.acp_command.as_ref().map(|v| v.join(" ")),
             acp_cwd: cfg.ai.connection.acp_cwd.clone(),
+            acp_transport: cfg.ai.connection.acp_transport.clone(),
+            acp_ssh_host: cfg.ai.connection.acp_ssh_host.clone(),
+            acp_ssh_key: cfg.ai.connection.acp_ssh_key.clone(),
+            acp_remote_command: cfg.ai.connection.acp_remote_command.clone(),
         },
         shell_supported: shell_supported(),
     })
@@ -744,6 +772,7 @@ pub async fn set_agent_flags(
 /// прочие ключи) и НЕМЕДЛЕННО свопает активный бэкенд (тот же выбор, что `open_vault` — без переоткрытия
 /// vault). Возвращает НОРМАЛИЗОВАННЫЙ набор (мусорный mode → embedded). `socket=None` → не трогаем путь.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_agent_connection(
     state: State<'_, AppState>,
     mode: String,
@@ -751,6 +780,11 @@ pub async fn set_agent_connection(
     // ACP-1b: командная строка + cwd ACP-агента (None → не трогаем).
     acp_command: Option<String>,
     acp_cwd: Option<String>,
+    // ACP-REMOTE-SSH: транспорт + ssh-поля (None → не трогаем существующее).
+    acp_transport: Option<String>,
+    acp_ssh_host: Option<String>,
+    acp_ssh_key: Option<String>,
+    acp_remote_command: Option<String>,
 ) -> AppResult<AgentConnectionDto> {
     let root = state.vault().await?.root.clone();
     let dir = root.join(".nexus");
@@ -763,7 +797,15 @@ pub async fn set_agent_connection(
         serde_json::from_str(&raw).map_err(|e| AppError::Msg(format!("local.json не JSON: {e}")))?
     };
     apply_connection(&mut doc, &mode, socket.as_deref())?;
-    apply_acp(&mut doc, acp_command.as_deref(), acp_cwd.as_deref())?;
+    apply_acp(
+        &mut doc,
+        acp_command.as_deref(),
+        acp_cwd.as_deref(),
+        acp_transport.as_deref(),
+        acp_ssh_host.as_deref(),
+        acp_ssh_key.as_deref(),
+        acp_remote_command.as_deref(),
+    )?;
     let pretty = serde_json::to_string_pretty(&doc).map_err(|e| AppError::Msg(e.to_string()))?;
     let path2 = path.clone();
     let bytes = pretty.clone().into_bytes();
@@ -789,6 +831,10 @@ pub async fn set_agent_connection(
             socket: c.ai.connection.socket.clone(),
             acp_command: c.ai.connection.acp_command.as_ref().map(|v| v.join(" ")),
             acp_cwd: c.ai.connection.acp_cwd.clone(),
+            acp_transport: c.ai.connection.acp_transport.clone(),
+            acp_ssh_host: c.ai.connection.acp_ssh_host.clone(),
+            acp_ssh_key: c.ai.connection.acp_ssh_key.clone(),
+            acp_remote_command: c.ai.connection.acp_remote_command.clone(),
         })
         .unwrap_or_default();
     Ok(echo)
@@ -880,20 +926,22 @@ async fn probe_local_socket(_cfg: &LocalConfig, _root: &std::path::Path) -> AppR
     ))
 }
 
-/// ACP-1b: проба ACP-агента — спавн подпроцесса + ACP `initialize` (10с) + версия. Подпроцесс
-/// убивается при дропе (`kill_on_drop`). Кросс-платформенная. Пустая команда / не найден бинарь /
-/// провал handshake → внятная ошибка.
+/// ACP-1b/ACP-REMOTE-SSH: проба ACP-агента — спавн РАЗРЕШЁННОЙ команды (ssh-сборка при
+/// `acp_transport="ssh"`, иначе локальный `acp_command`) + ACP `initialize` (10с) + версия. Подпроцесс
+/// убивается при дропе (`kill_on_drop`). Кросс-платформенная. Не сконфигурировано / не найден бинарь /
+/// провал handshake → внятная ошибка. «Проверить» тестирует ИМЕННО ту команду, что пойдёт в прод.
 async fn probe_acp(cfg: &LocalConfig, root: &std::path::Path) -> AppResult<String> {
     use nexus_core::agent::connect::acp::{AcpClient, ACP_PROTOCOL_VERSION};
     use nexus_core::agent::connect::StdioTransport;
     use std::sync::Arc;
-    let cmd = cfg
-        .ai
-        .connection
-        .acp_command
-        .clone()
-        .filter(|c| !c.is_empty())
-        .ok_or_else(|| AppError::Msg("ACP-агент не задан (ai.connection.acpCommand)".into()))?;
+    let cmd = cfg.ai.connection.acp_spawn_argv().ok_or_else(|| {
+        // Внятная диагностика по транспорту: ssh без host/команды vs local без команды.
+        if cfg.ai.connection.acp_transport.as_deref() == Some("ssh") {
+            AppError::Msg("ACP не сконфигурирован: укажите хост и команду".into())
+        } else {
+            AppError::Msg("команда не задана".into())
+        }
+    })?;
     let cwd = cfg
         .ai
         .connection
@@ -903,7 +951,7 @@ async fn probe_acp(cfg: &LocalConfig, root: &std::path::Path) -> AppResult<Strin
         .unwrap_or_else(|| root.to_path_buf());
     let (program, args) = cmd
         .split_first()
-        .expect("acp_command непустой (проверено выше)");
+        .expect("acp_spawn_argv непустой (Some → ≥1 элемент)");
     let transport = StdioTransport::spawn(program, args, &cwd)
         .await
         .map_err(|e| AppError::Msg(format!("ACP-агент не запустился (`{program}`): {e}")))?;
@@ -1114,7 +1162,16 @@ mod tests {
         let mut doc = serde_json::json!({
             "ai": { "connection": { "mode": "acp", "socket": "/tmp/s.sock", "url": "wss://x" } }
         });
-        apply_acp(&mut doc, Some("hermes acp --stdio"), Some("/vault/root")).unwrap();
+        apply_acp(
+            &mut doc,
+            Some("hermes acp --stdio"),
+            Some("/vault/root"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             doc.pointer("/ai/connection/acp_command").unwrap(),
             &serde_json::json!(["hermes", "acp", "--stdio"])
@@ -1134,21 +1191,99 @@ mod tests {
         assert_eq!(cfg.ai.connection.acp_cwd.as_deref(), Some("/vault/root"));
 
         // None → existing untouched; пустая команда/cwd → ключ удалён.
-        apply_acp(&mut doc, None, None).unwrap();
+        apply_acp(&mut doc, None, None, None, None, None, None).unwrap();
         assert!(doc.pointer("/ai/connection/acp_command").is_some());
-        apply_acp(&mut doc, Some("   "), Some("")).unwrap();
+        apply_acp(&mut doc, Some("   "), Some(""), None, None, None, None).unwrap();
         assert!(doc.pointer("/ai/connection/acp_command").is_none());
         assert!(doc.pointer("/ai/connection/acp_cwd").is_none());
     }
 
-    /// ACP-1b: probe без заданной команды → внятная ошибка (не паника, не spawn).
+    /// ACP-REMOTE-SSH: `apply_acp` пишет 4 ssh-поля (snake_case), не трогая mode/socket; round-trip через
+    /// `LocalConfig` → `acp_spawn_argv()` собирает ssh-команду. `None` → существующее не тронуто; пусто → ключ убран.
+    #[test]
+    fn apply_acp_round_trips_ssh_fields() {
+        let mut doc = serde_json::json!({
+            "ai": { "connection": { "mode": "acp", "socket": "/tmp/s.sock" } }
+        });
+        apply_acp(
+            &mut doc,
+            None,
+            Some("/tmp"),
+            Some("ssh"),
+            Some("artanov@192.168.0.28"),
+            Some("~/.ssh/id_ed25519"),
+            Some("docker exec -i hermes hermes acp"),
+        )
+        .unwrap();
+        assert_eq!(doc.pointer("/ai/connection/acp_transport").unwrap(), "ssh");
+        assert_eq!(
+            doc.pointer("/ai/connection/acp_ssh_host").unwrap(),
+            "artanov@192.168.0.28"
+        );
+        assert_eq!(
+            doc.pointer("/ai/connection/acp_ssh_key").unwrap(),
+            "~/.ssh/id_ed25519"
+        );
+        assert_eq!(
+            doc.pointer("/ai/connection/acp_remote_command").unwrap(),
+            "docker exec -i hermes hermes acp"
+        );
+        // socket НЕ тронут.
+        assert_eq!(doc.pointer("/ai/connection/socket").unwrap(), "/tmp/s.sock");
+        // Round-trip → резолвер собирает ssh-argv.
+        let cfg = LocalConfig::parse(&doc.to_string()).unwrap();
+        assert_eq!(
+            cfg.ai.connection.acp_spawn_argv().unwrap(),
+            vec![
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "-i",
+                "~/.ssh/id_ed25519",
+                "artanov@192.168.0.28",
+                "docker",
+                "exec",
+                "-i",
+                "hermes",
+                "hermes",
+                "acp"
+            ]
+        );
+
+        // None → existing untouched; пустой ключ/хост → ключ удалён.
+        apply_acp(&mut doc, None, None, None, None, None, None).unwrap();
+        assert!(doc.pointer("/ai/connection/acp_ssh_host").is_some());
+        apply_acp(&mut doc, None, None, None, Some("  "), Some(""), None).unwrap();
+        assert!(doc.pointer("/ai/connection/acp_ssh_host").is_none());
+        assert!(doc.pointer("/ai/connection/acp_ssh_key").is_none());
+    }
+
+    /// ACP-1b: probe без заданной команды (local) → внятная ошибка (не паника, не spawn).
     #[tokio::test]
     async fn probe_acp_without_command_errors() {
         let cfg = LocalConfig::parse("{}").unwrap();
         let e = probe_acp(&cfg, std::path::Path::new("/tmp"))
             .await
             .unwrap_err();
-        assert!(format!("{e}").contains("ACP-агент не задан"), "got: {e}");
+        assert!(format!("{e}").contains("команда не задана"), "got: {e}");
+    }
+
+    /// ACP-REMOTE-SSH: probe в ssh-транспорте без host/команды → внятная ssh-ошибка (не паника, не spawn).
+    #[tokio::test]
+    async fn probe_acp_ssh_without_host_errors() {
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"connection":{"mode":"acp","acp_transport":"ssh","acp_remote_command":"hermes acp"}}}"#,
+        )
+        .unwrap();
+        let e = probe_acp(&cfg, std::path::Path::new("/tmp"))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{e}").contains("укажите хост и команду"),
+            "got: {e}"
+        );
     }
 
     /// CONN-4: `classify_socket` без демона → внятная «не запущен» ошибка (не паника, не connect).
