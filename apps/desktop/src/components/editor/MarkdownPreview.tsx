@@ -452,7 +452,7 @@ export function MarkdownPreview({
       <div className={masthead?.reading ? `${styles.preview} ${styles.reading}` : styles.preview} ref={previewRef}>
         {masthead && (
           <header className={styles.docHead}>
-            {md.tags.length > 0 && <div className={styles.docKicker}>{md.tags.join(' · ')}</div>}
+            {md.kicker && <div className={styles.docKicker}>{md.kicker}</div>}
             {md.title && (
               <h1
                 className={styles.docTitle}
@@ -464,7 +464,7 @@ export function MarkdownPreview({
             )}
             <div className={styles.docByline}>
               {masthead.mtime != null && (
-                <span className={styles.chip}>
+                <span className={`${styles.chip} ${styles.datepill}`}>
                   <Clock size={12} aria-hidden /> {relTime(masthead.mtime, i18n.language)}
                 </span>
               )}

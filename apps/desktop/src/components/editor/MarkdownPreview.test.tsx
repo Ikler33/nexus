@@ -532,12 +532,12 @@ describe('MarkdownPreview: Mermaid-диаграммы (```mermaid)', () => {
 });
 
 describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', () => {
-  it('рисует kicker (теги) · display-title · byline; ведущий H1 не дублируется', () => {
+  it('рисует kicker · display-title · byline; ведущий H1 не дублируется', () => {
     const src = '---\ntags: [project, ai]\n---\n# Главный заголовок\n\nМного текста для буквицы.';
     render(
       <MarkdownPreview source={src} notePath="Notes/Test.md" onOpenLink={() => {}} masthead={{ mtime: null }} />,
     );
-    // kicker — теги через « · »
+    // kicker — нет type/status → graceful fallback на теги через « · »
     expect(screen.getByText('project · ai')).toBeInTheDocument();
     // заголовок — РОВНО один (H1 тела погашен, не задвоен)
     const titles = screen.getAllByRole('heading', { name: 'Главный заголовок' });
@@ -552,12 +552,32 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
 
   it('заголовок из frontmatter title имеет приоритет; title/tags не дублируются в Properties', () => {
     const src = '---\ntitle: Заголовок ФМ\ntags: [a]\nstatus: doing\n---\n# H1 тела\n\nтекст';
-    render(<MarkdownPreview source={src} notePath="f.md" onOpenLink={() => {}} masthead={{ mtime: null }} />);
+    const { container } = render(
+      <MarkdownPreview source={src} notePath="f.md" onOpenLink={() => {}} masthead={{ mtime: null }} />,
+    );
     expect(screen.getByRole('heading', { name: 'Заголовок ФМ' })).toBeInTheDocument();
-    expect(screen.getByText('a')).toBeInTheDocument(); // kicker
-    expect(screen.getByText('status')).toBeInTheDocument(); // прочее поле — в Properties
+    // S2: kicker — «тип · статус»; здесь только status → eyebrow = «doing» (значение есть и в Properties,
+    // потому ищем строго в самом eyebrow'е).
+    expect(container.querySelector('[class*=docKicker]')?.textContent).toBe('doing');
+    expect(screen.getByText('status')).toBeInTheDocument(); // ключ status — в Properties (не вынесен)
     expect(screen.queryByText('title')).toBeNull(); // ключ title не дублируется
     expect(screen.queryByText('tags')).toBeNull(); // ключ tags не дублируется
+  });
+
+  it('S2: eyebrow = «тип · статус» из frontmatter; type/status остаются в Properties', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'---\ntype: Идея\nstatus: seed\ntags: [x]\n---\n# Заголовок\n\nтекст'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    // eyebrow — type · status (теги в приоритете ниже)
+    expect(container.querySelector('[class*=docKicker]')?.textContent).toBe('Идея · seed');
+    // оба ключа по-прежнему видны в Properties-таблице
+    expect(screen.getByText('type')).toBeInTheDocument();
+    expect(screen.getByText('status')).toBeInTheDocument();
   });
 
   it('буквица: первая буква ведущего абзаца штампуется в data-cap', () => {

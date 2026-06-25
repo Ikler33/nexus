@@ -16,8 +16,14 @@ const MASTHEAD_FIELDS = new Set(['title', 'tags', 'tag']);
 export interface Masthead {
   /** Заголовок (frontmatter `title` → текст ведущего H1 → имя файла). Может быть пустым. */
   title: string;
-  /** Теги для kicker (значения frontmatter `tags`/`tag`, без ведущего `#`). */
+  /** Теги (значения frontmatter `tags`/`tag`, без ведущего `#`) — fallback-источник kicker'а. */
   tags: string[];
+  /**
+   * Текст eyebrow'а (S2): «тип · статус» из frontmatter `type`/`status` (напр. «Идея · seed»).
+   * Если ни `type`, ни `status` нет — graceful fallback на теги (как было). Может быть пустым
+   * (нет ни type/status, ни тегов) → eyebrow не рендерится.
+   */
+  kicker: string;
   /** Оставшиеся поля frontmatter для Properties-таблицы (title/tags убраны — они в масthead'е). */
   fields: FmField[];
   /** Тело с обнулённой строкой ведущего H1 (число строк и позиции сохранены). */
@@ -64,6 +70,14 @@ export function deriveMasthead(source: string, notePath?: string): Masthead {
     .map((v) => v.replace(/^#/, '').trim())
     .filter((v) => v !== '');
 
+  // Eyebrow «тип · статус» (S2): берём ПЕРВЫЕ значения frontmatter `type`/`status`. Поля остаются в
+  // Properties-таблице (там их место по макету) — eyebrow лишь дублирует их как kicker. Если нет ни
+  // type, ни status → graceful fallback на теги (прежнее поведение). Пусто → eyebrow не рисуется.
+  const typeVal = fieldValues(allFields, 'type')[0]?.trim() ?? '';
+  const statusVal = fieldValues(allFields, 'status')[0]?.trim() ?? '';
+  const typeStatus = [typeVal, statusVal].filter((v) => v !== '').join(' · ');
+  const kicker = typeStatus || tags.join(' · ');
+
   // Обнуляем ведущий H1, сохраняя число строк (см. шапку файла).
   const lines = source.split('\n');
   const start = fm ? fm.endLine : 0; // 0-based индекс первой строки тела (endLine — 1-based номер закрывающего ---)
@@ -87,5 +101,5 @@ export function deriveMasthead(source: string, notePath?: string): Masthead {
   const title = fmTitle || titleFromH1 || basenameTitle(notePath);
   const fields = allFields.filter((f) => !MASTHEAD_FIELDS.has(f.key.toLowerCase()));
 
-  return { title, tags, fields, body: lines.join('\n'), h1Line, h1Text };
+  return { title, tags, kicker, fields, body: lines.join('\n'), h1Line, h1Text };
 }
