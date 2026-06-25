@@ -332,17 +332,9 @@
   align-items: flex-start;
   margin-bottom: 26px;
 }
-.reply {
-  display: inline-block;
-  max-width: 72%;
-  font-family: var(--font-serif);
-  font-size: 15px;
-  line-height: 1.65;
-  color: var(--color-text);
-  white-space: pre-wrap;
-}
-/* Финальный ответ как markdown (Markdown сам держит блочную вёрстку — без pre-wrap, иначе двойные
-   переносы; display:block, чтобы списки/таблицы/код заняли ширину пузыря, как у `.reply`). */
+/* Ответ ассистента как markdown — стрим (StreamingMarkdown) и финал (Markdown) под одним `.replyMd`:
+   Markdown сам держит блочную вёрстку (без pre-wrap, иначе двойные переносы); display:block — чтобы
+   списки/таблицы/код заняли ширину пузыря. */
 .replyMd {
   display: block;
   max-width: 72%;

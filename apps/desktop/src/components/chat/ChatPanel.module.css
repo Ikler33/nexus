@@ -960,26 +960,6 @@
   background: var(--color-surface-hover);
 }
 
-/* Плавный вывод стрима («айфон-стайл», фидбэк 11.06): свежий чанк проявляется мягко. */
-.fresh {
-  animation: chunk-in 240ms var(--ease-out, ease-out);
-}
-@keyframes chunk-in {
-  from {
-    opacity: 0;
-    filter: blur(1.5px);
-  }
-  to {
-    opacity: 1;
-    filter: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .fresh {
-    animation: none;
-  }
-}
-
 /* Markdown-типографика ответа (LLM пишет md; сырые ## выглядели плохо — фидбэк 11.06). */
 .md > :first-child {
   margin-top: 0;

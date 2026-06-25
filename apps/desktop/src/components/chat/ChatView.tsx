@@ -27,6 +27,9 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkGfm from 'remark-gfm';
 
 import { CITE_SCHEME, remarkCitations } from '../../lib/markdown/remarkCitations';
+import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
+import { MermaidDiagram } from '../editor/MermaidDiagram';
+import { StreamingMarkdown } from '../common/StreamingMarkdown';
 
 import {
   disclosureOpen,
@@ -496,30 +499,6 @@ function Sources({ sources, onOpen }: { sources: ChatSource[]; onOpen: (path: st
   );
 }
 
-/**
- * Плавный вывод стрима (фидбэк 11.06, «айфон-стайл»): свежий чанк токенов появляется с лёгким
- * fade/blur. Во время стрима — плейн-текст (markdown по живому дёргал бы вёрстку), по завершении
- * Message переключается на markdown-рендер.
- */
-function StreamingText({ text }: { text: string }) {
-  const seen = useRef(0);
-  const stable = text.slice(0, seen.current);
-  const fresh = text.slice(seen.current);
-  useEffect(() => {
-    seen.current = text.length;
-  });
-  return (
-    <>
-      {stable}
-      {fresh && (
-        <span key={text.length} className={styles.fresh}>
-          {fresh}
-        </span>
-      )}
-    </>
-  );
-}
-
 // Раскрытость аккордеонов — в disclosureOpen (стор): react-virtual размонтирует сообщения,
 // ушедшие из вьюпорта, и useState сбрасывался — источники «сами сворачивались» при скролле.
 
@@ -903,14 +882,20 @@ function Message({
   // AIP-2: цитаты `[n]` (remarkCitations → схема nexus-cite:) рендерятся кликабельной кнопкой,
   // открывающей источник n этого сообщения; прочие ссылки — как раньше. Мемо по message/onOpen.
   const mdComponents = useMemo<Components>(
-    () => ({
-      a({ href, children }) {
-        if (typeof href === 'string' && href.startsWith(CITE_SCHEME)) {
-          return <Citation n={Number(href.slice(CITE_SCHEME.length))} message={message} onOpen={onOpen} />;
-        }
-        return <a href={href}>{children}</a>;
-      },
-    }),
+    () =>
+      ({
+        a({ href, children }) {
+          if (typeof href === 'string' && href.startsWith(CITE_SCHEME)) {
+            return <Citation n={Number(href.slice(CITE_SCHEME.length))} message={message} onOpen={onOpen} />;
+          }
+          return <a href={href}>{children}</a>;
+        },
+        // W-35: фенс ` ```mermaid ` → ленивый CSP-безопасный SVG (узел из remarkMermaid). Только финал.
+        'nexus-mermaid': ({ node }: { node?: { properties?: Record<string, unknown> } }) => {
+          const code = node?.properties?.code;
+          return typeof code === 'string' && code.trim() ? <MermaidDiagram code={code} /> : null;
+        },
+      }) as Components,
     [message, onOpen],
   );
   if (message.role === 'user') {
@@ -944,16 +929,19 @@ function Message({
           {message.content ? (
             <div className={styles.answer}>
               {message.streaming ? (
-                <>
-                  <StreamingText text={message.content} />
+                // W-34: живой markdown по ходу стрима (троттл + closeOpenFences; mermaid off —
+                // финал отрисует диаграмму целиком). Класс `.md` снимает pre-wrap `.answer` (md сам
+                // держит вёрстку), вид совпадает с финалом по типографике.
+                <div className={styles.md}>
+                  <StreamingMarkdown text={message.content} />
                   <span className={styles.caret} aria-hidden />
-                </>
+                </div>
               ) : (
                 // LLM отвечает в markdown (фидбэк 11.06: «## выглядят не очень») → рендерим.
                 // AIP-2: + remarkCitations (клик по [n] → источник). Только финальный рендер, не стрим.
                 <div className={styles.md}>
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkCitations]}
+                    remarkPlugins={[remarkGfm, remarkCitations, remarkMermaid]}
                     urlTransform={citeUrlTransform}
                     components={mdComponents}
                   >
