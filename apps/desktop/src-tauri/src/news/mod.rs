@@ -25,8 +25,9 @@ pub use llm::{daily_digest, evaluate_entries, EvalReport, EvaluatedEntry};
 pub use parse::parse_feed;
 pub use run::{run_news_pipeline, FeedFetcher, NewsFeedHandler, KIND_NEWSFEED, LLM_RUN_CAP};
 pub use store::{
-    filter_new_urls, get_body, get_item, insert_items, latest_run, list_items, list_topics,
-    mark_read, record_run, retention_gc, set_body, NewRow, NewsItem, NewsRun, RETENTION_DAYS,
+    filter_new_urls, get_body, get_item, insert_items, latest_run, list_items, list_runs,
+    list_topics, mark_read, record_run, retention_gc, set_body, NewRow, NewsItem, NewsRun,
+    RETENTION_DAYS,
 };
 
 use thiserror::Error;

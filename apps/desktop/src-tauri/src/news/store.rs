@@ -299,6 +299,34 @@ pub async fn record_run(writer: &WriteActor, run: NewsRun) -> DbResult<()> {
         .await
 }
 
+/// История прогонов (W-39 «Диагностика»): свежие сверху, `limit` записей. Без безлимитных выгрузок
+/// (урок #22) — вызывающий передаёт разумный кэп. Пусто — прогонов ещё не было.
+pub async fn list_runs(reader: &ReadPool, limit: i64) -> DbResult<Vec<NewsRun>> {
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT run_at,digest_ru,items_new,sources_ok,sources_total,llm_failed,errors \
+                 FROM news_runs ORDER BY run_at DESC, id DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map([limit], |r| {
+                    let errors_raw: String = r.get(6)?;
+                    Ok(NewsRun {
+                        run_at: r.get(0)?,
+                        digest_ru: r.get(1)?,
+                        items_new: r.get(2)?,
+                        sources_ok: r.get(3)?,
+                        sources_total: r.get(4)?,
+                        llm_failed: r.get(5)?,
+                        errors: serde_json::from_str(&errors_raw).unwrap_or_default(),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+}
+
 /// Последний прогон (шапка страницы); `None` — прогонов ещё не было.
 pub async fn latest_run(reader: &ReadPool) -> DbResult<Option<NewsRun>> {
     reader
@@ -525,5 +553,55 @@ mod tests {
             (7, 15, 16, 2)
         );
         assert_eq!(run.errors, vec!["mistral: timeout".to_string()]);
+    }
+
+    /// W-39: история прогонов отдаётся в порядке убывания run_at и уважает limit; ошибки —
+    /// JSON-roundtrip как в `latest_run`. Пустая таблица → пустой вектор.
+    #[tokio::test]
+    async fn list_runs_orders_desc_and_limits() {
+        let (_d, db) = open().await;
+        let (w, r) = (db.writer(), db.reader());
+
+        assert!(
+            list_runs(r, 10).await.unwrap().is_empty(),
+            "пусто без прогонов"
+        );
+
+        for (run_at, items_new) in [(100, 1), (300, 3), (200, 2)] {
+            record_run(
+                w,
+                NewsRun {
+                    run_at,
+                    digest_ru: format!("прогон {run_at}"),
+                    items_new,
+                    sources_ok: 1,
+                    sources_total: 1,
+                    llm_failed: 0,
+                    errors: if run_at == 300 {
+                        vec!["mistral: timeout".into()]
+                    } else {
+                        vec![]
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        // Свежие сверху (по run_at DESC).
+        let all = list_runs(r, 10).await.unwrap();
+        assert_eq!(
+            all.iter().map(|x| x.run_at).collect::<Vec<_>>(),
+            vec![300, 200, 100]
+        );
+        assert_eq!(all[0].errors, vec!["mistral: timeout".to_string()]);
+
+        // Лимит режет хвост, сохраняя порядок.
+        let two = list_runs(r, 2).await.unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(
+            two.iter().map(|x| x.run_at).collect::<Vec<_>>(),
+            vec![300, 200]
+        );
     }
 }

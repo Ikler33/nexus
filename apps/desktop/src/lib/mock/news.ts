@@ -7,6 +7,7 @@ import type {
   LinkSuggestion,
   NewsArticle,
   NewsConfig,
+  NewsEndpointHealth,
   NewsItem,
   NewsPage,
   NewsRun,
@@ -280,4 +281,49 @@ const RELATED: Record<number, LinkSuggestion[]> = {
 export async function related(id: number, limit?: number): Promise<LinkSuggestion[]> {
   await new Promise((r) => setTimeout(r, 400)); // эмуляция RAG-поиска
   return (RELATED[id] ?? []).slice(0, limit ?? 6);
+}
+
+// W-39 «Диагностика»: история прогонов (свежие сверху) — текущий прогон + два прошлых
+// (один частичный с ошибкой источника, один чистый), чтобы превью панели было показательным.
+const RUNS_HISTORY: NewsRun[] = [
+  run ? { ...run } : ({} as NewsRun),
+  {
+    runAt: NOW - 26 * H,
+    digestRu: 'Спокойный день: пара релизов инференса, без крупных анонсов моделей.',
+    itemsNew: 3,
+    sourcesOk: 6,
+    sourcesTotal: 6,
+    llmFailed: 0,
+    errors: [],
+  },
+  {
+    runAt: NOW - 50 * H,
+    digestRu: 'Анонс открытых весов и обзор локального RAG-стека.',
+    itemsNew: 5,
+    sourcesOk: 4,
+    sourcesTotal: 6,
+    llmFailed: 0,
+    errors: ['DeepMind блог: 503, будет повтор', 'Simon Willison: таймаут (15с)'],
+  },
+].filter((r) => r.runAt);
+
+/** W-39: история последних прогонов (свежие сверху, до `limit`). */
+export async function runs(limit: number): Promise<NewsRun[]> {
+  return RUNS_HISTORY.slice(0, limit).map((r) => ({ ...r, errors: [...r.errors] }));
+}
+
+/** W-39: пинг провайдера новостей — мок отдаёт «доступен» с правдоподобной латентностью. */
+export async function testEndpoint(): Promise<NewsEndpointHealth> {
+  await new Promise((r) => setTimeout(r, 350)); // эмуляция пинга
+  return {
+    ok: true,
+    message: 'анализатор новостей доступен',
+    endpoint: 'http://192.168.0.28:8084',
+    latencyMs: 42,
+  };
+}
+
+/** W-39: экспорт логов — в браузер-превью fs нет, возвращаем фиктивный путь. */
+export async function exportLogs(): Promise<string | null> {
+  return 'nexus-news.log';
 }

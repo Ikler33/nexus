@@ -90,7 +90,7 @@ static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuar
 /// Каталог файлового лога отладки: `<data_local>/app.nexus.desktop/logs` (macOS —
 /// `~/Library/Application Support/app.nexus.desktop/logs`). Режим отладки (запрос владельца
 /// 2026-06-11): «кликнул — ничего не произошло» нечем ловить без персистентного журнала.
-fn log_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
     dirs::data_local_dir().map(|d| d.join("app.nexus.desktop").join("logs"))
 }
 
@@ -234,6 +234,9 @@ pub fn run() {
             commands::news::set_news_config,
             commands::news::news_allow_host,
             commands::news::news_disallow_host,
+            commands::news::get_news_runs,
+            commands::news::news_test_endpoint,
+            commands::news::export_news_logs,
             commands::websearch::get_websearch_config,
             commands::websearch::set_websearch_config,
             commands::news::news_sources,

@@ -5,14 +5,15 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::ai::ChatProvider;
+use crate::ai::{ChatProvider, LocalConfig};
 use crate::db::{DbResult, ReadPool};
 use crate::error::{AppError, AppResult};
-use crate::net::EgressFeature;
+use crate::net::{EgressFeature, GuardedClient, NetError, RunCtx};
 use crate::news::{self, NewsConfig, NewsItem, NewsRun};
 use crate::search::{self, SearchOptions};
 use crate::state::AppState;
@@ -51,6 +52,153 @@ pub async fn get_news(
     let topics = news::list_topics(&reader).await?;
     let run = news::latest_run(&reader).await?;
     Ok(NewsPageDto { items, topics, run })
+}
+
+/// Потолок числа прогонов в истории «Диагностики» (W-39): без безлимитных выгрузок (урок #22) —
+/// история компактная (компактный список последних прогонов), не отчёт.
+const NEWS_RUNS_CAP: u32 = 50;
+/// Таймаут пинга эндпоинта новостей (W-39): короткий — не вешать кнопку «Проверить связь».
+const NEWS_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// W-39: история прогонов ленты для панели «Диагностика» — последние `limit` записей (свежие сверху).
+/// Зеркалит `news::NewsRun` (camelCase): backend читает таблицу `news_runs` напрямую (read-many).
+#[tauri::command]
+pub async fn get_news_runs(state: State<'_, AppState>, limit: u32) -> AppResult<Vec<NewsRun>> {
+    let reader = state.vault().await?.db.reader().clone();
+    let limit = i64::from(limit.min(NEWS_RUNS_CAP));
+    Ok(news::list_runs(&reader, limit).await?)
+}
+
+/// Здоровье эндпоинта анализатора новостей (W-39): отдаётся кнопке «Проверить связь».
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsEndpointHealth {
+    /// Эндпоинт ответил (любой HTTP-статус) — провайдер достижим.
+    pub ok: bool,
+    /// Человеко-читаемое сообщение (RU): «доступен» / причина недоступности.
+    pub message: String,
+    /// Базовый URL пингованного эндпоинта (тот, что реально использует пайплайн новостей).
+    pub endpoint: String,
+    /// Латентность пинга в миллисекундах.
+    pub latency_ms: u32,
+}
+
+/// URL провайдера, которым РЕАЛЬНО пользуются новости: пайплайн (`news::run`/`news_article`/
+/// `news_summarize`) берёт `ai.chat_util` (= `ai.fast`) с fallback на `ai.chat_fast` (= `ai.chat`).
+/// Здесь зеркалим этот выбор по конфигу `.nexus/local.json`: `ai.fast.url`, иначе `ai.chat.url`.
+fn news_provider_url(cfg: &LocalConfig) -> Option<String> {
+    cfg.ai
+        .fast
+        .as_ref()
+        .map(|f| f.url.clone())
+        .or_else(|| cfg.ai.chat.as_ref().map(|c| c.url.clone()))
+        .filter(|u| !u.trim().is_empty())
+}
+
+/// W-39: пингует ПРОВАЙДЕРА новостей (анализатор записей/перевод — `ai.fast` с fallback на `ai.chat`).
+/// Переиспользует тот же health-механизм, что «Проверить связь» в настройках (`GuardedClient::for_probe`
+/// + `EgressFeature::Probe` + пробный GET `/v1/models`): URL проверяется политикой эгресса ДО сети
+/// (первый egress-вектор закрыт), офлайн-тумблер режет, аудит пишет. Любой ответ сервера → достижим;
+/// сетевая ошибка → нет (с причиной). Эндпоинт не настроен → `ok=false` с подсказкой.
+#[tauri::command]
+pub async fn news_test_endpoint(state: State<'_, AppState>) -> AppResult<NewsEndpointHealth> {
+    let root = state.vault().await?.root.clone();
+    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
+        .await
+        .unwrap_or_default();
+    let cfg = if raw.trim().is_empty() {
+        LocalConfig::default()
+    } else {
+        LocalConfig::parse(&raw).map_err(|e| AppError::Msg(e.to_string()))?
+    };
+    let Some(endpoint) = news_provider_url(&cfg) else {
+        return Ok(NewsEndpointHealth {
+            ok: false,
+            message: "анализатор новостей не настроен — укажите эндпоинт в Настройки → ИИ".into(),
+            endpoint: String::new(),
+            latency_ms: 0,
+        });
+    };
+
+    let probe = GuardedClient::for_probe(
+        state.egress_policy.clone(),
+        state.egress_audit.clone(),
+        NEWS_PROBE_TIMEOUT,
+    )
+    .map_err(crate::ai::AiError::from)?;
+    let target = format!("{}/v1/models", crate::ai::api_base(&endpoint));
+    let started = std::time::Instant::now();
+    // «Проверить связь» — вне прогона агента → RunCtx::NONE (как test_ai_connection в настройках).
+    let result = probe.get(&target, EgressFeature::Probe, RunCtx::NONE).await;
+    let latency_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+    let (ok, message) = match result {
+        Ok(_) => (true, "анализатор новостей доступен".to_string()),
+        Err(NetError::Denied(d)) => (false, d.to_string()),
+        Err(NetError::BadUrl) => (false, "некорректный URL эндпоинта".to_string()),
+        Err(NetError::Http(e)) => (false, format!("эндпоинт недоступен: {e}")),
+    };
+    Ok(NewsEndpointHealth {
+        ok,
+        message,
+        endpoint,
+        latency_ms,
+    })
+}
+
+/// Максимальный размер копируемого лог-файла (W-39, anti-DoS, зеркалит `backup::MAX_BACKUP_BYTES`):
+/// журнал ротируется по дням, но защищаемся от патологически разросшегося файла ДО чтения в память.
+const MAX_LOG_BYTES: u64 = crate::backup::MAX_BACKUP_BYTES as u64;
+
+/// W-39: копирует САМЫЙ СВЕЖИЙ лог-файл из `log_dir()` в `path` (FE отдаёт путь save-диалогом — fs
+/// остаётся в доверенном бэкенде, фронт не получает прав на запись; зеркало `backup_export_to_path`).
+/// Полный лог (не отфильтрованный по «news:») — полезнее для дебага. Нет файлов → внятная ошибка.
+#[tauri::command]
+pub async fn export_news_logs(path: String) -> AppResult<()> {
+    let dir = crate::log_dir().ok_or_else(|| AppError::Msg("каталог логов недоступен".into()))?;
+    let src = latest_log_file(&dir).await?.ok_or_else(|| {
+        AppError::Msg("файлов журнала ещё нет — действий пока не записано".into())
+    })?;
+    let meta = tokio::fs::metadata(&src)
+        .await
+        .map_err(|e| AppError::Msg(format!("лог-файл недоступен: {e}")))?;
+    // Anti-DoS: отсекаем патологически разросшийся файл по размеру ДО копирования.
+    if meta.len() > MAX_LOG_BYTES {
+        return Err(AppError::Msg(format!(
+            "лог-файл слишком большой ({} байт > предела {MAX_LOG_BYTES})",
+            meta.len()
+        )));
+    }
+    tokio::fs::copy(&src, &path)
+        .await
+        .map_err(|e| AppError::Msg(format!("запись файла логов: {e}")))?;
+    Ok(())
+}
+
+/// Самый свежий лог-файл в каталоге (по mtime): tracing-appender ротирует по дням
+/// (`nexus.log.YYYY-MM-DD`), поэтому берём не по имени, а по времени модификации — устойчиво к
+/// схеме именования. `None` — каталога/файлов ещё нет.
+async fn latest_log_file(dir: &std::path::Path) -> AppResult<Option<std::path::PathBuf>> {
+    let mut rd = match tokio::fs::read_dir(dir).await {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(AppError::Msg(format!("каталог логов недоступен: {e}"))),
+    };
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    while let Some(entry) = rd
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Msg(format!("чтение каталога логов: {e}")))?
+    {
+        let meta = match entry.metadata().await {
+            Ok(m) if m.is_file() => m,
+            _ => continue,
+        };
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+            best = Some((mtime, entry.path()));
+        }
+    }
+    Ok(best.map(|(_, p)| p))
 }
 
 /// Отметка прочитано/непрочитано (AC-NF-9).
