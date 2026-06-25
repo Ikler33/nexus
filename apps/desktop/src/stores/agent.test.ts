@@ -198,10 +198,12 @@ describe('agent store — приём всех событий контракта 
 });
 
 /**
- * ACP-1b: один ACP `request_permission` = ОДНО атомарное решение, поэтому N файлов делят ОДИН
- * actionId. Стор дедуплицирует решения по actionId (одно на группу) и применяет fail-closed AND:
- * любой rejected/нерешённый файл в группе → reject ВСЕЙ permission. БЕЗОПАСНОСТЬ: нельзя частично
- * одобрить атомарную permission и нельзя авто-одобрить файл, который пользователь отклонил.
+ * ACP: один `request_permission` = ОДНО атомарное решение, поэтому N файлов делят ОДИН actionId.
+ * Стор дедуплицирует решения по actionId (одно на группу). «Подтвердить» — УТВЕРДИТЕЛЬНОЕ действие:
+ * одобряет всё, что НЕ отклонено ЯВНО (applied И undefined → approve), любой ЯВНО rejected файл в
+ * группе → reject ВСЕЙ permission (нельзя частично одобрить атомарную permission). БЕЗОПАСНОСТЬ:
+ * нельзя авто-одобрить файл, который пользователь явно отклонил; «не подтвердили вовсе» fail-close'ится
+ * на бэкенде (незавершённый ход → pending → Cancelled).
  */
 describe('agent store — atomic ACP-permission approve (общий actionId)', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -248,10 +250,18 @@ describe('agent store — atomic ACP-permission approve (общий actionId)', 
     expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: false }]);
   });
 
-  it('нерешённый файл в группе → reject всей группы (fail-closed)', async () => {
+  it('нерешённые строки (без явного reject) → approve (утвердительное «Подтвердить»)', async () => {
+    // Регрессия: клик «Подтвердить» без пометки строк ДОЛЖЕН одобрить permission, а не отклонить.
+    const spy = vi.spyOn(tauriApi.agent, 'approve').mockResolvedValue(undefined);
+    seed(undefined, undefined);
+    await useAgentStore.getState().approve();
+    expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: true }]);
+  });
+
+  it('applied + нерешённый (без явного reject) → approve всей группы', async () => {
     const spy = vi.spyOn(tauriApi.agent, 'approve').mockResolvedValue(undefined);
     seed('applied', undefined);
     await useAgentStore.getState().approve();
-    expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: false }]);
+    expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: true }]);
   });
 });

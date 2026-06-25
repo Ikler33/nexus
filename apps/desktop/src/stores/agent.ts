@@ -485,18 +485,20 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const turns = get().turns;
     const last = turns[turns.length - 1];
     if (!last || last.runId == null || last.status !== 'awaiting' || get().approving) return;
-    // decisions[]: одобренные = applied; всё прочее (rejected / нерешённое) = reject (fail-closed,
-    // как бэкенд трактует отсутствующий айтем). Только адресуемые файлы (actionId >= 0).
+    // `approve()` = УТВЕРДИТЕЛЬНАЯ кнопка «Подтвердить» (её единственный вызыватель). Поэтому одобряем
+    // всё, что НЕ отклонено ЯВНО: `applied` И `undefined` → approve; только явный `rejected` → reject.
+    // (Раньше `undefined → reject` ломало UX: клик «Подтвердить» без пометки строк отклонял permission.)
+    // Fail-closed «ничего не подтвердили» остаётся на БЭКЕНДЕ: незавершённый ход → pending → Cancelled.
+    // Только адресуемые файлы (actionId >= 0).
     //
-    // ACP-1b: один ACP-permission = ОДНО атомарное решение, поэтому N файлов делят ОДИН actionId.
-    // Дедуплицируем по actionId и шлём ОДНО решение на группу (бэкенд снимает pending_perms по id
-    // единожды — дубль был бы no-op, но честнее не слать). Семантика группы — fail-closed AND:
-    // approve только если ВСЕ файлы группы applied (любой reject/нерешённый → reject всей атомарной
-    // permission). Для embedded (уникальные id) каждая группа = один файл → поведение без изменений.
+    // ACP: один ACP-permission = ОДНО атомарное решение, поэтому N файлов делят ОДИН actionId.
+    // Дедуплицируем по actionId и шлём ОДНО решение на группу. Семантика группы — AND по «не отклонено»:
+    // любой ЯВНО отклонённый файл → reject всей атомарной permission (нельзя частично одобрить).
+    // Для embedded (уникальные id) каждая группа = один файл.
     const byAction = new Map<number, boolean>();
     for (const f of last.changeset) {
       if (f.actionId < 0) continue;
-      const ok = f.decision === 'applied';
+      const ok = f.decision !== 'rejected';
       byAction.set(f.actionId, (byAction.get(f.actionId) ?? true) && ok);
     }
     const decisions: AgentApprovalDecision[] = [...byAction.entries()].map(
@@ -509,7 +511,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ approving: true });
     try {
       await tauriApi.agent.approve(runId, decisions);
-      // Решение принято — нерешённые помечаем reject (отражаем то, что ушло на бэк), снимаем ожидание.
+      // Решение принято — нерешённые помечаем applied (отражаем то, что ушло на бэк: «Подтвердить»
+      // одобряет всё не отклонённое явно), снимаем ожидание.
       set((s) => ({
         approving: false,
         turns: s.turns.map((tn) =>
@@ -518,7 +521,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
                 ...tn,
                 status: tn.status === 'awaiting' ? 'running' : tn.status,
                 changeset: tn.changeset.map((f) =>
-                  f.actionId >= 0 && f.decision === undefined ? { ...f, decision: 'rejected' } : f,
+                  f.actionId >= 0 && f.decision === undefined ? { ...f, decision: 'applied' } : f,
                 ),
               }
             : tn,
