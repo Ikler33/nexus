@@ -111,6 +111,11 @@
     transform: scale(1.06);
   }
 }
+/* статичный знак — анимация выключена (Castor не «работает») */
+.brand-thinking.static .bt-orbit,
+.brand-thinking.static .bt-sat {
+  animation: none;
+}
 
 /* Строка «думаю…» с переливающимся лейблом (рядом со знаком). */
 .msg-thinking {
