@@ -1031,3 +1031,228 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+
+/* ── панель «Диагностика» (W-39): прозрачность загрузки + инструменты проверки ── */
+.diagWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.gearBtnOn {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.diagPanel {
+  position: absolute;
+  right: 0;
+  top: 36px;
+  width: 340px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-2);
+  padding: 12px;
+  z-index: 40;
+}
+.diagHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 10px;
+}
+.diagHead svg {
+  color: var(--color-ai);
+}
+.diagSub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+  margin: 12px 0 6px;
+}
+.diagMuted {
+  font-size: var(--text-sm);
+  color: var(--color-text-faint);
+  padding: 2px 0;
+}
+.diagEmpty {
+  display: flex;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  border: 1px solid color-mix(in oklch, var(--color-warning) 30%, transparent);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--color-text);
+}
+.diagEmpty svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--color-warning);
+}
+.diagStats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+.diagStats > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.diagKey {
+  min-width: 116px;
+  color: var(--color-text-muted);
+}
+.diagErrors {
+  flex-direction: column;
+  align-items: stretch !important;
+  gap: 4px;
+  margin-top: 4px;
+}
+.diagActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.diagBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.diagBtn:hover {
+  background: var(--color-surface-hover);
+}
+.diagBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.diagPill {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+.diagPillOk {
+  background: color-mix(in oklch, var(--color-success) 14%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-success) 30%, transparent);
+}
+.diagPillBad {
+  background: var(--color-danger-soft);
+  border: 1px solid color-mix(in oklch, var(--color-danger) 30%, transparent);
+}
+.diagPillOk svg {
+  color: var(--color-success);
+}
+.diagPillBad svg {
+  color: var(--color-danger);
+}
+.diagPillLabel {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.diagPillEndpoint {
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-muted);
+}
+.diagPillLatency {
+  color: var(--color-text-faint);
+}
+.diagPillMsg {
+  flex-basis: 100%;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+.diagHistory {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.diagRun {
+  border-radius: var(--radius-sm);
+}
+.diagRunRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 6px 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.diagRunRow:disabled {
+  cursor: default;
+}
+.diagRunRow:not(:disabled):hover {
+  background: var(--color-surface-hover);
+}
+.diagRunWhen {
+  flex: 1;
+  color: var(--color-text-muted);
+}
+.diagRunNew {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.diagRunSrc {
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.diagRunSrcWarn {
+  color: var(--color-warning);
+}
+.diagRunErr {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-danger);
+}
+.diagChevOpen {
+  transform: rotate(90deg);
+}
+.diagRunErrors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px 8px 24px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.diagToast {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-hover);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}

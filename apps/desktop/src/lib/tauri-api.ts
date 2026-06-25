@@ -887,6 +887,19 @@ export interface NewsRun {
   errors: string[];
 }
 
+/** Здоровье эндпоинта анализатора новостей (W-39, зеркалит Rust `commands::news::NewsEndpointHealth`):
+ *  результат кнопки «Проверить связь» в панели «Диагностика». */
+export interface NewsEndpointHealth {
+  /** Эндпоинт ответил (любой HTTP-статус) — провайдер достижим. */
+  ok: boolean;
+  /** Человеко-читаемое сообщение (RU): «доступен» / причина недоступности. */
+  message: string;
+  /** Базовый URL пингованного эндпоинта (тот, что реально использует пайплайн новостей). */
+  endpoint: string;
+  /** Латентность пинга в миллисекундах. */
+  latencyMs: number;
+}
+
 /** Страница ленты (зеркалит Rust `commands::news::NewsPageDto`). */
 export interface NewsPage {
   items: NewsItem[];
@@ -1703,6 +1716,27 @@ export const tauriApi = {
       isTauri()
         ? invoke<LinkSuggestion[]>('news_related', { id, limit })
         : mockNews.related(id, limit),
+
+    /** W-39 «Диагностика»: история последних прогонов (свежие сверху, до `limit`). */
+    runs: (limit: number): Promise<NewsRun[]> =>
+      isTauri() ? invoke<NewsRun[]>('get_news_runs', { limit }) : mockNews.runs(limit),
+
+    /** W-39: пинг провайдера новостей (анализатор `ai.fast`→`ai.chat`) через политику эгресса. */
+    testEndpoint: (): Promise<NewsEndpointHealth> =>
+      isTauri() ? invoke<NewsEndpointHealth>('news_test_endpoint') : mockNews.testEndpoint(),
+
+    /** W-39: экспорт самого свежего лог-файла в файл через save-диалог. Путь файла, либо null
+     *  если отменили. fs — в доверенном бэкенде (как backup W-9); путь выбирает пользователь. */
+    exportLogs: async (): Promise<string | null> => {
+      if (!isTauri()) return mockNews.exportLogs();
+      const path = await saveDialog({
+        defaultPath: 'nexus-news.log',
+        filters: [{ name: 'Log', extensions: ['log'] }],
+      });
+      if (!path) return null;
+      await invoke<void>('export_news_logs', { path });
+      return path;
+    },
   },
 
   /** Память агента (MEM): курируемые ЯВНЫЕ ФАКТЫ о пользователе/проектах. MEM-3 — захват:

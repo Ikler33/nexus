@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 
 import { tauriApi, type NewsItem } from '../../lib/tauri-api';
 import { useNewsStore } from '../../stores/news';
+import { NewsDiagnostics } from './NewsDiagnostics';
 import { NewsReader } from './NewsReader';
 import styles from './NewsView.module.css';
 
@@ -354,6 +355,7 @@ export function NewsView() {
             </div>
           )}
           {!run && <div style={{ flex: 1 }} />}
+          <NewsDiagnostics lastRun={run} feedEmpty={items.length === 0 && !filtersActive} />
           <div className={styles.gearWrap} ref={gearRef}>
             <button
               type="button"

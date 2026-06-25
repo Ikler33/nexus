@@ -1006,7 +1006,34 @@
       "llm": "Analyzing entries · {{done}}/{{total}}",
       "digest": "Writing the daily digest…"
     },
-    "stalled": "The scheduler is not responding: the job is queued but never runs. Restart the app — diagnostics are written to the log (Library/Application Support/app.nexus.desktop/logs)."
+    "stalled": "The scheduler is not responding: the job is queued but never runs. Restart the app — diagnostics are written to the log (Library/Application Support/app.nexus.desktop/logs).",
+    "diag": {
+      "title": "Diagnostics",
+      "open": "Loading diagnostics",
+      "lastRun": "Last run",
+      "never": "No runs yet",
+      "when": "When",
+      "newItems": "New",
+      "sources": "Sources",
+      "llmFailed": "Analyzer errors",
+      "errors": "Run errors",
+      "history": "Run history",
+      "historyEmpty": "History is empty — the feed has never run.",
+      "testConn": "Test connection",
+      "checking": "Checking…",
+      "ok": "Connected",
+      "fail": "No connection",
+      "latency": "{{ms}} ms",
+      "downloadLogs": "Download logs",
+      "logsSaved": "Log saved · {{path}}",
+      "logsFailed": "Couldn't save the log: {{error}}",
+      "whyEmpty": "Why empty",
+      "emptyLlm": "Analyzer unavailable: {{endpoint}} — entries were not scored. The feed won't update until the endpoint is fixed (Settings → AI).",
+      "emptyLlmGeneric": "The news analyzer was unavailable in the last run — entries were not scored.",
+      "emptySources": "Sources didn't respond in the last run ({{ok}} of {{total}}) — check your network and connection.",
+      "emptyDedup": "No fresh entries: everything the sources returned was already in the feed (dedup).",
+      "emptyUnknown": "The last run brought no new entries."
+    }
   },
   "inline": {
     "continue": "Continue",
