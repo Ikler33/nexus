@@ -42,6 +42,10 @@ export interface AgentStep {
   id: string;
   kind: string;
   args: string;
+  /** Человеко-подпись действия от агента (ACP `tool_call.title`, напр. «Fetching docs.rs»), если
+   *  прислана. Отсутствует/`null` для нативного Кастора — `describeStep` строит подпись из
+   *  `kind`+`args`. Опционально: фикстуры/нативный путь его не задают. */
+  title?: string | null;
   /** Результат (`toolResult`) — приходит позже, по тому же `id`. `null` пока инструмент выполняется. */
   result: string | null;
   isError: boolean;
@@ -278,7 +282,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             ...t0,
             steps: [
               ...t0.steps,
-              { id: event.id, kind: event.kind, args: event.args, result: null, isError: false },
+              {
+                id: event.id,
+                kind: event.kind,
+                args: event.args,
+                title: event.title ?? null,
+                result: null,
+                isError: false,
+              },
             ],
           }));
           break;
