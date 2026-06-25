@@ -22,6 +22,7 @@ import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
+import { AgentHistory } from './AgentHistory';
 import { describeStep } from './describeStep';
 import { ExecGraph } from './ExecGraph';
 import { Markdown } from '../common/Markdown';
@@ -228,8 +229,9 @@ export function AgentView() {
         </div>
       </header>
 
-      {/* ── Тело: лента + правый dock ── */}
+      {/* ── Тело: левый сайдбар истории + лента + правый dock ── */}
       <div className={styles.body}>
+        <AgentHistory />
         <div className={styles.session}>
           <div className={styles.scroll}>
             {!started ? (

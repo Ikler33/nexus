@@ -74,6 +74,35 @@ pub async fn create_run(
         .await
 }
 
+/// W-38: создаёт прогон в статусе `queued`, привязанный к `session_id` (история переписок агента).
+/// Идентично [`create_run`], но проставляет `agent_runs.session_id` — UI-путь десктопа группирует ходы
+/// одной переписки общим `session_id` (фронт-стор). Top-level прогон (parent NULL). Возвращает `id`.
+pub async fn create_run_in_session(
+    writer: &WriteActor,
+    session_id: &str,
+    task: &str,
+    model: Option<&str>,
+    autonomy: Option<&str>,
+) -> DbResult<i64> {
+    let (session_id, task, model, autonomy) = (
+        session_id.to_string(),
+        task.to_string(),
+        model.map(str::to_string),
+        autonomy.map(str::to_string),
+    );
+    writer
+        .transaction(move |tx| {
+            let ts = now_secs();
+            tx.execute(
+                "INSERT INTO agent_runs(session_id,task,status,model,autonomy,step,created_at,updated_at) \
+                 VALUES(?1,?2,?3,?4,?5,0,?6,?6)",
+                params![session_id, task, STATUS_QUEUED, model, autonomy, ts],
+            )?;
+            Ok(tx.last_insert_rowid())
+        })
+        .await
+}
+
 /// Создаёт ПРОГОН-РЕБЁНОК (субагент, SUB-0) в статусе `queued` со ссылкой на `parent_run_id` (дерево
 /// делегирования). Идентично [`create_run`], но проставляет `parent_run_id` (родитель ВИДЕН в строке для
 /// реконструкции дерева, per-child корреляции egress/ledger, узлов плана). Возвращает `id` ребёнка
@@ -281,6 +310,213 @@ pub async fn reconcile_orphan_child_runs(
                     cutoff
                 ],
             )
+        })
+        .await
+}
+
+// ── W-38: персист ходов агента (история переписок) ─────────────────────────────────────────────────
+
+/// Один шаг хода для персиста (`agent_turn_steps`). Зеркало `AgentStep` фронт-стора без runtime-полей:
+/// `ord` — порядок в ходе (по нему реконструируем ленту), `kind`/`args`/`title`/`result`/`is_error`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistStep {
+    pub ord: i64,
+    pub kind: String,
+    pub args: String,
+    pub title: Option<String>,
+    pub result: Option<String>,
+    pub is_error: bool,
+}
+
+/// Сводка одной агент-сессии для левого сайдбара истории (W-38). `title` — задача ПЕРВОГО хода (с чего
+/// началась переписка); `status` — статус ПОСЛЕДНЕГО (терминал последнего хода); `turn_count`/`updated_at`
+/// — агрегаты по `session_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionRow {
+    pub session_id: String,
+    pub title: String,
+    pub status: String,
+    pub turn_count: i64,
+    pub updated_at: i64,
+}
+
+/// Один персистированный ход переписки (W-38) + его шаги (для реконструкции ленты при переоткрытии).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedTurnRow {
+    pub run_id: i64,
+    pub task: String,
+    pub assistant_text: String,
+    pub report: Option<String>,
+    pub error: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub steps: Vec<PersistStep>,
+}
+
+/// W-38: персистит ОДИН ход переписки агента (терминал прогона) через `INSERT OR REPLACE` строки
+/// `agent_turns` плюс полную перезапись её шагов (`DELETE` по `run_id` затем пакетный `INSERT`).
+/// Идемпотентно по `run_id` (повторный персист того же прогона перезаписывает, не двоит). Best-effort у
+/// вызывающего: ошибку он логирует, не роняя прогон. Пустой `session_id` вызывающий НЕ передаёт (UI-путь
+/// всегда с сессией).
+#[allow(clippy::too_many_arguments)]
+pub async fn persist_turn(
+    writer: &WriteActor,
+    run_id: i64,
+    session_id: &str,
+    task: &str,
+    assistant_text: &str,
+    steps: &[PersistStep],
+    status: &str,
+    report: Option<&str>,
+    error: Option<&str>,
+    created_at: i64,
+) -> DbResult<()> {
+    let (session_id, task, assistant_text, status) = (
+        session_id.to_string(),
+        task.to_string(),
+        assistant_text.to_string(),
+        status.to_string(),
+    );
+    let (report, error) = (report.map(str::to_string), error.map(str::to_string));
+    let steps = steps.to_vec();
+    writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT OR REPLACE INTO agent_turns\
+                 (run_id,session_id,task,assistant_text,report,error_text,status,created_at) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    run_id,
+                    session_id,
+                    task,
+                    assistant_text,
+                    report,
+                    error,
+                    status,
+                    created_at
+                ],
+            )?;
+            // Полная перезапись шагов хода (идемпотентность: REPLACE строки + чистый набор шагов).
+            tx.execute(
+                "DELETE FROM agent_turn_steps WHERE run_id=?1",
+                params![run_id],
+            )?;
+            for s in &steps {
+                tx.execute(
+                    "INSERT INTO agent_turn_steps(run_id,ord,kind,args,title,result,is_error) \
+                     VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        run_id,
+                        s.ord,
+                        s.kind,
+                        s.args,
+                        s.title,
+                        s.result,
+                        s.is_error as i64
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+}
+
+/// W-38: список агент-сессий для левого сайдбара (свежие сверху). Группирует `agent_turns` по
+/// `session_id` (агрегаты `MAX(created_at)`/`COUNT`); `title` = задача ПЕРВОГО хода (минимальный
+/// `created_at`, тай-брейк по `run_id`), `status` = статус ПОСЛЕДНЕГО хода (максимальный `created_at`,
+/// тай-брейк по `run_id`). Title/status берутся коррелированными подзапросами — корректно, без вранья
+/// (не «первый попавшийся» из GROUP BY).
+pub async fn list_agent_sessions(reader: &ReadPool) -> DbResult<Vec<AgentSessionRow>> {
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT t.session_id, \
+                        (SELECT task FROM agent_turns f \
+                          WHERE f.session_id=t.session_id \
+                          ORDER BY f.created_at ASC, f.run_id ASC LIMIT 1) AS title, \
+                        (SELECT status FROM agent_turns l \
+                          WHERE l.session_id=t.session_id \
+                          ORDER BY l.created_at DESC, l.run_id DESC LIMIT 1) AS status, \
+                        COUNT(*) AS cnt, \
+                        MAX(t.created_at) AS upd \
+                 FROM agent_turns t \
+                 GROUP BY t.session_id \
+                 ORDER BY upd DESC",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(AgentSessionRow {
+                        session_id: r.get(0)?,
+                        title: r.get(1)?,
+                        status: r.get(2)?,
+                        turn_count: r.get(3)?,
+                        updated_at: r.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+}
+
+/// W-38: загружает все ходы одной агент-сессии (хронология ASC) с их шагами — для переоткрытия переписки
+/// в UI. Шаги читаются вторым запросом и раскладываются по `run_id` (ASC по `ord`).
+pub async fn load_agent_session(
+    reader: &ReadPool,
+    session_id: &str,
+) -> DbResult<Vec<PersistedTurnRow>> {
+    let session_id = session_id.to_string();
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT run_id, task, assistant_text, report, error_text, status, created_at \
+                 FROM agent_turns WHERE session_id=?1 ORDER BY created_at ASC, run_id ASC",
+            )?;
+            let mut turns = stmt
+                .query_map(params![session_id], |r| {
+                    Ok(PersistedTurnRow {
+                        run_id: r.get(0)?,
+                        task: r.get(1)?,
+                        assistant_text: r.get(2)?,
+                        report: r.get(3)?,
+                        error: r.get(4)?,
+                        status: r.get(5)?,
+                        created_at: r.get(6)?,
+                        steps: Vec::new(),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            // Шаги: один запрос на сессию (join по session_id), раскладка по run_id.
+            let mut step_stmt = c.prepare(
+                "SELECT s.run_id, s.ord, s.kind, s.args, s.title, s.result, s.is_error \
+                 FROM agent_turn_steps s \
+                 JOIN agent_turns t ON t.run_id = s.run_id \
+                 WHERE t.session_id=?1 ORDER BY s.run_id ASC, s.ord ASC",
+            )?;
+            let steps = step_stmt
+                .query_map(params![session_id], |r| {
+                    let run_id: i64 = r.get(0)?;
+                    let is_error: i64 = r.get(6)?;
+                    Ok((
+                        run_id,
+                        PersistStep {
+                            ord: r.get(1)?,
+                            kind: r.get(2)?,
+                            args: r.get(3)?,
+                            title: r.get(4)?,
+                            result: r.get(5)?,
+                            is_error: is_error != 0,
+                        },
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (run_id, step) in steps {
+                if let Some(turn) = turns.iter_mut().find(|t| t.run_id == run_id) {
+                    turn.steps.push(step);
+                }
+            }
+            Ok(turns)
         })
         .await
 }
@@ -532,5 +768,212 @@ mod tests {
             STATUS_DONE,
             "завершённый ребёнок НЕ тронут"
         );
+    }
+
+    // ── W-38: персист ходов агента (история переписок) ──────────────────────────────────────────
+
+    /// `create_run_in_session` персистит `session_id` (читается через `get_run`); миграция 026
+    /// применяется (round-trip персиста хода ниже это докажет — таблицы существуют).
+    #[tokio::test]
+    async fn create_run_in_session_persists_session_id() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let id = create_run_in_session(w, "sess-A", "задача", Some("qwen"), Some("auto"))
+            .await
+            .unwrap();
+        let r = get_run(db.reader(), id).await.unwrap().unwrap();
+        assert_eq!(r.session_id.as_deref(), Some("sess-A"));
+        assert_eq!(r.task, "задача");
+        assert_eq!(r.parent_run_id, None, "top-level прогон");
+    }
+
+    /// `persist_turn` round-trip: записанный ход + шаги читаются `load_agent_session` без потерь;
+    /// повторный персист того же `run_id` (REPLACE) перезаписывает, не двоит шаги.
+    #[tokio::test]
+    async fn persist_turn_roundtrips_via_load() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        let run_id = create_run_in_session(w, "sess-1", "сделай X", None, Some("confirm"))
+            .await
+            .unwrap();
+        let steps = vec![
+            PersistStep {
+                ord: 0,
+                kind: "fs.read".into(),
+                args: r#"{"path":"a.md"}"#.into(),
+                title: Some("Читает a.md".into()),
+                result: Some("ok".into()),
+                is_error: false,
+            },
+            PersistStep {
+                ord: 1,
+                kind: "note.create".into(),
+                args: r#"{"path":"b.md"}"#.into(),
+                title: None,
+                result: Some("boom".into()),
+                is_error: true,
+            },
+        ];
+        persist_turn(
+            w,
+            run_id,
+            "sess-1",
+            "сделай X",
+            "готов помочь",
+            &steps,
+            STATUS_DONE,
+            Some("итог хода"),
+            None,
+            1000,
+        )
+        .await
+        .unwrap();
+
+        let turns = load_agent_session(db.reader(), "sess-1").await.unwrap();
+        assert_eq!(turns.len(), 1);
+        let t = &turns[0];
+        assert_eq!(t.run_id, run_id);
+        assert_eq!(t.task, "сделай X");
+        assert_eq!(t.assistant_text, "готов помочь");
+        assert_eq!(t.report.as_deref(), Some("итог хода"));
+        assert_eq!(t.error, None);
+        assert_eq!(t.status, STATUS_DONE);
+        assert_eq!(t.created_at, 1000);
+        assert_eq!(t.steps.len(), 2);
+        assert_eq!(t.steps[0].kind, "fs.read");
+        assert_eq!(t.steps[0].title.as_deref(), Some("Читает a.md"));
+        assert!(!t.steps[0].is_error);
+        assert_eq!(t.steps[1].kind, "note.create");
+        assert!(t.steps[1].is_error, "is_error round-trips");
+
+        // Повторный персист (REPLACE) с ОДНИМ шагом — перезаписывает, не двоит.
+        persist_turn(
+            w,
+            run_id,
+            "sess-1",
+            "сделай X",
+            "перезапись",
+            &steps[..1],
+            STATUS_DONE,
+            Some("новый итог"),
+            None,
+            1001,
+        )
+        .await
+        .unwrap();
+        let turns = load_agent_session(db.reader(), "sess-1").await.unwrap();
+        assert_eq!(turns.len(), 1, "ход не задвоился (REPLACE по run_id)");
+        assert_eq!(turns[0].assistant_text, "перезапись");
+        assert_eq!(turns[0].steps.len(), 1, "шаги перезаписаны (DELETE+INSERT)");
+        assert_eq!(turns[0].report.as_deref(), Some("новый итог"));
+    }
+
+    /// `list_agent_sessions` группирует по `session_id`, сортирует по свежести (DESC), берёт title из
+    /// ПЕРВОГО хода и status из ПОСЛЕДНЕГО; turn_count корректен.
+    #[tokio::test]
+    async fn list_agent_sessions_groups_and_sorts() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        // Сессия A: два хода (первый — done, второй — error). created_at 100, 200.
+        let a1 = create_run_in_session(w, "A", "первая задача A", None, None)
+            .await
+            .unwrap();
+        persist_turn(
+            w,
+            a1,
+            "A",
+            "первая задача A",
+            "txt",
+            &[],
+            STATUS_DONE,
+            Some("ok"),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+        let a2 = create_run_in_session(w, "A", "вторая задача A", None, None)
+            .await
+            .unwrap();
+        persist_turn(
+            w,
+            a2,
+            "A",
+            "вторая задача A",
+            "txt",
+            &[],
+            STATUS_ERROR,
+            None,
+            Some("err"),
+            200,
+        )
+        .await
+        .unwrap();
+        // Сессия B: один ход, created_at 300 (свежее A) → должна быть ПЕРВОЙ.
+        let b1 = create_run_in_session(w, "B", "задача B", None, None)
+            .await
+            .unwrap();
+        persist_turn(
+            w,
+            b1,
+            "B",
+            "задача B",
+            "txt",
+            &[],
+            STATUS_DONE,
+            Some("ok"),
+            None,
+            300,
+        )
+        .await
+        .unwrap();
+
+        let sessions = list_agent_sessions(db.reader()).await.unwrap();
+        assert_eq!(sessions.len(), 2, "две сессии");
+        // Свежесть DESC: B (upd=300) раньше A (upd=200).
+        assert_eq!(sessions[0].session_id, "B");
+        assert_eq!(sessions[0].turn_count, 1);
+        assert_eq!(sessions[0].title, "задача B");
+        assert_eq!(sessions[0].status, STATUS_DONE);
+        assert_eq!(sessions[0].updated_at, 300);
+
+        assert_eq!(sessions[1].session_id, "A");
+        assert_eq!(sessions[1].turn_count, 2);
+        assert_eq!(
+            sessions[1].title, "первая задача A",
+            "title = задача ПЕРВОГО хода"
+        );
+        assert_eq!(
+            sessions[1].status, STATUS_ERROR,
+            "status = статус ПОСЛЕДНЕГО хода"
+        );
+        assert_eq!(sessions[1].updated_at, 200);
+    }
+
+    /// `load_agent_session` несуществующей сессии → пусто; ходы возвращаются в хронологии ASC.
+    #[tokio::test]
+    async fn load_agent_session_orders_ascending() {
+        let (_d, db) = open().await;
+        let w = db.writer();
+        assert!(load_agent_session(db.reader(), "нет")
+            .await
+            .unwrap()
+            .is_empty());
+        let r2 = create_run_in_session(w, "S", "t2", None, None)
+            .await
+            .unwrap();
+        persist_turn(w, r2, "S", "t2", "", &[], STATUS_DONE, None, None, 200)
+            .await
+            .unwrap();
+        let r1 = create_run_in_session(w, "S", "t1", None, None)
+            .await
+            .unwrap();
+        persist_turn(w, r1, "S", "t1", "", &[], STATUS_DONE, None, None, 100)
+            .await
+            .unwrap();
+        let turns = load_agent_session(db.reader(), "S").await.unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].task, "t1", "ASC по created_at: 100 раньше 200");
+        assert_eq!(turns[1].task, "t2");
     }
 }

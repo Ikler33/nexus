@@ -283,3 +283,91 @@ describe('agent store — atomic ACP-permission approve (общий actionId)', 
     expect(spy.mock.calls[0][1]).toEqual([{ actionId: 300, approve: true }]);
   });
 });
+
+describe('agent store — история переписок (W-38)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('newSession даёт НОВЫЙ currentSessionId (и чистит ленту)', () => {
+    useAgentStore.setState({ turns: [], context: null, approving: false });
+    const before = useAgentStore.getState().currentSessionId;
+    expect(before).toMatch(/^sess-/);
+    useAgentStore.getState().newSession();
+    const after = useAgentStore.getState().currentSessionId;
+    expect(after).toMatch(/^sess-/);
+    expect(after).not.toBe(before);
+    expect(useAgentStore.getState().turns).toEqual([]);
+  });
+
+  it('run прокидывает currentSessionId в agent.run (group-ключ персиста)', () => {
+    useAgentStore.setState({ turns: [], context: null, approving: false });
+    const sid = useAgentStore.getState().currentSessionId;
+    const spy = vi
+      .spyOn(tauriApi.agent, 'run')
+      .mockImplementation(() => Promise.resolve(1));
+    useAgentStore.getState().run('задача');
+    // 5-й аргумент run() = sessionId.
+    expect(spy.mock.calls[0][4]).toBe(sid);
+  });
+
+  it('loadSession гидрирует turns из мока и делает сессию текущей', async () => {
+    useAgentStore.setState({ turns: [], context: null, approving: false });
+    vi.spyOn(tauriApi.agent.sessions, 'load').mockResolvedValue({
+      turns: [
+        {
+          runId: 7,
+          task: 'разбери входящие',
+          assistantText: 'готов помочь',
+          report: 'итог',
+          error: null,
+          status: 'done',
+          createdAt: 100,
+          steps: [
+            { kind: 'fs.read', args: '{}', title: 'Читает', result: 'ok', isError: false },
+          ],
+        },
+      ],
+    });
+    await useAgentStore.getState().loadSession('sess-loaded');
+    const st = useAgentStore.getState();
+    expect(st.currentSessionId).toBe('sess-loaded');
+    expect(st.turns).toHaveLength(1);
+    expect(st.turns[0].runId).toBe(7);
+    expect(st.turns[0].task).toBe('разбери входящие');
+    expect(st.turns[0].report).toBe('итог');
+    expect(st.turns[0].status).toBe('done');
+    expect(st.turns[0].steps).toHaveLength(1);
+    expect(st.turns[0].steps[0].kind).toBe('fs.read');
+    // live-only поля пусты (персист их не несёт).
+    expect(st.turns[0].changeset).toEqual([]);
+    expect(st.turns[0].plan).toEqual([]);
+    expect(st.turns[0].researchReport).toBeNull();
+  });
+
+  it('loadSession — no-op во время активного хода', async () => {
+    useAgentStore.setState({
+      turns: [
+        {
+          key: 0,
+          epoch: 0,
+          runId: 1,
+          task: 'идёт',
+          assistantText: '',
+          steps: [],
+          changeset: [],
+          plan: [],
+          subagents: [],
+          execItems: [],
+          researchReport: null,
+          report: null,
+          error: null,
+          status: 'running',
+        },
+      ],
+      context: null,
+      approving: false,
+    });
+    const spy = vi.spyOn(tauriApi.agent.sessions, 'load');
+    await useAgentStore.getState().loadSession('sess-other');
+    expect(spy).not.toHaveBeenCalled(); // активный ход сначала отменить
+  });
+});

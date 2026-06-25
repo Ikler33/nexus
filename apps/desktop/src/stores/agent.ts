@@ -145,6 +145,9 @@ export interface AgentTurn {
 interface AgentState {
   /** Лента ходов сессии (мультитёрн). Пусто — сессия ещё не начата. */
   turns: AgentTurn[];
+  /** W-38: id текущей переписки (история). Генерится при инициализации и в `newSession`; едет в
+   *  `agent_run` как group-ключ персиста ходов. Меняется на загруженный при `loadSession`. */
+  currentSessionId: string;
   autonomy: AgentAutonomy;
   /** Отображаемая модель (per-run политика UI; реальную выбирает бэкенд по конфигу). */
   model: string;
@@ -170,6 +173,9 @@ interface AgentState {
   cancel: () => Promise<void>;
   /** Откат применённых действий активного/последнего хода (AGENT-4) → число откаченных. */
   undo: () => Promise<number>;
+  /** W-38: переоткрывает прошлую переписку — грузит её ходы (`agent_session_load`) в ленту и делает её
+   *  текущей (нельзя во время активного хода). */
+  loadSession: (sessionId: string) => Promise<void>;
   /** Новая сессия: очищает ленту (нельзя во время активного хода — сначала cancel). */
   newSession: () => void;
 }
@@ -187,6 +193,11 @@ export function sessionStatus(turns: AgentTurn[]): AgentStatus {
   return turns.length ? turns[turns.length - 1].status : 'idle';
 }
 
+/** W-38: новый id переписки — `sess-<ms>-<rand>` (уникален в пределах запуска для группировки ходов). */
+function newSessionId(): string {
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 const INITIAL = {
   turns: [] as AgentTurn[],
   context: null as ContextUsage | null,
@@ -199,6 +210,7 @@ let agentEpochSeq = 0;
 
 export const useAgentStore = create<AgentState>((set, get) => ({
   ...INITIAL,
+  currentSessionId: newSessionId(),
   autonomy: 'confirm',
   model: 'qwen3:35b',
   perms: { read: true, write: true, web: false },
@@ -441,7 +453,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     };
 
     void tauriApi.agent
-      .run(q, autonomy, onEvent, history)
+      .run(q, autonomy, onEvent, history, get().currentSessionId)
       .then((id) => {
         const tn = get().turns.find((t) => t.key === turnKey);
         // Тот же ход (epoch), не отменён синхронным потоком до резолва id — иначе не привязываем runId.
@@ -604,9 +616,48 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
+  async loadSession(sessionId) {
+    if (isActive(sessionStatus(get().turns))) return; // активный ход сначала отменить
+    logUi('agent:load-session', sessionId);
+    let data;
+    try {
+      data = await tauriApi.agent.sessions.load(sessionId);
+    } catch {
+      return; // загрузка не удалась — ленту не трогаем
+    }
+    // Реконструируем ленту: по одному `AgentTurn` на персистированный ход. Live-only поля (план/
+    // субагенты/exec/changeset/отчёт-документ) пусты — персист их не несёт (W-38), они оживают только в
+    // НОВЫХ прогонах. `key`/`epoch` присваиваем возрастающе (epoch — из общего счётчика, чтобы
+    // late-события активных прогонов сюда не текли).
+    const turns: AgentTurn[] = data.turns.map((tn, i) => ({
+      key: i,
+      epoch: ++agentEpochSeq,
+      runId: tn.runId,
+      task: tn.task,
+      assistantText: tn.assistantText,
+      steps: tn.steps.map((s, j) => ({
+        id: `hist-${tn.runId}-${j}`,
+        kind: s.kind,
+        args: s.args,
+        title: s.title,
+        result: s.result,
+        isError: s.isError,
+      })),
+      changeset: [],
+      plan: [],
+      subagents: [],
+      execItems: [],
+      researchReport: null,
+      report: tn.report,
+      error: tn.error,
+      status: tn.status as AgentStatus,
+    }));
+    set({ turns, currentSessionId: sessionId, context: null, approving: false });
+  },
+
   newSession() {
     if (isActive(sessionStatus(get().turns))) return; // активный ход сначала отменить
     logUi('agent:new-session');
-    set({ ...INITIAL });
+    set({ ...INITIAL, currentSessionId: newSessionId() });
   },
 }));
