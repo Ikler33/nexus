@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUp,
@@ -23,6 +22,7 @@ import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
+import { ExecGraph } from './ExecGraph';
 import { Markdown } from '../common/Markdown';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -39,11 +39,12 @@ const MODELS = ['qwen3:35b', 'llama3.3', 'gpt-5'] as const;
  * Вкладка Агента (UI-1b) — полноэкранный агентский воркспейс на контракте UI-1a (`Channel<AgentStreamEvent>`).
  * Шапка (модель/автономность/права/контекст-бар) · лента шагов (стрим токенов ассистента + раскрываемые
  * tool-вызовы/результаты + дифы) · Changeset (per-file apply/reject + bulk → `decisions[]` → `agent_approve`)
- * · композер (→ `agent_run`) · правый dock (План/Граф — демо-структура; Отчёт — из `final`).
+ * · композер (→ `agent_run`) · правый dock (План — реальные шаги; Граф — реальный граф выполнения ExecGraph;
+ *   Отчёт — из `final`).
  *
- * Plan/ResearchGraph здесь — ДОКУМЕНТИРОВАННАЯ статичная демо-структура (контракт UI-1a не несёт plan-шагов
- * /graph-данных — только AssistantToken/ToolCall/ToolResult/ContextUsage/Proposal/Diff/Final/Error). Отчёт —
- * РЕАЛЬНЫЕ данные из события `final`.
+ * Все доки питаются ЖИВЫМИ данными хода: PlanLive — `turn.steps`, ExecGraph — `turn.steps`/`subagents`/
+ * `execItems`/`report` (вертикальное дерево-таймлайн, заменил фейковый демо-ResearchGraph), Отчёт —
+ * `final`/`researchReport`.
  */
 export function AgentView() {
   const { t } = useTranslation();
@@ -882,168 +883,14 @@ function PlanLive() {
 // ── Правый dock: дерево субагентов (W-24, живые данные) ──────────────────────────────────────────
 
 /**
- * Дерево делегирования (W-24): плоский список субагентов последнего хода (max_depth=1 → без вложенности).
- * Живые данные из `turn.subagents` (события `subagentStatus`). Пусто → подсказка. Статус-классы — те же,
- * что у `PlanLive` (piDone/piRun/piErr).
- */
-function SubagentTree() {
-  const { t } = useTranslation();
-  const turns = useAgentStore((s) => s.turns);
-  const turn = turns.length ? turns[turns.length - 1] : null;
-  const subs = turn?.subagents ?? [];
-  if (subs.length === 0) {
-    return <div className={styles.planEmpty}>{t('agent.subagents.empty')}</div>;
-  }
-  const piCls = (status: string): string =>
-    status === 'done' ? styles.piDone : status === 'failed' ? styles.piErr : styles.piRun;
-  return (
-    <div className={styles.planList}>
-      {subs.map((s) => (
-        <div key={s.childRunId} className={`${styles.planItem} ${piCls(s.status)}`}>
-          <span className={styles.planIc}>
-            <Share2 size={12} aria-hidden />
-          </span>
-          <span className={styles.planLabel}>
-            {s.goal}
-            {s.summary ? ` — ${s.summary}` : ''}
-          </span>
-          <span className={styles.rcMeta}>{t(`agent.subagents.status.${s.status}`)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Список exec-предложений песочницы (W-26, ТОЛЬКО ОТОБРАЖЕНИЕ): силуэт команды + exit-код + finalized.
- * Живые данные из `turn.execItems` (события execProposal/execResult). Приватность §5.6: только силуэт
- * `summary` + exitCode, БЕЗ сырого stdout/argv. NB: exec структурно Linux-only (rootless-Podman sandbox);
- * на macOS-десктопе этот список ПУСТ — наполняется лишь при реальных exec-событиях (Linux-сборка /
- * будущий коннектор к agentd). Аппрува тут НЕТ намеренно: на десктопе нет exec-decision-пути (решение
- * host-side в песочнице/коннекторе) — кнопка была бы мёртвой/вводящей в заблуждение.
- */
-function ExecList() {
-  const { t } = useTranslation();
-  const turns = useAgentStore((s) => s.turns);
-  const turn = turns.length ? turns[turns.length - 1] : null;
-  const items = turn?.execItems ?? [];
-  if (items.length === 0) return null;
-  const piCls = (it: { finalized: boolean; exitCode: number | null }): string =>
-    !it.finalized ? styles.piRun : it.exitCode === 0 ? styles.piDone : styles.piErr;
-  return (
-    <div className={styles.planList}>
-      {items.map((it) => (
-        <div key={it.actionId} className={`${styles.planItem} ${piCls(it)}`}>
-          <span className={styles.planIc}>
-            <Terminal size={12} aria-hidden />
-          </span>
-          <span className={styles.planLabel}>{it.summary || t('agent.exec.untitled')}</span>
-          <span className={styles.rcMeta}>
-            {!it.finalized ? t('agent.exec.running') : t('agent.exec.exit', { code: it.exitCode ?? '?' })}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Содержимое дока «Граф»: живое дерево субагентов (W-24) и/или список exec-команд (W-26), если они
- * есть в последнем ходе; иначе — статичный демо-граф (контракт graph-данных пока не несёт топологию).
+ * Содержимое дока «Граф» = РЕАЛЬНЫЙ граф выполнения (ExecGraph): вертикальное дерево-таймлайн над
+ * состоянием последнего хода (steps=trunk, subagents=ветви, execItems/report=узлы). Заменяет фейковый
+ * статичный ResearchGraph и СУБСУМИРУЕТ прежние SubagentTree (W-24, субагенты теперь = branch-узлы) и
+ * ExecList (W-26, exec теперь = command-узлы). Рёбра только sequence+delegation (без выдуманной
+ * причинности). NB: `turn.plan` (план) сюда НЕ входит — он в отдельной вкладке «План» (PlanLive).
  */
 function GraphDock() {
-  const turns = useAgentStore((s) => s.turns);
-  const turn = turns.length ? turns[turns.length - 1] : null;
-  const hasSubs = (turn?.subagents?.length ?? 0) > 0;
-  const hasExec = (turn?.execItems?.length ?? 0) > 0;
-  if (!hasSubs && !hasExec) return <ResearchGraph />;
-  return (
-    <>
-      {hasSubs && <SubagentTree />}
-      {hasExec && <ExecList />}
-    </>
-  );
-}
-
-// ── Правый dock: Граф выполнения (демо-структура) ────────────────────────────────────────────────
-
-/**
- * Граф выполнения — ДОКУМЕНТИРОВАННАЯ статичная демо-визуализация (research-задачи). Контракт UI-1a НЕ несёт
- * graph-данных, поэтому это эталон из дизайна (`agent-view.jsx::ResearchGraph`), помеченный demoNote.
- * Радиальная раскладка детерминирована (без backend-данных).
- */
-function ResearchGraph() {
-  const { t } = useTranslation();
-  const cx = 150;
-  const cy = 220;
-  const R = 96;
-  const D2R = Math.PI / 180;
-  const rounds = [
-    { a: -90, n: 14 },
-    { a: -25, n: 8 },
-    { a: 45, n: 7 },
-    { a: 120, n: 12 },
-    { a: 200, n: 6 },
-  ];
-  const edges: ReactNode[] = [];
-  const hubs: ReactNode[] = [];
-  const dots: ReactNode[] = [];
-  let di = 0;
-  rounds.forEach((rd, ri) => {
-    const hx = cx + R * Math.cos(rd.a * D2R);
-    const hy = cy + R * Math.sin(rd.a * D2R);
-    edges.push(
-      <line key={`e${ri}`} className={styles.rgEdge} x1={cx} y1={cy} x2={hx} y2={hy} />,
-    );
-    hubs.push(<circle key={`h${ri}`} className={styles.rgHub} cx={hx} cy={hy} r={6.5} />);
-    hubs.push(
-      <text key={`hl${ri}`} className={styles.rgLabel} x={hx} y={hy - 11} textAnchor="middle">
-        {`R${ri + 1}`}
-      </text>,
-    );
-    for (let k = 0; k < rd.n; k++) {
-      const spread = rd.n > 1 ? (k / (rd.n - 1) - 0.5) * 96 : 0;
-      const ang = (rd.a + spread) * D2R;
-      const rr = 15 + (k % 3) * 5.5;
-      dots.push(
-        <circle
-          key={`d${ri}-${k}`}
-          className={styles.rgDot}
-          cx={hx + rr * Math.cos(ang)}
-          cy={hy + rr * Math.sin(ang)}
-          r={2.4}
-        />,
-      );
-      di++;
-    }
-  });
-  return (
-    <div className={styles.research}>
-      <div className={styles.demoNote}>{t('agent.graph.demoNote')}</div>
-      <div className={styles.rcH}>
-        <span className={styles.rcMeta}>{t('agent.graph.meta')}</span>
-      </div>
-      <svg
-        className={styles.rgSvg}
-        viewBox="0 0 300 460"
-        preserveAspectRatio="xMidYMid meet"
-        fill="none"
-        aria-hidden
-      >
-        <g>{edges}</g>
-        <circle className={styles.rgCenter} cx={cx} cy={cy} r={11} />
-        <text className={styles.rgClabel} x={cx} y={cy + 30} textAnchor="middle">
-          {t('agent.graph.center')}
-        </text>
-        <g>{dots}</g>
-        <g>{hubs}</g>
-      </svg>
-      <div className={styles.rcFoot}>
-        <span className={styles.rcRun}>{t('agent.graph.running')}</span>
-        <span>· {di} ●</span>
-      </div>
-    </div>
-  );
+  return <ExecGraph />;
 }
 
 // ── Правый dock: Отчёт (реальные данные из `final`) ──────────────────────────────────────────────
