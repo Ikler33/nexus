@@ -23,6 +23,7 @@ import { OrbitIcon } from '../chrome/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { BrandThinking } from '../chrome/BrandThinking';
+import { Markdown } from '../common/Markdown';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useToastStore } from '../../stores/toast';
@@ -422,14 +423,20 @@ function TurnView({
         <div className={styles.task}>{turn.task}</div>
       </div>
 
-      {/* Ответ ассистента (склейка assistantToken) */}
+      {/* Ответ ассистента (склейка assistantToken). Во время стрима — плейн-текст (raw, быстро,
+          markdown по живому дёргал бы вёрстку, как в чате); по завершении хода — финальный
+          markdown-рендер (как ChatView: stream plain → final md). */}
       {(turn.assistantText || active) && (
         <div className={`${styles.msg} ${styles.msgBot}`}>
           <div className={styles.who}>
             <BrandThinking size={14} />
             {t('agent.who.agent')}
           </div>
-          <div className={styles.reply}>{turn.assistantText}</div>
+          {active || !turn.assistantText ? (
+            <div className={styles.reply}>{turn.assistantText}</div>
+          ) : (
+            <Markdown content={turn.assistantText} className={styles.replyMd} />
+          )}
         </div>
       )}
 
