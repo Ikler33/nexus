@@ -239,45 +239,49 @@ pub async fn open_vault(
             .ok()
             .map(|d| d.join("news.json"))
     };
-    let news_chat = chat_util.clone().or_else(|| chat_fast.clone());
-    let news_active = if let (Some(config_path), Some(news_chat)) = (&news_config_path, news_chat) {
-        let handler: Arc<dyn crate::scheduler::JobHandler> =
-            Arc::new(crate::news::NewsFeedHandler {
-                fetcher: Arc::new(crate::news::GuardedNewsFetcher::new(
-                    state.egress_policy.clone(),
-                    state.egress_audit.clone(),
-                    Arc::new(crate::news::SystemResolver),
-                )),
-                chat: news_chat,
-                writer: db.writer().clone(),
-                reader: db.reader().clone(),
-                config_path: config_path.clone(),
-                // W-2: эндпоинт оценки новостей = ai.fast (с фолбэком ai.chat) — для видимой ошибки
-                // в сводке прогона при недостижимости (дрейф .31/.28). Зеркалит выбор news_chat.
-                chat_endpoint: local_cfg.as_ref().and_then(|c| {
-                    c.ai.fast
+    // W-40: регистрируем при наличии ХОТЯ БЫ одной модели; выбор util(ai.fast)/main(ai.chat) — на
+    // КАЖДЫЙ прогон по news.json::model_pref (горячее переключение в NewsFeedHandler::handle).
+    let has_news_model = chat_util.is_some() || chat_fast.is_some();
+    let news_active =
+        if let Some(config_path) = news_config_path.as_ref().filter(|_| has_news_model) {
+            let handler: Arc<dyn crate::scheduler::JobHandler> =
+                Arc::new(crate::news::NewsFeedHandler {
+                    fetcher: Arc::new(crate::news::GuardedNewsFetcher::new(
+                        state.egress_policy.clone(),
+                        state.egress_audit.clone(),
+                        Arc::new(crate::news::SystemResolver),
+                    )),
+                    chat_util: chat_util.clone(),
+                    chat_fast: chat_fast.clone(),
+                    writer: db.writer().clone(),
+                    reader: db.reader().clone(),
+                    config_path: config_path.clone(),
+                    // W-2/W-40: URL утилитарной (ai.fast) и основной (ai.chat) — для видимой ошибки
+                    // в сводке прогона по ВЫБРАННОЙ модели при недостижимости.
+                    url_util: local_cfg
                         .as_ref()
-                        .map(|f| f.url.clone())
-                        .or_else(|| c.ai.chat.as_ref().map(|ch| ch.url.clone()))
-                }),
-                progress: {
-                    // Этапы прогона → UI (фидбэк 11.06: живой статус «Опрашиваю источники 7/16»
-                    // вместо немого «Собираю…»). Best-effort, как jobs:changed.
-                    let app = app.clone();
-                    Arc::new(move |stage: &str, done: usize, total: usize| {
-                        use tauri::Emitter;
-                        let _ = app.emit(
-                            "news:progress",
-                            serde_json::json!({ "stage": stage, "done": done, "total": total }),
-                        );
-                    })
-                },
-            });
-        registry.insert(crate::news::KIND_NEWSFEED.to_string(), handler);
-        true
-    } else {
-        false
-    };
+                        .and_then(|c| c.ai.fast.as_ref().map(|f| f.url.clone())),
+                    url_fast: local_cfg
+                        .as_ref()
+                        .and_then(|c| c.ai.chat.as_ref().map(|ch| ch.url.clone())),
+                    progress: {
+                        // Этапы прогона → UI (фидбэк 11.06: живой статус «Опрашиваю источники 7/16»
+                        // вместо немого «Собираю…»). Best-effort, как jobs:changed.
+                        let app = app.clone();
+                        Arc::new(move |stage: &str, done: usize, total: usize| {
+                            use tauri::Emitter;
+                            let _ = app.emit(
+                                "news:progress",
+                                serde_json::json!({ "stage": stage, "done": done, "total": total }),
+                            );
+                        })
+                    },
+                });
+            registry.insert(crate::news::KIND_NEWSFEED.to_string(), handler);
+            true
+        } else {
+            false
+        };
 
     // Recurring (slice 6): LLM-фичи сами переназначаются после прогона — авто-обновление раз в сутки
     // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.

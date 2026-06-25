@@ -916,6 +916,9 @@ export interface NewsConfig {
   keywords: string[] | null;
   /** Доп. хосты статей, разрешённые по клику из ридера (per-host consent, ревизия NF-6). */
   extraHosts: string[];
+  /** W-40: модель пайплайна новостей — `'fast'` (`ai.fast`, дефолт) | `'main'` (`ai.chat`);
+   *  `null`/неизвестное → как `'fast'` (0 регрессии). */
+  modelPref: 'fast' | 'main' | null;
 }
 
 /** Источник реестра v1 (зеркалит Rust `commands::news::NewsSourceDto`) — для consent-строки. */

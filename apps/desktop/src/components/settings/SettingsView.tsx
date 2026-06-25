@@ -9,6 +9,7 @@ import {
   Info,
   Keyboard,
   Loader2,
+  Newspaper,
   Palette,
   Pencil,
   RotateCcw,
@@ -42,6 +43,7 @@ import type { Accent, Theme } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import type { SettingsSection } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
+import { NewsSettingsSection } from './NewsSettingsSection';
 import styles from './SettingsView.module.css';
 
 /** Превью-цвет свотча акцента (реальный акцент — data-accent в токенах). */
@@ -89,6 +91,7 @@ const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
   { id: 'editor', icon: Pencil, key: 'settings.editor' },
   { id: 'appearance', icon: Palette, key: 'settings.appearance' },
   { id: 'ai', icon: Cpu, key: 'settings.ai' },
+  { id: 'news', icon: Newspaper, key: 'settings.news.title' },
   { id: 'data', icon: Database, key: 'settings.data' },
   { id: 'hotkeys', icon: Keyboard, key: 'settings.hotkeys' },
   { id: 'about', icon: Info, key: 'settings.about' },
@@ -148,6 +151,7 @@ export function SettingsView() {
           {section === 'editor' && <EditorSection />}
           {section === 'appearance' && <AppearanceSection />}
           {section === 'ai' && <AiSection />}
+          {section === 'news' && <NewsSettingsSection />}
           {section === 'data' && <DataSection />}
           {section === 'hotkeys' && <HotkeysSection />}
           {section === 'about' && <AboutSection />}

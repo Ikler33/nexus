@@ -33,6 +33,12 @@ pub struct NewsConfig {
     /// капы/таймауты/маркеры те же — consent добавляет только ПУБЛИЧНЫЙ хост в "news"-скоуп.
     #[serde(default)]
     pub extra_hosts: Vec<String>,
+    /// W-40: какую LLM пайплайн новостей берёт для анализа/перевода/сокращения:
+    /// `Some("fast")` → утилитарная `ai.fast` (= `chat_util`, ТЕКУЩИЙ дефолт: быстро),
+    /// `Some("main")` → основная `ai.chat` (= `chat_fast`: качественнее, медленнее).
+    /// `None`/неизвестное → как `"fast"` (0 регрессии — старые конфиги без поля ведут себя как раньше).
+    #[serde(default)]
+    pub model_pref: Option<String>,
 }
 
 impl NewsConfig {
@@ -128,5 +134,41 @@ mod tests {
         std::fs::write(&path, "{оборвано").unwrap();
         assert!(!load(&path).enabled, "битый файл → fail-safe выкл");
         assert!(!load(&dir.path().join("нет.json")).enabled);
+    }
+
+    /// W-40: `model_pref` переживает round-trip; старый конфиг без поля грузится с `None` (= fast,
+    /// 0 регрессии). Битый файл по-прежнему → дефолт (`model_pref: None`).
+    #[test]
+    fn model_pref_round_trips_and_defaults_to_none() {
+        // Старый конфиг (поля model_pref ещё нет) → None благодаря `#[serde(default)]`.
+        let legacy = NewsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(legacy.model_pref, None, "новый конфиг — fast-дефолт (None)");
+        let json = serde_json::to_string(&NewsConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap();
+        // Сериализованный дефолт несёт modelPref:null — десериализуется обратно в None.
+        let back: NewsConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.model_pref, None);
+
+        // Конфиг без ключа modelPref вовсе (как до W-40) → тоже None.
+        let pre_w40: NewsConfig = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert_eq!(pre_w40.model_pref, None);
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("news.json");
+        let cfg = NewsConfig {
+            enabled: true,
+            model_pref: Some("main".into()),
+            ..Default::default()
+        };
+        save(&path, &cfg).unwrap();
+        let loaded = load(&path);
+        assert_eq!(loaded.model_pref.as_deref(), Some("main"));
+        assert_eq!(loaded, cfg);
     }
 }

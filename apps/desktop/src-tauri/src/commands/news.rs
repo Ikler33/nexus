@@ -22,6 +22,21 @@ use crate::suggest::LinkSuggestion;
 /// Размер страницы ленты (карточек за запрос) — без безлимитных выгрузок (урок #22).
 const PAGE_SIZE: i64 = 50;
 
+/// W-40: выбирает chat-провайдера пайплайна новостей по `model_pref` из `news.json`.
+/// ЕДИНАЯ точка выбора (заменяет два инлайн-`.or_else`-места — `news_article`/`news_summarize`),
+/// чтобы анализ статьи и её сокращение всегда шли через ОДНУ и ту же модель, что выбрал пользователь.
+/// - `Some("main")` → основная модель `ai.chat` (= `chat_fast`) с fallback на утилитарную `ai.fast`.
+/// - иначе (`Some("fast")` / `None` / неизвестное) → утилитарная `ai.fast` (= `chat_util`) с fallback
+///   на `ai.chat` (= `chat_fast`). Это ТЕКУЩЕЕ (до-W-40) поведение — при `None` байт-в-байт прежнее.
+fn select_news_chat(ai: &crate::ai::AIClient, pref: Option<&str>) -> Option<Arc<dyn ChatProvider>> {
+    if pref == Some("main") {
+        ai.chat_fast.clone().or_else(|| ai.chat_util.clone())
+    } else {
+        // fast / None / неизвестное — дефолт = прежнее поведение (ai.fast → ai.chat).
+        ai.chat_util.clone().or_else(|| ai.chat_fast.clone())
+    }
+}
+
 /// Страница ленты для UI: записи + чипы тем + шапка последнего прогона.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,15 +99,19 @@ pub struct NewsEndpointHealth {
 }
 
 /// URL провайдера, которым РЕАЛЬНО пользуются новости: пайплайн (`news::run`/`news_article`/
-/// `news_summarize`) берёт `ai.chat_util` (= `ai.fast`) с fallback на `ai.chat_fast` (= `ai.chat`).
-/// Здесь зеркалим этот выбор по конфигу `.nexus/local.json`: `ai.fast.url`, иначе `ai.chat.url`.
-fn news_provider_url(cfg: &LocalConfig) -> Option<String> {
-    cfg.ai
-        .fast
-        .as_ref()
-        .map(|f| f.url.clone())
-        .or_else(|| cfg.ai.chat.as_ref().map(|c| c.url.clone()))
-        .filter(|u| !u.trim().is_empty())
+/// `news_summarize`) выбирает модель по `news.json::model_pref` ([`select_news_chat`]) — `ai.fast`
+/// (дефолт/`"fast"`/`None`) ИЛИ `ai.chat` (`"main"`), с fallback на другую. Здесь зеркалим ТОТ ЖЕ
+/// порядок по конфигу `.nexus/local.json`, чтобы «Проверить связь» (W-39) пинговала именно тот URL,
+/// которым пайплайн реально пользуется при текущем выборе модели.
+fn news_provider_url(cfg: &LocalConfig, pref: Option<&str>) -> Option<String> {
+    let chat_url = || cfg.ai.chat.as_ref().map(|c| c.url.clone());
+    let fast_url = || cfg.ai.fast.as_ref().map(|f| f.url.clone());
+    let ordered = if pref == Some("main") {
+        chat_url().or_else(fast_url) // "main": ai.chat, fallback ai.fast
+    } else {
+        fast_url().or_else(chat_url) // "fast"/None: ai.fast, fallback ai.chat (прежнее поведение)
+    };
+    ordered.filter(|u| !u.trim().is_empty())
 }
 
 /// W-39: пингует ПРОВАЙДЕРА новостей (анализатор записей/перевод — `ai.fast` с fallback на `ai.chat`).
@@ -101,7 +120,12 @@ fn news_provider_url(cfg: &LocalConfig) -> Option<String> {
 /// (первый egress-вектор закрыт), офлайн-тумблер режет, аудит пишет. Любой ответ сервера → достижим;
 /// сетевая ошибка → нет (с причиной). Эндпоинт не настроен → `ok=false` с подсказкой.
 #[tauri::command]
-pub async fn news_test_endpoint(state: State<'_, AppState>) -> AppResult<NewsEndpointHealth> {
+pub async fn news_test_endpoint(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<NewsEndpointHealth> {
+    // W-40: пингуем URL модели, выбранной в news.json (`model_pref`) — консистентно с пайплайном.
+    let model_pref = news::load_news_config(&config_path(&app)?).model_pref;
     let root = state.vault().await?.root.clone();
     let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
         .await
@@ -111,7 +135,7 @@ pub async fn news_test_endpoint(state: State<'_, AppState>) -> AppResult<NewsEnd
     } else {
         LocalConfig::parse(&raw).map_err(|e| AppError::Msg(e.to_string()))?
     };
-    let Some(endpoint) = news_provider_url(&cfg) else {
+    let Some(endpoint) = news_provider_url(&cfg, model_pref.as_deref()) else {
         return Ok(NewsEndpointHealth {
             ok: false,
             message: "анализатор новостей не настроен — укажите эндпоинт в Настройки → ИИ".into(),
@@ -368,7 +392,13 @@ pub enum NewsArticleDto {
 /// хост вне news-allowlist → `denied`, никакого расширения по клику) → извлечение абзацев →
 /// RU-перевод утилитарной моделью → кэш в БД. Долгий вызов (LLM) — UI показывает прогресс.
 #[tauri::command]
-pub async fn news_article(state: State<'_, AppState>, id: i64) -> AppResult<NewsArticleDto> {
+pub async fn news_article(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<NewsArticleDto> {
+    // W-40: модель новостей по выбору пользователя (`news.json::model_pref`); None → fast-дефолт.
+    let model_pref = news::load_news_config(&config_path(&app)?).model_pref;
     let (reader, writer, policy, audit, chat) = {
         let ctx = state.vault().await?;
         (
@@ -376,10 +406,7 @@ pub async fn news_article(state: State<'_, AppState>, id: i64) -> AppResult<News
             ctx.db.writer().clone(),
             ctx.ai.policy.clone(),
             state.egress_audit.clone(),
-            ctx.ai
-                .chat_util
-                .clone()
-                .or_else(|| ctx.ai.chat_fast.clone()),
+            select_news_chat(&ctx.ai, model_pref.as_deref()),
         )
     };
     let item = news::get_item(&reader, id)
@@ -442,15 +469,18 @@ pub async fn news_article(state: State<'_, AppState>, id: i64) -> AppResult<News
 
 /// «Сократить» (NF-6): 3–6 RU-тезисов по тексту статьи (кэш тела; без него — по резюме).
 #[tauri::command]
-pub async fn news_summarize(state: State<'_, AppState>, id: i64) -> AppResult<Vec<String>> {
+pub async fn news_summarize(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> AppResult<Vec<String>> {
+    // W-40: тот же выбор модели, что и в news_article — анализ и сокращение через одну модель.
+    let model_pref = news::load_news_config(&config_path(&app)?).model_pref;
     let (reader, chat) = {
         let ctx = state.vault().await?;
         (
             ctx.db.reader().clone(),
-            ctx.ai
-                .chat_util
-                .clone()
-                .or_else(|| ctx.ai.chat_fast.clone()),
+            select_news_chat(&ctx.ai, model_pref.as_deref()),
         )
     };
     let chat: Arc<dyn ChatProvider> =
@@ -653,6 +683,121 @@ fn unix_to_date(secs: i64) -> String {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Мок chat-провайдера для тестов выбора модели: несёт лишь идентификатор, чтобы убедиться,
+    /// КАКОЙ слот (`chat_util`/`chat_fast`) выбрал [`select_news_chat`] по `model_pref`.
+    struct TagProvider(&'static str);
+    #[async_trait::async_trait]
+    impl ChatProvider for TagProvider {
+        async fn stream_chat(
+            &self,
+            _messages: &[crate::ai::ChatMessage],
+            _on_token: &mut (dyn FnMut(String) + Send),
+            _cancel: &Arc<AtomicBool>,
+        ) -> crate::ai::AiResult<String> {
+            Ok(String::new())
+        }
+        fn model_id(&self) -> &str {
+            self.0
+        }
+    }
+
+    /// Собирает `AIClient` с заданными слотами утилитарной/основной модели (остальное — None/пусто).
+    fn ai_client(util: Option<&'static str>, fast: Option<&'static str>) -> crate::ai::AIClient {
+        crate::ai::AIClient {
+            chat: None,
+            chat_fast: fast.map(|m| Arc::new(TagProvider(m)) as Arc<dyn ChatProvider>),
+            chat_util: util.map(|m| Arc::new(TagProvider(m)) as Arc<dyn ChatProvider>),
+            embedder: None,
+            agent_tools: None,
+            policy: Arc::new(crate::net::EgressPolicy::new(Arc::new(AtomicBool::new(
+                false,
+            )))),
+        }
+    }
+
+    /// W-40: `select_news_chat` — дефолт/`"fast"`/`None` берёт утилитарную (`chat_util`), `"main"` —
+    /// основную (`chat_fast`); при отсутствии выбранной модели падает на другую (fallback).
+    #[test]
+    fn select_news_chat_routes_by_pref() {
+        let ai = ai_client(Some("util-model"), Some("main-model"));
+
+        // None / "fast" / неизвестное → утилитарная (ТЕКУЩЕЕ поведение, 0 регрессии).
+        for pref in [None, Some("fast"), Some("bogus")] {
+            assert_eq!(
+                select_news_chat(&ai, pref).unwrap().model_id(),
+                "util-model",
+                "pref={pref:?} → утилитарная"
+            );
+        }
+        // "main" → основная.
+        assert_eq!(
+            select_news_chat(&ai, Some("main")).unwrap().model_id(),
+            "main-model"
+        );
+
+        // Fallback: "main" без основной → утилитарная; "fast"/None без утилитарной → основная.
+        let only_util = ai_client(Some("util-model"), None);
+        assert_eq!(
+            select_news_chat(&only_util, Some("main"))
+                .unwrap()
+                .model_id(),
+            "util-model"
+        );
+        let only_fast = ai_client(None, Some("main-model"));
+        assert_eq!(
+            select_news_chat(&only_fast, None).unwrap().model_id(),
+            "main-model"
+        );
+
+        // Обе пусты → None независимо от pref.
+        let empty = ai_client(None, None);
+        assert!(select_news_chat(&empty, Some("main")).is_none());
+        assert!(select_news_chat(&empty, None).is_none());
+    }
+
+    /// W-40: `news_provider_url` зеркалит тот же порядок выбора по `model_pref` для «Проверить связь».
+    #[test]
+    fn news_provider_url_mirrors_pref() {
+        let cfg = LocalConfig::parse(
+            r#"{"ai":{"chat":{"url":"http://chat:8080"},"fast":{"url":"http://fast:8084"}}}"#,
+        )
+        .unwrap();
+        // None / fast → ai.fast url (прежнее поведение).
+        assert_eq!(
+            news_provider_url(&cfg, None).as_deref(),
+            Some("http://fast:8084")
+        );
+        assert_eq!(
+            news_provider_url(&cfg, Some("fast")).as_deref(),
+            Some("http://fast:8084")
+        );
+        // main → ai.chat url.
+        assert_eq!(
+            news_provider_url(&cfg, Some("main")).as_deref(),
+            Some("http://chat:8080")
+        );
+
+        // Fallback при отсутствии выбранного эндпоинта.
+        let only_chat =
+            LocalConfig::parse(r#"{"ai":{"chat":{"url":"http://chat:8080"}}}"#).unwrap();
+        assert_eq!(
+            news_provider_url(&only_chat, None).as_deref(),
+            Some("http://chat:8080"),
+            "fast не задан → fallback на chat"
+        );
+        let only_fast =
+            LocalConfig::parse(r#"{"ai":{"fast":{"url":"http://fast:8084"}}}"#).unwrap();
+        assert_eq!(
+            news_provider_url(&only_fast, Some("main")).as_deref(),
+            Some("http://fast:8084"),
+            "main без chat → fallback на fast"
+        );
+
+        // Ничего не настроено → None.
+        let empty = LocalConfig::default();
+        assert!(news_provider_url(&empty, Some("main")).is_none());
+    }
 
     fn item(title_ru: &str) -> NewsItem {
         NewsItem {

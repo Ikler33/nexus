@@ -17,7 +17,13 @@ import type {
 const NOW = Math.floor(Date.now() / 1000);
 const H = 3600;
 
-let config: NewsConfig = { enabled: true, sources: {}, keywords: null, extraHosts: [] };
+let config: NewsConfig = {
+  enabled: true,
+  sources: {},
+  keywords: null,
+  extraHosts: [],
+  modelPref: null,
+};
 
 const registry: NewsSource[] = [
   { id: 'openai', title: 'OpenAI', enabled: true, langRu: false },

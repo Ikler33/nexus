@@ -20,6 +20,7 @@ export type SettingsSection =
   | 'editor'
   | 'appearance'
   | 'ai'
+  | 'news'
   | 'data'
   | 'hotkeys'
   | 'about';

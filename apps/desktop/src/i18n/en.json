@@ -305,6 +305,29 @@
       "testOk": "Reachable · v{{version}}",
       "localWarn": "Local mode: the agent runs one-shot — no conversation history and no per-run autonomy (the daemon uses its own config). The agentd daemon must open the SAME vault, otherwise edits go to the wrong place. Restarting agentd drops the current run — start the task again.",
       "acpWarn": "ACP mode: the app launches an external ACP agent and hands it the turn. You get the connected agent's brain (its model, tools, skills), not the embedded Castor. Action requests go through your approval; the agent performs file operations itself in its working directory — point it at the intended vault root. Each turn is a separate one-shot run with no conversation memory; pause/resume and turn undo are not supported. Ending the turn terminates the agent process."
+    },
+    "news": {
+      "title": "News",
+      "intro": "Configure the AI news feed: which model analyzes items, sources, the keyword filter and allowed hosts.",
+      "loading": "Loading…",
+      "model": "Analysis model",
+      "modelHint": "Which model the feed uses to translate and summarize items: the fast utility model or the main one (higher quality, but slower).",
+      "modelFast": "Fast",
+      "modelMain": "Main",
+      "modelUnset": "Model not configured — set the endpoint in “AI / Models”.",
+      "sources": "Sources",
+      "keywords": "Keywords",
+      "keywordsHint": "One per line or comma-separated. Empty — the default set.",
+      "keywordsPlaceholder": "llm\nrag\nlocal models",
+      "keywordsApply": "Apply",
+      "extraHosts": "Extra hosts",
+      "extraHostsHint": "Article hosts you allowed by clicking from the reader. Remove them here.",
+      "addHost": "Add",
+      "addHostPlaceholder": "example.com",
+      "removeHost": "Remove",
+      "diagHint": "Diagnostics, run history and logs live in the “News” feed.",
+      "saved": "Feed settings saved.",
+      "saveError": "Failed to save feed settings"
     }
   },
   "sidebar": {
