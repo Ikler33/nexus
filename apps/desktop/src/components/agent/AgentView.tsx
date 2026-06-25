@@ -26,6 +26,7 @@ import { AgentHistory } from './AgentHistory';
 import { describeStep } from './describeStep';
 import { ExecGraph } from './ExecGraph';
 import { Markdown } from '../common/Markdown';
+import { StreamingMarkdown } from '../common/StreamingMarkdown';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useToastStore } from '../../stores/toast';
@@ -429,9 +430,9 @@ function TurnView({
         <div className={styles.task}>{turn.task}</div>
       </div>
 
-      {/* Ответ ассистента (склейка assistantToken). Во время стрима — плейн-текст (raw, быстро,
-          markdown по живому дёргал бы вёрстку, как в чате); по завершении хода — финальный
-          markdown-рендер (как ChatView: stream plain → final md). */}
+      {/* Ответ ассистента (склейка assistantToken). W-34: во время стрима — живой markdown
+          (StreamingMarkdown: троттл + closeOpenFences, mermaid off); по завершении хода — финальный
+          markdown-рендер (Markdown, mermaid вкл). Как ChatView. */}
       {(turn.assistantText || active) && (
         <div className={`${styles.msg} ${styles.msgBot}`}>
           <div className={styles.who}>
@@ -439,7 +440,9 @@ function TurnView({
             {t('agent.who.agent')}
           </div>
           {active || !turn.assistantText ? (
-            <div className={styles.reply}>{turn.assistantText}</div>
+            // W-34: живой markdown по ходу стрима (как чат). `.replyMd` снимает pre-wrap (md держит
+            // вёрстку сам); финал ниже — полный `Markdown` (с mermaid из §1).
+            <StreamingMarkdown text={turn.assistantText} className={styles.replyMd} />
           ) : (
             <Markdown content={turn.assistantText} className={styles.replyMd} />
           )}
