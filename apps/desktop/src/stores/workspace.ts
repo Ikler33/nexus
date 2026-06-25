@@ -1,7 +1,9 @@
 import { create } from 'zustand';
+import i18n from '../i18n/setup';
 import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
 import { cancelAllAutosave, cancelAutosave, flush, scheduleAutosave } from './autosave';
+import { useToastStore } from './toast';
 
 /**
  * Рабочее пространство (§4.1, Б12): группы (сплиты) и вкладки вместо одиночного `currentFile`.
@@ -108,7 +110,9 @@ interface WorkspaceState {
   openLink: (target: string) => Promise<void>;
   setActiveTab: (groupId: string, path: string) => void;
   setActiveGroup: (groupId: string) => void;
-  closeTab: (groupId: string, path: string) => void;
+  /** Закрыть вкладку. Async: осиротевший dirty-буфер флашится ПЕРЕД GC; при ОШИБКЕ записи вкладка/буфер
+   *  НЕ удаляются (правки целы, баннер saveError виден) — DATA-SAFETY (audit P0-5). */
+  closeTab: (groupId: string, path: string) => Promise<void>;
   /** DnD вкладок между панами (DP-3, контракт `text/nexus-tab` макета): перенос без дублей,
    *  опустевшая группа схлопывается, буфер жив (в отличие от closeTab — без GC). */
   moveTab: (fromGroupId: string, toGroupId: string, path: string) => void;
@@ -117,8 +121,9 @@ interface WorkspaceState {
   toggleMode: (groupId?: string) => void;
   splitRight: () => void;
   /** W-1: закрыть весь пейн (группу) крестиком. Никогда не закрывает последнюю группу. Зеркалит
-   *  GC+flush closeTab (SAFE-4: осиротевшие буферы флашатся ПЕРЕД удалением) и nav-retarget moveTab. */
-  closeGroup: (groupId: string) => void;
+   *  GC+flush closeTab (SAFE-4: осиротевшие буферы флашатся ПЕРЕД удалением) и nav-retarget moveTab.
+   *  Async: при ОШИБКЕ записи осиротевшего буфера пейн НЕ закрывается (DATA-SAFETY, audit P0-5). */
+  closeGroup: (groupId: string) => Promise<void>;
   updateBufferDoc: (path: string, doc: string) => void;
   /** Запомнить позицию курсора буфера (NAV-4) — редактор зовёт при уходе с заметки. */
   setBufferCursor: (path: string, cursor: number) => void;
@@ -206,13 +211,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   async openFile(path, groupId, opts) {
-    // Открытие файла переключает main-область на редактор (Home/News/Доска — полные вьюхи поверх
-    // редактора). Гасим ВСЕ три, иначе при открытом примарном вью файл откроется ЗА ним = «мёртвый
-    // клик» из дерева/палитры/⌘O (adversarial-ревью BOARD-4: closeBoard забыли).
+    // Открытие файла переключает main-область на редактор. Гасим ВСЕ полноэкранные main-вьюхи
+    // (Home/News/Доска/Сегодня/Агент — полные вьюхи поверх редактора), иначе при открытом примарном
+    // вью файл откроется ЗА ним = «мёртвый клик» из дерева/палитры/⌘O (adversarial-ревью BOARD-4:
+    // closeBoard забыли; audit P0-2: closeToday/closeAgent забыли — Today/Agent перекрывали редактор).
     const { useUIStore } = await import('./ui');
     useUIStore.getState().closeHome();
     useUIStore.getState().closeNews();
     useUIStore.getState().closeBoard();
+    useUIStore.getState().closeToday();
+    useUIStore.getState().closeAgent();
     const gid = groupId ?? get().activeGroupId;
     let buffers = get().buffers;
     if (!buffers[path]) {
@@ -296,11 +304,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ activeGroupId: groupId });
   },
 
-  closeTab(groupId, path) {
+  async closeTab(groupId, path) {
     // SAFE-4 (критфикс): closeTab GC-ил буфер БЕЗ записи — несохранённые правки терялись. Флашим
     // ПЕРЕД GC. flush читает буфер сейчас (ещё есть), saveBuffer фиксирует doc строкой → запись
     // переживёт удаление буфера.
-    void flush(path);
+    // P0-5 (DATA-SAFETY): прежде flush был fire-and-forget (`void flush`), затем буфер СИНХРОННО GC-ился —
+    // если writeFile падал, к моменту catch буфера уже нет, saveError некуда положить → ТИХАЯ ПОТЕРЯ
+    // ПРАВОК. Теперь: если закрываемая вкладка осиротит свой dirty-буфер (нет ссылок в других
+    // вкладках), AWAIT-им flush ДО GC. При ошибке записи (saveError выставлен) вкладку/буфер НЕ удаляем.
+    const s0 = get();
+    const orphaned =
+      !!s0.buffers[path] &&
+      !s0.groups.some((g) => (g.id === groupId ? false : g.tabs.includes(path)));
+    if (orphaned && s0.buffers[path]?.dirty) {
+      await flush(path); // saveBuffer фиксирует doc строкой; при провале ставит saveError, dirty цел
+      const b = get().buffers[path];
+      // saveError → запись упала; всё ещё dirty → в окно `await` пришла НОВАЯ правка (re-dirty, ревью
+      // Defect-1). В обоих случаях НЕ закрываем (правки целы), до-флашим свежее + видимый тост (Defect-2:
+      // saveError-баннер StatusBar виден только активной вкладке).
+      if (b?.saveError || b?.dirty) {
+        if (b?.dirty && !b?.saveError) void flush(path);
+        useToastStore.getState().addToast(i18n.t('editor.closeUnsaved'), { kind: 'error' });
+        return;
+      }
+    } else {
+      void flush(path); // буфер выживет в др. вкладке (или чист) — синхронная фиксация happy-path (SAFE-4)
+    }
     set((s) => {
       const updated = s.groups.map((g) => {
         if (g.id !== groupId) return g;
@@ -314,10 +343,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const activeGroupId = groups.some((g) => g.id === s.activeGroupId)
         ? s.activeGroupId
         : groups[0].id;
-      // GC: буферы без ссылок из вкладок.
+      // GC: буферы без ссылок из вкладок. Защита (ревью Defect-1): НЕ удаляем ещё `dirty` (несохранён)
+      // буфер, даже если он осиротел в гонке — правки не пропадут (до-флашатся / останутся видны).
       const referenced = new Set(groups.flatMap((g) => g.tabs));
       const buffers = Object.fromEntries(
-        Object.entries(s.buffers).filter(([p]) => referenced.has(p)),
+        Object.entries(s.buffers).filter(([p]) => referenced.has(p) || s.buffers[p]?.dirty),
       );
       return { groups, activeGroupId, buffers };
     });
@@ -372,19 +402,44 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
   },
 
-  closeGroup(groupId) {
+  async closeGroup(groupId) {
     const s0 = get();
     // Никогда не закрываем последнюю группу (всегда есть куда открывать заметки).
     if (s0.groups.length <= 1 || !s0.groups.some((g) => g.id === groupId)) return;
     // SAFE-4: буферы, которые после закрытия осиротеют (нет ссылок в других группах), флашим
     // ПЕРЕД GC — иначе несохранённые правки в закрываемом пейне потеряются.
+    // P0-5 (DATA-SAFETY): прежде flush был fire-and-forget, затем буферы СИНХРОННО GC-ились — при
+    // ошибке writeFile буфер уже удалён → saveError некуда положить → ТИХАЯ ПОТЕРЯ ПРАВОК. Теперь:
+    // AWAIT-им flush всех осиротевших буферов ДО GC; если ХОТЬ ОДИН не записался (saveError), пейн
+    // НЕ закрываем (правки целы, баннер виден).
     const remaining0 = s0.groups.filter((g) => g.id !== groupId);
     const referenced0 = new Set(remaining0.flatMap((g) => g.tabs));
-    s0.groups
-      .find((g) => g.id === groupId)
-      ?.tabs.forEach((p) => {
-        if (!referenced0.has(p)) void flush(p);
+    const orphans = (s0.groups.find((g) => g.id === groupId)?.tabs ?? []).filter(
+      (p) => !referenced0.has(p),
+    );
+    const dirtyOrphans = orphans.filter((p) => s0.buffers[p]?.dirty);
+    if (dirtyOrphans.length) {
+      // Чистые осиротевшие буферы — синхронная фиксация (happy-path SAFE-4); грязные — AWAIT перед GC.
+      orphans.forEach((p) => {
+        if (!s0.buffers[p]?.dirty) void flush(p);
       });
+      await Promise.allSettled(dirtyOrphans.map((p) => flush(p)));
+      const after = get();
+      // saveError → запись упала; всё ещё dirty → re-dirty в окно `await` (ревью Defect-1). В обоих
+      // случаях НЕ закрываем пейн (правки целы), до-флашим свежее + видимый тост (Defect-2).
+      const blocked = dirtyOrphans.filter(
+        (p) => after.buffers[p]?.saveError || after.buffers[p]?.dirty,
+      );
+      if (blocked.length) {
+        blocked.forEach((p) => {
+          if (after.buffers[p]?.dirty && !after.buffers[p]?.saveError) void flush(p);
+        });
+        useToastStore.getState().addToast(i18n.t('editor.closeUnsaved'), { kind: 'error' });
+        return;
+      }
+    } else {
+      orphans.forEach((p) => void flush(p)); // все чистые — синхронная фиксация happy-path
+    }
     set((s) => {
       // closeGroup НЕ схлопывает выжившие пустые пейны (пустой сплит — осознанный выбор юзера), но
       // если активная группа закрыта — целимся в первую НЕПУСТУЮ из оставшихся (как closeTab/moveTab),
@@ -395,7 +450,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         ? s.activeGroupId
         : (groups.find((g) => g.tabs.length > 0) ?? groups[0]).id;
       const buffers = Object.fromEntries(
-        Object.entries(s.buffers).filter(([p]) => referenced.has(p)),
+        // Защита (ревью Defect-1): ещё `dirty` буфер не GC-им, даже если осиротел.
+        Object.entries(s.buffers).filter(([p]) => referenced.has(p) || s.buffers[p]?.dirty),
       );
       const modes = { ...s.modes };
       delete modes[groupId];

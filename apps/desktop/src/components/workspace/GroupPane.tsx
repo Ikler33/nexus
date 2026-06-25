@@ -254,7 +254,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                     className={styles.close}
                     onClick={(e) => {
                       e.stopPropagation();
-                      closeTab(groupId, path);
+                      void closeTab(groupId, path);
                     }}
                     aria-label={t('editor.close', { name: basename(path) })}
                   >
@@ -296,7 +296,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
           {groupCount > 1 && (
             <button
               className={styles.split}
-              onClick={() => closeGroup(groupId)}
+              onClick={() => void closeGroup(groupId)}
               title={t('editor.closePane')}
               aria-label={t('editor.closePane')}
             >

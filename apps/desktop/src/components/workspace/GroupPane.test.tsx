@@ -78,7 +78,9 @@ describe('GroupPane close-pane (W-1)', () => {
       activeGroupId: 'g1',
       buffers: {},
     });
-    const closeGroup = vi.spyOn(useWorkspaceStore.getState(), 'closeGroup').mockImplementation(() => {});
+    const closeGroup = vi
+      .spyOn(useWorkspaceStore.getState(), 'closeGroup')
+      .mockResolvedValue(undefined); // P0-5: closeGroup теперь async
     render(<GroupPane groupId="g1" />);
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть панель' }));
     expect(closeGroup).toHaveBeenCalledWith('g1');

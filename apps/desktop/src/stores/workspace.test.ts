@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../lib/tauri-api';
 import { flushAllDirty } from './autosave';
+import { useUIStore } from './ui';
 import { useVaultStore } from './vault';
 import { activeBuffer, activePath, useWorkspaceStore } from './workspace';
 
@@ -11,6 +12,18 @@ beforeEach(async () => {
   await useVaultStore.getState().openVault('');
 });
 
+afterEach(() => {
+  // P0-2: openFile дёргает useUIStore (closeHome/News/Board/Today/Agent) — возвращаем main-вью к дефолту,
+  // чтобы флаги не текли между тестами/файлами.
+  useUIStore.setState({
+    homeOpen: true,
+    newsOpen: false,
+    boardOpen: false,
+    todayOpen: false,
+    agentOpen: false,
+  });
+});
+
 describe('workspace store (Ф0-9, Б12)', () => {
   it('openFile открывает буфер во вкладке и делает активным', async () => {
     await useWorkspaceStore.getState().openFile('Inbox.md');
@@ -19,6 +32,19 @@ describe('workspace store (Ф0-9, Б12)', () => {
     expect(activeBuffer(s)?.path).toBe('Inbox.md');
     expect(activeBuffer(s)?.doc).toBeDefined();
     expect(s.groups[0].tabs).toContain('Inbox.md');
+  });
+
+  // P0-2: открытие файла гасит ВСЕ полноэкранные main-вьюхи (Home/News/Board/Today/Agent), иначе
+  // редактор откроется ЗА Today/Agent = «мёртвый клик» из дерева/палитры/⌘O (раньше гасили только
+  // Home/News/Board — Today/Agent забыли).
+  it('openFile гасит todayOpen и agentOpen (anti-dead-click)', async () => {
+    useUIStore.setState({ todayOpen: true, agentOpen: true, homeOpen: false });
+    await useWorkspaceStore.getState().openFile('Inbox.md');
+    expect(useUIStore.getState().todayOpen).toBe(false);
+    expect(useUIStore.getState().agentOpen).toBe(false);
+    expect(useUIStore.getState().homeOpen).toBe(false);
+    // Файл реально стал активным (редактор впереди).
+    expect(activePath(useWorkspaceStore.getState())).toBe('Inbox.md');
   });
 
   it('несколько вкладок в группе; переключение меняет активную', async () => {
@@ -150,8 +176,35 @@ describe('workspace store (Ф0-9, Б12)', () => {
     useWorkspaceStore.getState().updateBufferDoc('Inbox.md', 'unsaved edit before close');
     const writeSpy = vi.spyOn(tauriApi.vault, 'writeFile');
     const secondId = useWorkspaceStore.getState().activeGroupId;
-    useWorkspaceStore.getState().closeGroup(secondId);
+    await useWorkspaceStore.getState().closeGroup(secondId); // P0-5: async — ждём flush осиротевшего буфера
     expect(writeSpy).toHaveBeenCalledWith('Inbox.md', 'unsaved edit before close', false);
+    // Запись прошла → пейн закрыт, буфер собран GC.
+    expect(useWorkspaceStore.getState().groups.length).toBe(1);
+    expect(useWorkspaceStore.getState().buffers['Inbox.md']).toBeUndefined();
+    writeSpy.mockRestore();
+  });
+
+  // P0-5 (DATA-SAFETY, ядро среза): закрытие пейна, чей осиротевший буфер НЕ записался (writeFile
+  // reject) — пейн НЕ закрывается, saveError виден, буфер ЦЕЛ (правки не потеряны).
+  it('closeGroup при ОШИБКЕ записи осиротевшего буфера НЕ закрывает пейн (правки целы)', async () => {
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().splitRight();
+    await useWorkspaceStore.getState().openFile('Inbox.md');
+    useWorkspaceStore.getState().updateBufferDoc('Inbox.md', 'правки под угрозой');
+    const writeSpy = vi
+      .spyOn(tauriApi.vault, 'writeFile')
+      .mockRejectedValueOnce(new Error('диск полон'));
+    const secondId = useWorkspaceStore.getState().activeGroupId;
+    await useWorkspaceStore.getState().closeGroup(secondId);
+    const s = useWorkspaceStore.getState();
+    // Пейн остался открыт.
+    expect(s.groups.some((g) => g.id === secondId)).toBe(true);
+    expect(s.groups.length).toBe(2);
+    // Буфер цел, правки на месте, saveError видим, dirty НЕ сброшен.
+    expect(s.buffers['Inbox.md']).toBeDefined();
+    expect(s.buffers['Inbox.md'].doc).toBe('правки под угрозой');
+    expect(s.buffers['Inbox.md'].dirty).toBe(true);
+    expect(s.buffers['Inbox.md'].saveError).toContain('диск полон');
     writeSpy.mockRestore();
   });
 
@@ -341,9 +394,48 @@ describe('workspace autosave + flush (SAFE-4)', () => {
     ws().updateBufferDoc('README.md', 'важная правка');
     const spy = vi.spyOn(tauriApi.vault, 'writeFile');
     const gid = ws().activeGroupId;
-    ws().closeTab(gid, 'README.md');
+    await ws().closeTab(gid, 'README.md'); // P0-5: async — ждём flush осиротевшего буфера до GC
     expect(spy).toHaveBeenCalledWith('README.md', 'важная правка', false);
+    // Запись прошла → вкладка закрыта, буфер собран GC.
+    expect(ws().groups[0].tabs).not.toContain('README.md');
+    expect(ws().buffers['README.md']).toBeUndefined();
     spy.mockRestore();
+  });
+
+  // P0-5 (DATA-SAFETY, ядро среза): закрытие вкладки, чей осиротевший буфер НЕ записался — вкладка
+  // НЕ удаляется, буфер ЦЕЛ, saveError виден. Раньше fire-and-forget flush + синхронный GC = тихая
+  // потеря правок (catch saveBuffer не находил буфер).
+  it('closeTab при ОШИБКЕ записи осиротевшего буфера НЕ закрывает вкладку (правки целы)', async () => {
+    await ws().openFile('README.md');
+    ws().updateBufferDoc('README.md', 'правки под угрозой');
+    const spy = vi
+      .spyOn(tauriApi.vault, 'writeFile')
+      .mockRejectedValueOnce(new Error('диск полон'));
+    const gid = ws().activeGroupId;
+    await ws().closeTab(gid, 'README.md');
+    const s = ws();
+    // Вкладка осталась.
+    expect(s.groups[0].tabs).toContain('README.md');
+    // Буфер цел, правки на месте, saveError виден, dirty НЕ сброшен.
+    expect(s.buffers['README.md']).toBeDefined();
+    expect(s.buffers['README.md'].doc).toBe('правки под угрозой');
+    expect(s.buffers['README.md'].dirty).toBe(true);
+    expect(s.buffers['README.md'].saveError).toContain('диск полон');
+    spy.mockRestore();
+  });
+
+  // P0-5: грязный буфер, открытый ТАКЖЕ в другой группе, при закрытии одной вкладки НЕ осиротевает →
+  // flush fire-and-forget (happy-path SAFE-4), вкладка закрывается, буфер жив (GC его не трогает).
+  it('closeTab не-осиротевшего буфера (открыт в др. группе) закрывает вкладку, буфер жив', async () => {
+    await ws().openFile('README.md');
+    ws().splitRight(); // README теперь в двух группах (g0, g1)
+    ws().updateBufferDoc('README.md', 'правка');
+    const [g0] = ws().groups.map((g) => g.id);
+    await ws().closeTab(g0, 'README.md');
+    // README больше не в g0 (g0 опустел и схлопнулся), но буфер жив — README остался в g1 → GC не собрал.
+    expect(ws().groups.flatMap((g) => g.tabs)).toContain('README.md'); // ещё открыт в g1
+    expect(ws().buffers['README.md']).toBeDefined();
+    expect(ws().buffers['README.md'].doc).toBe('правка');
   });
 
   it('flushAllDirty сохраняет все грязные буферы', async () => {
