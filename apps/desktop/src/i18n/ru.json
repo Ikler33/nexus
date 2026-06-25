@@ -665,6 +665,8 @@
       "execLabel": "Выполнить команду",
       "applied": "применено",
       "rejected": "отклонено",
+      "resolvedApplied": "применено: {{count}}",
+      "resolvedRejected": "отклонено: {{count}}",
       "autoBadge": "Авто · агент ревьюит сам",
       "autoMark": "авто",
       "confirmApprove": "Подтвердить",

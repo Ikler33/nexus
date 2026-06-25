@@ -654,6 +654,8 @@
       "execLabel": "Run command",
       "applied": "applied",
       "rejected": "rejected",
+      "resolvedApplied": "{{count}} applied",
+      "resolvedRejected": "{{count}} rejected",
       "autoBadge": "Auto · agent self-reviews",
       "autoMark": "auto",
       "confirmApprove": "Confirm",

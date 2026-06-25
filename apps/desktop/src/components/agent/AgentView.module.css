@@ -538,6 +538,14 @@
   overflow: hidden;
   margin-bottom: 18px;
 }
+/* Свёрнутый итог после решения: одна строка без файлов/кнопок, приглушённо. */
+.csResolved {
+  background: transparent;
+}
+.csResolved .csH {
+  border-bottom: none;
+  color: var(--color-text-muted);
+}
 .csH {
   display: flex;
   align-items: center;

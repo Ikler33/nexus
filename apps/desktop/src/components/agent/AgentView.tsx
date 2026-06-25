@@ -598,6 +598,30 @@ function Changeset({
   const totDel = files.reduce((a, f) => a + f.del, 0);
   const pending = auto ? 0 : files.filter((f) => f.decision === undefined && f.actionId >= 0).length;
 
+  // После решения (confirm-режим, ход ушёл из awaiting и нет нерешённых) — СВОРАЧИВАЕМ большую
+  // интерактивную карточку в компактную строку-итог: окно «разрешения» уходит, мёртвых кнопок нет
+  // (баг: карточка зависала после нажатия и «вела» вёрстку). Применённые правки видны в шагах хода.
+  // `pending===0`: на паузе с нерешённым changeset карточка остаётся полной — resume вернёт кнопки.
+  if (!auto && !awaiting && pending === 0) {
+    const applied = files.filter((f) => f.decision === 'applied').length;
+    const rejected = files.filter((f) => f.decision === 'rejected').length;
+    const summary = [
+      applied > 0 ? t('agent.changeset.resolvedApplied', { count: applied }) : null,
+      rejected > 0 ? t('agent.changeset.resolvedRejected', { count: rejected }) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    return (
+      <div className={`${styles.changeset} ${styles.csResolved}`}>
+        <div className={styles.csH}>
+          <GitBranch size={14} className={styles.csIc} aria-hidden />
+          <span className={styles.csT}>{t('agent.changeset.title')}</span>
+          {summary && <span className={styles.csSum}>{summary}</span>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.changeset}>
       <div className={styles.csH}>
