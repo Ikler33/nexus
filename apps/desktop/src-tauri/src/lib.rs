@@ -194,6 +194,8 @@ pub fn run() {
             commands::agent::agent_resume,
             commands::agent::agent_cancel,
             commands::agent::agent_undo,
+            commands::agent::agent_sessions_list,
+            commands::agent::agent_session_load,
             commands::backup::backup_export_json,
             commands::backup::backup_import_json,
             commands::backup::backup_export_to_path,

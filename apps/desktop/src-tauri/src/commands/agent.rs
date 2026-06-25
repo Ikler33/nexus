@@ -39,9 +39,13 @@ use serde::Deserialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use nexus_core::actuator::{
     self, AuditSink, BatchDecision, DecisionSource, ItemDecision, ProposalBatch,
 };
+use nexus_core::agent::run_store::PersistStep;
 use nexus_core::agent::{
     run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, DelegationDeps,
     LoopOutcome, SessionSpec, VaultAgentMemory,
@@ -68,17 +72,65 @@ pub use nexus_core::agent::connect::wire::{map_agent_event, AgentStreamEvent};
 
 // ── AgentEventForwarder → Channel (FIXME(UI-1) РЕШЁН): стрим событий прогона во фронт ──────────────
 
+/// W-38: аккумулятор хода для персиста истории переписок. Копит склеенный текст ассистента и ленту
+/// шагов (tool-вызовы + их результаты по `id`) ПО ХОДУ стрима; `persist_turn` пишет его на ТЕРМИНАЛЕ
+/// (после `finish_run`). `index_by_id` сопоставляет `ToolCall.id` → позицию в `steps` (результат
+/// приходит позже отдельным событием). Не персистим live-построчно (одна запись на финал — best-effort).
+#[derive(Default)]
+struct TurnAccum {
+    text: String,
+    steps: Vec<PersistStep>,
+    /// `ToolCall.id` → индекс в `steps` (для проставления result/is_error из `ToolResult`).
+    index_by_id: HashMap<String, usize>,
+}
+
 /// [`AgentEventForwarder`]-мост прогона → агент-стрим во фронт. ЕДИНЫЙ форвардер для desktop: его
 /// получает и `run_agent_session` (события цикла), и гейт актуатора (Proposal/Diff — через внутренний
 /// `ForwardingEventSink`). Маппит `AgentEvent` → wire-DTO и шлёт в [`Channel`] (best-effort: фронт мог
 /// отвалиться). Гейт блокируется на `DecisionSource::decide`, ожидая `agent_approve` (человек-в-петле).
 /// Headless agentd вместо этого считает шаги + tracing-логирует (см. `agent::job::HeadlessForwarder`).
+///
+/// W-38: помимо форварда в Channel, КОПИТ ход в `accum` (текст ассистента + шаги) для персиста истории
+/// на терминале. Аккумуляция — best-effort и НЕ влияет на стрим (mutex поверх копилки; ошибок не несёт).
 struct ChannelForwarder {
     channel: Channel<AgentStreamEvent>,
+    accum: Arc<Mutex<TurnAccum>>,
 }
 
 impl AgentEventForwarder for ChannelForwarder {
     fn forward(&self, ev: &AgentEvent) {
+        // W-38: копим ход для персиста (до маппинга — внутренний AgentEvent несёт точные поля). Держим
+        // std::sync::Mutex БЕЗ `.await` под гардом (forward синхронный) → clippy await_holding_lock чист.
+        if let Ok(mut acc) = self.accum.lock() {
+            match ev {
+                AgentEvent::AssistantToken(t) => acc.text.push_str(t),
+                AgentEvent::ToolCall { id, kind, args } => {
+                    let idx = acc.steps.len();
+                    acc.steps.push(PersistStep {
+                        ord: idx as i64,
+                        kind: kind.clone(),
+                        args: args.clone(),
+                        title: None,
+                        result: None,
+                        is_error: false,
+                    });
+                    acc.index_by_id.insert(id.clone(), idx);
+                }
+                AgentEvent::ToolResult {
+                    id,
+                    content,
+                    is_error,
+                } => {
+                    if let Some(&idx) = acc.index_by_id.get(id) {
+                        if let Some(step) = acc.steps.get_mut(idx) {
+                            step.result = Some(content.clone());
+                            step.is_error = *is_error;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         if let Some(mapped) = map_agent_event(ev) {
             let _ = self.channel.send(mapped);
         }
@@ -165,12 +217,22 @@ pub async fn agent_run(
     task: String,
     autonomy: String,
     history: Vec<HistoryMsg>,
+    // W-38: id переписки (генерится фронт-стором) — группирует ходы для истории. Опционален для
+    // обратной совместимости с тестами/старым фронтом (отсутствует → пустая строка → не персистим).
+    session_id: Option<String>,
     channel: Channel<AgentStreamEvent>,
 ) -> AppResult<i64> {
     state
         .agent_backend()
         .await
-        .run(&state, task, autonomy, history, channel)
+        .run(
+            &state,
+            task,
+            autonomy,
+            history,
+            session_id.unwrap_or_default(),
+            channel,
+        )
         .await
 }
 
@@ -183,6 +245,9 @@ pub(crate) async fn run_impl(
     // W-4: история прошлых ходов сессии (из стора `turns[]`); фронт всегда шлёт (пустой массив для
     // первого хода).
     history: Vec<HistoryMsg>,
+    // W-38: id переписки (история). Пусто → ход НЕ персистится (не-UI путь); непусто → group-ключ
+    // `agent_runs.session_id` + `agent_turns.session_id` для левого сайдбара истории.
+    session_id: String,
     channel: Channel<AgentStreamEvent>,
 ) -> AppResult<i64> {
     let autonomy = normalize_autonomy(&autonomy);
@@ -348,14 +413,16 @@ pub(crate) async fn run_impl(
         .map(|c| c.ai.research.clone())
         .filter(|r| r.enabled);
 
-    // Создаём строку прогона (queued) — источник run_id для UI/корреляции/ledger.
-    let run_id = run_store::create_run(
-        &writer,
-        &task,
-        provider.as_ref().map(|p| p.model_id()),
-        Some(autonomy),
-    )
-    .await
+    // Создаём строку прогона (queued) — источник run_id для UI/корреляции/ledger. W-38: при наличии
+    // session_id привязываем прогон к переписке (история); пустой session_id (не-UI путь) → top-level
+    // прогон без группировки (поведение прежнего create_run).
+    let model_id = provider.as_ref().map(|p| p.model_id());
+    let run_id = if session_id.is_empty() {
+        run_store::create_run(&writer, &task, model_id, Some(autonomy)).await
+    } else {
+        run_store::create_run_in_session(&writer, &session_id, &task, model_id, Some(autonomy))
+            .await
+    }
     .map_err(|e| AppError::Msg(format!("agent_run: создание прогона: {e}")))?;
 
     // Per-run kill-switch (AGENT-5) + cancel-флаг + UI-DecisionSource (sender в реестр).
@@ -398,6 +465,13 @@ pub(crate) async fn run_impl(
     let reader_for_loop = reader.clone();
     let runs = state.agent_runs_handle();
 
+    // W-38: аккумулятор хода (текст + шаги) для персиста истории на терминале. Создаём ДО спавна,
+    // отдаём клон в drive_run (ChannelForwarder копит туда), читаем ПОСЛЕ финала. `task`/`session_id`
+    // клонируем для персиста (task move'ится в drive_run).
+    let accum: Arc<Mutex<TurnAccum>> = Arc::new(Mutex::new(TurnAccum::default()));
+    let accum_for_loop = accum.clone();
+    let task_for_persist = task.clone();
+
     tokio::spawn(async move {
         let outcome = drive_run(
             run_id,
@@ -417,6 +491,7 @@ pub(crate) async fn run_impl(
             decision_source,
             agent_memory,
             canon_root,
+            accum_for_loop,
             &writer_for_loop,
             &reader_for_loop,
             paused,
@@ -425,7 +500,34 @@ pub(crate) async fn run_impl(
         )
         .await;
         // Финал в БД (run_store) + дерегистрация из реестра. Финал best-effort (наблюдаемость).
-        finish_in_store(&writer_for_loop, run_id, outcome).await;
+        let (status, text) = finish_in_store(&writer_for_loop, run_id, outcome).await;
+        // W-38: персист хода для истории переписок (best-effort — НЕ роняем прогон). Только UI-путь
+        // (непустой session_id); status done|error|cancelled; report=текст для done, error=текст иначе.
+        if !session_id.is_empty() {
+            let (text_acc, steps) = match accum.lock() {
+                Ok(g) => (g.text.clone(), g.steps.clone()),
+                Err(_) => (String::new(), Vec::new()),
+            };
+            let is_done = status == run_store::STATUS_DONE;
+            let report = is_done.then_some(text.as_str());
+            let error = (!is_done).then_some(text.as_str());
+            if let Err(e) = run_store::persist_turn(
+                &writer_for_loop,
+                run_id,
+                &session_id,
+                &task_for_persist,
+                &text_acc,
+                &steps,
+                status,
+                report,
+                error,
+                nexus_core::scheduler::now_secs(),
+            )
+            .await
+            {
+                tracing::warn!(error = %e, run_id, "W-38: персист хода истории не удался (игнор)");
+            }
+        }
         if let Ok(mut g) = runs.lock() {
             g.remove(&run_id);
         }
@@ -556,6 +658,102 @@ pub(crate) async fn undo_impl(state: &AppState, run_id: i64) -> AppResult<usize>
     Ok(outcome.restored())
 }
 
+// ── W-38: история переписок агента (левый сайдбар) ──────────────────────────────────────────────────
+
+/// Сводка одной агент-сессии для списка истории (зеркало Rust `run_store::AgentSessionRow`). camelCase.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionDto {
+    pub session_id: String,
+    pub title: String,
+    pub status: String,
+    pub turn_count: i64,
+    pub updated_at: i64,
+}
+
+/// Один персистированный шаг хода для UI (зеркало `run_store::PersistStep` без `ord`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedStepDto {
+    pub kind: String,
+    pub args: String,
+    pub title: Option<String>,
+    pub result: Option<String>,
+    pub is_error: bool,
+}
+
+/// Один персистированный ход переписки для UI (зеркало `run_store::PersistedTurnRow`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedTurnDto {
+    pub run_id: i64,
+    pub task: String,
+    pub assistant_text: String,
+    pub report: Option<String>,
+    pub error: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub steps: Vec<PersistedStepDto>,
+}
+
+/// Данные переоткрываемой переписки (ходы в хронологии ASC).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionDataDto {
+    pub turns: Vec<PersistedTurnDto>,
+}
+
+/// W-38: список агент-сессий (история переписок) для левого сайдбара — свежие сверху.
+#[tauri::command]
+pub async fn agent_sessions_list(state: State<'_, AppState>) -> AppResult<Vec<AgentSessionDto>> {
+    let reader = state.vault().await?.db.reader().clone();
+    let rows = run_store::list_agent_sessions(&reader).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| AgentSessionDto {
+            session_id: r.session_id,
+            title: r.title,
+            status: r.status,
+            turn_count: r.turn_count,
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
+/// W-38: загружает все ходы одной переписки (для переоткрытия в UI).
+#[tauri::command]
+pub async fn agent_session_load(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<AgentSessionDataDto> {
+    let reader = state.vault().await?.db.reader().clone();
+    let rows = run_store::load_agent_session(&reader, &session_id).await?;
+    let turns = rows
+        .into_iter()
+        .map(|t| PersistedTurnDto {
+            run_id: t.run_id,
+            task: t.task,
+            assistant_text: t.assistant_text,
+            report: t.report,
+            error: t.error,
+            status: t.status,
+            created_at: t.created_at,
+            steps: t
+                .steps
+                .into_iter()
+                .map(|s| PersistedStepDto {
+                    kind: s.kind,
+                    args: s.args,
+                    title: s.title,
+                    result: s.result,
+                    is_error: s.is_error,
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(AgentSessionDataDto { turns })
+}
+
 // ── Драйв цикла (spawned task) ────────────────────────────────────────────────────────────────────
 
 /// Гонит [`run_agent_loop`] для прогона `run_id`, форвардя события в `channel`. Зеркало
@@ -584,6 +782,8 @@ async fn drive_run(
     decision_source: Arc<dyn DecisionSource>,
     memory: Arc<dyn AgentMemory>,
     canon_root: PathBuf,
+    // W-38: копилка хода (текст + шаги) для персиста истории — ChannelForwarder пишет сюда по ходу.
+    accum: Arc<Mutex<TurnAccum>>,
     writer: &nexus_core::db::WriteActor,
     reader: &nexus_core::db::ReadPool,
     paused: Arc<AtomicBool>,
@@ -609,6 +809,7 @@ async fn drive_run(
     // desktop пока нет (None). `RunCtx::run(run_id)` строит сама сессия.
     let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(ChannelForwarder {
         channel: channel.clone(),
+        accum,
     });
     let spec = SessionSpec {
         run_id,
@@ -648,7 +849,13 @@ async fn drive_run(
 /// (BudgetExhausted{Paused}) здесь трактуется как НЕ-терминал в desktop-модели: цикл драйвится единым
 /// `tokio::spawn` (не реквью планировщика) — если пауза остановила цикл, мы помечаем прогон error с
 /// пометкой паузы (UI может перезапустить). Это desktop-упрощение vs agentd-requeue (план планировщика).
-async fn finish_in_store(writer: &nexus_core::db::WriteActor, run_id: i64, outcome: LoopOutcome) {
+/// Возвращает финальный `(status, text)` (W-38: используется и для персиста хода истории — report для
+/// done, error-текст иначе).
+async fn finish_in_store(
+    writer: &nexus_core::db::WriteActor,
+    run_id: i64,
+    outcome: LoopOutcome,
+) -> (&'static str, String) {
     use nexus_core::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
     use nexus_core::agent::BudgetKind;
     let (status, text) = match outcome {
@@ -674,6 +881,7 @@ async fn finish_in_store(writer: &nexus_core::db::WriteActor, run_id: i64, outco
         LoopOutcome::Error(e) => (STATUS_ERROR, e),
     };
     let _ = run_store::finish_run(writer, run_id, status, Some(&text)).await;
+    (status, text)
 }
 
 // ── Вспомогательное ───────────────────────────────────────────────────────────────────────────────
@@ -976,6 +1184,7 @@ mod tests {
             Arc::new(decision),
             empty_memory(&db),
             canon,
+            Arc::new(Mutex::new(TurnAccum::default())), // W-38: accum (тест истории не проверяет)
             db.writer(),
             db.reader(),
             Arc::new(AtomicBool::new(false)),
@@ -1005,6 +1214,110 @@ mod tests {
         assert_eq!(res["isError"], false);
     }
 
+    /// **W-38: персист хода истории.** `drive_run` КОПИТ в общий `accum` (через ChannelForwarder) текст
+    /// ассистента + шаги по ходу стрима; на терминале `persist_turn` пишет ход, а `load_agent_session`
+    /// его читает (зеркало пути `run_impl`-spawn). Доказывает, что аккумуляция и персист сцеплены: после
+    /// прогона переписка переоткрывается с тем же шагом (kind+result) и финальным отчётом.
+    #[tokio::test]
+    async fn drive_run_accumulates_and_persists_turn_for_history() {
+        let (_dir, db, canon) = open_db().await;
+        let session_id = "sess-hist-1";
+        let provider = FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: "debug.echo".into(),
+                arguments: r#"{"text":"привет"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("итог хода".into())),
+        ]);
+        let (channel, _buf) = collector_channel();
+        let (decision, _tx) = UiDecisionSource::new();
+        // Прогон в сессии (как run_impl создаёт строку при непустом session_id).
+        let run_id = run_store::create_run_in_session(
+            db.writer(),
+            session_id,
+            "разбери входящие",
+            None,
+            Some("auto"),
+        )
+        .await
+        .unwrap();
+        let accum: Arc<Mutex<TurnAccum>> = Arc::new(Mutex::new(TurnAccum::default()));
+
+        let outcome = drive_run(
+            run_id,
+            "разбери входящие".into(),
+            vec![],
+            "auto",
+            Some(provider),
+            false,
+            64 * 1024,
+            16,
+            Some(32768),
+            None,
+            None,
+            false,
+            None,
+            None,
+            Arc::new(decision),
+            empty_memory(&db),
+            canon,
+            accum.clone(),
+            db.writer(),
+            db.reader(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            &channel,
+        )
+        .await;
+
+        // Финализируем как run_impl: finish_in_store → persist_turn из accum.
+        let (status, text) = finish_in_store(db.writer(), run_id, outcome).await;
+        assert_eq!(status, run_store::STATUS_DONE);
+        let (text_acc, steps) = {
+            let g = accum.lock().unwrap();
+            (g.text.clone(), g.steps.clone())
+        };
+        // Аккумулятор поймал шаг echo (его result) — даже если текста ассистента в стабах не было.
+        assert_eq!(steps.len(), 1, "accum поймал один tool-шаг");
+        assert_eq!(steps[0].kind, "debug.echo");
+        assert!(steps[0].result.is_some(), "результат шага зафиксирован");
+        assert!(!steps[0].is_error);
+
+        run_store::persist_turn(
+            db.writer(),
+            run_id,
+            session_id,
+            "разбери входящие",
+            &text_acc,
+            &steps,
+            status,
+            Some(text.as_str()),
+            None,
+            1234,
+        )
+        .await
+        .unwrap();
+
+        // Переоткрытие переписки: ход и его шаг на месте.
+        let turns = run_store::load_agent_session(db.reader(), session_id)
+            .await
+            .unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].run_id, run_id);
+        assert_eq!(turns[0].task, "разбери входящие");
+        assert_eq!(turns[0].status, run_store::STATUS_DONE);
+        assert_eq!(turns[0].report.as_deref(), Some("итог хода"));
+        assert_eq!(turns[0].steps.len(), 1);
+        assert_eq!(turns[0].steps[0].kind, "debug.echo");
+
+        // И в списке сессий появилась наша переписка.
+        let sessions = run_store::list_agent_sessions(db.reader()).await.unwrap();
+        assert!(sessions
+            .iter()
+            .any(|s| s.session_id == session_id && s.turn_count == 1));
+    }
+
     /// Деградация: провайдер None → стрим error("agent tools unavailable"), исход Error (как agentd).
     #[tokio::test]
     async fn drive_run_without_provider_streams_error() {
@@ -1032,6 +1345,7 @@ mod tests {
             Arc::new(decision),
             empty_memory(&db),
             canon,
+            Arc::new(Mutex::new(TurnAccum::default())), // W-38: accum (тест истории не проверяет)
             db.writer(),
             db.reader(),
             Arc::new(AtomicBool::new(false)),
@@ -1115,6 +1429,7 @@ mod tests {
             decision,
             empty_memory(&db),
             canon.clone(),
+            Arc::new(Mutex::new(TurnAccum::default())), // W-38: accum (тест истории не проверяет)
             db.writer(),
             db.reader(),
             Arc::new(AtomicBool::new(false)),
@@ -1190,6 +1505,7 @@ mod tests {
             decision,
             empty_memory(&db),
             canon.clone(),
+            Arc::new(Mutex::new(TurnAccum::default())), // W-38: accum (тест истории не проверяет)
             db.writer(),
             db.reader(),
             Arc::new(AtomicBool::new(false)),
@@ -1252,6 +1568,7 @@ mod tests {
             decision,
             empty_memory(&db),
             canon.clone(),
+            Arc::new(Mutex::new(TurnAccum::default())), // W-38: accum (тест истории не проверяет)
             db.writer(),
             db.reader(),
             Arc::new(AtomicBool::new(false)),

@@ -721,6 +721,14 @@
       "open": "Open report",
       "sources": "{{count}} sources",
       "rounds": "{{count}} rounds"
+    },
+    "history": {
+      "title": "History",
+      "new": "New conversation",
+      "empty": "No conversations yet",
+      "collapse": "Collapse history",
+      "expand": "Show history",
+      "turns": "{{count}} turns"
     }
   },
   "chat": {

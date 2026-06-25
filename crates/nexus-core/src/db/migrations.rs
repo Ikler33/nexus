@@ -202,6 +202,13 @@ const MIGRATIONS: &[Migration] = &[
         rebuild_fts: false,
         rebuild_chat_fts: false,
     },
+    Migration {
+        version: 26,
+        name: "agent_turns",
+        sql: include_str!("migrations/026_agent_turns.sql"),
+        rebuild_fts: false, // персист ходов агента (W-38): история переписок, заметочных производных не трогает
+        rebuild_chat_fts: false,
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).

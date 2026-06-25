@@ -21,12 +21,15 @@ use crate::state::AppState;
 #[async_trait]
 pub trait AgentBackend: Send + Sync {
     /// Запустить прогон, стримя события в `channel`; вернуть `run_id` сразу (асинхронно).
+    /// W-38: `session_id` группирует ходы одной переписки (история) — Embedded персистит его; внешние
+    /// бэкенды (Connected/ACP) пока его игнорируют (история — десктоп-embedded-фича).
     async fn run(
         &self,
         state: &AppState,
         task: String,
         autonomy: String,
         history: Vec<HistoryMsg>,
+        session_id: String,
         channel: Channel<AgentStreamEvent>,
     ) -> AppResult<i64>;
     /// Решение по changeset'у (Confirm-тир аппрув/реджект).
@@ -58,9 +61,10 @@ impl AgentBackend for EmbeddedBackend {
         task: String,
         autonomy: String,
         history: Vec<HistoryMsg>,
+        session_id: String,
         channel: Channel<AgentStreamEvent>,
     ) -> AppResult<i64> {
-        crate::commands::agent::run_impl(state, task, autonomy, history, channel).await
+        crate::commands::agent::run_impl(state, task, autonomy, history, session_id, channel).await
     }
     async fn approve(
         &self,
@@ -304,6 +308,7 @@ mod connected {
             task: String,
             _autonomy: String, // R1: autonomy НЕ идёт по проводу (сервер берёт из своего конфига)
             _history: Vec<HistoryMsg>, // R1: history НЕ идёт по проводу (сервер one-shot)
+            _session_id: String, // W-38: история — embedded-фича; коннектор группировку не персистит
             channel: Channel<AgentStreamEvent>,
         ) -> AppResult<i64> {
             let mut guard = self.inner.lock().await;
@@ -883,6 +888,7 @@ mod acp_backend {
             task: String,
             _autonomy: String, // R1: autonomy не идёт по проводу (агент берёт из своего конфига)
             _history: Vec<HistoryMsg>, // R1: history не идёт по проводу (сессии stateful у агента)
+            _session_id: String, // W-38: история — embedded-фича; ACP-агент свою группировку не персистит
             channel: Channel<AgentStreamEvent>,
         ) -> AppResult<i64> {
             let command = self
@@ -1444,6 +1450,7 @@ mod acp_backend {
                     "первый".into(),
                     "ask".into(),
                     vec![],
+                    String::new(), // W-38: session_id (ACP игнорирует историю-группировку)
                     channel_into(buf1.clone()),
                 )
                 .await
@@ -1467,6 +1474,7 @@ mod acp_backend {
                         "второй".into(),
                         "ask".into(),
                         vec![],
+                        String::new(), // W-38: session_id (ACP игнорирует историю-группировку)
                         channel_into(buf2.clone()),
                     )
                     .await

@@ -17,6 +17,8 @@ import type {
   AgentAutonomy,
   AgentHistoryMsg,
   AgentProposedKind,
+  AgentSessionData,
+  AgentSessionInfo,
   AgentStreamEvent,
   SkillList,
 } from '../tauri-api';
@@ -85,8 +87,11 @@ export function run(
   // W-4: история мультитёрна — мок поведением её не использует (proposal детерминирован per-run),
   // но принимает для соответствия контракту команды `agent_run`.
   history: AgentHistoryMsg[] = [],
+  // W-38: id переписки — мок принимает по контракту (персиста в браузер-превью нет).
+  sessionId?: string,
 ): Promise<number> {
   void history; // принимаем по контракту; детерминированный мок-proposal от истории не зависит
+  void sessionId; // W-38: браузер-мок не персистит историю (фейковый список ниже)
   const runId = nextRunId++;
   const files: MockFile[] = [
     { path: 'RMS-B2B/Идея — кэш контекста.md', add: 8, del: 0, status: 'new', kind: 'file', actionId: runId * 100 + 1 },
@@ -343,4 +348,60 @@ export async function setSkillArchived(name: string, archived: boolean): Promise
   if (!s) return false;
   s.archived = archived;
   return true;
+}
+
+// W-38: история переписок агента в браузер-превью/тестах. Несколько фейковых сессий (свежие сверху) +
+// загрузка ходов по ним. Зеркалит контракт `agent_sessions_list`/`agent_session_load`.
+const NOW = Math.floor(Date.now() / 1000);
+const mockSessions: AgentSessionInfo[] = [
+  {
+    sessionId: 'sess-demo-1',
+    title: 'Разобрать входящие заметки',
+    status: 'done',
+    turnCount: 2,
+    updatedAt: NOW - 1800,
+  },
+  {
+    sessionId: 'sess-demo-2',
+    title: 'Связать проекты RMS-B2B',
+    status: 'error',
+    turnCount: 1,
+    updatedAt: NOW - 86_400,
+  },
+  {
+    sessionId: 'sess-demo-3',
+    title: 'Сводка по PaymentService',
+    status: 'done',
+    turnCount: 3,
+    updatedAt: NOW - 3 * 86_400,
+  },
+];
+
+export async function sessionsList(): Promise<AgentSessionInfo[]> {
+  return mockSessions.map((s) => ({ ...s }));
+}
+
+export async function sessionLoad(sessionId: string): Promise<AgentSessionData> {
+  const info = mockSessions.find((s) => s.sessionId === sessionId);
+  if (!info) return { turns: [] };
+  // По одному ходу на turnCount — детерминированно, с одним tool-шагом, для рендера ленты.
+  const turns = Array.from({ length: info.turnCount }, (_, i) => ({
+    runId: 1000 + i,
+    task: i === 0 ? info.title : `Уточнение ${i + 1}`,
+    assistantText: `Готово по шагу ${i + 1}.`,
+    report: i === info.turnCount - 1 ? `Итог переписки «${info.title}».` : null,
+    error: null,
+    status: 'done',
+    createdAt: info.updatedAt - (info.turnCount - i) * 60,
+    steps: [
+      {
+        kind: 'fs.read',
+        args: '{"path":"Inbox.md"}',
+        title: null,
+        result: '12 записей',
+        isError: false,
+      },
+    ],
+  }));
+  return { turns };
 }

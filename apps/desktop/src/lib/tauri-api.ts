@@ -691,6 +691,44 @@ export interface AgentApprovalDecision {
   approve: boolean;
 }
 
+// ── W-38: история переписок агента (левый сайдбар) ──────────────────────────────────────────────────
+
+/** Сводка одной агент-сессии для списка истории (зеркало Rust `AgentSessionDto`). `title` — задача
+ *  первого хода; `status` — статус последнего; `turnCount`/`updatedAt` — агрегаты. */
+export interface AgentSessionInfo {
+  sessionId: string;
+  title: string;
+  status: string;
+  turnCount: number;
+  updatedAt: number;
+}
+
+/** Один персистированный шаг хода (зеркало Rust `PersistedStepDto`). */
+export interface PersistedStep {
+  kind: string;
+  args: string;
+  title: string | null;
+  result: string | null;
+  isError: boolean;
+}
+
+/** Один персистированный ход переписки (зеркало Rust `PersistedTurnDto`). */
+export interface PersistedTurn {
+  runId: number;
+  task: string;
+  assistantText: string;
+  report: string | null;
+  error: string | null;
+  status: string;
+  createdAt: number;
+  steps: PersistedStep[];
+}
+
+/** Данные переоткрываемой переписки (зеркало Rust `AgentSessionDataDto`) — ходы в хронологии ASC. */
+export interface AgentSessionData {
+  turns: PersistedTurn[];
+}
+
 /** Событие inline-стрима редактора (зеркалит Rust `commands::inline::InlineStreamEvent`). Без `sources`
  * — inline не делает RAG-ретрив (D2). Порядок: много `token` → `done` (или `error`). */
 export type InlineStreamEvent =
@@ -1746,14 +1784,27 @@ export const tauriApi = {
       // W-4: история прошлых ходов сессии (мультитёрн) — чтобы follow-up продолжал работу прошлого
       // хода и снова предлагал правки через гейт. Пусто для первого хода.
       history: AgentHistoryMsg[] = [],
+      // W-38: id переписки (группировка ходов для истории). Опционален для обратной совместимости.
+      sessionId?: string,
     ): Promise<number> => {
-      if (!isTauri()) return mockAgent.run(task, autonomy, onEvent, history);
+      if (!isTauri()) return mockAgent.run(task, autonomy, onEvent, history, sessionId);
       const channel = new Channel<AgentStreamEvent>();
       channel.onmessage = onEvent;
-      return invoke<number>('agent_run', { task, autonomy, history, channel }).catch((e: unknown) => {
-        onEvent({ type: 'error', message: String(e) });
-        throw e;
-      });
+      return invoke<number>('agent_run', { task, autonomy, history, sessionId, channel }).catch(
+        (e: unknown) => {
+          onEvent({ type: 'error', message: String(e) });
+          throw e;
+        },
+      );
+    },
+    /** W-38: история переписок агента (левый сайдбар). list — сводки, load — ходы переписки. */
+    sessions: {
+      list: (): Promise<AgentSessionInfo[]> =>
+        isTauri() ? invoke<AgentSessionInfo[]>('agent_sessions_list') : mockAgent.sessionsList(),
+      load: (sessionId: string): Promise<AgentSessionData> =>
+        isTauri()
+          ? invoke<AgentSessionData>('agent_session_load', { sessionId })
+          : mockAgent.sessionLoad(sessionId),
     },
     /** Кормит UI-DecisionSource прогона решениями (Confirm-тир аппрув/реджект). */
     approve: (runId: number, decisions: AgentApprovalDecision[]): Promise<void> =>
