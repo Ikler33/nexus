@@ -1,7 +1,7 @@
 //! Граф ссылок — **ADR-004**: источник истины = SQLite. Беклинки и обходы — запросами
 //! по индексу `idx_links_target`; petgraph в памяти НЕ держим (нет дублирования/рассинхрона).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
@@ -251,6 +251,30 @@ pub struct GraphEdge {
     pub target: i64,
 }
 
+/// Сводит сырые НАПРАВЛЕННЫЕ рёбра `links` (A→B и B→A — две строки) в КАНОНИЧЕСКИЕ
+/// НЕНАПРАВЛЕННЫЕ пары: ровно одно `GraphEdge` на неупорядоченную пару `{s,t}` (P1-19).
+/// Граф визуально ненаправленный (рендер `<line>` без стрелок/маркеров), поэтому реципрокная
+/// ссылка не должна давать вдвое завышенную степень/размер узла, двойную линию и удвоенный счётчик
+/// рёбер. Фильтрует self-loop (`s==t`, бессмысленно в knowledge-graph) и рёбра в узлы вне `ids`.
+/// Канонизация `(min,max)` детерминирует ориентацию (для ненаправленного графа порядок не важен).
+fn dedup_undirected_edges(raw: Vec<(i64, i64)>, ids: &BTreeSet<i64>) -> Vec<GraphEdge> {
+    let mut seen: HashSet<(i64, i64)> = HashSet::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    for (s, t) in raw {
+        if s == t || !ids.contains(&t) {
+            continue; // self-loop или цель вне набора узлов
+        }
+        let key = (s.min(t), s.max(t));
+        if seen.insert(key) {
+            edges.push(GraphEdge {
+                source: key.0,
+                target: key.1,
+            });
+        }
+    }
+    edges
+}
+
 /// Локальный подграф вокруг файла.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -344,11 +368,8 @@ pub async fn get_local_graph(reader: &ReadPool, center: String, hops: u32) -> Db
                 },
                 |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
             )?;
-            let edges: Vec<GraphEdge> = raw_edges
-                .into_iter()
-                .filter(|(s, t)| s != t && ids.contains(t)) // self-loop (s==t) бессмыслен в графе (аудит)
-                .map(|(source, target)| GraphEdge { source, target })
-                .collect();
+            // P1-19: дедуп в канонические ненаправленные пары — реципрокная (A→B, B→A) → одно ребро.
+            let edges = dedup_undirected_edges(raw_edges, &ids);
 
             Ok(GraphData { nodes, edges })
         })
@@ -378,15 +399,21 @@ pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGra
                     r.get(0)
                 })?;
 
-            // Топ-N файлов по степени (число инцидентных разрешённых связей), хабы первыми.
+            // Топ-N файлов по НЕНАПРАВЛЕННОЙ степени (число инцидентных дедуп-рёбер), хабы первыми.
+            // P1-19: канонические пары `p(a,b) = DISTINCT (MIN(s,t), MAX(s,t))` материализуем ОДИН
+            // раз через CTE (реципрокная A→B,B→A → одна пара), затем каждый конец даёт +1 → ранг-степень
+            // совпадает с числом инцидентных рёбер дедуп-графа (иначе реципрокные хабы выигрывали отбор).
+            // CTE (а не нестед-подзапрос дважды) — один `SCAN links`, без двойного скана+sort (перф).
             let mut nstmt = c.prepare(
                 "SELECT f.id, f.path, f.title \
                  FROM files f \
                  LEFT JOIN ( \
+                     WITH p(a, b) AS ( \
+                         SELECT DISTINCT MIN(source_id, target_id), MAX(source_id, target_id) \
+                         FROM links WHERE target_id IS NOT NULL AND source_id != target_id \
+                     ) \
                      SELECT id, COUNT(*) AS deg FROM ( \
-                         SELECT source_id AS id FROM links WHERE target_id IS NOT NULL AND source_id != target_id \
-                         UNION ALL \
-                         SELECT target_id AS id FROM links WHERE target_id IS NOT NULL AND source_id != target_id \
+                         SELECT a AS id FROM p UNION ALL SELECT b AS id FROM p \
                      ) GROUP BY id \
                  ) d ON d.id = f.id \
                  WHERE f.is_deleted = 0 \
@@ -420,11 +447,8 @@ pub async fn get_full_graph(reader: &ReadPool, limit: usize) -> DbResult<FullGra
                 },
                 |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
             )?;
-            let edges: Vec<GraphEdge> = raw_edges
-                .into_iter()
-                .filter(|(s, t)| s != t && ids.contains(t)) // self-loop (s==t) бессмыслен в графе (аудит)
-                .map(|(source, target)| GraphEdge { source, target })
-                .collect();
+            // P1-19: дедуп в канонические ненаправленные пары — реципрокная (A→B, B→A) → одно ребро.
+            let edges = dedup_undirected_edges(raw_edges, &ids);
 
             let truncated = total_files > nodes.len() as i64;
             Ok(FullGraph {
@@ -775,5 +799,140 @@ mod tests {
             g.edges.iter().any(|e| e.source == 1 && e.target == 2),
             "ребро A→B на месте"
         );
+    }
+
+    /// P1-19: реципрокная пара (links A→B И B→A — взаимные вики-ссылки) даёт РОВНО ОДНО
+    /// ненаправленное ребро (не два), иначе степень/размер узла и счётчик рёбер раздувались бы
+    /// вдвое, а в рендере была бы двойная линия. Одно-направленная пара — тоже одно ребро;
+    /// self-loop отфильтрован. Проверяем оба места сбора рёбер (`get_local_graph` + `get_full_graph`).
+    #[tokio::test]
+    async fn reciprocal_links_collapse_to_single_undirected_edge() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        db.writer()
+            .transaction(|tx| {
+                for (id, p) in [(1, "A.md"), (2, "B.md"), (3, "C.md")] {
+                    tx.execute(
+                        "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                         VALUES (?1,?2,'h',0,0,0,0)",
+                        rusqlite::params![id, p],
+                    )?;
+                }
+                // Реципрокная пара A↔B (две строки A→B и B→A) + одно-направленная A→C + self-loop B→B.
+                for (s, t, raw) in [(1, 2, "B"), (2, 1, "A"), (1, 3, "C"), (2, 2, "B")] {
+                    tx.execute(
+                        "INSERT INTO links (source_id,target_id,target_raw,link_type) \
+                         VALUES (?1,?2,?3,'wikilink')",
+                        rusqlite::params![s, t, raw],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Хелпер: число рёбер между неупорядоченной парой {x,y} (порядок концов не важен).
+        fn count_pair(edges: &[GraphEdge], x: i64, y: i64) -> usize {
+            edges
+                .iter()
+                .filter(|e| (e.source == x && e.target == y) || (e.source == y && e.target == x))
+                .count()
+        }
+
+        // Полный граф: A↔B — одно ребро, A↔C — одно, self-loop B↔B отброшен → всего 2 ребра.
+        let full = get_full_graph(db.reader(), 100).await.unwrap();
+        assert_eq!(
+            count_pair(&full.edges, 1, 2),
+            1,
+            "реципрокная пара A↔B → ровно одно ребро (full)"
+        );
+        assert_eq!(count_pair(&full.edges, 1, 3), 1, "A→C → одно ребро (full)");
+        assert!(
+            full.edges.iter().all(|e| e.source != e.target),
+            "self-loop отфильтрован (full)"
+        );
+        assert_eq!(full.edges.len(), 2, "всего 2 ненаправленных ребра (full)");
+
+        // Локальный граф из A (2 хопа покрывает B и C): та же дедупликация во ВТОРОМ месте сбора.
+        let local = get_local_graph(db.reader(), "A.md".into(), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            count_pair(&local.edges, 1, 2),
+            1,
+            "реципрокная пара A↔B → ровно одно ребро (local)"
+        );
+        assert_eq!(
+            count_pair(&local.edges, 1, 3),
+            1,
+            "A→C → одно ребро (local)"
+        );
+        assert!(
+            local.edges.iter().all(|e| e.source != e.target),
+            "self-loop отфильтрован (local)"
+        );
+        assert_eq!(local.edges.len(), 2, "всего 2 ненаправленных ребра (local)");
+    }
+
+    /// P1-19 (хвост MINOR): TOP-N отбор хабов в `get_full_graph` ранжирует по НЕНАПРАВЛЕННОЙ
+    /// степени, согласованной с дедуп-рёбрами. Узел R с НЕСКОЛЬКИМИ реципрокными связями к ОДНОМУ
+    /// соседу (R↔P, две строки) НЕ должен обогнать узел H с бОльшим числом УНИКАЛЬНЫХ соседей.
+    /// Со старой сырой направленной степенью R считался бы как 2 (source в R→P + target в P→R),
+    /// сравнявшись с H (2 уникальных соседа) и обойдя его по tie-break id — отбор был бы кривой.
+    #[tokio::test]
+    async fn full_graph_top_n_ranks_by_undirected_degree() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(dir.path().join(".nexus/nexus.db"))
+            .await
+            .unwrap();
+        db.writer()
+            .transaction(|tx| {
+                // id 1=R (реципрокный), 2=P (партнёр R), 3=H (хаб), 4=X, 5=Y (соседи H).
+                for (id, p) in [(1, "R.md"), (2, "P.md"), (3, "H.md"), (4, "X.md"), (5, "Y.md")] {
+                    tx.execute(
+                        "INSERT INTO files (id,path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                         VALUES (?1,?2,'h',0,0,0,0)",
+                        rusqlite::params![id, p],
+                    )?;
+                }
+                // R↔P — реципрокная пара (две строки) → R ненаправленная степень 1, НЕ 2.
+                // H→X, H→Y — две УНИКАЛЬНЫЕ связи → H ненаправленная степень 2.
+                for (s, t) in [(1, 2), (2, 1), (3, 4), (3, 5)] {
+                    tx.execute(
+                        "INSERT INTO links (source_id,target_id,target_raw,link_type) \
+                         VALUES (?1,?2,'x','wikilink')",
+                        rusqlite::params![s, t],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Лимит 1 → берём ровно одного хаба. По ненаправленной степени это H (deg 2 > R deg 1).
+        // Со старой направленной степенью R тоже имел бы 2 и обогнал бы H по `f.id` (1 < 3).
+        let top1 = get_full_graph(db.reader(), 1).await.unwrap();
+        assert_eq!(top1.nodes.len(), 1);
+        assert_eq!(
+            top1.nodes[0].path, "H.md",
+            "TOP-1 — узел с бОльшей НЕНАПРАВЛЕННОЙ степенью (H=2), а не реципрокный R (=1)"
+        );
+
+        // И прямая проверка степени по дедуп-рёбрам в полном графе: R инцидентен 1 ребру, H — 2.
+        let full = get_full_graph(db.reader(), 100).await.unwrap();
+        let deg_of = |id: i64| {
+            full.edges
+                .iter()
+                .filter(|e| e.source == id || e.target == id)
+                .count()
+        };
+        assert_eq!(
+            deg_of(1),
+            1,
+            "R: одно дедуп-ребро (реципрокная пара не двоит)"
+        );
+        assert_eq!(deg_of(3), 2, "H: два дедуп-ребра");
     }
 }
