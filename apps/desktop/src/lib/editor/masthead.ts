@@ -9,6 +9,7 @@
  */
 
 import { extractFrontmatter, parseFrontmatterFields, type FmField } from '../markdown/frontmatter';
+import { stripHeadingEmoji } from './headingText';
 
 /** Поля frontmatter, которые выносятся в масthead (kicker/title) → не дублируем их в Properties-таблице. */
 const MASTHEAD_FIELDS = new Set(['title', 'tags', 'tag']);
@@ -41,11 +42,13 @@ export function basenameTitle(path?: string): string {
 }
 
 /**
- * Первая буква текста для буквицы (порт `dropcap.js`): первый Unicode-`\p{L}` в ВЕРХНЕМ регистре.
- * Пусто, если букв нет (абзац начинается с цифры/символа) → буквица не ставится.
+ * Первый знак текста для буквицы (порт `dropcap.js`): первый Unicode-`\p{L}` (буква) ИЛИ `\p{Nd}`
+ * (десятичная цифра) в ВЕРХНЕМ регистре. Владелец просил «большую красную ЦИФРУ» → абзац, начинающийся
+ * с года/числа (`2026 год…`), получает цифру-буквицу (`2`). `toUpperCase()` цифру не меняет. Пусто,
+ * если нет ни буквы, ни цифры (абзац начинается только с пунктуации/символов) → буквица не ставится.
  */
 export function dropCapLetter(text: string): string {
-  const m = (text || '').trim().match(/\p{L}/u);
+  const m = (text || '').trim().match(/\p{L}|\p{Nd}/u);
   return m ? m[0].toUpperCase() : '';
 }
 
@@ -95,9 +98,10 @@ export function deriveMasthead(source: string, notePath?: string): Masthead {
   }
 
   // Для отображаемого заголовка снимаем inline-маркеры `*`/`` ` `` (как parseOutline в макете), чтобы из
-  // `# Идея **важная**` не торчали звёздочки; `_` НЕ трогаем (часто snake_case в именах). frontmatter
-  // title — литерал, его не чистим. Для slug-id используем СЫРОЙ h1Text (slugify сам срежет пунктуацию).
-  const titleFromH1 = h1Text ? h1Text.replace(/[*`]/g, '').trim() : '';
+  // `# Идея **важная**` не торчали звёздочки; `_` НЕ трогаем (часто snake_case в именах). Эмодзи из H1
+  // тоже срезаем (`# 📅 …` daily → чистый редакционный вид, как заголовки тела). frontmatter title —
+  // литерал, его не чистим. Для slug-id используем СЫРОЙ h1Text (slugify сам срежет пунктуацию).
+  const titleFromH1 = h1Text ? stripHeadingEmoji(h1Text.replace(/[*`]/g, '')) : '';
   const title = fmTitle || titleFromH1 || basenameTitle(notePath);
   const fields = allFields.filter((f) => !MASTHEAD_FIELDS.has(f.key.toLowerCase()));
 

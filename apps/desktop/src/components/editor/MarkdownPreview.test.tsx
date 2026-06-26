@@ -960,6 +960,169 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     fireEvent.click(screen.getByRole('checkbox'));
     expect(onToggleTask).toHaveBeenCalledWith(3); // строка ПОЛНОГО исходника, не сдвинута погашением H1
   });
+
+  // ── БАГ 1: эмодзи срезаны из заголовков (H1 masthead-title + H2-секции), source НЕ мутируется ──
+  it('эмодзи срезаны из masthead-title и H2-секции; исходный source не меняется', () => {
+    const src = '# 📅 2026-03-05 Понедельник\n\n## 🧠 Поток мыслей\n\nТело секции с буквицей.';
+    const { container } = render(
+      <MarkdownPreview source={src} notePath="Daily/2026-03-05.md" onOpenLink={() => {}} masthead={{ mtime: null }} />,
+    );
+    // masthead-title — без эмодзи (id docTitle начинается с цифры → читаем через класс, не getByRole)
+    expect(container.querySelector('[class*=docTitle]')?.textContent).toBe('2026-03-05 Понедельник');
+    // H2-секция — без эмодзи (SectionHeading рендерит h2)
+    expect(screen.getByRole('heading', { name: 'Поток мыслей', level: 2 })).toBeInTheDocument();
+    // секция получила slug БЕЗ эмодзи
+    expect(container.querySelector('section[data-sec-id="поток-мыслей"]')).not.toBeNull();
+    // эмодзи в заголовках в DOM нет
+    expect(container.textContent).not.toContain('🧠');
+    expect(container.textContent).not.toContain('📅');
+    // КРИТИЧНО: исходная строка (пропс source) не мутирована — эмодзи остаются в .md
+    expect(src).toBe('# 📅 2026-03-05 Понедельник\n\n## 🧠 Поток мыслей\n\nТело секции с буквицей.');
+  });
+
+  it('эмодзи срезаны из H3–H6 тела (не только секционных H2)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Раздел\n\n### 💡 Подзаголовок\n\nтекст'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Подзаголовок', level: 3 })).toBeInTheDocument();
+    expect(container.textContent).not.toContain('💡');
+  });
+
+  it('эмодзи в ТЕЛЕ абзаца НЕ трогаются (strip только заголовки)', () => {
+    render(
+      <MarkdownPreview
+        source={'## Заголовок\n\nТекст абзаца с эмодзи 🎉 целым.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(screen.getByText('Текст абзаца с эмодзи 🎉 целым.')).toBeInTheDocument();
+  });
+
+  // ── БАГ 2a: буквица появляется, когда заметка открывается H2-СЕКЦИЕЙ (первый абзац вложен в section) ──
+  it('буквица: заметка открывается H2-секцией → первый <p> внутри секции получает data-dropcap', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## 🧠 Поток мыслей\n\nМного текста для буквицы внутри секции.'}
+        notePath="Daily/2026-03-05.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('М');
+    // абзац-цель реально лежит ВНУТРИ секции (S3-обёртка)
+    expect(cap?.closest('section[data-sec-id]')).not.toBeNull();
+  });
+
+  it('буквица в секции — только ПЕРВЫЙ абзац первой секции (не во второй секции)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Первый\n\nАбзац первой секции.\n\n## Второй\n\nАбзац второй секции.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const caps = container.querySelectorAll('p[data-dropcap]');
+    expect(caps).toHaveLength(1); // ровно одна буквица — в первой секции
+    expect(caps[0].textContent).toContain('Абзац первой секции.');
+  });
+
+  it('буквица в секции — если первый блок секции список (не абзац), буквицы нет', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Раздел\n\n- пункт один\n- пункт два'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(container.querySelector('[data-dropcap]')).toBeNull();
+  });
+
+  // ── Регресс БАГ 2: счётчик секций (`.sec h2::before`) появляется для всех top-level H2 ──
+  it('регресс: счётчик секций цел — каждый top-level H2 обёрнут в section[data-sec-id]', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Заголовок\n\nлид\n\n## Раздел A\n\nтекст\n\n## Раздел B\n\nтекст'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    // обе секции обёрнуты (CSS-счётчик counter(sec) тикает по `.sec` → 01/02 появятся)
+    const secs = container.querySelectorAll('section[data-sec-id]');
+    expect(secs).toHaveLength(2);
+    expect(container.querySelector('section[data-sec-id="раздел-a"]')).not.toBeNull();
+    expect(container.querySelector('section[data-sec-id="раздел-b"]')).not.toBeNull();
+  });
+
+  // adversarial FIX 1 (CRITICAL): заголовок с inline-марками НЕ склеивает слова при рендере.
+  it('FIX1: H2 с **bold** не склеивает слова (`Раздел **A** и B` → «Раздел A и B»)', () => {
+    render(
+      <MarkdownPreview
+        source={'## Раздел **A** и B\n\nтекст'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    // accessible name заголовка собирается из всех inline-узлов с пробелами на стыках
+    expect(screen.getByRole('heading', { name: 'Раздел A и B', level: 2 })).toBeInTheDocument();
+  });
+
+  // adversarial FIX 3 (MAJOR): буквица НЕ садится внутрь callout/blockquote, если секция ими открывается.
+  it('FIX3: секция открывается callout → буквица НЕ внутри callout (на лид-абзаце ниже)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Раздел\n\n> [!note] Заметка\n> тело callout\n\nНастоящий лид-абзац секции.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    // буквица НЕ внутри admonition
+    expect(cap?.closest('[data-callout]')).toBeNull();
+    // буквица на реальном лид-абзаце
+    expect(cap?.textContent).toContain('Настоящий лид-абзац секции.');
+  });
+
+  it('FIX3: секция открывается blockquote → буквица НЕ внутри цитаты (на абзаце ниже)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Раздел\n\n> цитата в начале\n\nЛид-абзац после цитаты.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.closest('blockquote')).toBeNull();
+    expect(cap?.textContent).toContain('Лид-абзац после цитаты.');
+  });
+
+  it('FIX3: секция = ТОЛЬКО callout (нет голого абзаца) → буквицы нет', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Раздел\n\n> [!note] Заметка\n> только тело callout'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(container.querySelector('[data-dropcap]')).toBeNull();
+  });
 });
 
 // Hermes-8 S7 — ховер-превью `.popcard`. Fake timers (220мс вики / 120мс сноска) + мок резолвера/readFile.

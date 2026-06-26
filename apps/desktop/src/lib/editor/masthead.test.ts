@@ -11,10 +11,16 @@ describe('dropCapLetter', () => {
     expect(dropCapLetter('  «слово»')).toBe('С');
     expect(dropCapLetter('— тире')).toBe('Т');
   });
-  it('пусто, если букв нет', () => {
-    expect(dropCapLetter('123 456')).toBe('');
+  it('ведущая ЦИФРА → буквица-цифра (владелец просил «большую красную цифру»)', () => {
+    expect(dropCapLetter('2026 год')).toBe('2');
+    expect(dropCapLetter('123 456')).toBe('1');
+    expect(dropCapLetter('  «2026»')).toBe('2'); // пропускает пунктуацию до первой цифры
+    expect(dropCapLetter('— 7 правил')).toBe('7');
+  });
+  it('пусто, если нет ни буквы, ни цифры', () => {
     expect(dropCapLetter('   ')).toBe('');
     expect(dropCapLetter('')).toBe('');
+    expect(dropCapLetter('!!! ??? …')).toBe('');
   });
 });
 
@@ -57,6 +63,12 @@ describe('deriveMasthead — заголовок', () => {
   });
   it('h1Text null, если ведущего H1 нет', () => {
     expect(deriveMasthead('текст без H1', 'f.md').h1Text).toBeNull();
+  });
+  it('срезает эмодзи из отображаемого title (daily `# 📅 …`), сырой h1Text/source целы', () => {
+    const src = '# 📅 2026-03-05 Понедельник\nтекст';
+    const m = deriveMasthead(src, 'f.md');
+    expect(m.title).toBe('2026-03-05 Понедельник'); // title без эмодзи
+    expect(m.h1Text).toBe('📅 2026-03-05 Понедельник'); // СЫРОЙ h1Text (для slug) — эмодзи цел
   });
 });
 

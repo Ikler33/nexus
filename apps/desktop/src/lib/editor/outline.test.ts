@@ -86,6 +86,15 @@ describe('extractHeadings (EDIT-7)', () => {
     ]);
   });
 
+  it('срезает эмодзи из заголовков (совпадает с рендером remarkStripHeadingEmoji)', () => {
+    const doc = ['# 📅 2026-03-05', '## 🧠 Поток мыслей', '## 💡 Идеи'].join('\n');
+    expect(extractHeadings(doc)).toEqual([
+      { level: 1, text: '2026-03-05', line: 1 },
+      { level: 2, text: 'Поток мыслей', line: 2 },
+      { level: 2, text: 'Идеи', line: 3 },
+    ]);
+  });
+
   it('пустой документ → пустой список', () => {
     expect(extractHeadings('')).toEqual([]);
   });
