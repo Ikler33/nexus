@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Дизайн · Hermes-8 S6 «Редакция» — scroll-spy оглавления + раскрытие секции при прыжке
+
+Шестой срез редизайна редактора. Оглавление становится живым навигатором поверх свёрнутых секций (S3).
+
+- **Scroll-spy** — при скролле документа активный пункт оглавления подсвечивается (ember-маркер по README §6). Слушатель скролла на скролл-руте пейна (`GroupPane.scrollRef`) с rAF-троттлом (один пересчёт на кадр); активна последняя секция, чей верх ≤ 90px от верха вьюпорта (чистая `pickActiveLine` в `lib/editor/outline.ts`, юнит-тестируема отдельно от DOM); до первого заголовка подсвечен первый. `activeLine` прокинут `GroupPane → InspectorRail → OutlineBar` (`.active` + `aria-current="location"`).
+- **Раскрытие свёрнутой секции при клик-прыжке** — `MarkdownPreview` обёрнут в `forwardRef` + `useImperativeHandle({ revealLine })`; `revealLine(line)` по `[data-outline-line]` находит секцию (`section[data-sec-id]`, скоуп на владеющую `.preview`) и убирает её `secId` из `collapsedSecs` (DOM-источник свёрнутости, идемпотентно). `jumpToHeading` раскрывает цель ПЕРЕД скроллом.
+- **Тайминг прыжка (adversarial FIX):** `revealLine` возвращает `didExpand` — если секция реально раскрывается, `scrollIntoView` откладывается до конца grid-анимации (`transitionend` на `grid-template-rows` у `.sec-body` + фолбэк 350мс для reduced-motion), иначе скролл немедленный. Без этого Chromium фиксировал бы offset до расхлопа (0.28s) → недоскролл к вложенному h3.
+- **Производительность (adversarial FIX):** `components` и элемент `<ReactMarkdown>` мемоизированы внутри `MarkdownPreview` (плагин-цепочки вынесены в модуль-константы) — смена `activeLine` (scroll-spy) больше НЕ ре-парсит тело (remark/rehype). S3-сворачивание остаётся живым через `SectionContext` (Provider оборачивает мемо-границу — контекст пробивает мемоизацию).
+- **Анти-дребезг spy** при программном скролле прыжка (~400мс + окно раскрытия); spy только в preview/reading (в source CM6 скроллит сам). Сплиты не путаются (свой `scrollRef`/`activeLine` на пейн).
+- Тесты vitest (+24 к срезу: pickActiveLine, OutlineBar-active, revealLine через lazy/forwardRef, didExpand-семантика, отложенный/немедленный/фолбэк-скролл, S3-collapse-регресс на идентичность узла). Гейт зелёный (1182). **Независимый adversarial-ревью (3 линзы) → 2 MAJOR (паразитный ре-парс на scroll-spy; недоскролл из-за неучтённой grid-анимации) — оба исправлены** (self-review субагента их не увидел — perf не юнит-тестируется, тайминг маскируется reduced-motion).
+
 ### Дизайн · Hermes-8 S7 «Редакция» — ховер-превью и поповеры (`.popcard`)
 
 Седьмой срез редизайна редактора заметок. Тело заметки получает редакционные ховер-превью.

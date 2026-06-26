@@ -1,5 +1,5 @@
-import type { MouseEvent as ReactMouseEvent } from 'react';
-import { createElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentProps, ForwardedRef, MouseEvent as ReactMouseEvent } from 'react';
+import { createElement, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
@@ -62,6 +62,31 @@ function urlTransform(url: string): string {
   // на href ссылки = XSS (urlTransform общий для href и src), поэтому только image-подтип (находка аудита).
   return !hasScheme || /^(https?:|mailto:|tel:|data:image\/)/i.test(url) ? url : '';
 }
+
+// remark/rehype-цепочки — ЧИСТЫЕ КОНСТАНТЫ (плагины и их опции не зависят от пропсов/стейта). Вынесены
+// в модуль-скоуп: иначе свежие литералы-массивы на каждый ре-рендер ломали бы мемоизацию `<ReactMarkdown>`
+// (S6-FIX1: смена activeLine в родителе НЕ должна гонять весь remark/rehype-пайплайн заново).
+// ПОРЯДОК ВАЖЕН: remarkFrontmatter/remarkComments — ПЕРВЫМИ (убрать frontmatter и вырезать `%%…%%` до
+// embed/callout/nexus). pass-2 remarkComments чистит пустые абзацы, а remarkEmbeds позже делает embed-узлы
+// «пустыми» абзацами → reorder remarkComments ПОСЛЕ embeds стёр бы вставки.
+const REMARK_PLUGINS: ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [
+  remarkFrontmatter,
+  remarkComments,
+  remarkEmbeds,
+  remarkMermaid,
+  remarkCallouts,
+  remarkGfm,
+  remarkHighlight,
+  remarkNexus,
+  [remarkMath, { singleDollarTextMath: false }],
+];
+// rehypeSections — ПОСЛЕ katex/csp: ему нужен полный, стабильный hast root (он лишь ПЕРЕГРУППИРОВЫВАЕТ узлы
+// в `<section.sec>`, не трогая содержимое). h2 перемещаются as-is → React-оверрайд проставит id/data-outline-line.
+const REHYPE_PLUGINS: ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
+  [rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }],
+  rehypeKatexCsp,
+  rehypeSections,
+];
 
 /** Минимальная форма hast-узла, по которой ищем состояние GFM-чекбокса (без зависимости от типов hast). */
 type HastNode = { tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
@@ -155,17 +180,28 @@ function EmbedImage({ name, alt, width }: { name: string; alt: string; width?: n
   return <VaultImage src={path} alt={alt || name} width={width} />;
 }
 
-export function MarkdownPreview({
-  source,
-  onOpenLink,
-  onOpenTag,
-  onToggleTask,
-  notePath,
-  onAppendLine,
-  fetchNotes,
-  masthead,
-}: {
-  source: string;
+/**
+ * Hermes-8 S6: imperative-хэндл превью для GroupPane. `revealLine(line)` раскрывает свёрнутую S3-секцию,
+ * содержащую исходную строку `line` (чтобы прыжок оглавления к скрытому h3 доскроллил к видимой цели).
+ */
+export interface MarkdownPreviewHandle {
+  /** Раскрывает свёрнутую S3-секцию, содержащую строку `line`. Возвращает `true`, если реально раскрыл
+   *  (вызвал grid-анимацию) — GroupPane по этому признаку откладывает scrollIntoView до конца раскрытия. */
+  revealLine: (line: number) => boolean;
+}
+
+function MarkdownPreviewImpl(
+  {
+    source,
+    onOpenLink,
+    onOpenTag,
+    onToggleTask,
+    notePath,
+    onAppendLine,
+    fetchNotes,
+    masthead,
+  }: {
+    source: string;
   onOpenLink: (target: string) => void;
   /** TAGCLICK-1: клик по `#tag`-чипу → имя тега (без `#`). Не задан (доска/peek/вложенный embed без
    *  проброса) — чип остаётся НЕ-кликабельным `<span>` (честно, как onToggleTask-absence у чекбоксов). */
@@ -186,7 +222,9 @@ export function MarkdownPreview({
    *  (embed/peek/доска) — шапки и буквицы нет (как у вложенных рендеров макета). `mtime` — для chip'а
    *  «изменено» (живёт в GroupPane); `reading` — режим чтения ⌘R (центрированная шапка, крупнее буквица). */
   masthead?: { mtime: number | null; reading?: boolean };
-}) {
+  },
+  ref: ForwardedRef<MarkdownPreviewHandle>,
+) {
   // Транклюзия: добавляем свой путь в множество предков (гард-цикл A→B→A). Мемо — стабильная
   // идентичность Set'а, иначе вложенный NoteEmbed перефетчивал бы на каждый ре-рендер родителя.
   const inheritedEmbed = useContext(EmbedContext);
@@ -236,6 +274,48 @@ export function MarkdownPreview({
   // `.preview` ПОСЛЕ шапки и Properties-таблицы) и, если это абзац, штампуем его первую букву в `data-cap`
   // (CSS тюнит оптический зазор по глифу) + маркер `data-dropcap`. Только в режиме шапки; иначе снимаем.
   const previewRef = useRef<HTMLDivElement>(null);
+
+  // Hermes-8 S6: imperative-хэндл для GroupPane — раскрытие свёрнутой секции при прыжке оглавления.
+  // ИСТОЧНИК = DOM (надёжнее перепарса структуры): по `[data-outline-line="${line}"]` находим узел
+  // целевой строки в ВЛАДЕЮЩЕЙ .preview (previewRef, не спускаясь в чужие эмбеды), поднимаемся до его
+  // секции `<section.sec data-sec-id>` и убираем secId из `collapsedSecs`. Идемпотентно: секции нет
+  // (строка вне секций — лид/footnotes) или она уже развёрнута → no-op (Set без secId не меняется).
+  // Прыжок к самому h2 (его строка) тоже раскрывает тело — ок по UX (показать содержимое при переходе
+  // к заголовку секции). React.lazy + forwardRef совместимы: ref доходит через lazy-границу (тест S6).
+  useImperativeHandle(
+    ref,
+    () => ({
+      // Возвращает `true`, если РЕАЛЬНО раскрыл свёрнутую секцию (GroupPane по этому признаку откладывает
+      // scrollIntoView до конца grid-анимации раскрытия — S6-FIX2). `false` = секции нет / уже развёрнута →
+      // прыжок можно скроллить немедленно. Состояние свёрнутости читаем ИЗ DOM (класс `.collapsed` на секции,
+      // тот же `styles.collapsed`, что ставит Section) — синхронный источник истины, без stale-замыкания на
+      // collapsedSecs (хэндл мемоизирован с []).
+      revealLine(line: number): boolean {
+        const root = previewRef.current;
+        if (!root) return false;
+        // `line` — доверенное целое (из outline.extractHeadings) → CSS.escape не нужен (он дал бы
+        // путаную digit-escape-форму `\33 ` в строке селектора). Нечисловое отсекаем заранее.
+        if (!Number.isFinite(line)) return false;
+        const target = root.querySelector<HTMLElement>(`[data-outline-line="${line}"]`);
+        // Фильтр по owning-preview: querySelector мог бы взять одноимённую строку вложенного эмбеда.
+        if (!target || target.closest('[class*="preview"]') !== root) return false;
+        const sec = target.closest<HTMLElement>('section[data-sec-id]');
+        const secId = sec?.getAttribute('data-sec-id');
+        if (!sec || !secId) return false;
+        const wasCollapsed = sec.classList.contains(styles.collapsed);
+        if (!wasCollapsed) return false; // уже развёрнута → no-op, скролл немедленный
+        setCollapsedSecs((prev) => {
+          if (!prev.has(secId)) return prev; // защита от гонки (стабильная ссылка — без лишнего ре-рендера)
+          const next = new Set(prev);
+          next.delete(secId);
+          return next;
+        });
+        return true; // раскрыли свёрнутую секцию → GroupPane ждёт анимацию перед скроллом
+      },
+    }),
+    [],
+  );
+
   useLayoutEffect(() => {
     const root = previewRef.current;
     if (!root) return;
@@ -394,8 +474,18 @@ export function MarkdownPreview({
     [cancelPending, t],
   );
 
-  const sourceLines = onToggleTask ? source.split('\n') : null;
-  const components: Components = {
+  // S6-FIX1: набор component-оверрайдов МЕМОИЗИРУЕМ — иначе свежий объект на каждый ре-рендер (в т.ч.
+  // паразитный от смены activeLine в родителе) форсил бы ReactMarkdown заново прогонять весь remark/rehype-
+  // пайплайн. Deps — ВСЁ, что реально замыкают оверрайды: пропсы-коллбэки (onOpenLink/onOpenTag/onToggleTask;
+  // onAppendLine не тут — он в JSX, не в оверрайдах), стабильные useCallback-хэндлеры ховера (onWikiEnter/
+  // onFootnoteEnter/hidePopcard) и производные от source/masthead (sourceLines/slugger/leadSlug). ВАЖНО:
+  // оверрайды section/h2 НЕ замыкают collapsedSecs — они читают его через SectionContext, поэтому смена
+  // свёрнутости НЕ инвалидирует `components` (S3 жив через контекст, см. ниже SectionContext.Provider).
+  // Мемо отдаёт И `leadSlug`: slug ведущего H1 потребляется ТЕМ ЖЕ slugger'ом, что нумерует заголовки тела
+  // (общий дедуп-счётчик), и нужен снаружи для `id` masthead-h1 — поэтому считаем здесь, отдаём наружу.
+  const { components, leadSlug } = useMemo<{ components: Components; leadSlug: string | null }>(() => {
+    const sourceLines = onToggleTask ? source.split('\n') : null;
+    const comps: Components = {
     // IMG-1: картинки-вложения через VaultImage (vault-путь → data:-URL).
     img({ src, alt }) {
       return (
@@ -514,8 +604,9 @@ export function MarkdownPreview({
     },
   };
 
-  // HEADANCHOR-1: slug-id на заголовок (per-render дедуп) — якорь для `#heading`-навигации/сносок.
-  // Новый slugger на каждый рендер (без утечки счётчиков между нотами/ре-рендерами).
+  // HEADANCHOR-1: slug-id на заголовок (дедуп per memo-build) — якорь для `#heading`-навигации/сносок.
+  // Новый slugger при каждой пересборке `components` (deps source/masthead/md), т.е. при каждой реальной
+  // ре-рендере ReactMarkdown → без утечки счётчиков между нотами; стабильный пока текст/режим не сменился.
   const slugger = makeSlugger();
   // HEADANCHOR-1: ведущий H1 погашен в теле → его slug-id переносим на заголовок шапки, ПОТРЕБЛЯЯ slug
   // первым (до рендера тела) — чтобы якорь `#slug-ведущего-H1` вёл к шапке И дедуп последующих одноимённых
@@ -546,17 +637,17 @@ export function MarkdownPreview({
       if (id != null) props.id = id;
       return createElement(tag, props, children);
     };
-  components.h1 = headingWithLine('h1');
-  components.h2 = headingWithLine('h2');
-  components.h3 = headingWithLine('h3');
-  components.h4 = headingWithLine('h4');
-  components.h5 = headingWithLine('h5');
-  components.h6 = headingWithLine('h6');
+  comps.h1 = headingWithLine('h1');
+  comps.h2 = headingWithLine('h2');
+  comps.h3 = headingWithLine('h3');
+  comps.h4 = headingWithLine('h4');
+  comps.h5 = headingWithLine('h5');
+  comps.h6 = headingWithLine('h6');
 
   // Транклюзия: кастомный блок `nexus-embed` (из remarkEmbeds) → рекурсивный рендер вставленной
   // заметки. Кастомный тег вне `Components`-типа → регистрируем индексом. Нагрузку (target/anchor)
   // берём из hast-properties (hProperties копируются в node.properties дословно).
-  (components as Record<string, Components['div']>)['nexus-embed'] = ({ node }) => {
+  (comps as Record<string, Components['div']>)['nexus-embed'] = ({ node }) => {
     const props = (node?.properties ?? {}) as Record<string, unknown>;
     const target = typeof props.target === 'string' ? props.target : '';
     const anchor = typeof props.anchor === 'string' ? props.anchor : '';
@@ -574,7 +665,7 @@ export function MarkdownPreview({
   };
 
   // Картинка-вставка `nexus-image` (из remarkEmbeds) → резолв basename + рендер `<img>`.
-  (components as Record<string, Components['div']>)['nexus-image'] = ({ node }) => {
+  (comps as Record<string, Components['div']>)['nexus-image'] = ({ node }) => {
     const props = (node?.properties ?? {}) as Record<string, unknown>;
     const name = typeof props.name === 'string' ? props.name : '';
     const alt = typeof props.alt === 'string' ? props.alt : '';
@@ -585,13 +676,13 @@ export function MarkdownPreview({
   };
 
   // Mermaid-диаграмма `nexus-mermaid` (из remarkMermaid) → ленивый рендер CSP-безопасного SVG.
-  (components as Record<string, Components['div']>)['nexus-mermaid'] = ({ node }) => {
+  (comps as Record<string, Components['div']>)['nexus-mermaid'] = ({ node }) => {
     const code = (node?.properties as Record<string, unknown> | undefined)?.code;
     return typeof code === 'string' && code.trim() ? <MermaidDiagram code={code} /> : null;
   };
 
   // Callout `nexus-callout` (из remarkCallouts) → admonition-блок: иконка/цвет по типу, опц. сворачивание.
-  (components as Record<string, Components['div']>)['nexus-callout'] = ({ node, children }) => {
+  (comps as Record<string, Components['div']>)['nexus-callout'] = ({ node, children }) => {
     const props = (node?.properties ?? {}) as Record<string, unknown>;
     const kind = typeof props.kind === 'string' ? props.kind : 'note';
     const fold = typeof props.fold === 'string' ? props.fold : '';
@@ -602,7 +693,7 @@ export function MarkdownPreview({
     );
   };
   // Заголовок callout `nexus-callout-title` (иконка + подпись; пустой → дефолтная подпись по типу).
-  (components as Record<string, Components['div']>)['nexus-callout-title'] = ({ node, children }) => {
+  (comps as Record<string, Components['div']>)['nexus-callout-title'] = ({ node, children }) => {
     const props = (node?.properties ?? {}) as Record<string, unknown>;
     const kind = typeof props.kind === 'string' ? props.kind : 'note';
     const label = typeof props.label === 'string' ? props.label : kind;
@@ -617,7 +708,7 @@ export function MarkdownPreview({
   // сохраняем через `role=separator` (как нативный hr); сами точки — пустые `<span>` без текста (чистый
   // декор, AT ничего не зачитывает). CSS `.asterism` (MarkdownPreview.module.css). markdown `---`/`***`/
   // `___` дают этот узел; frontmatter-`---` уже срезан remarkFrontmatter (спурьёзного hr нет — FRONTMATTER-1).
-  components.hr = () => (
+  comps.hr = () => (
     <div className={styles.asterism} role="separator">
       <span />
       <span />
@@ -627,8 +718,8 @@ export function MarkdownPreview({
 
   // S3 «Редакция»: обёртка H2-секции (rehypeSections обернул h2+тело в `<section.sec data-sec-id>`).
   // Класс `.collapsed` ставит `Section` по контексту; интерактив (клик/шеврон) — на самом h2
-  // (`SectionHeading`). h2 уже отрендерен через `components.h2` (HEADANCHOR-1: id/data-outline-line целы).
-  components.section = ({ node, children, ...rest }) => {
+  // (`SectionHeading`). h2 уже отрендерен через `comps.h2` (HEADANCHOR-1: id/data-outline-line целы).
+  comps.section = ({ node, children, ...rest }) => {
     const props = (node?.properties ?? {}) as Record<string, unknown>;
     // react-markdown@10 кладёт `data-sec-id` в node.properties БЕЗ camelCase (литеральный ключ).
     const secId = typeof props['data-sec-id'] === 'string' ? props['data-sec-id'] : '';
@@ -642,8 +733,8 @@ export function MarkdownPreview({
   if (onToggleTask) {
     // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,
     // в т.ч. вложенный в `<p>` у loose-списков) — единственный чекбокс рисуем в `li`.
-    components.input = () => null;
-    components.li = ({ node, className, children }) => {
+    comps.input = () => null;
+    comps.li = ({ node, className, children }) => {
       const cls = String(className ?? '');
       if (!cls.includes('task-list-item')) return <li className={cls || undefined}>{children}</li>;
       // Состояние — авторитетное из GFM-парса (а не из перепарса исходной строки): корректно для
@@ -665,7 +756,19 @@ export function MarkdownPreview({
         </li>
       );
     };
-  }
+    }
+    return { components: comps, leadSlug };
+  }, [
+    onOpenLink,
+    onOpenTag,
+    onToggleTask,
+    onWikiEnter,
+    onFootnoteEnter,
+    hidePopcard,
+    source,
+    mastheadActive,
+    md,
+  ]);
 
   // FRONTMATTER-1: поля frontmatter для Properties-таблицы (сам блок убирается из рендера remarkFrontmatter,
   // строки тела не сдвигаются). У вложенных embed'ов frontmatter уже срезан (NoteEmbed) → таблицы нет.
@@ -676,6 +779,27 @@ export function MarkdownPreview({
   // В режиме шапки title/tags вынесены в kicker/заголовок → не дублируем их в Properties-таблице (md.fields
   // уже без них). Без шапки — полный набор полей (поведение embed/peek не меняем).
   const tableFields = masthead ? md.fields : fmFields;
+
+  // S6-FIX1: МЕМОИЗИРУЕМ сам элемент `<ReactMarkdown>` по [body, components] (плагины — стабильные
+  // модуль-константы). Так смена activeLine/popcard/любого «лёгкого» стейта родителя (или этого компонента)
+  // НЕ перезапускает remark/rehype-пайплайн: React переиспользует тот же element, ReactMarkdown не ре-парсит.
+  // Перерендерится ТОЛЬКО при реальной смене текста (body) или контракта оверрайдов (components). S3-collapse
+  // НЕ инвалидирует это: collapsedSecs не входит в `components` (читается через SectionContext) — а Provider
+  // оборачивает мемо-элемент СНАРУЖИ, поэтому смена value контекста ре-рендерит консьюмеров Section/h2 даже
+  // сквозь memo-границу (контекст пробивает React.memo/мемоизированные subtree).
+  const markdownEl = useMemo(
+    () => (
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        urlTransform={urlTransform}
+        components={components}
+      >
+        {body}
+      </ReactMarkdown>
+    ),
+    [body, components],
+  );
 
   return (
     <EmbedContext.Provider value={embedCtx}>
@@ -711,24 +835,10 @@ export function MarkdownPreview({
           </header>
         )}
         {tableFields.length > 0 && <PropertiesTable fields={tableFields} onOpenTag={onOpenTag} />}
-        {/* S3: контекст сворачивания секций — потребляют оверрайды h2 (кнопка) и section (класс). */}
-        <SectionContext.Provider value={sectionState}>
-          <ReactMarkdown
-            // ПОРЯДОК ВАЖЕН: remarkFrontmatter/remarkComments — ПЕРВЫМИ (убрать frontmatter и вырезать
-            // `%%…%%` до embed/callout/nexus). Оба чистят узлы по позиции/тексту, тело по строкам сохранено
-            // (EDIT-5/7). pass-2 remarkComments чистит пустые абзацы — а remarkEmbeds позже делает embed-узлы
-            // «пустыми» абзацами, так что reorder remarkComments/remarkFrontmatter ПОСЛЕ embeds стёр бы вставки.
-            remarkPlugins={[remarkFrontmatter, remarkComments, remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
-            // rehypeSections — ПОСЛЕ katex/csp: ему нужен полный, уже стабильный hast root (он лишь
-            // ПЕРЕГРУППИРОВЫВАЕТ узлы в `<section.sec>`, не трогая их содержимое). h2-узлы перемещаются
-            // as-is → React-оверрайд h2 по-прежнему проставит id/data-outline-line (HEADANCHOR-1).
-            rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp, rehypeSections]}
-            urlTransform={urlTransform}
-            components={components}
-          >
-            {body}
-          </ReactMarkdown>
-        </SectionContext.Provider>
+        {/* S3: контекст сворачивания секций — потребляют оверрайды h2 (кнопка) и section (класс). Provider
+            СНАРУЖИ мемоизированного `markdownEl` (S6-FIX1): смена collapsedSecs ре-рендерит консьюмеров
+            Section/SectionHeading через контекст, не инвалидируя дорогой remark/rehype-пайплайн. */}
+        <SectionContext.Provider value={sectionState}>{markdownEl}</SectionContext.Provider>
         {/* AppendLine — только у top-level превью редактора (onAppendLine задан); embed/peek/доска не передают. */}
         {onAppendLine && fetchNotes && (
           <AppendLine onAppend={onAppendLine} fetchNotes={fetchNotes} />
@@ -747,3 +857,13 @@ export function MarkdownPreview({
     </EmbedContext.Provider>
   );
 }
+
+/**
+ * Hermes-8 S6: оборачиваем в `forwardRef`, чтобы GroupPane мог императивно раскрыть свёрнутую секцию
+ * перед прыжком (revealLine). Совместимо с `React.lazy` (ref прокидывается через lazy-границу).
+ * `displayName` — для DevTools/diagnostics (forwardRef иначе теряет имя).
+ */
+export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, Parameters<typeof MarkdownPreviewImpl>[0]>(
+  MarkdownPreviewImpl,
+);
+MarkdownPreview.displayName = 'MarkdownPreview';

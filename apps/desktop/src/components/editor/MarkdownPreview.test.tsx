@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../../lib/tauri-api';
-import { MarkdownPreview } from './MarkdownPreview';
+import { MarkdownPreview, type MarkdownPreviewHandle } from './MarkdownPreview';
 
 // mermaid рендерится через тяжёлый dynamic-import + getBBox (jsdom не умеет) — мокаем renderMermaid
 // фейковым CSP-безопасным SVG, проверяем только конвейер фенс→компонент (сам рендер — в превью).
@@ -291,6 +292,88 @@ describe('MarkdownPreview: S3 сворачиваемые H2-секции', () =>
     expect((container.querySelector('section[data-sec-id="раздел"]') as HTMLElement).className).toMatch(
       /collapsed/,
     );
+  });
+});
+
+describe('MarkdownPreview: S6 revealLine (раскрытие секции при прыжке оглавления)', () => {
+  // Источник: h2 «Раздел» — строка 1; вложенный h3 «Под» — строка 3; тело — строка 5.
+  const SRC = '## Раздел\n\n### Под\n\nтекст внутри';
+
+  it('imperative-хэндл доходит через forwardRef (revealLine — функция на ref.current)', () => {
+    const ref = createRef<MarkdownPreviewHandle>();
+    render(<MarkdownPreview ref={ref} source={SRC} onOpenLink={() => {}} />);
+    expect(ref.current).not.toBeNull();
+    expect(typeof ref.current?.revealLine).toBe('function');
+  });
+
+  it('revealLine к строке внутри свёрнутой секции раскрывает её + возвращает true (didExpand)', () => {
+    const ref = createRef<MarkdownPreviewHandle>();
+    const { container } = render(<MarkdownPreview ref={ref} source={SRC} onOpenLink={() => {}} />);
+    // Свернём секцию кликом по h2.
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    const sec = () => container.querySelector('section[data-sec-id="раздел"]') as HTMLElement;
+    expect(sec().className).toMatch(/collapsed/);
+    // Прыжок к вложенному h3 (строка 3, скрыт в свёрнутом теле) → revealLine раскрывает + сигналит true.
+    let didExpand: boolean | undefined;
+    act(() => {
+      didExpand = ref.current?.revealLine(3);
+    });
+    expect(didExpand).toBe(true); // S6-FIX2: реально раскрыл → GroupPane отложит scrollIntoView
+    expect(sec().className).not.toMatch(/collapsed/);
+    // Тело смонтировано и видимо (узел в DOM — он и не размонтировался по S3).
+    expect(screen.getByText('текст внутри')).toBeInTheDocument();
+  });
+
+  it('revealLine идемпотентна: уже развёрнутая секция → false (no-op, скролл будет немедленным)', () => {
+    const ref = createRef<MarkdownPreviewHandle>();
+    const { container } = render(<MarkdownPreview ref={ref} source={SRC} onOpenLink={() => {}} />);
+    const sec = () => container.querySelector('section[data-sec-id="раздел"]') as HTMLElement;
+    expect(sec().className).not.toMatch(/collapsed/);
+    let didExpand: boolean | undefined;
+    act(() => {
+      didExpand = ref.current?.revealLine(3); // уже развёрнута
+    });
+    expect(didExpand).toBe(false); // S6-FIX2: ничего не раскрывал → немедленный скролл
+    expect(sec().className).not.toMatch(/collapsed/);
+  });
+
+  it('revealLine к строке вне секций (лид/нет такой строки) → false, безопасный no-op', () => {
+    const ref = createRef<MarkdownPreviewHandle>();
+    const { container } = render(
+      <MarkdownPreview ref={ref} source={'лид-интро\n\n## Раздел\n\nтело'} onOpenLink={() => {}} />,
+    );
+    // Свернём секцию.
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    const sec = () => container.querySelector('section[data-sec-id="раздел"]') as HTMLElement;
+    expect(sec().className).toMatch(/collapsed/);
+    // Строки без data-outline-line (лид / несуществующая) → секция не трогается, didExpand=false.
+    let r1: boolean | undefined;
+    let r2: boolean | undefined;
+    act(() => {
+      r1 = ref.current?.revealLine(1); // лид — вне секции
+      r2 = ref.current?.revealLine(999); // нет такой строки
+    });
+    expect(r1).toBe(false);
+    expect(r2).toBe(false);
+    expect(sec().className).toMatch(/collapsed/); // осталась свёрнутой (целевой секции не было)
+  });
+
+  // S6-FIX1: смена «лёгкого» стейта (сворачивание секции) НЕ должна ре-парсить тело — `<ReactMarkdown>`
+  // мемоизирован по [body, components], collapsedSecs идёт через SectionContext СНАРУЖИ мемо-границы.
+  // Признак отсутствия ре-парса: DOM-узел абзаца тела сохраняет ИДЕНТИЧНОСТЬ через toggle (React переиспользовал
+  // мемо-элемент, а не пересоздал поддерево из нового hast). При этом класс .collapsed корректно проставляется.
+  it('S6-FIX1: toggle секции применяет .collapsed, но НЕ пересоздаёт поддерево тела (идентичность узла цела)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'## Раздел\n\nабзац тела'} onOpenLink={() => {}} />,
+    );
+    const bodyP = screen.getByText('абзац тела'); // конкретный DOM-узел абзаца ДО сворачивания
+    const sec = () => container.querySelector('section[data-sec-id="раздел"]') as HTMLElement;
+    expect(sec().className).not.toMatch(/collapsed/);
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 })); // toggle через контекст
+    // S3 жив: класс .collapsed проставился (контекст пробил мемо-границу к Section).
+    expect(sec().className).toMatch(/collapsed/);
+    // FIX1: тот же DOM-узел абзаца (тело НЕ ре-парсилось — иначе был бы новый элемент).
+    expect(screen.getByText('абзац тела')).toBe(bodyP);
   });
 });
 
