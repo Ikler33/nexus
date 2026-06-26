@@ -60,7 +60,7 @@ describe('deriveMasthead — заголовок', () => {
   });
 });
 
-describe('deriveMasthead — kicker (теги)', () => {
+describe('deriveMasthead — теги', () => {
   it('собирает теги из frontmatter, снимает ведущий #', () => {
     const m = deriveMasthead('---\ntags: [project, "#ai"]\n---\nтекст', 'f.md');
     expect(m.tags).toEqual(['project', 'ai']);
@@ -71,6 +71,33 @@ describe('deriveMasthead — kicker (теги)', () => {
   });
   it('нет тегов → пустой массив', () => {
     expect(deriveMasthead('# H\nтекст', 'f.md').tags).toEqual([]);
+  });
+});
+
+describe('deriveMasthead — kicker (S2: «тип · статус» из frontmatter)', () => {
+  it('собирает «тип · статус» из frontmatter type/status', () => {
+    const m = deriveMasthead('---\ntype: Идея\nstatus: seed\n---\nтекст', 'f.md');
+    expect(m.kicker).toBe('Идея · seed');
+  });
+  it('только type → kicker = тип', () => {
+    expect(deriveMasthead('---\ntype: Идея\n---\nтекст', 'f.md').kicker).toBe('Идея');
+  });
+  it('только status → kicker = статус', () => {
+    expect(deriveMasthead('---\nstatus: doing\n---\nтекст', 'f.md').kicker).toBe('doing');
+  });
+  it('нет type/status → graceful fallback на теги', () => {
+    expect(deriveMasthead('---\ntags: [project, ai]\n---\nтекст', 'f.md').kicker).toBe('project · ai');
+  });
+  it('type/status имеют приоритет над тегами', () => {
+    const m = deriveMasthead('---\ntype: Заметка\nstatus: draft\ntags: [x, y]\n---\nтекст', 'f.md');
+    expect(m.kicker).toBe('Заметка · draft');
+  });
+  it('нет ни type/status, ни тегов → пустой kicker', () => {
+    expect(deriveMasthead('# H\nтекст', 'f.md').kicker).toBe('');
+  });
+  it('type/status ОСТАЮТСЯ в полях Properties (eyebrow лишь дублирует)', () => {
+    const m = deriveMasthead('---\ntype: Идея\nstatus: seed\n---\nтекст', 'f.md');
+    expect(m.fields.map((f) => f.key)).toEqual(['type', 'status']);
   });
 });
 

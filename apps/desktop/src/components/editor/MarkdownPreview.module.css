@@ -16,36 +16,50 @@
   margin-top: 0;
 }
 
+/* S2 «Редакция»: заголовки тела — Cormorant (un-пин с S1). Только шрифт/размер/вес/цвет/маргин —
+   верхний border + counter «01/02» + сворачивание секций = S3 (НЕ здесь). slug-id/data-outline-line
+   на разметке заголовков (HEADANCHOR-1) не трогаем — это чистый CSS. h5/h6 — служебные, держим mono. */
 .preview h1,
 .preview h2,
-.preview h3,
-.preview h4,
-.preview h5,
-.preview h6 {
-  /* S1: тело перешло на сериф — заголовки держим прежний UI-шрифт/ink до S2/S5 (явный пин, не наследование). */
-  font-family: var(--font-editor);
-  font-weight: 700;
-  line-height: 1.25;
-  margin: 1.4em 0 0.5em;
+.preview h3 {
+  font-family: var(--font-headline);
+  font-weight: 600;
   color: var(--color-text);
 }
 .preview h1 {
-  font-size: 1.8em;
+  font-size: 36px;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  margin: 30px 0 14px;
 }
 .preview h2 {
-  font-size: 1.45em;
-  padding-bottom: 0.2em;
-  border-bottom: 1px solid var(--color-border);
+  font-size: 29px;
+  line-height: 1.1;
+  letter-spacing: -0.005em;
+  margin: 30px 0 14px;
 }
 .preview h3 {
-  font-size: 1.2em;
+  font-size: 21px;
+  line-height: 1.15;
+  margin: 24px 0 10px;
 }
+/* h4 — mono-eyebrow стиль (метка секции), как в README. */
 .preview h4 {
-  font-size: 1.05em;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 22px 0 8px;
 }
 .preview h5,
 .preview h6 {
+  font-family: var(--font-mono);
+  font-weight: 600;
   font-size: 1em;
+  line-height: 1.25;
+  margin: 1.4em 0 0.5em;
   color: var(--color-text-muted);
 }
 
@@ -128,14 +142,14 @@
   font-size: 0.9em;
 }
 
-/* Выделение `==текст==` (Obsidian highlight): мягкая жёлтая плашка, читаемая во всех темах. Тинт через
-   color-mix поверх прозрачного (адаптируется к фону); solid-фолбэк для движков без color-mix. */
+/* Выделение `==текст==` / `.hl` (S2 «Редакция»): тёплая ember-плашка ~18%. Тинт через color-mix
+   поверх прозрачного (адаптируется к фону всех тем); solid-фолбэк для движков без color-mix. */
 .preview mark {
-  background: rgba(255, 213, 0, 0.28); /* фолбэк, если color-mix не поддержан */
-  background: color-mix(in srgb, var(--color-warning) 30%, transparent);
+  background: rgba(196, 91, 51, 0.18); /* фолбэк, если color-mix не поддержан */
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: inherit;
   border-radius: 3px;
-  padding: 0 2px;
+  padding: 0 3px;
 }
 
 /* Frontmatter Properties-таблица (FRONTMATTER-1): сетка ключ→значение НАД телом заметки (вместо сырого
@@ -176,6 +190,21 @@
 .preview sup {
   line-height: 0;
 }
+/* Маркер сноски (S2 `sup.fn`): mono .62em, ember, hover-подчёркивание. GFM рендерит
+   `<sup><a data-footnote-ref …>` — стилизуем сам якорь (перебивает `.preview a` slate-цвет). */
+.preview sup :global(.data-footnote-ref) {
+  font-family: var(--font-mono);
+  font-size: 0.62em;
+  color: var(--color-accent);
+  cursor: pointer;
+  border-bottom: none;
+}
+.preview sup :global(.data-footnote-ref)::after {
+  content: none; /* не нужна «↗» внешней ссылки — это внутр. якорь сноски */
+}
+.preview sup :global(.data-footnote-ref):hover {
+  text-decoration: underline;
+}
 .preview :global(.data-footnote-backref) {
   text-decoration: none;
   margin-left: 0.3em;
@@ -215,17 +244,17 @@
   text-decoration: underline;
 }
 
-/* Wikilink по макету (DP-3): мягкое подчёркивание, hover-плашка, видимые скобки. */
+/* Wikilink (S2 «Редакция»): ember-ссылка с dashed-подчёркиванием, hover-плашка, видимые скобки. */
 .wikilink {
-  color: var(--color-link);
+  color: var(--color-accent);
   cursor: pointer;
   border-radius: 3px;
   padding: 0 2px;
-  box-shadow: inset 0 -1px 0 var(--color-link-soft);
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-accent) 45%, transparent);
   transition: background var(--motion-fast) var(--ease-standard);
 }
 .wikilink:hover {
-  background: var(--color-link-soft);
+  background: var(--color-accent-soft);
 }
 .wikilink::before {
   content: '[[';
@@ -235,7 +264,7 @@
   content: ']]';
   opacity: 0.32;
 }
-/* Тег-пилюля по макету. */
+/* Тег-пилюля по макету (sage). */
 .tag {
   color: var(--color-tag);
   background: var(--color-tag-soft);
@@ -246,16 +275,50 @@
   cursor: pointer;
 }
 .tag:hover {
+  background: var(--color-tag-soft);
   filter: brightness(1.1);
 }
 
+/* Внешняя http(s)-ссылка (S2 `.ext`): ember, solid-подчёркивание ~38%, метка «↗». Селектор
+   `a[href^=http]` берёт ровно внешние ссылки (вики-ссылки/сноски/якоря — `href="#…"` → мимо;
+   теги — `<span>`). `.preview a` выше уже сбросил подчёркивание — здесь акцент и border-bottom. */
+.preview a[href^='http'] {
+  color: var(--color-accent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 38%, transparent);
+}
+.preview a[href^='http']:hover {
+  text-decoration: none;
+  border-bottom-color: var(--color-accent);
+}
+.preview a[href^='http']::after {
+  content: '↗';
+  font-family: var(--font-ui);
+  font-size: 0.72em;
+  opacity: 0.7;
+  margin-left: 1px;
+}
+
+/* Эмфаза/зачёркивание (S2): сильный — 700 ink, курсив — em, del — faint зачёркнут. */
+.preview strong {
+  font-weight: 700;
+  color: var(--color-text);
+}
+.preview em {
+  font-style: italic;
+}
+.preview del {
+  color: var(--color-text-faint);
+  text-decoration: line-through;
+}
+
+/* Инлайн-код (S2): mono .82em, surface-плашка, ember-текст. */
 .preview code {
   font-family: var(--font-mono);
   font-size: 0.82em;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 5px;
-  padding: 0.1em 0.45em;
+  padding: 1px 6px;
   color: var(--color-accent);
 }
 .preview pre {
@@ -459,34 +522,38 @@
 .docHead {
   margin-bottom: var(--space-6);
 }
+/* Eyebrow/kicker (S2): mono 11px/600, ls .2em, uppercase, ember, mb 16px. */
 .docKicker {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-weight: 600;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--color-accent);
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
-/* `.docHead .docTitle` (а не голый `.docTitle`) — перебить `.preview h1` (он специфичнее класса). */
+/* `.docHead .docTitle` (а не голый `.docTitle`) — перебить `.preview h1` (он специфичнее класса).
+   S2 «Редакция»: Cormorant 600, ~50px (clamp), line-height 1.0, ls -.01em. */
 .docHead .docTitle {
   font-family: var(--font-headline);
   font-weight: 600;
-  font-size: clamp(38px, 4.4vw, 52px);
-  line-height: 1.02;
-  letter-spacing: -0.02em;
+  font-size: clamp(38px, 4.4vw, 50px);
+  line-height: 1;
+  letter-spacing: -0.01em;
   margin: 0 0 16px;
   text-wrap: balance;
   color: var(--color-text);
 }
+/* Byline (S2): mono 11px, ls .04em, faint, flex gap 10px. */
 .docByline {
   display: flex;
-  gap: var(--space-3);
+  gap: 10px;
   flex-wrap: wrap;
   align-items: center;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--color-text-faint);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
   padding-bottom: var(--space-4);
   border-bottom: 1px solid var(--color-border);
 }
@@ -496,6 +563,15 @@
   gap: 5px;
   white-space: nowrap;
 }
+/* Datepill (S2): дата с dotted-подчёркиванием, hover → ember, кликабельна (визуально). */
+.docByline .datepill {
+  border-bottom: 1px dotted var(--color-border-strong);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-standard);
+}
+.docByline .datepill:hover {
+  color: var(--color-accent);
+}
 
 /* ── Буквица ведущего абзаца (порт dropcap.js + app.css) ─────────────────────────────
    Постоянный размер float-капа → постоянный «слив» в 3 строки для любого глифа; по
@@ -504,7 +580,7 @@
 .preview p[data-dropcap]::first-letter {
   font-family: var(--font-headline);
   font-weight: 700;
-  font-size: 3.5em;
+  font-size: 3.4em; /* S2: мелкая подгонка 3.5 → 3.4em */
   line-height: 0.68;
   float: left;
   padding: 0.16em 0.14em 0 0;
