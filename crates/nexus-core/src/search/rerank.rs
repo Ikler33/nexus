@@ -213,6 +213,57 @@ mod tests {
         assert_eq!(out[0].path, "a.md", "до 3 кандидатов порядок не трогаем");
     }
 
+    /// P1-7: чат-мок, чтящий `cancel` как реальный провайдер (взведён → пустой выход, как стрим на
+    /// отмене); считает, был ли вызван (вернул ли хоть один токен).
+    struct CancelAwareChat {
+        emitted: Arc<AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl ChatProvider for CancelAwareChat {
+        async fn stream_chat(
+            &self,
+            _m: &[ChatMessage],
+            on_token: &mut (dyn FnMut(String) + Send),
+            c: &Arc<AtomicBool>,
+        ) -> AiResult<String> {
+            // Реальный провайдер на взведённом cancel обрывается без токенов (per-chunk cancel.load).
+            if c.load(std::sync::atomic::Ordering::Relaxed) {
+                return Ok(String::new());
+            }
+            self.emitted
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            on_token("[3,1,2]".to_string());
+            Ok("[3,1,2]".to_string())
+        }
+        fn model_id(&self) -> &str {
+            "cancel-aware-mock"
+        }
+    }
+
+    /// P1-7: уже-взведённый `cancel`, переданный в реранк (теперь это ПОЛЬЗОВАТЕЛЬСКИЙ токен Stop, а не
+    /// локальная заглушка) → провайдер обрывается без токенов → graceful-фолбэк на ИСХОДНЫЙ порядок
+    /// гибрида, БЕЗ потери кандидатов. Доказывает: Stop во время реранка не портит/не теряет выдачу.
+    #[tokio::test]
+    async fn prearmed_cancel_falls_back_to_hybrid_order() {
+        let hits = vec![hit(1, "a.md"), hit(2, "b.md"), hit(3, "c.md")];
+        let armed = Arc::new(AtomicBool::new(true)); // Stop пришёл к началу реранка
+        let chat = CancelAwareChat {
+            emitted: Arc::new(AtomicBool::new(false)),
+        };
+        let emitted = chat.emitted.clone();
+        let out = llm_rerank(&chat, "q", hits, &armed).await;
+        let paths: Vec<_> = out.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["a.md", "b.md", "c.md"],
+            "взведённый cancel → исходный порядок гибрида (без переупорядочивания/потерь)"
+        );
+        assert!(
+            !emitted.load(std::sync::atomic::Ordering::Relaxed),
+            "провайдер не отдал реранк-токенов под взведённым cancel"
+        );
+    }
+
     /// Форма промпта (мок-тесты выше мокают модель → проверяют лишь парсинг): 2 сообщения system+user;
     /// system несёт анти-инъекцию + маркер; КАЖДЫЙ фрагмент обёрнут маркером дважды; нумерация [n] по
     /// порядку; контент фрагментов на месте. Ловит регресс формы промпта, который live-eval поймал бы
