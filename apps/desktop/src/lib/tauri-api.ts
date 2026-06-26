@@ -1691,11 +1691,11 @@ export const tauriApi = {
 
     /** Разрешить хост статьи (per-host consent из Denied-баннера ридера). Возвращает конфиг. */
     allowHost: (host: string): Promise<NewsConfig> =>
-      isTauri() ? invoke<NewsConfig>('news_allow_host', { host }) : mockNews.getConfig(),
+      isTauri() ? invoke<NewsConfig>('news_allow_host', { host }) : mockNews.allowHost(host),
 
     /** Снять разрешение с хоста (gear-меню ленты). Возвращает конфиг. */
     disallowHost: (host: string): Promise<NewsConfig> =>
-      isTauri() ? invoke<NewsConfig>('news_disallow_host', { host }) : mockNews.getConfig(),
+      isTauri() ? invoke<NewsConfig>('news_disallow_host', { host }) : mockNews.disallowHost(host),
 
     /** Сохраняет конфиг и мгновенно синхронизирует политику эгресса (NF-4, AC-NF-7). */
     setConfig: (config: NewsConfig): Promise<NewsConfig> =>

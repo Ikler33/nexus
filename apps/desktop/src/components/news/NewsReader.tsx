@@ -121,7 +121,10 @@ export function NewsReader(props: {
             type="button"
             className={`${styles.readerAct} ${summary && summary !== 'thinking' ? styles.readerActOn : ''}`}
             onClick={summarize}
-            disabled={summary === 'thinking'}
+            // P1-15: нет тела статьи (article не `ready`: denied/error/loading) → сокращать нечего;
+            // блокировка честна — клик без тела давал пустой summary/ошибку.
+            disabled={summary === 'thinking' || !ready}
+            title={!ready ? t('news.reader.summarizeUnavailable') : undefined}
           >
             <OrbitIcon size={15} aria-hidden />
             {t('news.reader.summarize')}
