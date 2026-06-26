@@ -1,5 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import { cleanHeadingText, extractHeadings } from './outline';
+import { cleanHeadingText, extractHeadings, pickActiveLine } from './outline';
+
+describe('pickActiveLine (Hermes-8 S6 scroll-spy)', () => {
+  // top — расстояние верха заголовка от верха вьюпорта; threshold = 90 (README §6).
+  it('активна ПОСЛЕДНЯЯ секция, чей top ≤ порога', () => {
+    const heads = [
+      { line: 1, top: -120 }, // уехал вверх за фолд
+      { line: 5, top: 40 }, // в пределах порога (≤90)
+      { line: 9, top: 200 }, // ниже порога
+    ];
+    expect(pickActiveLine(heads, 90)).toBe(5);
+  });
+
+  it('скролл выше первого заголовка (все top > порога) → подсвечивается ПЕРВЫЙ (подсветка не гаснет)', () => {
+    const heads = [
+      { line: 2, top: 150 },
+      { line: 6, top: 320 },
+    ];
+    expect(pickActiveLine(heads, 90)).toBe(2);
+  });
+
+  it('граница: top ровно = порогу включается (≤, не <)', () => {
+    expect(pickActiveLine([{ line: 3, top: 90 }], 90)).toBe(3);
+  });
+
+  it('пусто → null (нет заголовков)', () => {
+    expect(pickActiveLine([], 90)).toBeNull();
+  });
+
+  it('все заголовки выше фолда → активен последний (самый нижний прошедший порог)', () => {
+    const heads = [
+      { line: 1, top: -300 },
+      { line: 4, top: -120 },
+      { line: 8, top: -10 },
+    ];
+    expect(pickActiveLine(heads, 90)).toBe(8);
+  });
+});
 
 describe('extractHeadings (EDIT-7)', () => {
   it('извлекает ATX-заголовки с уровнем и 1-based номером строки', () => {

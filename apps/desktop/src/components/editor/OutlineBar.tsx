@@ -9,8 +9,21 @@ import styles from './OutlineBar.module.css';
  * отступом по уровню; клик ведёт к секции (`onJump` с 1-based номером исходной строки). Сворачивается
  * шапкой-твистом (как BacklinksBar). Нет заголовков → бар скрыт (не шумит на коротких заметках).
  * Уровни нормализованы к минимальному (заметка из h2/h3 не уезжает вправо). Стоит над backlinks-баром.
+ *
+ * Hermes-8 S6 (scroll-spy): `activeLine` — исходная строка активного (видимого вверху вьюпорта)
+ * заголовка, считается в GroupPane при скролле документа. Пункт, чей `h.line === activeLine`, получает
+ * `.active` (ember-маркер по README §6) + `aria-current="location"`. Не задан (нет родителя со скроллом —
+ * вложенные контексты) → подсветки нет, поведение прежнее.
  */
-export function OutlineBar({ doc, onJump }: { doc: string; onJump: (line: number) => void }) {
+export function OutlineBar({
+  doc,
+  onJump,
+  activeLine,
+}: {
+  doc: string;
+  onJump: (line: number) => void;
+  activeLine?: number | null;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   // Парсинг заголовков откладываем (audit B11): при быстром наборе React не пересчитывает оглавление
@@ -35,19 +48,23 @@ export function OutlineBar({ doc, onJump }: { doc: string; onJump: (line: number
       </button>
       {open && (
         <ul className={styles.list}>
-          {headings.map((h, i) => (
-            <li key={`${h.line}:${i}`}>
-              <button
-                type="button"
-                className={styles.item}
-                style={{ paddingLeft: `calc(var(--space-2) + ${(h.level - minLevel) * 12}px)` }}
-                onClick={() => onJump(h.line)}
-                title={h.text}
-              >
-                {h.text}
-              </button>
-            </li>
-          ))}
+          {headings.map((h, i) => {
+            const isActive = activeLine != null && h.line === activeLine;
+            return (
+              <li key={`${h.line}:${i}`}>
+                <button
+                  type="button"
+                  className={isActive ? `${styles.item} ${styles.active}` : styles.item}
+                  aria-current={isActive ? 'location' : undefined}
+                  style={{ paddingLeft: `calc(var(--space-2) + ${(h.level - minLevel) * 12}px)` }}
+                  onClick={() => onJump(h.line)}
+                  title={h.text}
+                >
+                  {h.text}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </nav>

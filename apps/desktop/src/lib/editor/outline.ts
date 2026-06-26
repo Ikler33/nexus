@@ -41,6 +41,26 @@ export function cleanHeadingText(raw: string): string {
 }
 
 /**
+ * Hermes-8 S6 scroll-spy: выбор активного заголовка по позициям. `headings` — пары {line, top}, где
+ * `top` = расстояние верха заголовка от верха скролл-вьюпорта (`rect.top - scrollRoot.top`), в DOM-порядке
+ * (= порядок строк). Алгоритм (README §6): активна ПОСЛЕДНЯЯ секция, чей `top ≤ threshold` (offsetTop ≤
+ * scrollTop+90). Если ни один (скролл выше первого заголовка) → первый (подсветка не гаснет). Пусто → null.
+ * Чистая функция (без DOM) — тестируется детерминированно, jsdom-rect'ы мокать не нужно.
+ */
+export function pickActiveLine(
+  headings: { line: number; top: number }[],
+  threshold: number,
+): number | null {
+  if (headings.length === 0) return null;
+  let pick: number | null = null;
+  for (const h of headings) {
+    if (h.top <= threshold) pick = h.line; // последний прошедший порог
+    else break; // в DOM-порядке дальше только ниже порога
+  }
+  return pick ?? headings[0].line; // выше первого заголовка → подсвечиваем первый
+}
+
+/**
  * Извлекает ATX-заголовки вне код-блоков, в порядке появления. Заголовки, текст которых после
  * очистки разметки пуст (`# ` / `## ****`), пропускаются — в оглавлении пустая строка бесполезна.
  */

@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GroupPane } from './GroupPane';
+import { tauriApi } from '../../lib/tauri-api';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 // Пустая группа (без вкладок): таб-стрип с back/forward рендерится всегда, без CM6-редактора —
@@ -84,5 +85,100 @@ describe('GroupPane close-pane (W-1)', () => {
     render(<GroupPane groupId="g1" />);
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть панель' }));
     expect(closeGroup).toHaveBeenCalledWith('g1');
+  });
+});
+
+// S6-FIX2: прыжок оглавления к строке в СВЁРНУТОЙ секции должен ОТЛОЖИТЬ scrollIntoView до конца
+// grid-анимации раскрытия (transitionend / фолбэк-таймер), а к УЖЕ развёрнутой — скроллить немедленно (rAF).
+describe('GroupPane jumpToHeading expand-then-scroll (S6-FIX2)', () => {
+  // Заметка: h2 «Раздел» (стр.1) + вложенный h3 «Под» (стр.3) + тело.
+  const SRC = '## Раздел\n\n### Под\n\nтекст внутри';
+
+  // jsdom не реализует scrollIntoView — ставим no-op стуб на прототип, чтобы его можно было шпионить.
+  beforeEach(() => {
+    if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
+  });
+
+  // Открыть markdown-вкладку в режиме preview; дождаться ленивого MarkdownPreview.
+  async function setup() {
+    vi.spyOn(tauriApi.vault, 'fileMtime').mockResolvedValue(0);
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+      buffers: { 'A.md': { path: 'A.md', doc: SRC, dirty: false, baseHash: '' } },
+      modes: { g0: 'preview' },
+    });
+    render(<GroupPane groupId="g0" />);
+    // Ленивый MarkdownPreview подгрузился — виден заголовок секции.
+    await screen.findByRole('heading', { name: /Раздел/, level: 2 });
+  }
+
+  // Прокинуть jumpToHeading: открыть инспектор «Оглавление» и кликнуть пункт нужной строки.
+  function clickOutline(name: RegExp) {
+    fireEvent.click(screen.getByRole('button', { name: 'Оглавление' }));
+    fireEvent.click(screen.getByRole('button', { name }));
+  }
+
+  it('цель в свёрнутой секции → scrollIntoView ОТЛОЖЕН до transitionend(grid-template-rows)', async () => {
+    await setup();
+    const scrollSpy = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
+    // Свернём секцию кликом по h2.
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    // Прыжок к вложенному h3 «Под» (строка 3, скрыта в свёрнутом теле).
+    clickOutline(/Под/);
+    // В пределах первого кадра scrollIntoView ещё НЕ вызван (ждём анимацию раскрытия).
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+    expect(scrollSpy).not.toHaveBeenCalled();
+    // Эмулируем завершение grid-анимации → теперь скроллит.
+    const secBody = document.querySelector('section[data-sec-id="раздел"] .sec-body') as HTMLElement;
+    expect(secBody).not.toBeNull();
+    act(() => {
+      const ev = new Event('transitionend') as TransitionEvent;
+      Object.defineProperty(ev, 'propertyName', { value: 'grid-template-rows' });
+      secBody.dispatchEvent(ev);
+    });
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('цель в РАЗВЁРНУТОЙ секции → scrollIntoView немедленный (в rAF, без ожидания transitionend)', async () => {
+    await setup();
+    const scrollSpy = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
+    // Секция развёрнута по умолчанию → прыжок к h3 «Под» (видим) скроллит сразу в rAF.
+    clickOutline(/Под/);
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('фолбэк-таймер: если transitionend не пришёл, scrollIntoView всё равно срабатывает (~350мс)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(tauriApi.vault, 'fileMtime').mockResolvedValue(0);
+      useWorkspaceStore.setState({
+        groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+        activeGroupId: 'g0',
+        buffers: { 'A.md': { path: 'A.md', doc: SRC, dirty: false, baseHash: '' } },
+        modes: { g0: 'preview' },
+      });
+      render(<GroupPane groupId="g0" />);
+      // Прокрутить микротаски/таймеры для резолва ленивого чанка.
+      await vi.waitFor(() => screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+      const scrollSpy = vi.fn();
+      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
+      fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 })); // свернуть
+      clickOutline(/Под/);
+      // Прогнать rAF + фолбэк-таймер (transitionend НЕ диспатчим).
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

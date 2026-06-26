@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   ChevronLeft,
@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { EditorView } from '@codemirror/view';
 import { toggleTaskAtLine } from '../../lib/editor/format';
 import { getActiveEditorView } from '../../lib/editor/activeView';
+import { pickActiveLine } from '../../lib/editor/outline';
 import { formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import { useInlineAIStore } from '../../stores/inlineAI';
@@ -35,6 +36,8 @@ import styles from './GroupPane.module.css';
 const MarkdownPreview = lazy(() =>
   import('../editor/MarkdownPreview').then((m) => ({ default: m.MarkdownPreview })),
 );
+// Тип imperative-хэндла превью (S6 revealLine) — type-only импорт (рантайм-граф не тянет, lazy цел).
+import type { MarkdownPreviewHandle } from '../editor/MarkdownPreview';
 
 /** MIME-тип DnD вкладок между панами — контракт макета `editor.jsx` (DP-3). */
 const TAB_MIME = 'text/nexus-tab';
@@ -91,6 +94,14 @@ export function GroupPane({ groupId }: { groupId: string }) {
   // EDIT-7: ссылка на скролл-контейнер пейна — в режиме чтения/превью оглавление скроллит к заголовку
   // по `data-outline-line` (CM6 в source-режиме скроллит сам). Реф своего пейна → корректно при сплитах.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Hermes-8 S6 (scroll-spy): императивный хэндл превью (revealLine — раскрытие свёрнутой секции при
+  // прыжке оглавления к скрытой строке) + активная строка оглавления (подсветка по скроллу).
+  const previewRef = useRef<MarkdownPreviewHandle>(null);
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  // Анти-дребезг spy: после программного прыжка (jumpToHeading) подавляем пересчёт активного на ~400мс —
+  // во время smooth-скролла spy не должен «скакать» по промежуточным заголовкам (целевую строку выставляем
+  // сразу). Date.now() — это UI-throttle, не workflow-логика, потому допустим.
+  const suppressSpyUntil = useRef(0);
 
   // DP-15 (макет editor.jsx): clock-чип doc-meta — mtime активного файла; перечитываем при смене
   // вкладки и переключении в превью (после правок mtime обновился сохранением).
@@ -122,6 +133,60 @@ export function GroupPane({ groupId }: { groupId: string }) {
     const s = useInlineAIStore.getState();
     if (s.openGroupId === groupId) s.close();
   }, [activePath, groupId, mode]);
+
+  // Hermes-8 S6 scroll-spy: вычислить активный заголовок по позиции скролла. Алгоритм (README §6):
+  // «активна последняя секция, чей offsetTop ≤ scrollTop+THRESHOLD». В терминах rect: последний
+  // `[data-outline-line]`, чей верх в пределах THRESHOLD от верха скролл-вьюпорта (top - scrollTop ≤ 90).
+  // Если ни один (скролл до первого заголовка) → первый заголовок (а не null: пункт всё равно подсвечен).
+  // Только в ВЛАДЕЮЩЕЙ .preview-разметке (querySelectorAll своего scrollRef → пейны не путаются при сплите).
+  const SPY_THRESHOLD = 90; // px от верха вьюпорта (README §6: scrollTop+90)
+  const computeActiveLine = useCallback(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const rootTop = root.getBoundingClientRect().top;
+    // Собираем {line, top} в DOM-порядке (= порядок строк), top — относительно верха скролл-вьюпорта.
+    const heads: { line: number; top: number }[] = [];
+    root.querySelectorAll<HTMLElement>('[data-outline-line]').forEach((node) => {
+      const line = Number(node.getAttribute('data-outline-line'));
+      if (Number.isFinite(line)) heads.push({ line, top: node.getBoundingClientRect().top - rootTop });
+    });
+    setActiveLine(pickActiveLine(heads, SPY_THRESHOLD));
+  }, []);
+
+  // Слушатель скролла (preview/reading) с rAF-троттлом: один пересчёт на кадр. Во время программного
+  // прыжка (suppressSpyUntil) пересчёт пропускаем — активную строку выставил jumpToHeading сразу.
+  // Начальный пересчёт на маунте/смене заметки/режима. Снятие листенера + отмена rAF на cleanup.
+  // Гейт mdActive считаем здесь же (до conditional-return ниже — порядок хуков стабилен): spy только
+  // в preview/reading и только для markdown-вкладки (в source CM6 скроллит сам, нет data-outline-line).
+  const activeBuf = group?.activeTab ? buffers[group.activeTab] : null;
+  const spyMdActive = activeBuf != null && !isViewable(activeBuf.path) && isMarkdown(activeBuf.path);
+  const spyActive = (mode === 'preview' || reading) && spyMdActive;
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !spyActive) {
+      setActiveLine(null);
+      return;
+    }
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return; // уже запланирован пересчёт на этот кадр
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (Date.now() < suppressSpyUntil.current) return; // программный скролл прыжка — не дёргаем spy
+        computeActiveLine();
+      });
+    };
+    root.addEventListener('scroll', onScroll, { passive: true });
+    // Initial: после коммита превью посчитать активный пункт (двойной rAF — дождаться layout react-markdown).
+    let initRaf = requestAnimationFrame(() => {
+      initRaf = requestAnimationFrame(() => computeActiveLine());
+    });
+    return () => {
+      root.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+      if (initRaf) cancelAnimationFrame(initRaf);
+    };
+  }, [spyActive, activePath, computeActiveLine]);
 
   if (!group) return null;
   const active = group.activeTab ? buffers[group.activeTab] : null;
@@ -159,9 +224,48 @@ export function GroupPane({ groupId }: { groupId: string }) {
   // в редактор A; одно-пейновый случай (типичный) корректен, потери данных нет (как в commands-core/TasksPanel).
   const jumpToHeading = (line: number) => {
     if (mode === 'preview' || reading) {
-      scrollRef.current
-        ?.querySelector<HTMLElement>(`[data-outline-line="${line}"]`)
-        ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      // S6: цель может быть в свёрнутой секции (вложенный h3) → СНАЧАЛА раскрываем её (revealLine).
+      // Анти-дребезг spy: целевую строку подсвечиваем сразу.
+      const didExpand = previewRef.current?.revealLine(line) ?? false;
+      setActiveLine(line);
+      // Скролл к цели (one-shot — гард `done` против двойного вызова из transitionend+фолбэка).
+      let done = false;
+      const doScroll = () => {
+        if (done) return;
+        done = true;
+        scrollRef.current
+          ?.querySelector<HTMLElement>(`[data-outline-line="${line}"]`)
+          ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      };
+      if (didExpand) {
+        // S6-FIX2: раскрытие свёрнутой секции — это grid-анимация `grid-template-rows:0fr→1fr` (~0.28s);
+        // до её завершения тело ~0fr и вложенный h3 прижат к h2 → немедленный scrollIntoView недоскроллит.
+        // Ждём `transitionend` (grid-template-rows) на `.sec-body` целевой секции, с фолбэк-таймером 350мс
+        // (reduced-motion/не-сработавший transitionend). Окно подавления spy продлеваем на раскрытие+smooth.
+        suppressSpyUntil.current = Date.now() + 350 + 400;
+        // rAF — дать React закоммитить снятие `.collapsed`, затем найти `.sec-body` и подписаться.
+        requestAnimationFrame(() => {
+          const body = scrollRef.current
+            ?.querySelector<HTMLElement>(`[data-outline-line="${line}"]`)
+            ?.closest('section[data-sec-id]')
+            ?.querySelector<HTMLElement>('.sec-body');
+          const onEnd = (e: TransitionEvent) => {
+            if (e.propertyName !== 'grid-template-rows') return; // только анимация раскрытия
+            body?.removeEventListener('transitionend', onEnd);
+            doScroll();
+          };
+          body?.addEventListener('transitionend', onEnd);
+          // Фолбэк: transitionend мог не прийти (reduced-motion обнуляет переход, тело уже в потоке) → скроллим.
+          window.setTimeout(() => {
+            body?.removeEventListener('transitionend', onEnd);
+            doScroll();
+          }, 350);
+        });
+      } else {
+        // Секция уже развёрнута (или цель вне секций) → прыжок не замедляем: скролл в текущем rAF.
+        suppressSpyUntil.current = Date.now() + 400;
+        requestAnimationFrame(doScroll);
+      }
       return;
     }
     const view = getActiveEditorView();
@@ -371,6 +475,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                     `mtime` (живое состояние GroupPane) и `reading` (⌘R) прокидываем; остальное —
                     title/теги/слова — MarkdownPreview считает из источника сам. */}
                 <MarkdownPreview
+                  ref={previewRef}
                   source={active.doc}
                   notePath={active.path}
                   masthead={{ mtime, reading }}
@@ -426,7 +531,12 @@ export function GroupPane({ groupId }: { groupId: string }) {
               related/summary — структура + заглушка (контент в отдельном AI-срезе). Скрыт в режиме чтения
               и для бинарей (картинка/PDF — нет outline/backlinks). */}
           {mdActive && !reading && (
-            <InspectorRail doc={active.doc} path={active.path} onJump={jumpToHeading} />
+            <InspectorRail
+              doc={active.doc}
+              path={active.path}
+              onJump={jumpToHeading}
+              activeLine={activeLine}
+            />
           )}
           </div>
         </>

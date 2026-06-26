@@ -32,6 +32,13 @@ describe('InspectorRail (editor-chrome)', () => {
     expect(onJump).toHaveBeenCalledWith(2); // `## Details` — строка 2
   });
 
+  // Hermes-8 S6 scroll-spy: activeLine прокидывается в OutlineBar → подсветка активного пункта.
+  it('S6: activeLine доходит до OutlineBar (активный пункт несёт aria-current=location)', () => {
+    render(<InspectorRail doc={DOC} path="A.md" onJump={vi.fn()} activeLine={2} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Оглавление' }));
+    expect(screen.getByRole('button', { name: 'Details' })).toHaveAttribute('aria-current', 'location');
+  });
+
   it('тоггл «Связи» открывает панель с существующим BacklinksBar', async () => {
     vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([
       { sourcePath: 'Notes/Linker.md', sourceTitle: 'Linker', context: null, lineNumber: null },
