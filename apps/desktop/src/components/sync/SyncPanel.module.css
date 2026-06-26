@@ -133,6 +133,21 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+/* P1-5: чекбоксы выбора файлов для выборочного коммита */
+.check,
+.selAll {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.selAll {
+  margin-right: 2px;
+}
+
 .change:last-child {
   border-bottom: none;
 }

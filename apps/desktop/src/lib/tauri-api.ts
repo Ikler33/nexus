@@ -1616,14 +1616,14 @@ export const tauriApi = {
 
     /** Коммит изменений: secret-scan → при находке блокировка; пустое сообщение → авто-саммари. */
     commit: (message?: string): Promise<GitCommitOutcome> =>
-      isTauri() ? invoke<GitCommitOutcome>('git_commit', { message }) : mockGit.commit(),
+      isTauri() ? invoke<GitCommitOutcome>('git_commit', { message }) : mockGit.commit(message),
 
     /** Выборочный коммит (#10): коммитит ТОЛЬКО выбранные пути (из `git.status()`), а не всё-или-ничего.
      *  Secret-scan по выбранным; устаревший/пустой выбор → `nothing-to-commit`. Вне Tauri — мок. */
     commitPaths: (paths: string[], message?: string): Promise<GitCommitOutcome> =>
       isTauri()
         ? invoke<GitCommitOutcome>('git_commit_paths', { paths, message })
-        : mockGit.commit(),
+        : mockGit.commitPaths(paths, message),
 
     /** Сохранить токен доступа к remote в системном keychain (на диск не пишется). Ф3-3b. */
     setToken: (token: string): Promise<void> =>
