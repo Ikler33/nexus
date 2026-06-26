@@ -10,6 +10,15 @@ const READABLE_KEY = 'nexus.editor.readableWidth';
 /** Ширина читаемой колонки (~700px, как дефолт Obsidian). */
 const READABLE_WIDTH = '44rem';
 
+/**
+ * «Чистые ссылки» (Obsidian-style Live Preview) в source-редакторе: скрывать `[[ ]]`-скобки и
+ * показывать только имя/алиас вики-ссылки, раскрывая полный синтаксис под курсором. Это CM6-extension
+ * (не CSS-переменная) — стор лишь хранит флаг + уведомляет редактор; реактивность — через Compartment
+ * в `Editor.tsx`. По умолчанию ВКЛ (запрос владельца; можно выключить).
+ */
+const WIKILINK_LP_KEY = 'nexus.editor.wikilinkLivePreview';
+const START_WIKILINK_LP = readBool(WIKILINK_LP_KEY, true);
+
 function readBool(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key);
@@ -155,6 +164,9 @@ function readString(key: string): string {
 
 interface PrefsState {
   readableLineWidth: boolean;
+  /** «Чистые ссылки» (Live Preview): скрывать `[[ ]]`-скобки в source-редакторе, показывать имя/алиас,
+   *  раскрывать полный синтаксис под курсором. ВКЛ по умолчанию (запрос владельца). */
+  wikilinkLivePreview: boolean;
   /** Имя пользователя для приветствия HOME (необязательное, локальное). */
   userName: string;
   /** Позиция командной палитры (DP-11). */
@@ -191,6 +203,7 @@ interface PrefsState {
   /** Высота bottom-AI-панели, px (драг кромки). */
   aiPanelH: number;
   setReadableLineWidth: (on: boolean) => void;
+  setWikilinkLivePreview: (on: boolean) => void;
   setUserName: (name: string) => void;
   setPaletteStyle: (style: PaletteStyle) => void;
   setAiLayout: (layout: AiLayout) => void;
@@ -209,6 +222,7 @@ interface PrefsState {
 
 export const usePrefsStore = create<PrefsState>((set) => ({
   readableLineWidth: START_READABLE,
+  wikilinkLivePreview: START_WIKILINK_LP,
   userName: readString(USER_NAME_KEY),
   paletteStyle: readPalette(),
   aiLayout: readAiLayout(),
@@ -228,6 +242,11 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       persistBool(READABLE_KEY, on);
       applyReadable(on);
       return { readableLineWidth: on };
+    }),
+  setWikilinkLivePreview: (on) =>
+    set(() => {
+      persistBool(WIKILINK_LP_KEY, on);
+      return { wikilinkLivePreview: on };
     }),
   setUserName: (name) =>
     set(() => {

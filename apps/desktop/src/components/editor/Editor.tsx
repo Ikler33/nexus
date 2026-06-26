@@ -2,14 +2,15 @@ import { useEffect, useRef } from 'react';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdownKeymap } from '@codemirror/lang-markdown';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { Annotation, EditorState, Prec } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { clearActiveEditorView, setActiveEditorView } from '../../lib/editor/activeView';
 import type { NoteRef } from '../../lib/tauri-api';
 import { useInlineStore } from '../../stores/inline';
 import { useInlineAIStore } from '../../stores/inlineAI';
+import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { nexusExtensions } from './extensions';
+import { nexusExtensions, wikilinkLivePreview } from './extensions';
 import { imagePaste } from '../../lib/editor/imagePaste';
 import { ghostField, inlineKeymap } from './inlineGhost';
 import { inlineToolbar } from './inlineToolbar';
@@ -54,6 +55,8 @@ export function Editor({
 }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // Live-preview вики-ссылок (тоггл «Чистые ссылки») — реконфигурируется на смену pref без пересоздания view.
+  const lpCompartment = useRef(new Compartment());
   const cb = useRef({ onChange, onSave, onBlur, onOpenLink, fetchNotes, fetchTags });
   cb.current = { onChange, onSave, onBlur, onOpenLink, fetchNotes, fetchTags };
   const loadedPath = useRef(path);
@@ -172,6 +175,10 @@ export function Editor({
             fetchTags: () => cb.current.fetchTags?.() ?? Promise.resolve([]),
             getOpenLink: () => cb.current.onOpenLink,
           }),
+          // Live-preview вики-ссылок под Compartment — стартовое состояние по pref, далее reconfigure.
+          lpCompartment.current.of(
+            usePrefsStore.getState().wikilinkLivePreview ? wikilinkLivePreview : [],
+          ),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !u.transactions.some((t) => t.annotation(externalSync))) {
               cb.current.onChange?.(u.state.doc.toString());
@@ -227,6 +234,17 @@ export function Editor({
     // фокус у другой панели).
     if (switching) view.focus();
   }, [path, initialDoc]);
+
+  // Реактивность тоггла «Чистые ссылки» (Live Preview): подписка на prefs-стор → reconfigure
+  // Compartment без пересоздания view. Флаг OFF → пустое расширение (поведение как раньше: скобки видны).
+  const lpOn = usePrefsStore((s) => s.wikilinkLivePreview);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: lpCompartment.current.reconfigure(lpOn ? wikilinkLivePreview : []),
+    });
+  }, [lpOn]);
 
   return <div ref={host} className={styles.editor} data-testid="editor" />;
 }

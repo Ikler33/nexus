@@ -271,6 +271,8 @@ function EditorSection() {
   const { t } = useTranslation();
   const readable = usePrefsStore((s) => s.readableLineWidth);
   const setReadable = usePrefsStore((s) => s.setReadableLineWidth);
+  const linkLp = usePrefsStore((s) => s.wikilinkLivePreview);
+  const setLinkLp = usePrefsStore((s) => s.setWikilinkLivePreview);
   return (
     <>
       <SectionHeader title={t('settings.editor')} />
@@ -293,6 +295,30 @@ function EditorSection() {
             className={`${styles.segBtn} ${readable ? styles.on : ''}`}
             onClick={() => setReadable(true)}
             aria-pressed={readable}
+          >
+            {t('settings.on')}
+          </button>
+        </div>
+      </section>
+      <section className={styles.group}>
+        <div className={styles.rowText}>
+          <span className={styles.label}>{t('settings.ed.linkLivePreview')}</span>
+          <span className={styles.rowDesc}>{t('settings.ed.linkLivePreviewDesc')}</span>
+        </div>
+        <div className={styles.seg}>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${!linkLp ? styles.on : ''}`}
+            onClick={() => setLinkLp(false)}
+            aria-pressed={!linkLp}
+          >
+            {t('settings.off')}
+          </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${linkLp ? styles.on : ''}`}
+            onClick={() => setLinkLp(true)}
+            aria-pressed={linkLp}
           >
             {t('settings.on')}
           </button>
