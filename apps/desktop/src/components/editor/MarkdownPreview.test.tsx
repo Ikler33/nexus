@@ -294,6 +294,72 @@ describe('MarkdownPreview: S3 сворачиваемые H2-секции', () =>
   });
 });
 
+describe('MarkdownPreview: S5 блочные элементы «Редакция»', () => {
+  it('hr (`---`) → астеризм: div[role=separator] с тремя точками-span, без <hr>', () => {
+    const { container } = render(
+      <MarkdownPreview source={'текст до\n\n---\n\nтекст после'} onOpenLink={() => {}} />,
+    );
+    const sep = container.querySelector('[role="separator"]');
+    expect(sep).not.toBeNull();
+    expect(sep?.tagName).toBe('DIV'); // не <hr> — декоративный астеризм с семантикой separator
+    expect(sep?.querySelectorAll('span')).toHaveLength(3); // три точки
+    expect(container.querySelector('hr')).toBeNull(); // голого <hr> не осталось
+  });
+
+  it('blockquote без accent-фоновой плашки (нет inline background); левый бордер цитаты остаётся', () => {
+    const { container } = render(<MarkdownPreview source={'> цитата мудреца'} onOpenLink={() => {}} />);
+    const bq = container.querySelector('blockquote');
+    expect(bq).not.toBeNull();
+    // фон/радиус-плашка убраны — стиль раздаёт CSS через `.preview blockquote` (element-селектор, не
+    // class на узле), inline-background не задаётся. jsdom не вычисляет module-CSS, проверяем что нет
+    // inline-style (accent-плашка убрана в CSS, не в разметке).
+    expect(bq?.getAttribute('style')).toBeNull();
+    expect(screen.getByText('цитата мудреца')).toBeInTheDocument();
+  });
+
+  it('table: thead в <thead>, tbody в <tbody> (mono-разделитель/serif — через CSS-module)', () => {
+    const src = '| Имя | Возраст |\n|---|---|\n| Алиса | 30 |\n| Боб | 25 |';
+    const { container } = render(<MarkdownPreview source={src} onOpenLink={() => {}} />);
+    const table = container.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(table?.querySelector('thead th')).not.toBeNull(); // заголовок колонки в thead → mono-стиль
+    expect(table?.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(screen.getByText('Алиса')).toBeInTheDocument();
+  });
+
+  it('callout [!info] → slate-вид (data-callout=info, иконка, тело)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'> [!info] Заметка\n> важная деталь'} onOpenLink={() => {}} />,
+    );
+    const callout = container.querySelector('[data-callout="info"]');
+    expect(callout).not.toBeNull(); // info-вид (slate-палитра через per-kind CSS)
+    expect(callout?.querySelector('svg')).not.toBeNull();
+    expect(screen.getByText('важная деталь')).toBeInTheDocument();
+  });
+
+  it('код-блок (```...```) рендерит <pre><code> (mono/left-border — через CSS, без хайлайт-токенов)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'```\nconst x = 1;\n```'} onOpenLink={() => {}} />,
+    );
+    const pre = container.querySelector('pre');
+    expect(pre).not.toBeNull();
+    expect(pre?.querySelector('code')).not.toBeNull();
+    // нет синтаксического хайлайтера в превью → нет токен-span .cm/.kw/.st (базовый pre)
+    expect(pre?.querySelectorAll('span')).toHaveLength(0);
+  });
+
+  it('footnotes-блок: сохраняет .footnotes-класс и якоря сносок (passthrough S3 не сломан)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'текст[^1]\n\n[^1]: определение сноски'} onOpenLink={() => {}} />,
+    );
+    const fn = container.querySelector('.footnotes, [class*=footnotes]');
+    expect(fn).not.toBeNull();
+    // якорь-id сноски цел (FOOTNOTE-1) — нумерация-рескин его не трогает
+    expect(container.querySelector('li[id*="fn-1"]')).not.toBeNull();
+    expect(screen.getByText(/определение сноски/)).toBeInTheDocument();
+  });
+});
+
 describe('MarkdownPreview: формулы (#4, MathML под строгим CSP)', () => {
   it('инлайн $$…$$ рендерится в <math>', () => {
     const { container } = render(<MarkdownPreview source={'энергия $$E=mc^2$$ тут'} onOpenLink={() => {}} />);
