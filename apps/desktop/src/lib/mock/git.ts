@@ -20,11 +20,36 @@ export async function status(): Promise<GitStatusEntry[]> {
   return [...dirty];
 }
 
-export async function commit(): Promise<GitCommitOutcome> {
+export async function commit(message?: string): Promise<GitCommitOutcome> {
   if (dirty.length === 0) return { status: 'nothing-to-commit' };
   const files = dirty.length;
   dirty = [];
-  return { status: 'committed', oid: 'mock0a1b2c3', message: `Vault sync: ~${files} changed`, files };
+  // Зеркалит бэкенд `commit_all_with_message`: пользовательское сообщение → авто-саммари при пустом.
+  return {
+    status: 'committed',
+    oid: 'mock0a1b2c3',
+    message: message?.trim() || `Vault sync: ~${files} changed`,
+    files,
+  };
+}
+
+/**
+ * Выборочный коммит (#10) — зеркалит Rust `git_commit_paths`/`commit_paths_with_message`:
+ * коммитит ТОЛЬКО пересечение `paths` с реальными изменениями (`dirty`), остальное остаётся
+ * НЕ закоммиченным (видно в следующем `status()` — превью/тесты не врут, что всё ушло).
+ * Пустое пересечение (устаревший/пустой выбор) → `nothing-to-commit` (как бэкенд). Secret-scan —
+ * бэкенд-only, мок его не моделирует (happy-path).
+ */
+export async function commitPaths(paths: string[], message?: string): Promise<GitCommitOutcome> {
+  const sel = dirty.filter((d) => paths.includes(d.path));
+  if (sel.length === 0) return { status: 'nothing-to-commit' };
+  dirty = dirty.filter((d) => !paths.includes(d.path)); // убираем ТОЛЬКО выбранные; остальное dirty
+  return {
+    status: 'committed',
+    oid: 'mock0a1b2c3',
+    message: message?.trim() || `Vault sync: ~${sel.length} changed`,
+    files: sel.length,
+  };
 }
 
 // Мок keychain-токена (в реальности — системный keychain через Rust `keyring`).
@@ -74,4 +99,18 @@ export async function resolveConflicts(
   dirty = [];
   // Мок: «слили» merge с theirs, применив N резолвов.
   return `mockmerge_${theirs.slice(0, 6)}_${resolutions.length}`;
+}
+
+/**
+ * ТЕСТ-хелпер: сброс module-level стейта мока к сид-значениям (этот мок мутабелен — `commit`/
+ * `commitPaths`/`resolveConflicts` меняют общий `dirty`; токен/remote тоже module-level). Зови в
+ * `beforeEach`, чтобы тесты не связывались скрыто через общий мок (известный footgun кодбейза).
+ */
+export function __resetGitMock(): void {
+  dirty = [
+    { path: 'README.md', kind: 'modified' },
+    { path: 'Notes/Idea.md', kind: 'new' },
+  ];
+  token = null;
+  remote = null;
 }

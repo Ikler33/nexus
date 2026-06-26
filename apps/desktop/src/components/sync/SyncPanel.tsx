@@ -27,9 +27,19 @@ export function SyncPanel() {
   const { t } = useTranslation();
   const close = useUIStore((s) => s.closeSync);
   const [changes, setChanges] = useState<GitStatusEntry[] | null>(null);
+  // P1-5: выбранные для коммита пути. После загрузки статуса дефолт = ВСЕ выбраны (дефолтный
+  // «Коммит» = коммит всего, не регресс). До загрузки — пусто (кнопка и так gated по !changes).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [outcome, setOutcome] = useState<CommitOutcome | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+
+  // Перезагрузка статуса (load/после коммита) → реинициализируем выбор: все пути новых changes.
+  // Невыбранные после выборочного коммита остаются в `changes` (мок/бэк их не закоммитили).
+  const applyChanges = useCallback((entries: GitStatusEntry[]) => {
+    setChanges(entries);
+    setSelected(new Set(entries.map((e) => e.path)));
+  }, []);
 
   // remote-конфиг
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -43,10 +53,11 @@ export function SyncPanel() {
   const load = useCallback(() => {
     setOutcome(null);
     setChanges(null);
+    setSelected(new Set());
     tauriApi.git
       .status()
-      .then(setChanges)
-      .catch(() => setChanges([]));
+      .then(applyChanges)
+      .catch(() => applyChanges([]));
     tauriApi.git
       .getRemote()
       .then((r) => setRemoteUrl(r ?? ''))
@@ -55,26 +66,49 @@ export function SyncPanel() {
       .hasToken()
       .then(setConnected)
       .catch(() => {});
-  }, []);
+  }, [applyChanges]);
   useEffect(() => load(), [load]);
 
   const commit = async () => {
+    if (selected.size === 0 || !changes) return; // нечего коммитить (кнопка и так disabled)
     setBusy(true);
     try {
-      const o = await tauriApi.git.commit(message.trim() || undefined);
+      const msg = message.trim() || undefined;
+      // P1-5: всё выбрано → commit-all (не регресс); подмножество → commitPaths (только выбранные).
+      const o =
+        selected.size === changes.length
+          ? await tauriApi.git.commit(msg)
+          : await tauriApi.git.commitPaths([...selected], msg);
       if (o.status === 'committed') setMessage('');
       setOutcome(o);
       if (o.status !== 'blocked-by-secrets') {
+        // Перезагрузка статуса: невыбранные при выборочном коммите ОСТАЮТСЯ dirty (мок зеркалит бэк).
         await tauriApi.git
           .status()
-          .then(setChanges)
-          .catch(() => setChanges([]));
+          .then(applyChanges)
+          .catch(() => applyChanges([]));
       }
     } catch (e) {
       setOutcome({ status: 'error', message: String(e) }); // показываем сбой, а не глотаем (audit B13)
     } finally {
       setBusy(false);
     }
+  };
+
+  // Тоггл одного пути в выборе.
+  const toggle = (path: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  // Мастер-чекбокс «выбрать все/ничего» в шапке секции «Изменения».
+  const allSelected = !!changes && changes.length > 0 && selected.size === changes.length;
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(changes?.map((c) => c.path) ?? []));
   };
 
   const saveRemote = async () => {
@@ -101,7 +135,7 @@ export function SyncPanel() {
       useSyncStore.getState().setMergeRequired(result.status === 'merge-required');
       await tauriApi.git
         .status()
-        .then(setChanges)
+        .then(applyChanges)
         .catch(() => {});
     } catch (e) {
       setSyncResult({ status: 'error', message: String(e) });
@@ -143,6 +177,13 @@ export function SyncPanel() {
           ) : (
             <div>
               <div className={styles.secLabel}>
+                <input
+                  type="checkbox"
+                  className={styles.selAll}
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label={t('git.selectAll')}
+                />
                 {t('git.changes')}
                 <span className={styles.cnt}>{changes.length}</span>
               </div>
@@ -153,6 +194,13 @@ export function SyncPanel() {
                   const name = slash >= 0 ? c.path.slice(slash + 1) : c.path;
                   return (
                     <li key={c.path} className={styles.change}>
+                      <input
+                        type="checkbox"
+                        className={styles.check}
+                        checked={selected.has(c.path)}
+                        onChange={() => toggle(c.path)}
+                        aria-label={t('git.selectFile', { path: c.path })}
+                      />
                       <span className={`${styles.kind} ${styles[c.kind]}`} aria-hidden>
                         {c.kind === 'new'
                           ? 'A'
@@ -241,10 +289,14 @@ export function SyncPanel() {
           <button
             className={styles.commitBtn}
             onClick={() => void commit()}
-            disabled={busy || !changes || changes.length === 0}
+            disabled={busy || !changes || changes.length === 0 || selected.size === 0}
           >
             <GitMerge size={15} aria-hidden />
-            {busy ? t('git.committing') : t('git.commit')}
+            {busy
+              ? t('git.committing')
+              : changes && selected.size < changes.length
+                ? t('git.commitSelected', { count: selected.size })
+                : t('git.commit')}
           </button>
         </footer>
       </div>
