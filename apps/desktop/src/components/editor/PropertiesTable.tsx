@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import type { FmField } from '../../lib/markdown/frontmatter';
 import styles from './MarkdownPreview.module.css';
 
@@ -6,8 +7,12 @@ const TAG_FIELDS = new Set(['tags', 'tag', 'aliases']);
 
 /**
  * Properties-таблица frontmatter в режиме чтения (FRONTMATTER-1, по образцу Obsidian Properties).
- * Сетка ключ→значение (div'ы, не `<table>` — чтобы не конфликтовать с `.preview table` GFM). Значения
- * полей-тегов — чипы (нижний регистр + фильтр сайдбара, как inline `#tag`); прочее — текст через запятую.
+ *
+ * Hermes-8 S4 «Вариант А · Колонка»: `.properties` — сам CSS-grid (`92px 1fr`), а `.propKey`/`.propVal` —
+ * прямые дети grid (без обёртки `.propRow`), чтобы ключи/значения выравнивались по 2 колонкам сквозь ВСЕ
+ * строки. div'ы, не `<table>` — чтобы не конфликтовать с `.preview table` GFM. Значения полей-тегов —
+ * sage-чипы (нижний регистр + фильтр сайдбара, как inline `#tag`); прочее — текст через запятую.
+ * Значение ключа `type` получает ember-акцент (`.acc`) по README.
  */
 export function PropertiesTable({
   fields,
@@ -20,10 +25,13 @@ export function PropertiesTable({
     <div className={styles.properties}>
       {fields.map((f, i) => {
         const isTag = TAG_FIELDS.has(f.key.toLowerCase());
+        const isType = f.key.toLowerCase() === 'type';
         return (
-          <div className={styles.propRow} key={`${f.key}-${i}`}>
+          // Фрагмент, а не `.propRow`-обёртка: ключ+значение — прямые дети grid-контейнера `.properties`,
+          // чтобы колонки 92px/1fr выравнивались по всем строкам (README «Вариант А · Колонка»).
+          <Fragment key={`${f.key}-${i}`}>
             <div className={styles.propKey}>{f.key}</div>
-            <div className={styles.propVal}>
+            <div className={`${styles.propVal}${isType ? ` ${styles.acc}` : ''}`}>
               {isTag
                 ? f.values.map((v, j) => {
                     const tag = v.replace(/^#/, '').toLowerCase();
@@ -49,7 +57,7 @@ export function PropertiesTable({
                   })
                 : f.values.join(', ')}
             </div>
-          </div>
+          </Fragment>
         );
       })}
     </div>
