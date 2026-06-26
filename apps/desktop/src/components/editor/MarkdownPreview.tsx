@@ -1,3 +1,4 @@
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +10,14 @@ import remarkMath from 'remark-math';
 
 import { isTaskLine } from '../../lib/editor/format';
 import { deriveMasthead, dropCapLetter } from '../../lib/editor/masthead';
+import {
+  bodyExcerpt,
+  footnoteNumber,
+  footnoteText,
+  noteStatus,
+  noteTitle,
+  noteType,
+} from '../../lib/editor/popcard';
 import { makeSlugger } from '../../lib/editor/slug';
 import { EmbedContext } from '../../lib/markdown/embed-context';
 import { extractFrontmatter, parseFrontmatterFields } from '../../lib/markdown/frontmatter';
@@ -28,6 +37,7 @@ import { AppendLine } from './AppendLine';
 import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
+import { Popcard, type PopcardContent } from './Popcard';
 import { PropertiesTable } from './PropertiesTable';
 import { Section } from './Section';
 import { SectionHeading } from './SectionHeading';
@@ -249,6 +259,141 @@ export function MarkdownPreview({
     // на каждый ре-рендер GroupPane перезапускал бы эффект вхолостую. Штамповка зависит только от body.
   }, [body, mastheadActive]);
 
+  // ── Hermes-8 S7: ховер-превью `.popcard` (вики-ссылка 220мс / сноска 120мс) ──────────────────────
+  // Карточка одна; `rect` — точка привязки (от `getBoundingClientRect` триггера). `pendingRef` держит
+  // активный таймер показа; `tokenRef` — монотонный request-токен против гонок async-чтения заметки
+  // (ушли с ссылки/сменили цель за время чтения → старый ответ НЕ показывается).
+  const [popcard, setPopcard] = useState<{
+    variant: 'wiki' | 'fnote';
+    rect: { top: number; bottom: number; left: number };
+    content: PopcardContent;
+  } | null>(null);
+  const pendingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tokenRef = useRef(0);
+
+  // Гасит pending-таймер и инвалидирует текущий request-токен (любой in-flight ответ устаревает).
+  const cancelPending = useCallback(() => {
+    if (pendingRef.current != null) {
+      clearTimeout(pendingRef.current);
+      pendingRef.current = null;
+    }
+    tokenRef.current += 1;
+  }, []);
+
+  // Полное скрытие: гасим таймер/токен и убираем карточку (на mouseleave триггера).
+  const hidePopcard = useCallback(() => {
+    cancelPending();
+    setPopcard(null);
+  }, [cancelPending]);
+
+  // Очистка таймеров/токена на unmount (без утечек).
+  useEffect(() => {
+    return () => {
+      cancelPending();
+    };
+  }, [cancelPending]);
+  // Превью перерисовалось (СМЕНА заметки ИЛИ живое редактирование того же notePath: `body` поменялся) →
+  // гасим pending-таймер и прячем stale-карточку: её rect привязан к прежнему DOM, цель/триггер могли
+  // уехать (ревью MINOR: при правке тела карточка переживала ре-рендер со stale-rect). `body` меняется
+  // и при смене notePath (другой source), поэтому покрывает оба случая.
+  useEffect(() => {
+    cancelPending();
+    setPopcard(null);
+  }, [body, cancelPending]);
+
+  // Наведение на ВИКИ-ссылку: 220мс → резолв имени в заметку (resolveNote→readFile), РЕАЛЬНОЕ превью.
+  const onWikiEnter = useCallback(
+    (e: ReactMouseEvent<HTMLAnchorElement>, target: string) => {
+      cancelPending();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const place = { top: rect.top, bottom: rect.bottom, left: rect.left };
+      const myToken = tokenRef.current;
+      pendingRef.current = setTimeout(() => {
+        void (async () => {
+          try {
+            // 1) имя → путь (бэкенд-резолвер индексатора — путь/+.md/basename/алиас).
+            const path = await tauriApi.vault.resolveNote(target);
+            if (tokenRef.current !== myToken) return; // ушли/сменили за время резолва
+            if (!path) {
+              // Битая ссылка → ЧЕСТНОЕ «не найдено» (muted), не фейк-превью.
+              setPopcard({ variant: 'wiki', rect: place, content: { body: t('popcard.notFound'), muted: true } });
+              return;
+            }
+            // 2) путь → содержимое (реальный текст заметки).
+            const content = await tauriApi.vault.readFile(path);
+            if (tokenRef.current !== myToken) return;
+            // 3) реальные беклинки целевой заметки → счётчик ссылок (НЕ выдуманный).
+            let linkCount: number | null = null;
+            try {
+              const backlinks = await tauriApi.graph.getBacklinks(path);
+              if (tokenRef.current !== myToken) return;
+              linkCount = backlinks.length;
+            } catch {
+              linkCount = null; // источник недоступен → счётчик опускаем (не врём)
+            }
+            const type = noteType(content);
+            const status = noteStatus(content);
+            // `.pc-meta` — ТОЛЬКО реальные данные: статус (frontmatter) и/или N ссылок (реальные беклинки).
+            const metaParts: string[] = [];
+            if (status) metaParts.push(status);
+            if (linkCount != null && linkCount > 0) metaParts.push(t('popcard.links', { count: linkCount }));
+            const body = bodyExcerpt(content);
+            // Заметка НАЙДЕНА, но эксцерпт пуст (только frontmatter/H1) — честное «Пустая заметка»
+            // (muted), но title/meta — реальные, СОХРАНЯЕМ (ревью: «не найдена» для существующей заметки
+            // — ложь; `popcard.notFound` остаётся ТОЛЬКО в ветке path===null выше).
+            setPopcard({
+              variant: 'wiki',
+              rect: place,
+              content: {
+                eyebrow: type ? type.toUpperCase() : undefined,
+                title: noteTitle(content, path),
+                body: body || t('popcard.empty'),
+                muted: body ? undefined : true,
+                meta: metaParts.length > 0 ? metaParts.join(' · ') : undefined,
+              },
+            });
+          } catch {
+            // Транзиентная ошибка чтения — карточку не показываем (молча), как другие read-failures превью.
+          }
+        })();
+      }, 220);
+    },
+    [cancelPending, t],
+  );
+
+  // Наведение на СНОСКУ (footnote-ref `<a href="#user-content-fn-N">`): 120мс → текст из её `<li>` в DOM.
+  const onFootnoteEnter = useCallback(
+    (e: ReactMouseEvent<HTMLAnchorElement>, href: string) => {
+      cancelPending();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const place = { top: rect.top, bottom: rect.bottom, left: rect.left };
+      const myToken = tokenRef.current;
+      pendingRef.current = setTimeout(() => {
+        if (tokenRef.current !== myToken) return;
+        const n = footnoteNumber(href);
+        if (!n) return;
+        // Определение сноски ищем СТРОГО в ВЛАДЕЮЩЕЙ .preview этого инстанса (previewRef, стабилен).
+        // `querySelector` спускается во вложенные .preview эмбедов (у них тот же `fn-1`, секция раньше
+        // в DOM) → фильтруем по тому, чей ближайший .preview-предок === наш root: чужая сноска эмбеда
+        // отбрасывается (MAJOR-ревью: показывалась сноска ИЗ эмбеда).
+        const root = previewRef.current;
+        if (!root) return;
+        const li =
+          Array.from(root.querySelectorAll(`li[id$="fn-${CSS.escape(n)}"]`)).find(
+            (x) => x.closest('[class*="preview"]') === root,
+          ) ?? null;
+        const text = footnoteText(li);
+        if (!text) return; // нет текста — карточку не показываем (честно)
+        setPopcard({
+          variant: 'fnote',
+          rect: place,
+          content: { eyebrow: t('popcard.footnote'), body: text },
+        });
+      }, 120);
+    },
+    [cancelPending, t],
+  );
+
   const sourceLines = onToggleTask ? source.split('\n') : null;
   const components: Components = {
     // IMG-1: картинки-вложения через VaultImage (vault-путь → data:-URL).
@@ -263,12 +408,18 @@ export function MarkdownPreview({
     a({ href, children }) {
       if (href && href.startsWith(WIKILINK_SCHEME)) {
         const target = decodeURIComponent(href.slice(WIKILINK_SCHEME.length));
+        // S7: `data-note` + ховер-превью (220мс). Клик → живая навигация `onOpenLink` как раньше
+        // (карточка `pointer-events:none` не перехватывает клик). Скрытие — на mouseleave.
         return (
           <a
             className={styles.wikilink}
             href="#"
+            data-note={target}
+            onMouseEnter={(e) => onWikiEnter(e, target)}
+            onMouseLeave={hidePopcard}
             onClick={(e) => {
               e.preventDefault();
+              hidePopcard();
               onOpenLink(target);
             }}
           >
@@ -305,11 +456,17 @@ export function MarkdownPreview({
       // скролл В ПРЕДЕЛАХ этого превью. Не `target=_blank` (он ломал бы хеш-навигацию); область —
       // ближайший `.preview`, чтобы сноски двух embed'ов с одинаковым `#fn-1` не прыгали в чужой блок.
       if (href && href.startsWith('#') && href.length > 1) {
+        // S7: footnote-ref (`#user-content-fn-N`) — ховер-превью текста сноски (120мс). Клик
+        // (скролл к определению) и backref-стрелка — без изменений. Не-сноска `#anchor` — без ховера.
+        const isFootnoteRef = /^#user-content-fn-/.test(href);
         return (
           <a
             href={href}
+            onMouseEnter={isFootnoteRef ? (e) => onFootnoteEnter(e, href) : undefined}
+            onMouseLeave={isFootnoteRef ? hidePopcard : undefined}
             onClick={(e) => {
               e.preventDefault();
+              if (isFootnoteRef) hidePopcard();
               // RAW user-href: `decodeURIComponent` бросает URIError на литеральном `%` (`#50%`) →
               // гард, иначе клик молча падает (находка ревью). CSS.escape — против селектор-инъекции.
               let id = href.slice(1);
@@ -318,8 +475,15 @@ export function MarkdownPreview({
               } catch {
                 /* кривое %-кодирование — берём как есть */
               }
-              const root = (e.currentTarget as HTMLElement).closest('[class*="preview"]') ?? document;
-              const el = (root as ParentNode).querySelector(`[id="${CSS.escape(id)}"]`);
+              // Скролл СТРОГО в ВЛАДЕЮЩЕЙ .preview этого инстанса (previewRef): `querySelector` спустился
+              // бы во вложенные .preview эмбедов (тот же `user-content-fn-1`/slug) → фильтр по owning-preview,
+              // иначе клик прыгал бы в чужой эмбед-блок (тот же класс дефекта, что hover — MAJOR-ревью).
+              const root = previewRef.current;
+              const el = root
+                ? Array.from(root.querySelectorAll(`[id="${CSS.escape(id)}"]`)).find(
+                    (x) => x.closest('[class*="preview"]') === root,
+                  )
+                : document.querySelector(`[id="${CSS.escape(id)}"]`);
               if (el instanceof HTMLElement) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }}
           >
@@ -515,7 +679,14 @@ export function MarkdownPreview({
 
   return (
     <EmbedContext.Provider value={embedCtx}>
-      <div className={masthead?.reading ? `${styles.preview} ${styles.reading}` : styles.preview} ref={previewRef}>
+      <div
+        className={masthead?.reading ? `${styles.preview} ${styles.reading}` : styles.preview}
+        ref={previewRef}
+        // S7: страховка скрытия — курсор покинул всё превью (mouseleave не всплывает, срабатывает на
+        // реальном выходе). Контейнер стабилен (не ремонтируется при ре-рендере ReactMarkdown), потому
+        // надёжно гасит карточку, даже если узел-триггер пересоздался показом карточки.
+        onMouseLeave={hidePopcard}
+      >
         {masthead && (
           <header className={styles.docHead}>
             {md.kicker && <div className={styles.docKicker}>{md.kicker}</div>}
@@ -561,6 +732,16 @@ export function MarkdownPreview({
         {/* AppendLine — только у top-level превью редактора (onAppendLine задан); embed/peek/доска не передают. */}
         {onAppendLine && fetchNotes && (
           <AppendLine onAppend={onAppendLine} fetchNotes={fetchNotes} />
+        )}
+        {/* S7: ховер-превью `.popcard` (вики/сноска). Fixed-узел — на layout не влияет; `pointer-events:none`
+            не перехватывает клик/ховер. Ключ по rect+variant — новый mount на каждый ховер (рестарт анимации). */}
+        {popcard && (
+          <Popcard
+            key={`${popcard.variant}:${popcard.rect.top}:${popcard.rect.left}`}
+            rect={popcard.rect}
+            content={popcard.content}
+            variant={popcard.variant}
+          />
         )}
       </div>
     </EmbedContext.Provider>
