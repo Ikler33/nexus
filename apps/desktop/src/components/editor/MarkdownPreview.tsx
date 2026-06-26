@@ -31,6 +31,7 @@ import { remarkFrontmatter } from '../../lib/markdown/remarkFrontmatter';
 import { remarkHighlight } from '../../lib/markdown/remarkHighlight';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/remarkNexus';
+import { remarkStripHeadingEmoji } from '../../lib/markdown/remarkStripHeadingEmoji';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
 import { relTime } from '../../lib/time';
 import { AppendLine } from './AppendLine';
@@ -77,6 +78,9 @@ const REMARK_PLUGINS: ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [
   remarkCallouts,
   remarkGfm,
   remarkHighlight,
+  // Эмодзи из заголовков (Hermes-8 фикс) — ДО remarkNexus: тот сплитит [[вики]]/#теги в заголовке в
+  // link-узлы, а strip бьёт text-узлы; режем эмодзи пока заголовок ещё цельный text → вики/теги целы.
+  remarkStripHeadingEmoji,
   remarkNexus,
   [remarkMath, { singleDollarTextMath: false }],
 ];
@@ -328,11 +332,25 @@ function MarkdownPreviewImpl(
     while (el && (el.classList.contains(styles.docHead) || el.classList.contains(styles.properties))) {
       el = el.nextElementSibling;
     }
+    // Цель буквицы — ведущий абзац тела. Прямой `<P>` (заметка открывается прозой) штампуем как есть.
+    // Если же первый блок — H2-секция (`<section.sec>`, S3: заметка открывается заголовком, напр. daily
+    // `## 🧠 Поток мыслей`), её первый абзац вложен в `<section><div.sec-body><div.sec-inner><p>` →
+    // спускаемся в ПЕРВУЮ контент-секцию и берём первый `<p>` в порядке чтения. adversarial FIX 3:
+    // ПРОПУСКАЕМ абзацы внутри callout (`<div data-callout>`, см. Callout.tsx) и `<blockquote>` — иначе
+    // гигантская буквица села бы внутрь admonition/цитаты раньше реального лид-абзаца секции. Нет
+    // подходящего «голого» `<p>` → буквицы нет (как list-first).
+    let target: HTMLElement | null = null;
     if (el && el.tagName === 'P') {
-      const cap = dropCapLetter(el.textContent ?? '');
+      target = el as HTMLElement;
+    } else if (el && (el.tagName === 'SECTION' || el.classList.contains(styles.sec))) {
+      target =
+        Array.from(el.querySelectorAll('p')).find((p) => !p.closest('[data-callout],blockquote')) ?? null;
+    }
+    if (target) {
+      const cap = dropCapLetter(target.textContent ?? '');
       if (cap) {
-        el.setAttribute('data-cap', cap);
-        el.setAttribute('data-dropcap', '');
+        target.setAttribute('data-cap', cap);
+        target.setAttribute('data-dropcap', '');
       }
     }
     // deps — примитивы (mastheadActive), а НЕ объект `masthead`: иначе свежий литерал {mtime,reading}

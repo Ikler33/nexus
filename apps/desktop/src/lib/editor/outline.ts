@@ -5,6 +5,8 @@
  * `===`/`---` под строкой) — пост-v1 (редки и требуют lookahead на предыдущую строку).
  */
 
+import { stripHeadingEmoji } from './headingText';
+
 export interface Heading {
   /** Уровень 1–6 (число решёток). */
   level: number;
@@ -80,7 +82,9 @@ export function extractHeadings(doc: string): Heading[] {
     if (fence !== null) continue;
     const m = ATX_RE.exec(line);
     if (m) {
-      const text = cleanHeadingText(m[2]);
+      // Эмодзи срезаем после inline-разметки (Hermes-8 фикс) — оглавление совпадает с рендером
+      // заголовков (remarkStripHeadingEmoji); иначе TOC показал бы `📅 …`, а заголовок — нет.
+      const text = stripHeadingEmoji(cleanHeadingText(m[2]));
       if (text) out.push({ level: m[1].length, text, line: i + 1 });
     }
   }
