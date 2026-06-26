@@ -328,30 +328,26 @@ function MarkdownPreviewImpl(
       el.removeAttribute('data-cap');
     });
     if (!mastheadActive) return;
-    let el: Element | null = root.firstElementChild;
-    while (el && (el.classList.contains(styles.docHead) || el.classList.contains(styles.properties))) {
-      el = el.nextElementSibling;
-    }
-    // Цель буквицы — ведущий абзац тела. Прямой `<P>` (заметка открывается прозой) штампуем как есть.
-    // Если же первый блок — H2-секция (`<section.sec>`, S3: заметка открывается заголовком, напр. daily
-    // `## 🧠 Поток мыслей`), её первый абзац вложен в `<section><div.sec-body><div.sec-inner><p>` →
-    // спускаемся в ПЕРВУЮ контент-секцию и берём первый `<p>` в порядке чтения. adversarial FIX 3:
-    // ПРОПУСКАЕМ абзацы внутри callout (`<div data-callout>`, см. Callout.tsx) и `<blockquote>` — иначе
-    // гигантская буквица села бы внутрь admonition/цитаты раньше реального лид-абзаца секции. Нет
+    // Буквица — на ПЕРВОМ обычном абзаце тела (порядок чтения, ГДЕ БЫ ОН НИ БЫЛ — проза-first ИЛИ
+    // первый абзац внутри H2-секции, напр. daily `## 🧠 Поток мыслей`: его `<p>` вложен в
+    // `<section><div.sec-body><div.sec-inner><p>`, querySelectorAll его видит). «Обычный» = НЕ внутри
+    // masthead/properties (шапка), callout (`<div data-callout>`, см. Callout.tsx), цитаты, списка,
+    // таблицы, figure — это не «обычный неформатированный текст» (adversarial FIX 3: иначе гигантская
+    // буквица села бы внутрь admonition/цитаты/пункта раньше реального лид-абзаца). Скоуп на СВОЙ
+    // previewRef: `querySelectorAll` спускается во вложенные `.preview` эмбедов (NoteEmbed), но буквица
+    // ставится ТОЛЬКО в своём документе → `p.closest('[class*="preview"]') === root` (как S6/S7). Нет
     // подходящего «голого» `<p>` → буквицы нет (как list-first).
-    let target: HTMLElement | null = null;
-    if (el && el.tagName === 'P') {
-      target = el as HTMLElement;
-    } else if (el && (el.tagName === 'SECTION' || el.classList.contains(styles.sec))) {
-      target =
-        Array.from(el.querySelectorAll('p')).find((p) => !p.closest('[data-callout],blockquote')) ?? null;
-    }
+    const EXCLUDE = `.${styles.docHead}, .${styles.properties}, [data-callout], blockquote, li, figure, table`;
+    const target = Array.from(root.querySelectorAll('p')).find(
+      (p) =>
+        p.closest('[class*="preview"]') === root &&
+        !p.closest(EXCLUDE) &&
+        dropCapLetter(p.textContent ?? '') !== '',
+    ) as HTMLElement | undefined;
     if (target) {
       const cap = dropCapLetter(target.textContent ?? '');
-      if (cap) {
-        target.setAttribute('data-cap', cap);
-        target.setAttribute('data-dropcap', '');
-      }
+      target.setAttribute('data-cap', cap);
+      target.setAttribute('data-dropcap', '');
     }
     // deps — примитивы (mastheadActive), а НЕ объект `masthead`: иначе свежий литерал {mtime,reading}
     // на каждый ре-рендер GroupPane перезапускал бы эффект вхолостую. Штамповка зависит только от body.
