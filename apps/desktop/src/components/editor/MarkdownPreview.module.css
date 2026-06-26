@@ -275,27 +275,29 @@
 }
 
 /* Frontmatter Properties-таблица (FRONTMATTER-1): сетка ключ→значение НАД телом заметки (вместо сырого
-   YAML + лишнего hr). div-grid, чтобы не конфликтовать с `.preview table` (GFM-таблицы). */
+   YAML + лишнего hr). div-grid, чтобы не конфликтовать с `.preview table` (GFM-таблицы).
+
+   Hermes-8 S4 «Вариант А · Колонка»: контейнер сам — CSS-grid (`92px 1fr`), ключ/значение — прямые дети
+   (без `.propRow`-обёртки), чтобы колонки выравнивались сквозь все строки. mono 12.5px, surface-фон,
+   ember-полоска слева. README: «Без `---` делимитеров» — read-режим их и не рисует (frontmatter вырезан
+   remarkFrontmatter, таблица — отдельный блок над телом). */
 .properties {
-  margin: 0 0 1.2em;
-  padding: 0.5em 0.8em;
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 3px 12px;
+  align-items: baseline;
+  margin: 0 0 30px;
+  padding: 13px 16px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
   border-radius: var(--radius-md);
-  font-size: 0.9em;
-}
-.propRow {
-  display: grid;
-  grid-template-columns: minmax(72px, 22%) 1fr;
-  gap: 0.3em 1em;
-  padding: 0.22em 0;
-}
-.propRow + .propRow {
-  border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 .propKey {
-  color: var(--color-text-muted);
-  font-weight: 600;
+  color: var(--color-text-faint);
   overflow-wrap: anywhere;
 }
 .propVal {
@@ -305,6 +307,10 @@
   flex-wrap: wrap;
   gap: 0.3em;
   align-items: center;
+}
+/* Акцентное значение (README: `type → idea` = ember). */
+.propVal.acc {
+  color: var(--color-accent);
 }
 
 /* Сноски GFM `[^1]` (FOOTNOTE-1): ссылка-надстрочник в тексте + блок определений снизу. remark-gfm их
