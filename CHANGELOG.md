@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Исправлено · Память агента (P1-4) — импортированные из бэкапа факты теперь векторизуются (recall их видит)
+
+Аудит-баг (data-integrity). `import_backup` писал строки `memory_facts`, но не заполнял индекс `memory_vectors` → импортированные факты были СЛЕПЫ для семантического recall (`context_facts`/`search_memory` их не находили). Эпизоды этот orphan-класс уже закрыли бэкфиллом; у памяти аналога не было.
+
+- **`memory/mod.rs`**: новый `memory_facts_for_backfill(reader)` (live-факты `superseded_by IS NULL`) — зеркало `episodes_for_backfill`.
+- **`commands/vault.rs`**: best-effort backfill-блок в `open_vault` (фоновый `tokio::spawn`, зеркалит эпизодный блок) — факты без вектора (фильтр по `memory_vectors.contains`) переэмбеддятся. Чинит и УЖЕ-импортированные факты (каждое открытие vault). Идемпотентно (upsert по ключу=id), best-effort (нет embedder → no-op). Model-change reconcile теперь тоже дропает `memory_vectors.usearch` → переэмбеддинг новой моделью.
+- **embed_query, не embed_documents** (исправлено adversarial-ревью): память СИММЕТРИЧНА — `index_fact` (хранение) и `context_facts` (recall) оба через `embed_query`; слепое зеркало асимметричного эпизодного `embed_documents` положило бы импортированные факты в document-субпространство для nomic/e5 (для bge-m3 префиксы пусты → прод был невредим, но латентная мина при смене эмбеддера). Эпизод/чат-бэкфилл (легитимно асимметричны) не тронуты.
+- Тесты: backfill→recall + идемпотентность + no-op-без-embedder + superseded-skip + **дискриминирующий `AsymMockEmbedder`-тест** (различает query/document → падает на embed_documents, регресс-доказан). Гейт зелёный (`nexus-core` 1091 · `nexus-desktop` 222 · clippy/fmt 0 · vitest 1189). Независимый adversarial-ревью (2 линзы) поймал embed-метод-MAJOR, который прошёл мимо реализации И тестов (мок маскировал).
+
 ### Исправлено · Титлбар (P1-20) — подсказка-шорткат поисковой пилюли больше не врёт
 
 Аудит-баг (over-reporting). Центральная поисковая пилюля показывала `⌘K`, но палитра команд открывается на `mod+p`/`mod+o` (`commands-core.ts`), а `mod+k` занят `editor.format.link` — нажатие ⌘K НЕ открывало палитру. Теперь `kbd` рендерит `formatCombo('mod+p')` (⌘P на mac / Ctrl+P иначе, локаль-корректно), совпадая с реальным действием пилюли (`openPalette`). +тест-регресс (`Titlebar.test.tsx`: подсказка = реальный шорткат, не «K»).
