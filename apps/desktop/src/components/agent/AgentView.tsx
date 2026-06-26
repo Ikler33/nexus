@@ -26,6 +26,7 @@ import { ExecGraph } from './ExecGraph';
 import { Markdown } from '../common/Markdown';
 import { StreamingMarkdown } from '../common/StreamingMarkdown';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
+import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useToastStore } from '../../stores/toast';
 import type { AgentPerms, AgentStep, AgentTurn, ChangesetFile } from '../../stores/agent';
@@ -80,6 +81,23 @@ export function AgentView() {
   const report = lastTurn?.report ?? null;
   const active = status === 'running' || status === 'paused' || status === 'awaiting';
   const started = turns.length > 0;
+
+  // P1-11 (Castor «Быстрый старт»): входящий промпт из `openAgent(seed)` предзаполняет композер
+  // (НЕ авто-отправляет — пользователь правит/жмёт «Запустить» сам). Зеркало pendingTagFilter/consumeTagFilter.
+  // Затирать НЕЛЬЗЯ лишь когда в композере уже есть несохранённый текст — единственное, что защищаем.
+  // Поэтому сидим, ЕСЛИ поле пусто, ДАЖЕ при активном прогоне: иначе сценарий «ушёл при работающем прогоне
+  // (AgentView размонтирован, input='') → клик быстрого старта → remount с active=true» молча терял бы
+  // промпт (ровно тот дефект, ради которого делался P1-11). Пустой композер защищать нечего.
+  const pendingSeed = useUIStore((s) => s.pendingAgentSeed);
+  const consumeSeed = useUIStore((s) => s.consumeAgentSeed);
+  useEffect(() => {
+    if (!pendingSeed) return;
+    if (input.trim() === '') setInput(pendingSeed.text);
+    // Непустой композер (несохранённый ввод) — НЕ затираем; промпт всё равно консьюмим (показали попытку,
+    // не накапливаем «висящий» сид). Поле disabled при active не мешает prefill — пользователь увидит текст,
+    // когда прогон завершится / он откроет новую сессию.
+    consumeSeed();
+  }, [pendingSeed, input, consumeSeed]);
 
   // Закрытие меню настроек по клику снаружи (как макет).
   useEffect(() => {

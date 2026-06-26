@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeView } from './HomeView';
+import * as mockSettings from '../../lib/mock/settings';
+import { tauriApi, type AiConfigDto, type AiEndpoint } from '../../lib/tauri-api';
 import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useChatStore } from '../../stores/chat';
 import { useHomeStore } from '../../stores/home';
@@ -11,12 +13,48 @@ import { useUIStore } from '../../stores/ui';
 // no-op'ом (чтобы детерминированно проверить error/loading), иначе подмена утекла бы в соседние тесты.
 const realLoad = useHomeStore.getState().load;
 
+const ep = (model: string): AiEndpoint => ({ url: 'http://localhost:8080/v1', model });
+
+/** Сконфигурировать мок AI-конфига (HomeView читает `getAiConfig()` на mount). По умолчанию — пусто
+ *  (как «модели не настроены»); кейсы P1-10/P1-9 задают chat/fast явно. Гейт-кнопки зависят от них. */
+function setAiConfig(partial: Partial<AiConfigDto>) {
+  vi.spyOn(mockSettings, 'getAiConfig').mockResolvedValue({
+    chat: null,
+    embedding: null,
+    fast: null,
+    agentAutonomy: null,
+    agentActuatorEnabled: false,
+    sandboxEnabled: false,
+    shellEnable: false,
+    webAllowPublicFetch: false,
+    skillsLearningEnabled: false,
+    agentSkillsDir: null,
+    delegationEnabled: false,
+    researchEnabled: false,
+    connection: {
+      mode: 'embedded',
+      socket: null,
+      acpCommand: null,
+      acpCwd: null,
+      acpTransport: null,
+      acpSshHost: null,
+      acpSshKey: null,
+      acpRemoteCommand: null,
+    },
+    shellSupported: false,
+    ...partial,
+  });
+}
+
 function resetStores() {
   useUIStore.setState({ homeOpen: true, newsOpen: false, chatOpen: false });
   useChatStore.setState({ draft: '', pinned: [], mode: 'general', streaming: false });
   // «Инсайты» включены — проверяем рендер карточек вопросов/дрейфа с контентом (отдельный кейс ниже
   // проверяет disabled-состояние при OFF).
   useAiFeaturesStore.setState({ insights: true, contradictions: true });
+  // Базлайн «модели настроены» (chat + fast): гейт-кнопки «Обновить» сводки (P1-10, требует fast) и
+  // stale radar (P1-9, требует chat) видны. Кейсы «без fast / без chat» переопределяют это явно.
+  setAiConfig({ chat: ep('gemma'), fast: ep('qwen3-4b') });
   useHomeStore.setState({
     data: null,
     activity: null,
@@ -34,6 +72,7 @@ function resetStores() {
 
 describe('HomeView (DP-1, макет home.jsx)', () => {
   beforeEach(resetStores);
+  afterEach(() => vi.restoreAllMocks());
 
   // Дашборд: приветствие, сводка дня (AI-карта из кэша виджета), недавние, статистика,
   // stale radar и открытые вопросы — всё из мок-бэкенда H1/H6/H2.
@@ -138,5 +177,72 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
       () => expect(screen.queryByText(/анализирую|analyzing/i)).not.toBeInTheDocument(),
       { timeout: 3000 },
     );
+  });
+
+  // ── P1-10: «Обновить» сводки дня видна ТОЛЬКО при настроенной ОСНОВНОЙ chat-модели (`ai.chat`) ─────
+  // Реальный precondition бэка: хендлер daily_brief строится из `chat_fast`, а тот = `build_chat(ai.chat)`
+  // (None без `ai.chat`; «быстрый» — тот же сервер `ai.chat`, НЕ отдельная `ai.fast`). Без `ai.chat` клик
+  // дал бы ошибку «неизвестный HOME-виджет».
+  it('P1-10: без `ai.chat` у «Сводки дня» нет кнопки «Обновить» + честная подсказка (не мёртвый клик)', async () => {
+    setAiConfig({ chat: null, fast: ep('qwen3-4b') }); // chat НЕТ (даже если fast задан → виджета нет)
+    useHomeStore.setState({ brief: null, loading: false }); // сводки нет → ветка cardEmpty
+    render(<HomeView />);
+    // Подсказка про chat-модель показана (а не «нажмите обновить»).
+    expect(
+      await screen.findByText(/chat-модель|chat model/i),
+    ).toBeInTheDocument();
+    // У карты «Сводка дня» кнопки «Обновить» нет (head без refresh-кнопки).
+    const briefTitle = screen.getByText(/^Сводка дня$|^Daily brief$/i);
+    const card = briefTitle.closest('[class*="cardHead"]') as HTMLElement;
+    expect(
+      within(card).queryByRole('button', { name: /обновить|refresh/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Реальный precondition: кнопка ВИДНА когда задан `ai.chat`, НЕЗАВИСИМО от `ai.fast` (fast=null тоже ОК —
+  // именно тот случай (A), что прежний неверный гейт ложно прятал).
+  it('P1-10: с `ai.chat` кнопка «Обновить» сводки дня видна даже без `ai.fast` (happy-path)', async () => {
+    setAiConfig({ chat: ep('gemma'), fast: null });
+    render(<HomeView />);
+    const briefTitle = await screen.findByText(/^Сводка дня$|^Daily brief$/i);
+    const card = briefTitle.closest('[class*="cardHead"]') as HTMLElement;
+    expect(
+      within(card).getByRole('button', { name: /обновить|refresh/i }),
+    ).toBeInTheDocument();
+  });
+
+  // ── P1-9: ручной триггер обогащения Stale radar — реальная кнопка над реальным бэком ──────────────
+  it('P1-9: кнопка «Обновить» stale radar появляется при insights ON + chat и зовёт реальный refresh', async () => {
+    setAiConfig({ chat: ep('gemma'), fast: ep('qwen3-4b') });
+    // Кнопка → стор `refreshWidget('stale_radar')` → реальный бэк-вызов `home.staleRefresh()` (мок no-op).
+    const staleRefreshSpy = vi.spyOn(tauriApi.home, 'staleRefresh').mockResolvedValue(undefined);
+    render(<HomeView />);
+    const staleTitle = await screen.findByText('Stale radar');
+    const head = staleTitle.closest('[class*="cardHead"]') as HTMLElement;
+    const btn = within(head).getByRole('button', { name: /обновить|refresh/i });
+    fireEvent.click(btn);
+    // Доказывает: кнопка зовёт именно реальный stale-refresh-эндпоинт (а не пустышку).
+    await vi.waitFor(() => expect(staleRefreshSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it('P1-9: без chat кнопки обогащения stale radar нет (бэк всё равно no-op → не мёртвый клик)', async () => {
+    setAiConfig({ chat: null, fast: null }); // нет chat → refresh_stale_radar вернул бы ошибку
+    render(<HomeView />);
+    const staleTitle = await screen.findByText('Stale radar');
+    const card = staleTitle.closest('[class*="cardHead"]') as HTMLElement;
+    expect(
+      within(card).queryByRole('button', { name: /обновить|refresh/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('P1-9: при выключенных «Инсайтах» кнопки обогащения stale radar нет (бэк no-op)', async () => {
+    useAiFeaturesStore.setState({ insights: false });
+    setAiConfig({ chat: ep('gemma'), fast: ep('qwen3-4b') });
+    render(<HomeView />);
+    const staleTitle = await screen.findByText('Stale radar');
+    const card = staleTitle.closest('[class*="cardHead"]') as HTMLElement;
+    expect(
+      within(card).queryByRole('button', { name: /обновить|refresh/i }),
+    ).not.toBeInTheDocument();
   });
 });

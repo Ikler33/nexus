@@ -394,6 +394,7 @@
     "thinking": "Analyzing the vault…",
     "briefTitle": "Daily brief",
     "briefEmpty": "No brief yet — hit “refresh” and the model will describe what's been happening.",
+    "briefNoChat": "The daily brief needs a chat model. Configure it in Settings → AI (the “Chat model” field).",
     "recentTitle": "Recent",
     "recentEmpty": "Nothing yet — create your first note.",
     "activityTitle": "Activity",
@@ -852,7 +853,10 @@
       "quickStart": "Quick start",
       "act1": "Process the inbox",
       "act2": "Link related notes",
-      "act3": "Tidy up tags"
+      "act3": "Tidy up tags",
+      "seed1": "Process my inbox notes: group them by topic and suggest where each should go.",
+      "seed2": "Find related notes and propose the [[…]] links that are missing between them.",
+      "seed3": "Tidy up my tags: find duplicate and near-synonym tags and suggest how to merge them."
     },
     "modeWeb": "Web",
     "modeWebHint": "Web agent: the model searches the internet via your SearXNG and answers with sources.",

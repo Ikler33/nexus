@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Исправлено · Home/Castor (P1-9, P1-10, P1-11) — достижимые действия без пустышек
+
+Три аудит-минора, все с РЕАЛЬНЫМ backend (никаких фейк-кнопок).
+
+- **P1-9** — ручное обновление Stale-radar было недостижимо (нет UI-триггера, хотя команда `refresh_stale_radar` есть). Добавлена кнопка «Обновить» на карте, gated на реальные preconditions бэкенда (insights + chat-модель).
+- **P1-10** — кнопка «Обновить» сводки дня + пустое-состояние were gated на НЕВЕРНЫЙ конфиг → честный hint врал / dead-клик. Daily-brief виджет регистрируется при `ai.chat` (provider `chat_fast` строится из chat-модели с `enable_thinking=false`, НЕ из `ai.fast`). Гейт исправлен на `Boolean(ai?.chat)`; пустое-состояние подсказывает настроить chat-модель (`briefNoChat`).
+- **P1-11** — Castor «Быстрый старт» (3 пункта в `AgentTab`) все звали `openAgent()` без сидинга → неотличимы. Расширен `openAgent(seed?)` (store `pendingAgentSeed{text,seq}` + `consumeAgentSeed`, по образцу `pendingTagFilter`); AgentView предзаполняет композер (prefill, НЕ авто-отправка) когда поле пусто — в т.ч. при remount поверх активного прогона (иначе промпт молча терялся); 3 пункта сеют разные промпты.
+- Тесты: gated-кнопки на реальных эндпоинтах (P1-9 спай `staleRefresh`), P1-10 на реальном precondition (`ai.chat`), P1-11 seed/seq/consume + active-remount-prefill. Гейт зелёный (vitest 1215). Независимый adversarial-ревью (2 линзы) поймал 3 MAJOR: неверный конфиг гейта P1-10 (chat_fast≠ai.fast — наводка была неверной) + потеря промпта P1-11 при активном прогоне + тавтологичный тест — все исправлены и верифицированы по бэкенду.
+
 ### Исправлено · News (P1-8, P1-15) — честный мок «Разрешить хост» + кнопка «Сократить» без тела
 
 - **P1-8 (мок≠бэк):** браузер-мок `allowHost`/`disallowHost` (tauri-api.ts) фолбэчил на `getConfig()` — не добавлял/убирал хост → «Разрешить хост» в превью/тестах ничего не делал. Добавлены честные `mockNews.allowHost`/`disallowHost`, реально мутирующие `config.extraHosts` (зеркалят бэкенд `news_allow_host`/`news_disallow_host`: идемпотентный push / retain-remove). +3 мок-теста (изоляция `vi.resetModules`).
