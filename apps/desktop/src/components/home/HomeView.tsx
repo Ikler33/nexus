@@ -229,6 +229,14 @@ export function HomeView() {
   const today = new Date();
   const aiModel = ai?.chat?.model || (ai?.chat?.url ? new URL(ai.chat.url).host : null);
   const goalColors = [styles.cAccent, styles.cAi, styles.cSuccess];
+  // P1-10: хендлер «Сводки дня» (daily_brief) регистрируется в бэке ТОЛЬКО когда построился `chat_fast`
+  // (vault.rs:138 `if let Some(fast) = &chat_fast`). А `chat_fast` строит `build_chat()`, которая
+  // возвращает `None` без секции `ai.chat` (vault.rs:785 `cfg.ai.chat.as_ref()?`) — «быстрый» провайдер
+  // это тот же сервер `ai.chat` с `enable_thinking=false`, НЕ отдельная `ai.fast`. Значит реальный
+  // precondition = задана ОСНОВНАЯ chat-модель (`ai.chat`). Без неё `refresh_widget('daily_brief')` падает
+  // «неизвестный HOME-виджет» → клик «Обновить» = ошибка. Гейтим кнопку И hint на наличие `ai.chat`.
+  // (`ai.fast` — отдельная утилитарная модель инсайтов/новостей; к daily_brief отношения не имеет.)
+  const briefReady = Boolean(ai?.chat);
 
   const aiCardHead = (
     icon: ReactNode,
@@ -241,10 +249,13 @@ export function HomeView() {
         {title}
         <span className={styles.aiBadge}>AI</span>
       </div>
-      {/* «Обновить» прячем ТОЛЬКО у инсайт-виджетов при OFF (фоновая генерация выключена → кнопка была
-          бы no-op). daily_brief гейтится не «Инсайтами», а наличием chat — его кнопка остаётся. */}
-      {(insightsOn ||
-        (widgetKey !== 'open_questions' && widgetKey !== 'context_drift')) && (
+      {/* «Обновить» прячем по гейту виджета (кнопка иначе была бы no-op/ошибкой): инсайт-виджеты
+          (open_questions/context_drift) — при OFF тоггла «Инсайты»; daily_brief — когда НЕ задана
+          основная chat-модель `ai.chat` (P1-10: без неё хендлер не зарегистрирован → refresh = ошибка). */}
+      {(widgetKey === 'daily_brief'
+        ? briefReady
+        : insightsOn ||
+          (widgetKey !== 'open_questions' && widgetKey !== 'context_drift')) && (
         <button
           type="button"
           className={styles.cardAct}
@@ -405,7 +416,11 @@ export function HomeView() {
             {brief?.content ? (
               <div className={styles.briefText}>{renderBold(brief.content)}</div>
             ) : (
-              <div className={styles.cardEmpty}>{t('home.briefEmpty')}</div>
+              // P1-10: без `ai.chat` кнопки «Обновить» нет → подсказка «нажмите обновить» вводила бы в
+              // заблуждение. Показываем честную причину (настройте chat-модель) вместо мёртвой инструкции.
+              <div className={styles.cardEmpty}>
+                {t(briefReady ? 'home.briefEmpty' : 'home.briefNoChat')}
+              </div>
             )}
             {thinking('daily_brief')}
           </div>
@@ -670,8 +685,23 @@ export function HomeView() {
                 <Clock size={15} aria-hidden />
                 {t('home.staleTitle')}
               </div>
-              {generating.stale_radar && (
+              {generating.stale_radar ? (
                 <span className={styles.staleEnriching}>{t('home.staleEnriching')}</span>
+              ) : (
+                // P1-9: ручной триггер LLM-обогащения stale radar (слой 2 — причина/действие/подсказка).
+                // Бэк `refresh_stale_radar` реален, но был НЕДОСТИЖИМ из UI. Требует chat + тоггл «Инсайты»
+                // ON (иначе бэк no-op) → кнопку показываем лишь при обоих, чтобы не было мёртвого клика.
+                insightsOn &&
+                ai?.chat && (
+                  <button
+                    type="button"
+                    className={styles.cardAct}
+                    onClick={() => void refreshWidget('stale_radar')}
+                  >
+                    <RefreshCw aria-hidden />
+                    {t('home.refresh')}
+                  </button>
+                )
               )}
             </div>
             <div className={styles.hList}>

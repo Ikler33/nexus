@@ -248,6 +248,43 @@ describe('ui-стор: REVEAL-ACTIVE-FILE', () => {
   });
 });
 
+describe('ui-стор: AGENT-SEED (Castor «Быстрый старт», P1-11)', () => {
+  afterEach(() => useUIStore.setState({ pendingAgentSeed: null, agentOpen: false }));
+
+  it('openAgent(seed) открывает агента и кладёт промпт; повтор того же текста растит seq', () => {
+    useUIStore.setState({ pendingAgentSeed: null, agentOpen: false, homeOpen: true });
+    useUIStore.getState().openAgent('разбери входящие');
+    const s = useUIStore.getState();
+    expect(s.agentOpen).toBe(true);
+    expect(s.homeOpen).toBe(false); // переход на main-вью гасит home (SWITCH_MAIN)
+    expect(s.pendingAgentSeed?.text).toBe('разбери входящие');
+    const seq1 = s.pendingAgentSeed!.seq;
+    // Повторный сид того же текста → seq растёт (AgentView перезапускает prefill).
+    useUIStore.getState().openAgent('разбери входящие');
+    expect(useUIStore.getState().pendingAgentSeed!.seq).toBe(seq1 + 1);
+  });
+
+  it('openAgent() без seed открывает агента, но НЕ трогает отложенный промпт (нет затирания)', () => {
+    useUIStore.setState({ pendingAgentSeed: { text: 'старый', seq: 5 }, agentOpen: false });
+    useUIStore.getState().openAgent();
+    expect(useUIStore.getState().agentOpen).toBe(true);
+    expect(useUIStore.getState().pendingAgentSeed).toEqual({ text: 'старый', seq: 5 });
+  });
+
+  it('openAgent с пустым/пробельным seed не ставит промпт (нет пустого prefill)', () => {
+    useUIStore.setState({ pendingAgentSeed: null, agentOpen: false });
+    useUIStore.getState().openAgent('   ');
+    expect(useUIStore.getState().agentOpen).toBe(true);
+    expect(useUIStore.getState().pendingAgentSeed).toBeNull();
+  });
+
+  it('consumeAgentSeed сбрасывает отложенный промпт', () => {
+    useUIStore.setState({ pendingAgentSeed: { text: 'x', seq: 1 } });
+    useUIStore.getState().consumeAgentSeed();
+    expect(useUIStore.getState().pendingAgentSeed).toBeNull();
+  });
+});
+
 describe('ui-стор: FILE-RENAME-COMMAND', () => {
   it('requestRename ставит цель, показывает сайдбар, выходит из reading; seq растёт при повторе', () => {
     useUIStore.setState({ renameTarget: null, sidebarOpen: false, reading: true });

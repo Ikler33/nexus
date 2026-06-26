@@ -12,10 +12,13 @@ import styles from './AiPanel.module.css';
 export function AgentTab() {
   const { t } = useTranslation();
   const openAgent = useUIStore((s) => s.openAgent);
-  const acts: { icon: typeof Inbox; label: string }[] = [
-    { icon: Inbox, label: t('chat.castor.act1') },
-    { icon: Link2, label: t('chat.castor.act2') },
-    { icon: Hash, label: t('chat.castor.act3') },
+  // P1-11: каждый пункт «Быстрого старта» сидит СВОЙ промпт в композер агента (раньше все 3 звали
+  // голый openAgent() → открывали агента, но поле оставалось пустым — 3 пункта неотличимы). Сид —
+  // prefill (НЕ авто-отправка): пользователь правит и запускает сам (см. AgentView seed-consume).
+  const acts: { icon: typeof Inbox; label: string; seed: string }[] = [
+    { icon: Inbox, label: t('chat.castor.act1'), seed: t('chat.castor.seed1') },
+    { icon: Link2, label: t('chat.castor.act2'), seed: t('chat.castor.seed2') },
+    { icon: Hash, label: t('chat.castor.act3'), seed: t('chat.castor.seed3') },
   ];
   return (
     <div className={styles.agentLaunch}>
@@ -32,8 +35,13 @@ export function AgentTab() {
           <span>{t('chat.castor.open')}</span>
         </button>
         <div className={styles.agentActsLabel}>{t('chat.castor.quickStart')}</div>
-        {acts.map(({ icon: Ico, label }) => (
-          <button key={label} type="button" className={styles.agentAct} onClick={() => openAgent()}>
+        {acts.map(({ icon: Ico, label, seed }) => (
+          <button
+            key={label}
+            type="button"
+            className={styles.agentAct}
+            onClick={() => openAgent(seed)}
+          >
             <Ico size={15} aria-hidden />
             <span>{label}</span>
             <ArrowUp size={13} aria-hidden className={styles.agentActGo} />

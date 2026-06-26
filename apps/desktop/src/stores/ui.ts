@@ -138,8 +138,16 @@ interface UIState {
   openToday: () => void;
   closeAgent: () => void;
   toggleAgent: () => void;
-  /** Открыть «Агент» (activity-bar: клик = переход на вью, гасит home/news/board/today/chat). */
-  openAgent: () => void;
+  /** Открыть «Агент» (activity-bar: клик = переход на вью, гасит home/news/board/today/chat). При
+   *  передаче `seed` — предзаполнить композер агента этим текстом (Castor «Быстрый старт»: каждый
+   *  пункт сидит свой промпт, НЕ авто-отправляя — пользователь жмёт «Запустить» сам). */
+  openAgent: (seed?: string) => void;
+  /** AGENT-SEED: «отложенный» промпт для композера агента — `openAgent(seed)` кладёт сюда, AgentView
+   *  читает в поле ввода и сбрасывает (consumeAgentSeed). `seq` (как revealTarget) — чтобы ПОВТОРНЫЙ
+   *  сид того же текста перезаписывал поле (иначе один и тот же промпт второй раз не «пролил» бы). */
+  pendingAgentSeed: { text: string; seq: number } | null;
+  /** Сбросить отложенный промпт агента (AgentView вызывает после prefill композера). */
+  consumeAgentSeed: () => void;
   toggleSidebar: () => void;
   closeHome: () => void;
   toggleHome: () => void;
@@ -418,10 +426,21 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('agent:toggle', s.agentOpen ? 'close' : 'open');
       return { ...SWITCH_MAIN, agentOpen: !s.agentOpen };
     }),
-  openAgent: () => {
-    logUi('agent:open');
-    set({ ...SWITCH_MAIN, agentOpen: true });
+  openAgent: (seed?: string) => {
+    logUi('agent:open', seed ? 'seeded' : '');
+    // Сид пишем как { text, seq } (как revealTarget): повтор того же промпта растит seq → AgentView
+    // перезапускает prefill. Пустой/пробельный seed (или без него) — поле не трогаем.
+    set((s) => ({
+      ...SWITCH_MAIN,
+      agentOpen: true,
+      pendingAgentSeed:
+        seed && seed.trim()
+          ? { text: seed, seq: (s.pendingAgentSeed?.seq ?? 0) + 1 }
+          : s.pendingAgentSeed,
+    }));
   },
+  pendingAgentSeed: null,
+  consumeAgentSeed: () => set({ pendingAgentSeed: null }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   closeHome: () => set({ homeOpen: false }),
   toggleHome: () =>
