@@ -1,0 +1,96 @@
+/* Hermes-8 S7 «Редакция» — ховер-превью `.popcard` (README §7). Карточка fixed поверх тела заметки:
+   превью целевой вики-заметки (РЕАЛЬНЫЕ данные) или текст сноски. Preview-only — `pointer-events:none`
+   (не ловит ховер-трапы, не перехватывает клик по ссылке). Токены: --paper→--color-bg-elevated,
+   --border-strong→--color-border-strong, тень --pop-shadow→существующий --elevation-2 (popover-shadow,
+   определён один раз в :root → одинаков во всех 13 темах). */
+.popcard {
+  position: fixed;
+  z-index: 60;
+  width: 300px;
+  box-sizing: border-box;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 11px;
+  box-shadow: var(--elevation-2);
+  padding: 14px 16px;
+  pointer-events: none;
+  /* Кап высоты: длинная сноска/эксцерпт не переполняют вьюпорт (ревью). overflow:hidden — без скролла
+     (preview-only, не интерактивно); текст уже обрезан по словам в footnoteText/bodyExcerpt. */
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  /* Появление: opacity 0→1 + translateY 4px→0, .15s. Стартовое состояние — до класса .show. */
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.15s var(--ease-standard),
+    transform 0.15s var(--ease-standard);
+}
+.popcard.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Вариант сноски: уже (280), тело на UI-шрифте (README §7). */
+.fnote {
+  width: 280px;
+}
+
+/* Eyebrow — mono 9px ember, uppercase/letter-spacing как kicker (S2). Тип заметки / «Сноска». */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  margin-bottom: 6px;
+}
+
+/* Заголовок — Cormorant 19px (display). Имя/заголовок целевой заметки. */
+.title {
+  font-family: var(--font-headline);
+  font-weight: 600;
+  font-size: 19px;
+  line-height: 1.15;
+  letter-spacing: -0.005em;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+
+/* Тело — Source Serif 13.5px, тело заметки (--color-note-ink). Эксцерпт / текст сноски. */
+.body {
+  font-family: var(--font-note);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--color-note-ink);
+}
+/* Сноска: тело на UI-шрифте (README §7 «.fnote body на --ui»). */
+.fnote .body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+/* Честное «не найдено» — приглушённый тон (muted), без фейк-превью. */
+.body.muted {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* Мета — mono 9.5px faint. ТОЛЬКО реальные данные (статус · N ссылок); пусто → слот не рендерится. */
+.meta {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+  margin-top: 9px;
+}
+
+/* Уважаем reduced-motion: без translate/transition (карточка появляется сразу). */
+@media (prefers-reduced-motion: reduce) {
+  .popcard {
+    transition: none;
+    transform: none;
+  }
+  .popcard.show {
+    transform: none;
+  }
+}

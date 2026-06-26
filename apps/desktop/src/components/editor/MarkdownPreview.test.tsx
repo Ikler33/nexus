@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../../lib/tauri-api';
@@ -876,5 +876,255 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     );
     fireEvent.click(screen.getByRole('checkbox'));
     expect(onToggleTask).toHaveBeenCalledWith(3); // строка ПОЛНОГО исходника, не сдвинута погашением H1
+  });
+});
+
+// Hermes-8 S7 — ховер-превью `.popcard`. Fake timers (220мс вики / 120мс сноска) + мок резолвера/readFile.
+// jsdom: getBoundingClientRect → нули, проверяем показ/контент/класс/тайминг, не пиксели.
+describe('MarkdownPreview — S7 ховер-поповеры', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const card = (c: HTMLElement) => c.querySelector('[data-popcard]');
+  // Прокрутка таймеров + промисов под act (state-апдейт popcard коммитится синхронно к ассерту).
+  const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+
+  it('вики: через 220мс показывает popcard с РЕАЛЬНЫМ эксцерптом/типом из заметки', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue(
+      '---\ntype: idea\nstatus: seed\n---\n# Цель заметки\n\nРеальное тело целевой заметки.',
+    );
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([]);
+    const { container } = render(<MarkdownPreview source={'см. [[Цель]]'} onOpenLink={() => {}} />);
+    const link = screen.getByText('Цель');
+
+    fireEvent.mouseEnter(link);
+    expect(card(container)).toBeNull(); // до 220мс — нет карточки
+    await advance(230);
+    const pc = card(container);
+    expect(pc).not.toBeNull();
+    expect(pc?.getAttribute('data-popcard')).toBe('wiki');
+    expect(pc?.textContent).toContain('Реальное тело целевой заметки'); // реальный эксцерпт
+    expect(pc?.textContent).toContain('Цель заметки'); // заголовок из H1
+    expect(pc?.textContent).toContain('IDEA'); // eyebrow = реальный type (uppercase)
+  });
+
+  it('вики: mouseleave ДО 220мс → popcard НЕ показывается', async () => {
+    vi.useFakeTimers();
+    const resolve = vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    const { container } = render(<MarkdownPreview source={'см. [[Цель]]'} onOpenLink={() => {}} />);
+    const link = screen.getByText('Цель');
+
+    fireEvent.mouseEnter(link);
+    await advance(100);
+    fireEvent.mouseLeave(link); // ушли до срабатывания таймера
+    await advance(300);
+    expect(card(container)).toBeNull();
+    expect(resolve).not.toHaveBeenCalled(); // таймер погашен — резолва даже не было
+  });
+
+  it('вики: уход во время async-чтения → popcard НЕ показывается (request-токен от гонок)', async () => {
+    vi.useFakeTimers();
+    // resolveNote зависает достаточно, чтобы mouseleave успел инвалидировать токен.
+    let release: (p: string) => void = () => {};
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockImplementation(
+      () => new Promise<string>((res) => (release = res)),
+    );
+    const readFile = vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('тело');
+    const { container } = render(<MarkdownPreview source={'см. [[Цель]]'} onOpenLink={() => {}} />);
+    const link = screen.getByText('Цель');
+
+    fireEvent.mouseEnter(link);
+    await advance(230); // таймер сработал, ушли в resolveNote
+    fireEvent.mouseLeave(link); // инвалидируем токен ДО ответа резолва
+    await act(async () => {
+      release('Notes/Цель.md'); // резолв ответил поздно — должен быть отброшен
+      await Promise.resolve();
+    });
+    expect(card(container)).toBeNull();
+    expect(readFile).not.toHaveBeenCalled(); // токен устарел → дальше readFile не пошли
+  });
+
+  it('вики: битая ссылка (резолв вернул null) → честное «не найдено», НЕ фейк-превью', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue(null); // заметки нет
+    const readFile = vi.spyOn(tauriApi.vault, 'readFile');
+    const { container } = render(<MarkdownPreview source={'см. [[Нет такой]]'} onOpenLink={() => {}} />);
+
+    fireEvent.mouseEnter(screen.getByText('Нет такой'));
+    await advance(230);
+    const pc = card(container);
+    expect(pc).not.toBeNull();
+    expect(pc?.textContent).toContain('Заметка не найдена'); // честное состояние (ru-локаль)
+    expect(readFile).not.toHaveBeenCalled(); // не читаем несуществующий файл
+  });
+
+  it('вики .pc-meta: статус + N ссылок — ТОЛЬКО из реальных источников', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('---\nstatus: growing\n---\nтело');
+    // Реальные беклинки (2 шт.) → счётчик «2 ссылки» из НАСТОЯЩЕГО источника, не выдуман.
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([
+      { sourcePath: 'a.md', sourceTitle: null, context: null, lineNumber: null },
+      { sourcePath: 'b.md', sourceTitle: null, context: null, lineNumber: null },
+    ]);
+    const { container } = render(<MarkdownPreview source={'[[Цель]]'} onOpenLink={() => {}} />);
+
+    fireEvent.mouseEnter(screen.getByText('Цель'));
+    await advance(230);
+    const pc = card(container);
+    expect(pc?.textContent).toContain('growing'); // реальный статус
+    expect(pc?.textContent).toMatch(/2 ссылк/); // реальный счётчик беклинков
+  });
+
+  it('вики .pc-meta: отсутствует, если нет реального статуса/счётчика (анти-фейк)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('просто тело без frontmatter');
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([]); // 0 беклинков
+    const { container } = render(<MarkdownPreview source={'[[Цель]]'} onOpenLink={() => {}} />);
+
+    fireEvent.mouseEnter(screen.getByText('Цель'));
+    await advance(230);
+    const pc = card(container);
+    expect(pc).not.toBeNull();
+    expect(pc?.querySelector('[class*=meta]')).toBeNull(); // нет реальных данных → слот опущен
+  });
+
+  it('вики: клик всё ещё зовёт onOpenLink (живая навигация цела)', async () => {
+    vi.useFakeTimers();
+    const onOpen = vi.fn();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('тело');
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([]);
+    const { container } = render(<MarkdownPreview source={'[[Цель]]'} onOpenLink={onOpen} />);
+
+    fireEvent.mouseEnter(screen.getByText('Цель'));
+    await advance(230);
+    // Ре-запрос триггера ПОСЛЕ показа карточки (ре-рендер react-markdown мог переcоздать узел ссылки).
+    const link = container.querySelector('[data-note]') as HTMLElement;
+    await act(async () => void fireEvent.click(link)); // hidePopcard() → setState; зовёт onOpenLink
+    expect(onOpen).toHaveBeenCalledWith('Цель'); // навигация не сломана ховером
+  });
+
+  it('сноска: через 120мс показывает popcard.fnote с текстом из <li id=…fn-N>', async () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <MarkdownPreview source={'текст[^1]\n\n[^1]: реальный текст сноски'} onOpenLink={() => {}} />,
+    );
+    const ref = container.querySelector('sup a') as HTMLElement;
+    expect(ref).not.toBeNull();
+
+    fireEvent.mouseEnter(ref);
+    expect(card(container)).toBeNull(); // до 120мс — нет
+    await advance(130);
+    const pc = card(container);
+    expect(pc).not.toBeNull();
+    expect(pc?.getAttribute('data-popcard')).toBe('fnote');
+    expect(pc?.textContent).toContain('реальный текст сноски'); // текст из <li> в DOM
+    expect(pc?.textContent).not.toContain('↩'); // backref-стрелка срезана
+  });
+
+  it('сноска: mouseleave скрывает popcard', async () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <MarkdownPreview source={'текст[^1]\n\n[^1]: текст'} onOpenLink={() => {}} />,
+    );
+    fireEvent.mouseEnter(container.querySelector('sup a') as HTMLElement);
+    await advance(130);
+    expect(card(container)).not.toBeNull();
+    // Ре-запрос ПОСЛЕ показа (ре-рендер мог переcоздать узел) → mouseleave реально на живом триггере.
+    const ref = container.querySelector('sup a') as HTMLElement;
+    await act(async () => void fireEvent.mouseLeave(ref)); // hidePopcard() → setState
+    expect(card(container)).toBeNull();
+  });
+
+  it('смена notePath скрывает stale-карточку прежней заметки', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('тело');
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([]);
+    const { container, rerender } = render(
+      <MarkdownPreview source={'[[Цель]]'} notePath="A.md" onOpenLink={() => {}} />,
+    );
+    fireEvent.mouseEnter(screen.getByText('Цель'));
+    await advance(230);
+    expect(card(container)).not.toBeNull();
+    rerender(<MarkdownPreview source={'другое'} notePath="B.md" onOpenLink={() => {}} />);
+    expect(card(container)).toBeNull(); // карточка прежней заметки убрана
+  });
+
+  // FIX 3 (MINOR): живое редактирование (body сменился, тот же notePath) → карточка скрывается
+  // (её rect привязан к прежнему DOM → stale-rect).
+  it('смена body (живое редактирование) скрывает stale-карточку', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Цель.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('тело');
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([]);
+    const { container, rerender } = render(
+      <MarkdownPreview source={'[[Цель]] один'} notePath="A.md" onOpenLink={() => {}} />,
+    );
+    fireEvent.mouseEnter(screen.getByText('Цель'));
+    await advance(230);
+    expect(card(container)).not.toBeNull();
+    // Та же заметка (notePath A.md), но source изменился — body другой → карточка должна скрыться.
+    rerender(<MarkdownPreview source={'[[Цель]] два три'} notePath="A.md" onOpenLink={() => {}} />);
+    expect(card(container)).toBeNull();
+  });
+
+  // FIX 4 (MINOR): заметка НАЙДЕНА но пустой эксцерпт → «Пустая заметка» (НЕ «не найдена»), title/meta целы.
+  it('вики: найденная-но-пустая заметка → «Пустая заметка», НЕ «не найдена» (title/meta сохранены)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Пустая.md');
+    // Только frontmatter + ведущий H1 → эксцерпт тела пуст.
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('---\nstatus: seed\n---\n# Только заголовок\n');
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([
+      { sourcePath: 'a.md', sourceTitle: null, context: null, lineNumber: null },
+    ]);
+    const { container } = render(<MarkdownPreview source={'[[Пустая]]'} onOpenLink={() => {}} />);
+
+    fireEvent.mouseEnter(screen.getByText('Пустая'));
+    await advance(230);
+    const pc = card(container);
+    expect(pc).not.toBeNull();
+    expect(pc?.textContent).toContain('Пустая заметка'); // честное «пустая», а не «не найдена»
+    expect(pc?.textContent).not.toContain('не найдена'); // существующая заметка — не лжём «не найдена»
+    expect(pc?.textContent).toContain('Только заголовок'); // title из H1 — РЕАЛЬНЫЙ, сохранён
+    expect(pc?.textContent).toContain('seed'); // meta-статус — реальный, сохранён
+  });
+
+  // FIX 1 (MAJOR): сноска внешнего документа при наличии эмбеда со СВОЕЙ [^1] → показывает текст
+  // ВНЕШНЕЙ сноски, не эмбеда (querySelector не должен спускаться в чужой .preview эмбеда).
+  it('сноска: при эмбеде со своей [^1] показывает ВНЕШНЮЮ сноску, не сноску эмбеда', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Emb.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue(
+      'тело эмбеда[^1]\n\n[^1]: ВНУТРЕННЯЯ сноска эмбеда',
+    );
+    const { container } = render(
+      <MarkdownPreview
+        notePath="Outer.md"
+        source={'![[Emb]]\n\nвнешний текст[^1]\n\n[^1]: ВНЕШНЯЯ сноска документа'}
+        onOpenLink={() => {}}
+      />,
+    );
+    // Дать эмбеду резолвиться/прочитаться (его inner-preview с user-content-fn-1 появляется в DOM).
+    await advance(0);
+    const refs = Array.from(container.querySelectorAll('sup a')) as HTMLElement[];
+    expect(refs.length).toBe(2); // ref эмбеда + ref внешнего документа
+    const rootPreview = container.querySelector('[class*="preview"]');
+    // Внешний footnote-ref — тот, чья ВЛАДЕЮЩАЯ .preview === корневая (не эмбед).
+    const outerRef = refs.find((r) => r.closest('[class*="preview"]') === rootPreview) as HTMLElement;
+    expect(outerRef).toBeTruthy();
+
+    fireEvent.mouseEnter(outerRef);
+    await advance(130);
+    const pc = card(container);
+    expect(pc).not.toBeNull();
+    expect(pc?.textContent).toContain('ВНЕШНЯЯ сноска документа'); // правильная — внешняя
+    expect(pc?.textContent).not.toContain('ВНУТРЕННЯЯ'); // НЕ сноска эмбеда (ядро FIX 1)
   });
 });

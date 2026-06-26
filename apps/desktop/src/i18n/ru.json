@@ -516,6 +516,14 @@
     "collapseSection": "Свернуть секцию",
     "expandSection": "Развернуть секцию"
   },
+  "popcard": {
+    "notFound": "Заметка не найдена",
+    "empty": "Пустая заметка",
+    "footnote": "Сноска",
+    "links_one": "{{count, number}} ссылка",
+    "links_few": "{{count, number}} ссылки",
+    "links_many": "{{count, number}} ссылок"
+  },
   "backlinks": {
     "title": "Беклинки",
     "loading": "Загрузка…",

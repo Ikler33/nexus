@@ -508,6 +508,13 @@
     "collapseSection": "Collapse section",
     "expandSection": "Expand section"
   },
+  "popcard": {
+    "notFound": "Note not found",
+    "empty": "Empty note",
+    "footnote": "Footnote",
+    "links_one": "{{count, number}} link",
+    "links_other": "{{count, number}} links"
+  },
   "backlinks": {
     "title": "Backlinks",
     "loading": "Loading…",
