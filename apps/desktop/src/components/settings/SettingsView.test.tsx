@@ -451,19 +451,49 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     expect(screen.getByRole('button', { name: 'English' })).toBeInTheDocument();
   });
 
+  // Хелпер: сегмент Вкл/Выкл строки по подписи (в «Редакторе» теперь несколько строк — скоупим
+  // поиск кнопок внутри `<section>` нужной строки, иначе getByRole матчит обе строки).
+  function segOf(labelRe: RegExp): { off: HTMLElement; on: HTMLElement } {
+    const label = screen.getByText(labelRe);
+    const section = label.closest('section');
+    if (!section) throw new Error('row section not found');
+    const scope = within(section as HTMLElement);
+    return {
+      off: scope.getByRole('button', { name: /^выкл$|^off$/i }),
+      on: scope.getByRole('button', { name: /^вкл$|^on$/i }),
+    };
+  }
+
   it('Editor (слайс 3): тогл читаемой ширины меняет prefs-стор и CSS-переменную', () => {
     usePrefsStore.getState().setReadableLineWidth(true); // нормализуем старт
     useUIStore.setState({ settingsSection: 'editor' });
     render(<SettingsView />);
     expect(usePrefsStore.getState().readableLineWidth).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: /^выкл$|^off$/i }));
+    const seg = segOf(/читаемая ширина|readable line/i);
+    fireEvent.click(seg.off);
     expect(usePrefsStore.getState().readableLineWidth).toBe(false);
     expect(document.documentElement.style.getPropertyValue('--editor-max-width')).toBe('none');
 
-    fireEvent.click(screen.getByRole('button', { name: /^вкл$|^on$/i }));
+    fireEvent.click(seg.on);
     expect(usePrefsStore.getState().readableLineWidth).toBe(true);
     expect(document.documentElement.style.getPropertyValue('--editor-max-width')).toBe('44rem');
+  });
+
+  it('Editor: строка «Чистые ссылки» (Live Preview) рендерится и флипает prefs-стор', () => {
+    usePrefsStore.getState().setWikilinkLivePreview(true); // нормализуем старт
+    useUIStore.setState({ settingsSection: 'editor' });
+    render(<SettingsView />);
+    // Строка тоггла присутствует.
+    expect(screen.getByText(/чистые ссылки|clean links/i)).toBeInTheDocument();
+    expect(usePrefsStore.getState().wikilinkLivePreview).toBe(true);
+
+    const seg = segOf(/чистые ссылки|clean links/i);
+    fireEvent.click(seg.off);
+    expect(usePrefsStore.getState().wikilinkLivePreview).toBe(false);
+
+    fireEvent.click(seg.on);
+    expect(usePrefsStore.getState().wikilinkLivePreview).toBe(true);
   });
 
   it('Hotkeys (слайс 4): список команд, захват комбинации и сброс', () => {

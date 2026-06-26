@@ -141,7 +141,9 @@
     },
     "ed": {
       "readableWidth": "Readable line length",
-      "readableWidthDesc": "Caps text width for comfortable reading (like Obsidian)."
+      "readableWidthDesc": "Caps text width for comfortable reading (like Obsidian).",
+      "linkLivePreview": "Clean links (Live Preview)",
+      "linkLivePreviewDesc": "Hide `[[ ]]` and show the link name in the editor; the cursor reveals the full form."
     },
     "hk": {
       "intro": "Reassign command shortcuts. Changes are saved locally.",

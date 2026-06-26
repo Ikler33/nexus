@@ -32,6 +32,73 @@ export function normalizeTarget(inner: string): string {
   return inner.split('|')[0].split('#')[0].trim();
 }
 
+/**
+ * Диапазон видимого ЛЕЙБЛА внутри `inner` (без обрамляющих `[[`/`]]`): alias после `|`, иначе target
+ * без `#heading`. Возвращает смещения [start, end) ОТНОСИТЕЛЬНО `inner` (НЕ тримит — границы по сырому
+ * тексту, чтобы скрытые префикс/суффикс точно стыковались с лейблом, без «съеденных» пробелов).
+ * Зеркалит `remarkNexus.wikilinkLabel` (preview-режим) по смыслу. Если лейбл пуст (напр. `[[|x]]`
+ * без target ИЛИ `[[#H]]`) — фолбэк на весь `inner` (ничего не прячем внутри, только скобки).
+ */
+export function wikilinkLabelRange(inner: string): { start: number; end: number } {
+  const bar = inner.indexOf('|');
+  if (bar >= 0) {
+    // Алиас: видимое — всё после `|` (как есть, до конца inner).
+    const start = bar + 1;
+    if (start < inner.length) return { start, end: inner.length };
+    return { start: 0, end: inner.length }; // пустой алиас → не прячем внутренности
+  }
+  // Без алиаса: видимое — target до `#heading`.
+  const hash = inner.indexOf('#');
+  if (hash > 0) return { start: 0, end: hash };
+  if (hash === 0) return { start: 0, end: inner.length }; // только `#H` без target → не прячем
+  return { start: 0, end: inner.length };
+}
+
+/** Скрываемый диапазон синтаксиса live-preview (для `Decoration.replace`). */
+export interface LpHiddenRange {
+  from: number;
+  to: number;
+}
+
+/**
+ * Live-preview вики-ссылок (ЧИСТАЯ, тестируемая): по тексту и выделению возвращает диапазоны
+ * СИНТАКСИСА для скрытия (`[[`, префикс `Target|`/суффикс `#heading`, `]]`), оставляя видимым лейбл.
+ *
+ * - Эмбеды `![[...]]` ПРОПУСКАЮТСЯ (не скрываем — `m[1] === '!'`).
+ * - РАСКРЫТИЕ под курсором: если [selFrom, selTo] пересекает диапазон ссылки [matchStart, matchEnd]
+ *   (включая края) — ничего не прячем (видно сырой `[[inner]]`, редактируемо; при наборе нового `[[…`
+ *   курсор внутри → не печатаешь вслепую).
+ * - `offset` — абсолютное смещение `text` в документе (для построения по `visibleRanges` кусками).
+ */
+export function buildLivePreviewRanges(
+  text: string,
+  selFrom: number,
+  selTo: number,
+  offset = 0,
+): LpHiddenRange[] {
+  const out: LpHiddenRange[] = [];
+  for (const m of text.matchAll(WIKILINK_RE)) {
+    if (m[1] === '!') continue; // эмбед — оставляем как есть
+    const inner = m[2];
+    const matchStart = offset + m.index!;
+    const matchEnd = matchStart + m[0].length;
+    // Раскрытие под курсором: выделение пересекает [matchStart, matchEnd] по краям ВКЛЮЧИТЕЛЬНО.
+    // Края включены НАМЕРЕННО: курсор сразу после `]]` (только что набрал/закрыл ссылку) или прямо
+    // перед `[[` держит её раскрытой → не печатаешь вслепую. Побочный косметический эффект: на стыке
+    // двух смежных ссылок `[[a]][[b]]` курсор в шве (между `]]` и `[[`) кратко раскрывает ОБЕ —
+    // безобидно, само схлопывается при движении курсора (UX как в Obsidian live-preview).
+    if (selFrom <= matchEnd && selTo >= matchStart) continue;
+    const innerStart = matchStart + 2; // после `[[`
+    const { start, end } = wikilinkLabelRange(inner);
+    const labelFrom = innerStart + start;
+    const labelTo = innerStart + end;
+    // Скрываем: открывающие `[[` + префикс до лейбла; суффикс после лейбла + закрывающие `]]`.
+    if (labelFrom > matchStart) out.push({ from: matchStart, to: labelFrom }); // `[[` (+`Target|`)
+    if (matchEnd > labelTo) out.push({ from: labelTo, to: matchEnd }); // (`#heading`+) `]]`
+  }
+  return out;
+}
+
 interface DecoRange {
   from: number;
   to: number;
@@ -80,6 +147,49 @@ const decorationPlugin = ViewPlugin.fromClass(
     }
   },
   { decorations: (v) => v.decorations },
+);
+
+/** Скрытый replace-декоратор синтаксиса вики-ссылки (атомарный — курсор перепрыгивает скрытое). */
+const lpHide = Decoration.replace({});
+
+/** Строит набор скрывающих декораций live-preview по видимой области + текущему выделению. */
+function collectLivePreview(view: EditorView): DecorationSet {
+  const { from: selFrom, to: selTo } = view.state.selection.main;
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const { from, to } of view.visibleRanges) {
+    const text = view.state.sliceDoc(from, to);
+    for (const r of buildLivePreviewRanges(text, selFrom, selTo, from)) {
+      builder.add(r.from, r.to, lpHide);
+    }
+  }
+  return builder.finish();
+}
+
+/**
+ * Live-preview вики-ссылок (СУТЬ, Obsidian-style): скрывает `[[ ]]`-скобки/`Target|`-префикс/`#heading`-
+ * суффикс через `Decoration.replace`, оставляя видимым только лейбл; раскрывает полный синтаксис под
+ * курсором (обновляется на `docChanged || viewportChanged || selectionSet`). Это ДИСПЛЕЙ-декорация —
+ * исходный текст `[[Файл]]` НЕ меняется. `provide` отдаёт скрытые диапазоны как АТОМАРНЫЕ → курсор
+ * корректно перепрыгивает скрытое (не «застревает» внутри). Включается под Compartment (Editor.tsx).
+ */
+export const wikilinkLivePreview: Extension = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = collectLivePreview(view);
+    }
+    update(u: ViewUpdate) {
+      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        this.decorations = collectLivePreview(u.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+    // Атомарность: курсор/выделение перепрыгивает скрытый синтаксис как единый блок (UX live-preview).
+    provide: (plugin) =>
+      EditorView.atomicRanges.of((view) => view.plugin(plugin)?.decorations ?? Decoration.none),
+  },
 );
 
 /** Клик по `[[wikilink]]` → навигация (через `onOpenLink`). */
