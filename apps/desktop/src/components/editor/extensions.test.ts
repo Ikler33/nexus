@@ -1,8 +1,9 @@
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildLivePreviewRanges,
+  nexusExtensions,
   normalizeTarget,
   wikilinkLabelRange,
   wikilinkLivePreview,
@@ -187,5 +188,67 @@ describe('wikilinkLivePreview (интеграция в EditorView)', () => {
       });
     }
     expect(found).toEqual({ from: 3, to: 5 });
+  });
+});
+
+// РЕГРЕССИЯ (репорт владельца): LP в source-режиме РЕАЛЬНОГО app монтируется НЕ изолированно, а вместе
+// со ВСЕМ набором `nexusExtensions` (там `decorationPlugin` ставит `Decoration.mark .cm-wikilink` поверх
+// ВСЕГО `[[…]]`, а LP — атомарный `Decoration.replace` на скобках). Прежние интеграционные тесты выше
+// монтировали ТОЛЬКО `[wikilinkLivePreview]` → не ловили бы конфликт mark+replace, пустую `[[ ]]`
+// (zero-length-replace → краш RangeSetBuilder → весь плагин падает → скобки видны) и реальные daily-строки.
+// Подтверждено идентично в реальном WebKit (WKWebView, движок Tauri).
+describe('wikilinkLivePreview в ПОЛНОМ наборе nexusExtensions (mark + replace, реальный app)', () => {
+  const views: EditorView[] = [];
+  function mountFull(doc: string, anchor: number): EditorView {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const lp = new Compartment();
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: { anchor },
+        extensions: [
+          ...nexusExtensions({
+            fetchNotes: () => Promise.resolve([]),
+            fetchTags: () => Promise.resolve([]),
+            getOpenLink: () => undefined,
+          }),
+          lp.of(wikilinkLivePreview),
+        ],
+      }),
+      parent,
+    });
+    views.push(view);
+    return view;
+  }
+  afterEach(() => {
+    while (views.length) views.pop()!.destroy();
+  });
+
+  it('mark (.cm-wikilink) + LP-replace вместе: скобки скрыты, подсветка стоит', () => {
+    const view = mountFull('start [[Note]] end', 0); // курсор вне ссылки
+    // LP-replace всё равно прячет `[[`/`]]` несмотря на mark поверх всей ссылки (нет конфликта precedence).
+    expect(view.dom.textContent).toBe('start Note end');
+    // mark-подсветка `.cm-wikilink` присутствует (обе декорации сосуществуют).
+    expect(view.dom.querySelector('.cm-wikilink')).not.toBeNull();
+    expect(view.state.doc.toString()).toBe('start [[Note]] end'); // документ цел
+  });
+
+  it('реальные daily-строки: пустая `[[ ]]` + датированная — плагин не падает, скобки скрыты', () => {
+    // Строки 38/41 реальной Daily/2026-03-01.md: пустая `[[ ]]` (inner=пробел) и `[[2026-02-24 - 2026-03-02]]`.
+    const doc = '## Кандидаты\n- [[ ]]\n## Связи\n\n- [[2026-02-24 - 2026-03-02]]\nend';
+    let threw: unknown = null;
+    let view: EditorView | null = null;
+    try {
+      view = mountFull(doc, doc.length); // курсор в конце — вне всех ссылок
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeNull(); // пустая `[[ ]]` НЕ роняет RangeSetBuilder/плагин
+    // Скобки скрыты у обеих ссылок (документ цел): датированная превратилась в чистый лейбл.
+    expect(view!.dom.textContent).not.toContain('[[');
+    expect(view!.dom.textContent).not.toContain(']]');
+    expect(view!.dom.textContent).toContain('2026-02-24 - 2026-03-02');
+    expect(view!.state.doc.toString()).toBe(doc); // исходный текст НЕ изменён (дисплей-декорация)
   });
 });
