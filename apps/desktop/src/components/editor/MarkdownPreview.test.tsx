@@ -130,6 +130,170 @@ describe('MarkdownPreview (#20)', () => {
   });
 });
 
+describe('MarkdownPreview: S3 сворачиваемые H2-секции', () => {
+  it('группирует h2+контент в <section.sec data-sec-id>; лид до 1-го h2 — вне секций', () => {
+    const { container } = render(
+      <MarkdownPreview source={'интро-лид\n\n## Раздел\n\nтело секции'} onOpenLink={() => {}} />,
+    );
+    const sec = container.querySelector('section[data-sec-id="раздел"]');
+    expect(sec).not.toBeNull();
+    // h2 — первый ребёнок секции, тело внутри секции
+    expect(sec?.querySelector('h2')).not.toBeNull();
+    expect(sec?.textContent).toContain('тело секции');
+    // лид «интро-лид» — НЕ внутри секции (вне неё)
+    const lead = screen.getByText('интро-лид');
+    expect(lead.closest('section[data-sec-id]')).toBeNull();
+  });
+
+  it('HEADANCHOR-1: h2 в секции ОСТАЁТСЯ heading и СОХРАНЯЕТ id(slug) + data-outline-line', () => {
+    render(<MarkdownPreview source={'# One\n\nтекст\n\n## Раздел Два'} onOpenLink={() => {}} />);
+    // h2 — по-прежнему heading (role не перебит на button → Outline/scroll-spy/getByRole целы)
+    const h2 = screen.getByRole('heading', { name: /Раздел Два/, level: 2 });
+    expect(h2).toHaveAttribute('id', 'раздел-два');
+    expect(h2).toHaveAttribute('data-outline-line', '5'); // исходная строка h2
+  });
+
+  it('клик по h2 сворачивает секцию (класс collapsed + aria-expanded шеврона); повторный — разворачивает', () => {
+    const { container } = render(
+      <MarkdownPreview source={'## Заголовок\n\nтело'} onOpenLink={() => {}} />,
+    );
+    // re-query: react-markdown пересоздаёт DOM-узел секции на каждый ре-рендер (старая ссылка протухает)
+    const sec = () => container.querySelector('section[data-sec-id]') as HTMLElement;
+    const h2 = () => screen.getByRole('heading', { name: /Заголовок/, level: 2 });
+    // развёрнуто по умолчанию
+    expect(sec().className).not.toMatch(/collapsed/);
+    expect(screen.getByRole('button', { name: /секцию/ })).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(h2()); // клик по строке заголовка тогглит
+    expect(sec().className).toMatch(/collapsed/);
+    expect(screen.getByRole('button', { name: /секцию/ })).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(h2());
+    expect(sec().className).not.toMatch(/collapsed/);
+  });
+
+  it('шеврон-кнопка тогглит секцию без двойного срабатывания (stopPropagation)', () => {
+    const { container } = render(<MarkdownPreview source={'## H\n\nтело'} onOpenLink={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /секцию/ }));
+    // один тоггл → свёрнуто (не «свернул→развернул» из-за всплытия на h2)
+    expect((container.querySelector('section[data-sec-id]') as HTMLElement).className).toMatch(/collapsed/);
+  });
+
+  it('тоггл одной секции не сворачивает другую (ключ — стабильный data-sec-id)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'## Альфа\n\na\n\n## Бета\n\nb'} onOpenLink={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('heading', { name: /Альфа/, level: 2 }));
+    const secA = container.querySelector('section[data-sec-id="альфа"]') as HTMLElement;
+    const secB = container.querySelector('section[data-sec-id="бета"]') as HTMLElement;
+    expect(secA.className).toMatch(/collapsed/);
+    expect(secB.className).not.toMatch(/collapsed/); // соседняя не тронута
+  });
+
+  it('тело секции НЕ размонтируется при сворачивании (раскрытие из оглавления/scroll-spy)', () => {
+    render(<MarkdownPreview source={'## H\n\nскрываемое тело'} onOpenLink={() => {}} />);
+    fireEvent.click(screen.getByRole('heading', { name: /H/, level: 2 }));
+    // CSS прячет (max-height:0), но узел в DOM остаётся (jsdom не считает max-height)
+    expect(screen.getByText('скрываемое тело')).toBeInTheDocument();
+  });
+
+  it('документ без H2 не падает и не создаёт секций (плоский рендер)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'# Только H1\n\nпросто абзац\n\n- список'} onOpenLink={() => {}} />,
+    );
+    expect(container.querySelector('section[data-sec-id]')).toBeNull();
+    expect(screen.getByText('просто абзац')).toBeInTheDocument();
+    expect(screen.getByText('список')).toBeInTheDocument();
+  });
+
+  it('EDIT-5: таск внутри секции остаётся кликабельным с верной исходной строкой', () => {
+    const onToggle = vi.fn();
+    // строки: 1 `## Дела`, 2 пусто, 3 `- [ ] купить`
+    render(
+      <MarkdownPreview
+        source={'## Дела\n\n- [ ] купить'}
+        onOpenLink={() => {}}
+        onToggleTask={onToggle}
+      />,
+    );
+    const box = screen.getByRole('checkbox');
+    // чекбокс ВНУТРИ секции
+    expect(box.closest('section[data-sec-id]')).not.toBeNull();
+    expect(box).not.toBeDisabled();
+    fireEvent.click(box);
+    expect(onToggle).toHaveBeenCalledWith(3);
+  });
+
+  it('FOOTNOTE-1: блок сносок (`<section.footnotes>`) сохраняет класс (не наша секция → passthrough)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'текст[^1]\n\n[^1]: определение'} onOpenLink={() => {}} />,
+    );
+    // GFM-секция сносок проходит через override section, но сохраняет .footnotes-класс
+    expect(container.querySelector('.footnotes, [class*=footnotes]')).not.toBeNull();
+    expect(screen.getByText(/определение/)).toBeInTheDocument();
+  });
+
+  it('секции уживаются с masthead: ведущий H1 → шапка, H2 → секции', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Заголовок\n\nлид\n\n## Раздел\n\nтело'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    // шапка есть
+    expect(container.querySelector('[class*=docHead]')).not.toBeNull();
+    // H2 — секция; лид «лид» вне секции (до первого H2)
+    expect(container.querySelector('section[data-sec-id="раздел"]')).not.toBeNull();
+    expect(screen.getByText('лид').closest('section[data-sec-id]')).toBeNull();
+  });
+
+  // Регресс ревью (MINOR-2): сноски не должны прятаться при сворачивании ПОСЛЕДНЕЙ секции (GFM-блок
+  // footnotes выносится top-level, а не в тело секции).
+  it('FOOTNOTE-1: сноски ВИДНЫ при свёрнутой последней секции (footnotes вне секции)', () => {
+    const { container } = render(
+      <MarkdownPreview source={'## Раздел\n\nтекст[^1]\n\n[^1]: определение'} onOpenLink={() => {}} />,
+    );
+    // блок сносок — НЕ внутри секции
+    const fnBlock = container.querySelector('.footnotes, [class*=footnotes]');
+    expect(fnBlock).not.toBeNull();
+    expect(fnBlock?.closest('section[data-sec-id]')).toBeNull();
+    // свернём секцию — определение сноски остаётся в DOM и вне свёрнутого тела
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    const fnAfter = container.querySelector('.footnotes, [class*=footnotes]');
+    expect(fnAfter?.closest('section[data-sec-id]')).toBeNull();
+    expect(screen.getByText(/определение/)).toBeInTheDocument();
+  });
+
+  // Регресс ревью (MINOR-3): смена ЗАМЕТКИ (notePath) сбрасывает свёрнутость (нет утечки stale secId).
+  it('смена notePath сбрасывает свёрнутость секций (нет утечки stale secId)', () => {
+    const { container, rerender } = render(
+      <MarkdownPreview source={'## Раздел\n\nтело'} notePath="a.md" onOpenLink={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    expect((container.querySelector('section[data-sec-id="раздел"]') as HTMLElement).className).toMatch(
+      /collapsed/,
+    );
+    // другая заметка с СЕКЦИЕЙ ТОГО ЖЕ slug — должна открыться РАЗВЁРНУТОЙ (стейт сброшен по notePath)
+    rerender(<MarkdownPreview source={'## Раздел\n\nиное тело'} notePath="b.md" onOpenLink={() => {}} />);
+    expect((container.querySelector('section[data-sec-id="раздел"]') as HTMLElement).className).not.toMatch(
+      /collapsed/,
+    );
+  });
+
+  // Анти-регресс к MINOR-3-фиксу: правка source ТОЙ ЖЕ заметки (notePath не сменился) свёрнутость СОХРАНЯЕТ
+  // (иначе сворачивание терялось бы на каждое нажатие клавиши).
+  it('правка source без смены notePath НЕ сбрасывает свёрнутость', () => {
+    const { container, rerender } = render(
+      <MarkdownPreview source={'## Раздел\n\nтело'} notePath="a.md" onOpenLink={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    rerender(<MarkdownPreview source={'## Раздел\n\nтело правлено'} notePath="a.md" onOpenLink={() => {}} />);
+    expect((container.querySelector('section[data-sec-id="раздел"]') as HTMLElement).className).toMatch(
+      /collapsed/,
+    );
+  });
+});
+
 describe('MarkdownPreview: формулы (#4, MathML под строгим CSP)', () => {
   it('инлайн $$…$$ рендерится в <math>', () => {
     const { container } = render(<MarkdownPreview source={'энергия $$E=mc^2$$ тут'} onOpenLink={() => {}} />);

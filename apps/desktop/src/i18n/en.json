@@ -504,7 +504,9 @@
     "metaWords_one": "{{count}} word",
     "metaWords_other": "{{count}} words",
     "metaReading_one": "{{count}} min read",
-    "metaReading_other": "{{count}} min read"
+    "metaReading_other": "{{count}} min read",
+    "collapseSection": "Collapse section",
+    "expandSection": "Expand section"
   },
   "backlinks": {
     "title": "Backlinks",

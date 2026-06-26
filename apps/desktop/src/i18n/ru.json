@@ -512,7 +512,9 @@
     "metaWords_many": "{{count}} слов",
     "metaReading_one": "{{count}} мин чтения",
     "metaReading_few": "{{count}} мин чтения",
-    "metaReading_many": "{{count}} мин чтения"
+    "metaReading_many": "{{count}} мин чтения",
+    "collapseSection": "Свернуть секцию",
+    "expandSection": "Развернуть секцию"
   },
   "backlinks": {
     "title": "Беклинки",
