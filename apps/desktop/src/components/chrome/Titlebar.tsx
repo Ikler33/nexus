@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
 import { useThemeStore, type Theme } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
+import { formatCombo } from '../../lib/commands';
 import { BrandMark } from './BrandMark';
 import styles from './Titlebar.module.css';
 
@@ -44,7 +45,7 @@ function themeIcon(theme: Theme) {
 
 /**
  * Верхний titlebar по макету `app.jsx` (DP-13): бренд «лого + Orvin» (клик → Home),
- * центральная поисковая пилюля (⌘K), справа ТОЛЬКО AI-инсайты (sparkles▾) | divider |
+ * центральная поисковая пилюля (палитра команд, ⌘P/mod+p), справа ТОЛЬКО AI-инсайты (sparkles▾) | divider |
  * режим чтения | RU/EN | тема | panel-right (AI-панель). Граф/новости/sync/настройки
  * переехали в вертикальный ActivityBar; плагины и «Открыть vault» — команды палитры.
  */
@@ -106,7 +107,9 @@ export function Titlebar() {
       <button type="button" className={styles.search} onClick={() => openPalette()}>
         <Search size={14} aria-hidden />
         <span>{t('chrome.search')}</span>
-        <kbd className={styles.kbd}>⌘K</kbd>
+        {/* P1-20 (honesty): реальный шорткат палитры — `mod+p` (commands-core.ts), НЕ ⌘K (тот = */}
+        {/* editor.format.link). formatCombo рендерит ⌘P на mac / Ctrl+P иначе, локаль-корректно. */}
+        <kbd className={styles.kbd}>{formatCombo('mod+p')}</kbd>
       </button>
       <span className={styles.spacer} />
 
