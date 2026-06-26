@@ -1022,6 +1022,76 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     expect(cap?.closest('section[data-sec-id]')).not.toBeNull();
   });
 
+  // ── РЕГРЕССИЯ (репорт владельца, реальная daily-заметка Daily/2026-03-01.md): режим чтения должен
+  //    давать ЧИСТЫЕ вики-ссылки (без `[[ ]]`) + буквицу. Воспроизводит ВЕСЬ реальный конвейер на
+  //    БАЙТ-ТОЧНОМ содержимом (frontmatter type/status, эмодзи-H1/H2, H2 `##  Связи` — после `##`
+  //    идёт ASCII-пробел + NO-BREAK SPACE U+00A0, как в .md владельца, НЕ два ASCII-пробела; список с
+  //    **жирным**, ПУСТАЯ вики `[[ ]]`, датированная `[[2026-02-24 - 2026-03-02]]`, callout `> [!tip]-`).
+  //    Прежние юнит-тесты гоняли синтетический контент и НЕ ловили бы регрессию пайплайна
+  //    (remarkStripHeadingEmoji → remarkNexus) на этих edge-узлах. Подтверждено идентично в реальном
+  //    WebKit (WKWebView, движок Tauri): рендер не падает, ссылки чисты, буквица есть. ──
+  it('РЕГРЕССИЯ реальной daily-заметки (reading): рендер без краха, чистые ссылки, буквица', () => {
+    const REAL = [
+      '---',
+      'type: daily',
+      'status: processed',
+      '---',
+      '',
+      '',
+      '',
+      '# 📅 воскресенье, март 1-го 2026',
+      '',
+      '## 🧠 Поток мыслей',
+      '',
+      'Сегодня день рождения - бестолковый день, так как я ничего хорошего не сделал.',
+      '',
+      'Аргументы против покупки ноутбука:',
+      '',
+      '- У меня стационарный, мощный пк, которые потянет **любые** задачи',
+      '- Я не выхожу из дома.',
+      '',
+      '## 💡 Кандидаты в идеи',
+      '- [[ ]]',
+      '##  Связи', // байт-точно: `##` + ASCII-пробел + NBSP (U+00A0), как в реальном .md владельца
+      '',
+      '- [[2026-02-24 - 2026-03-02]]',
+      '> [!tip]- 🧩 Шпаргалка (статусы daily)',
+      '> **inbox** → новая заметка',
+    ].join('\n');
+    // Рендер НЕ должен бросать (нет ErrorBoundary вокруг превью → краш = белый экран в живом app).
+    const { container } = render(
+      <MarkdownPreview
+        source={REAL}
+        notePath="Daily/2026-03-01.md"
+        masthead={{ mtime: Date.now(), reading: true }}
+        onOpenLink={() => {}}
+        onOpenTag={() => {}}
+        onToggleTask={() => {}}
+      />,
+    );
+    // 1) Вики-ссылки преобразованы в чистые `<a>` — сырых `[[ ]]` в DOM НЕТ (regression #1 владельца).
+    expect(container.textContent).not.toContain('[[');
+    expect(container.textContent).not.toContain(']]');
+    // Датированная ссылка — кликабельный wikilink с чистым лейблом (без скобок).
+    const dated = Array.from(container.querySelectorAll('a[class*="wikilink"]')).find(
+      (a) => a.textContent === '2026-02-24 - 2026-03-02',
+    );
+    expect(dated).toBeTruthy();
+    expect(dated?.getAttribute('href')).toBe('#'); // wikilink-навигация через onOpenLink, не href
+    // Пустая `[[ ]]` не роняет пайплайн и тоже не оставляет скобок (рендерится как пустой/минимальный <a>).
+    expect(container.querySelectorAll('a[class*="wikilink"]').length).toBeGreaterThanOrEqual(2);
+    // 2) Буквица ведущего абзаца проставлена (regression #2 владельца): первый «обычный» абзац — внутри
+    //    H2-секции `## 🧠 Поток мыслей`, начинается с «Сегодня» → data-cap='С'.
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('С');
+    // 3) Эмодзи срезаны из заголовков, masthead отрисован, double-space H2 `##  Связи` → секция «Связи».
+    expect(container.textContent).not.toContain('📅');
+    expect(container.textContent).not.toContain('🧠');
+    expect(container.querySelector('[class*="docHead"]')).not.toBeNull();
+    expect(container.querySelector('section[data-sec-id="связи"]')).not.toBeNull();
+  });
+
   it('буквица в секции — только ПЕРВЫЙ абзац первой секции (не во второй секции)', () => {
     const { container } = render(
       <MarkdownPreview
