@@ -142,6 +142,67 @@ describe('chat store (Ф1-8)', () => {
     useChatStore.getState().stop();
   });
 
+  // P1-7 (adversarial-ревью minor): отмена в фазе ретрива шлёт `Done{full:""}` (серверная egress-offline
+  // ИЛИ пользовательский Stop до первого токена). content пуст, НО sources уже пришли. Без гарда
+  // `!reply.content.trim()` персистился бы «источники без ответа» в chat_messages + пустая ассистент-реплика
+  // в N4b-память переписки. Эти тесты сторожат, что пустой/whitespace-обмен НЕ уходит в logExchange.
+  const SRC = {
+    chunkId: 1,
+    path: 'Roadmap.md',
+    title: 'Roadmap',
+    headingPath: null,
+    snippet: 'фрагмент',
+    score: 0.9,
+  };
+
+  it('пустой ответ (Done без токенов) с НЕпустыми источниками НЕ персистится (logExchange не зовётся)', () => {
+    const log = vi.spyOn(tauriApi.chat.sessions, 'logExchange').mockResolvedValue(7);
+    useChatStore.getState().hydrate('/vault/A'); // vaultOpen=true (иначе save() выходит раньше гарда)
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Вопрос' },
+        // Отмена в ретриве: контент пуст, но источники успели прийти (Sources до Done).
+        { id: 'a1', role: 'assistant', content: '', sources: [SRC], streaming: true },
+      ],
+      sessionId: null,
+      streaming: true,
+    });
+    useChatStore.getState().stop(); // терминал → save()
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('whitespace-only ответ НЕ персистится (trim)', () => {
+    const log = vi.spyOn(tauriApi.chat.sessions, 'logExchange').mockResolvedValue(7);
+    useChatStore.getState().hydrate('/vault/A');
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Вопрос' },
+        { id: 'a1', role: 'assistant', content: '  \n ', sources: [SRC], streaming: true },
+      ],
+      sessionId: null,
+      streaming: true,
+    });
+    useChatStore.getState().stop();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('ПОЗИТИВ-контроль: непустой ответ персистится через logExchange с этим контентом', async () => {
+    const log = vi.spyOn(tauriApi.chat.sessions, 'logExchange').mockResolvedValue(7);
+    useChatStore.getState().hydrate('/vault/A');
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'Вопрос' },
+        { id: 'a1', role: 'assistant', content: 'Реальный ответ', sources: [SRC], streaming: true },
+      ],
+      sessionId: null,
+      streaming: true,
+    });
+    useChatStore.getState().stop();
+    await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(1));
+    // logExchange(sessionId, question, answer, sourcesJson)
+    expect(log).toHaveBeenCalledWith(null, 'Вопрос', 'Реальный ответ', expect.any(String));
+  });
+
   it('regenerate — no-op во время стрима и без завершённого обмена', () => {
     const stream = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
     useChatStore.setState({ messages: [{ id: 'u1', role: 'user', content: 'q' }], streaming: false });

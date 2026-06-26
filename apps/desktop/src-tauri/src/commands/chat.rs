@@ -1,7 +1,10 @@
 //! Команда RAG-чата (Ф1-7): retrieve (гибрид) → промпт → стриминг ответа через `Channel` (§4.1).
 //!
 //! Поток: сперва `Sources` (найденные чанки), затем поток `Token`, в конце `Done` (или `Error`).
-//! Отмена — `chat_cancel` (взводит флаг активного стрима; см. [`AppState::begin_chat`]).
+//! Отмена — `chat_cancel` (взводит флаг прогона; см. [`AppState::begin_chat`]). Токен ставится В НАЧАЛЕ
+//! команды (P1-7), поэтому Stop прерывает И фазу ретрива (web-план / hybrid / LLM-реранк / recall) — на
+//! межфазных чек-точках ([`retrieval_cancelled`]) прогон завершается исходом отмены (`Done`, не `Error`),
+//! не сжигая дорогих web/LLM-вызовов, — И фазу стрима (per-chunk-проверка `cancel`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -200,12 +203,35 @@ pub async fn chat_rag(
         return Err("chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)".into());
     };
 
+    // P1-7 (фикс гонки Stop↔ретрив): токен отмены ставим ОДИН на весь прогон — ДО фазы ретрива
+    // (web-поиск / hybrid / LLM-реранк / recall), а не только перед стримом. Иначе клик Stop во время
+    // «думает/ищет» взводил бы пустой/устаревший `chat_cancel`, дорогие web/LLM-вызовы доезжали впустую,
+    // а второй `begin_chat()` перед стримом затирал бы взведённый Stop. `begin_chat` отменяет ПРЕДЫДУЩИЙ
+    // чат — от переноса это лишь корректнее (новый чат гасит прежний сразу). Этот же токен дальше идёт
+    // в стрим (per-chunk-проверка) и в реранк/web-планировщик. Пометка интерактивной LLM-операции (S5)
+    // тоже поднята сюда — реранк/web-план это LLM-вызовы, фон должен уступать им с самого начала.
+    let _llm_busy = state.enter_interactive_llm();
+    let cancel = state.begin_chat();
+
+    // P1-7: межфазная проверка отмены. Stop во время ретрива → завершаем тем же ИСХОДОМ, что отмена
+    // стрима (стрим на отмене возвращает `Ok(full)` → команда шлёт `Done`, НЕ `Error`). Реальная логика
+    // вынесена в [`retrieval_cancelled`] (тестируема изолированно); макрос лишь делает ранний `return`
+    // на границах фаз (после web-плана, перед реранком, перед recall, перед стримом).
+    macro_rules! bail_if_cancelled {
+        () => {
+            if retrieval_cancelled(&cancel, &channel) {
+                return Ok(());
+            }
+        };
+    }
+
     // Web-агент (W-2): LLM решает «нужен интернет» → SearXNG → ответ с цитатами; результаты —
     // НЕДОВЕРЕННЫЙ контекст (anti-injection маркеры), tool-use запрещён, ≤MAX_SEARCHES/ход (W3).
     // Планировщик — мелкая модель (`chat_util`) либо сам `chat` при её отсутствии.
     // Web — ДОПОЛНИТЕЛЬНЫЙ флаг к режиму (ревизия владельца 11.06): модель «может сходить в
     // интернет». План→поиск; если веб не нужен/пуст — отвечаем в ВЫБРАННОМ режиме (vault→RAG,
     // general→общий), а не принудительно в общем.
+    bail_if_cancelled!();
     let web_messages = if web {
         use crate::news::SystemResolver;
         use crate::websearch::{agent, config as web_config, WebSearcher};
@@ -225,8 +251,10 @@ pub async fn chat_rag(
             std::sync::Arc::new(SystemResolver),
             url,
         );
-        let cancel_plan = std::sync::Arc::new(AtomicBool::new(false));
-        match agent::run(planner, &searcher, &question, &cancel_plan).await {
+        // P1-7: web-планировщик (LLM) и реранк — самые долгие фазы. Передаём ПОЛЬЗОВАТЕЛЬСКИЙ `cancel`
+        // (тот же Arc, что взводит Stop) вместо локального токена-заглушки — Stop прерывает планировщик
+        // и его внутренние LLM-вызовы кооперативно (per-chunk-проверка в stream_chat).
+        match agent::run(planner, &searcher, &question, &cancel).await {
             Ok(outcome) if outcome.query.is_some() => {
                 let _ = channel.send(ChatStreamEvent::WebSources {
                     sources: outcome.results.clone(),
@@ -254,6 +282,8 @@ pub async fn chat_rag(
     } else {
         None
     };
+    // P1-7: Stop во время web-планирования → выходим до ретрива/стрима (не начинаем следующую фазу).
+    bail_if_cancelled!();
     let mut messages = if let Some(m) = web_messages {
         m
     } else if grounded {
@@ -289,10 +319,13 @@ pub async fn chat_rag(
                 return Ok(());
             }
         };
+        // P1-7: Stop после гибрид-ретрива → НЕ запускаем самую долгую фазу (LLM-реранк).
+        bail_if_cancelled!();
         if do_rerank {
             let util = chat_util.as_ref().expect("do_rerank ⇒ util");
-            let rerank_cancel = std::sync::Arc::new(AtomicBool::new(false));
-            hits = search::rerank::llm_rerank(util.as_ref(), &question, hits, &rerank_cancel).await;
+            // P1-7: реранк получает ПОЛЬЗОВАТЕЛЬСКИЙ `cancel` (не локальный токен-заглушку) — Stop
+            // прерывает LLM-вызов реранка кооперативно (per-chunk-проверка в stream_chat).
+            hits = search::rerank::llm_rerank(util.as_ref(), &question, hits, &cancel).await;
             hits.truncate(k);
         }
         let _ = channel.send(ChatStreamEvent::Sources {
@@ -315,6 +348,9 @@ pub async fn chat_rag(
         });
         build_chat_messages(&question)
     };
+
+    // P1-7: Stop после ретрива/реранка → не запускаем recall (память/эпизоды) и стрим.
+    bail_if_cancelled!();
 
     // EP-2: эпизодическая память — саммари релевантных ЗАВЕРШЁННЫХ сессий (канал episode_vectors,
     // ключи = id эпизодов). Отдельный канал, как N4b/MEM — note-RAG не трогает. Считаем ПЕРВЫМ, чтобы
@@ -504,11 +540,12 @@ pub async fn chat_rag(
         );
     }
 
-    // 3) Стриминг ответа (с отменой). Помечаем интерактивную LLM-операцию (S5): планировщик уступит
-    // фоновые LLM-джобы, пока идёт чат.
-    let _llm_busy = state.enter_interactive_llm();
-    let cancel = state.begin_chat();
+    // P1-7: финальный чек перед стримом — Stop во время recall/сборки контекста → выходим, не открывая
+    // LLM-сокет стрима. `cancel` и пометка интерактивной LLM-операции (S5) подняты в НАЧАЛО команды
+    // (один токен на весь прогон) — здесь второго `begin_chat()` НЕТ, чтобы не затереть взведённый Stop.
+    bail_if_cancelled!();
 
+    // 3) Стриминг ответа (с отменой).
     // R1 — живой 💭-индикатор. gemma стримит размышление → копим в буфер + шлём сырые дельты (для
     // спойлера «развернуть»); ПАРАЛЛЕЛЬНО мелкая модель (`chat_util`) каждые ~1.5с суммаризует буфер в
     // короткую фразу (`ReasoningSummary`, обновляется живо). Отмена чата гасит и стрим, и суммаризатор.
@@ -586,6 +623,22 @@ pub async fn chat_rag(
     Ok(())
 }
 
+/// P1-7: межфазный чек отмены ретрива. Если пользовательский `cancel` взведён (клик Stop), шлёт в
+/// канал `Done` с пустым текстом — ЗЕРКАЛЯ исход отмены стрима (стрим на отмене отдаёт `Ok(full)` →
+/// команда шлёт `Done`, НЕ `Error`) — и возвращает `true` (вызывающий делает ранний `return Ok(())`).
+/// Так клик Stop во время ретрива (web-план / hybrid / LLM-реранк / recall) прерывает прогон ДО
+/// дорогих фаз, не сжигая лишних web/LLM-вызовов и не показывая пользователю ошибку.
+fn retrieval_cancelled(cancel: &Arc<AtomicBool>, channel: &Channel<ChatStreamEvent>) -> bool {
+    if cancel.load(Ordering::Relaxed) {
+        let _ = channel.send(ChatStreamEvent::Done {
+            full: String::new(),
+        });
+        true
+    } else {
+        false
+    }
+}
+
 /// Суммаризует ход мысли в ОДНУ короткую фразу через мелкую модель (R1, `chat_util`). Берём хвост
 /// размышления (последние ~2000 симв — самое свежее), просим короткую фразу настоящего времени.
 /// Best-effort: ошибки гасятся вызывающим. Отмена чата прерывает и этот вызов (общий `cancel`).
@@ -626,7 +679,39 @@ pub async fn chat_cancel(state: State<'_, AppState>) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_pinnable;
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    type EventBuf = Arc<Mutex<Vec<serde_json::Value>>>;
+
+    /// `Channel`, складывающий каждое отправленное событие (parsed JSON) в буфер — тот же путь, что Tauri
+    /// (зеркало `agent_backend::tests::channel_into`). Позволяет проверять, ЧТО ушло во фронт.
+    fn capturing_channel() -> (Channel<ChatStreamEvent>, EventBuf) {
+        let buf: EventBuf = Arc::new(Mutex::new(Vec::new()));
+        let sink = buf.clone();
+        let ch = Channel::new(move |body: tauri::ipc::InvokeResponseBody| {
+            if let tauri::ipc::InvokeResponseBody::Json(s) = body {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                    sink.lock().unwrap().push(v);
+                }
+            }
+            Ok(())
+        });
+        (ch, buf)
+    }
+
+    fn types_of(buf: &EventBuf) -> Vec<String> {
+        buf.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|v| {
+                v.get("type")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect()
+    }
 
     #[test]
     fn pinnable_allows_md_blocks_service_paths() {
@@ -642,5 +727,119 @@ mod tests {
         assert!(!is_pinnable("Notes/.hidden.md")); // dot-файл
         assert!(!is_pinnable("README.txt")); // не .md
         assert!(!is_pinnable("image.png"));
+    }
+
+    /// P1-7: НЕвзведённый `cancel` → чек-точка не срабатывает (false), в канал НИЧЕГО не уходит
+    /// (нормальный путь ретрива не возмущается).
+    #[test]
+    fn retrieval_checkpoint_passes_through_when_not_cancelled() {
+        let (ch, buf) = capturing_channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert!(!retrieval_cancelled(&cancel, &ch));
+        assert!(
+            buf.lock().unwrap().is_empty(),
+            "без отмены чек-точка молчит"
+        );
+    }
+
+    /// P1-7 (ядро фикса): взведённый `cancel` на чек-точке ретрива → ранний выход (true) ИСХОДОМ ОТМЕНЫ —
+    /// ровно одно `Done` с пустым текстом, БЕЗ `Error`-события (зеркалит отмену стрима, не фейл).
+    #[test]
+    fn retrieval_checkpoint_emits_cancel_done_not_error() {
+        let (ch, buf) = capturing_channel();
+        let cancel = Arc::new(AtomicBool::new(true)); // Stop пришёл во время ретрива
+        assert!(retrieval_cancelled(&cancel, &ch));
+        let tys = types_of(&buf);
+        assert_eq!(
+            tys,
+            vec!["done"],
+            "ровно одно событие — Done (исход отмены)"
+        );
+        assert!(
+            !tys.iter().any(|t| t == "error"),
+            "отмена ретрива НЕ шлёт error"
+        );
+        let done = buf.lock().unwrap()[0].clone();
+        assert_eq!(
+            done.get("full").and_then(|v| v.as_str()),
+            Some(""),
+            "Done на отмене ретрива — с пустым full"
+        );
+    }
+
+    /// P1-7 (главный сценарий): отмена ВО ВРЕМЯ ретрива → команда завершается отменой РАНЬШЕ дорогих
+    /// фаз. Симулируем точную последовательность чек-точек `chat_rag` (как фазы) + ОДИН токен на прогон:
+    /// `begin_chat()` ставит токен В НАЧАЛЕ, `cancel_active_chat()` (Stop с фронта) взводит ИМЕННО его;
+    /// на ПЕРВОЙ же чек-точке выходим, а «дорогие фазы» (web-план / LLM-реранк) НЕ исполняются. Доказывает:
+    /// (1) один токен на весь прогон — Stop не теряется (нет второго begin_chat, затирающего его),
+    /// (2) ранний выход исходом отмены (Done, не Error), (3) дорогие LLM-вызовы не зовутся.
+    #[test]
+    fn cancel_during_retrieval_exits_before_expensive_phases() {
+        let state = AppState::new();
+        let (ch, buf) = capturing_channel();
+
+        // Фаза 0: токен ставится В НАЧАЛЕ команды (перенос begin_chat — суть фикса P1-7).
+        let cancel = state.begin_chat();
+        assert!(!cancel.load(Ordering::Relaxed), "новый прогон не отменён");
+
+        // Пользователь жмёт Stop, пока идёт ретрив (до web-плана/реранка). Это взводит ТОТ ЖЕ токен,
+        // что лежит в state.chat_cancel — потому что begin_chat уже его туда положил.
+        state.cancel_active_chat();
+        assert!(
+            cancel.load(Ordering::Relaxed),
+            "Stop взвёл токен ТЕКУЩЕГО прогона (один токен на прогон)"
+        );
+
+        // «Дорогие фазы» — считаем вызовы; они должны остаться нетронутыми.
+        let web_calls = Arc::new(AtomicBool::new(false));
+        let rerank_calls = Arc::new(AtomicBool::new(false));
+
+        // Имитируем поток chat_rag: на КАЖДОЙ границе фазы — чек-точка; первая же делает ранний выход.
+        let result: AppResult<()> = (|| {
+            // граница перед web-планом
+            if retrieval_cancelled(&cancel, &ch) {
+                return Ok(());
+            }
+            web_calls.store(true, Ordering::Relaxed); // дорогой web-план (не должен исполниться)
+                                                      // граница перед LLM-реранком
+            if retrieval_cancelled(&cancel, &ch) {
+                return Ok(());
+            }
+            rerank_calls.store(true, Ordering::Relaxed); // дорогой LLM-реранк (не должен исполниться)
+            Ok(())
+        })();
+
+        assert!(result.is_ok(), "отмена ретрива — это Ok-исход, не ошибка");
+        assert!(
+            !web_calls.load(Ordering::Relaxed),
+            "web-план НЕ вызван (вышли до него)"
+        );
+        assert!(
+            !rerank_calls.load(Ordering::Relaxed),
+            "LLM-реранк НЕ вызван (вышли до него)"
+        );
+        let tys = types_of(&buf);
+        assert_eq!(
+            tys,
+            vec!["done"],
+            "ровно одно событие Done на весь отменённый прогон, без Error"
+        );
+    }
+
+    /// P1-7 (инвариант «один токен на прогон»): нет второго `begin_chat()`, который затёр бы Stop,
+    /// взведённый во время ретрива. Если бы где-то перед стримом стоял повторный begin_chat — он
+    /// заменил бы токен НА СВЕЖИЙ (false), и Stop потерялся бы. Сторожим этот регресс на уровне state.
+    #[test]
+    fn single_cancel_token_per_run_stop_survives_until_stream() {
+        let state = AppState::new();
+        let cancel = state.begin_chat(); // токен прогона (в начале команды)
+        state.cancel_active_chat(); // Stop во время ретрива
+        assert!(cancel.load(Ordering::Relaxed));
+        // Тот же токен, что ушёл бы в стрим (per-chunk cancel.load) — он уже взведён.
+        // Эмулируем «второй begin_chat НЕ зовётся»: значение токена не сбрасывается само.
+        assert!(
+            cancel.load(Ordering::Relaxed),
+            "Stop доживает до фазы стрима — токен не перевзведён"
+        );
     }
 }

@@ -231,7 +231,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     const reply = msgs[msgs.length - 1];
     const ask = msgs[msgs.length - 2];
     if (!reply || reply.role !== 'assistant' || !ask || ask.role !== 'user') return;
-    if (reply.error) return; // ошибочные обмены не персистим (нечего вспоминать)
+    // Ошибочные ИЛИ пустые/отменённые обмены не персистим — нечего вспоминать, и нельзя засорять
+    // память переписки (N4b) + историю пустой ассистент-репликой. P1-7: отмена в фазе ретрива шлёт
+    // `Done{full:""}` (серверная отмена egress-offline ИЛИ пользовательский Stop до первого токена) →
+    // content пуст, но sources уже пришли → без этого гарда персистился бы «источники без ответа».
+    if (reply.error || !reply.content.trim()) return;
     const sourcesJson =
       reply.sources?.length ||
       reply.webSources?.length ||
