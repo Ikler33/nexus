@@ -1,6 +1,7 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../../lib/tauri-api';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { BacklinksBar } from './BacklinksBar';
 
 afterEach(() => {
@@ -12,6 +13,20 @@ describe('BacklinksBar (Ф0-6/Ф0-9)', () => {
   it('показывает входящие ссылки переданного файла', async () => {
     render(<BacklinksBar path="Inbox.md" />); // на Inbox ссылается README (mock)
     expect(await screen.findByText('README')).toBeInTheDocument(); // DP-15: title без .md
+  });
+
+  // S6b рескин: карта бэклинка несёт title + context и кликабельна (открывает источник).
+  it('карта рендерит title + context и по клику открывает источник', async () => {
+    vi.spyOn(tauriApi.graph, 'getBacklinks').mockResolvedValue([
+      { sourcePath: 'Notes/Src.md', sourceTitle: 'Источник', context: 'строка контекста', lineNumber: 3 },
+    ]);
+    const openFile = vi.fn();
+    useWorkspaceStore.setState({ openFile });
+    render(<BacklinksBar path="A.md" />);
+    const card = await screen.findByRole('button', { name: /Источник/ });
+    expect(screen.getByText('строка контекста')).toBeInTheDocument();
+    fireEvent.click(card);
+    expect(openFile).toHaveBeenCalledWith('Notes/Src.md');
   });
 
   it('показывает пустое состояние, когда обратных ссылок нет', async () => {

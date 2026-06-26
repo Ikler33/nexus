@@ -546,7 +546,8 @@
     "relatedEmpty": "No related notes",
     "summaryLead": "Summary",
     "summaryEmpty": "No summary (needs an AI model in Settings → AI)",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "relatedLead": "Semantically related notes"
   },
   "embed": {
     "loading": "Loading embed…",

@@ -90,4 +90,21 @@ describe('InspectorRail (editor-chrome)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Свернуть панель' }));
     expect(screen.queryByRole('button', { name: 'Свернуть панель' })).toBeNull();
   });
+
+  // S6b рескин: активный тоггл несёт ember-маркер (класс `on`) + aria-pressed; неактивные — нет.
+  it('активный тоггл получает ember-класс «on» и aria-pressed', () => {
+    vi.spyOn(tauriApi.suggest, 'related').mockResolvedValue([]);
+    render(<InspectorRail doc={DOC} path="A.md" onJump={vi.fn()} />);
+    const related = screen.getByRole('button', { name: 'Похожие' });
+    const outline = screen.getByRole('button', { name: 'Оглавление' });
+    // CSS-модуль хэширует имя класса в `_on_<hash>` — матчим по префиксу `_on_`.
+    const ON = /(^|\s)_on_/;
+    // до активации — без маркера
+    expect(related.className).not.toMatch(ON);
+    expect(related).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(related);
+    expect(related.className).toMatch(ON); // ember-подсветка активной секции
+    expect(related).toHaveAttribute('aria-pressed', 'true');
+    expect(outline.className).not.toMatch(ON); // другие — неактивны
+  });
 });
