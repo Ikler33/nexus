@@ -224,4 +224,44 @@ describe('mock graph (контракт ADR-004 / AC-DOD-Ф3)', () => {
     expect(g.nodes).toEqual([]);
     expect(g.edges).toEqual([]);
   });
+
+  // P1-19: реципрокная пара (Roadmap [[Spec]] И Spec [[Roadmap]] — взаимные вики-ссылки в CONTENT)
+  // даёт РОВНО ОДНО ненаправленное ребро, зеркаля бэкенд (dedup в канонические пары min/max).
+  // Без дедупа было бы (a,b) И (b,a) → вдвое завышенная степень/размер/счётчик и двойная линия.
+  it('реципрокная пара → ровно одно ненаправленное ребро (зеркало бэкенда)', async () => {
+    const full = await getFullGraph(10_000);
+    const idOf = (path: string) => full.nodes.find((n) => n.path === path)?.id;
+    const roadmap = idOf('Projects/Roadmap.md');
+    const spec = idOf('Projects/Alpha/Spec.md');
+    expect(roadmap).toBeDefined();
+    expect(spec).toBeDefined();
+
+    // Число рёбер между неупорядоченной парой {roadmap, spec} — должно быть ровно одно.
+    const between = full.edges.filter(
+      (e) =>
+        (e.source === roadmap && e.target === spec) ||
+        (e.source === spec && e.target === roadmap),
+    );
+    expect(between).toHaveLength(1);
+
+    // Ни одной дублирующей неупорядоченной пары во всём графе (контракт «одно ребро на пару»).
+    const seen = new Set<string>();
+    for (const e of full.edges) {
+      const key = [e.source, e.target].sort((a, b) => a - b).join('|');
+      expect(seen.has(key)).toBe(false);
+      seen.add(key);
+      expect(e.source).not.toBe(e.target); // self-loop не бывает
+    }
+
+    // Локальный граф из Roadmap — та же дедупликация (1 ребро на пару Roadmap↔Spec).
+    const local = await getLocalGraph('Projects/Roadmap.md', 1);
+    const lRoadmap = local.nodes.find((n) => n.path === 'Projects/Roadmap.md')?.id;
+    const lSpec = local.nodes.find((n) => n.path === 'Projects/Alpha/Spec.md')?.id;
+    const lBetween = local.edges.filter(
+      (e) =>
+        (e.source === lRoadmap && e.target === lSpec) ||
+        (e.source === lSpec && e.target === lRoadmap),
+    );
+    expect(lBetween).toHaveLength(1);
+  });
 });
