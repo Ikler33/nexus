@@ -167,6 +167,26 @@ export async function sources(): Promise<NewsSource[]> {
   return registry.map((s) => ({ ...s, enabled: config.sources[s.id] ?? s.enabled }));
 }
 
+/**
+ * P1-8: зеркалит бэкенд `news_allow_host` (commands/news.rs:345) — идемпотентный push хоста в
+ * `extra_hosts` (`extraHosts` в TS). Реально мутирует module-level config, чтобы превью/тесты
+ * «Разрешить хост» отражали добавление, а не врали возвратом нетронутого конфига. getConfig()
+ * отдаёт копию, так что наружу module-level состояние не утекает.
+ */
+export async function allowHost(host: string): Promise<NewsConfig> {
+  if (!config.extraHosts.includes(host)) config.extraHosts.push(host);
+  return getConfig();
+}
+
+/**
+ * P1-8: зеркалит бэкенд `news_disallow_host` (commands/news.rs:365) — retain-remove хоста из
+ * `extra_hosts` (идемпотентно: нет хоста → no-op). Возвращает применённый конфиг.
+ */
+export async function disallowHost(host: string): Promise<NewsConfig> {
+  config.extraHosts = config.extraHosts.filter((h) => h !== host);
+  return getConfig();
+}
+
 // Полные RU-тексты reader'а (контент мокапа `news.jsx`); id=6 эмулирует HN-кейс — статья на
 // хосте вне доверенных источников → политика отвечает denied (fail-closed, как бэкенд NF-6).
 const BODIES: Record<number, string[]> = {

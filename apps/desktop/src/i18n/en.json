@@ -1000,6 +1000,7 @@
       "back": "Back to feed",
       "summarize": "Summarize",
       "summarizing": "Summarizing…",
+      "summarizeUnavailable": "The article hasn’t loaded yet",
       "brief": "TL;DR",
       "hide": "Hide",
       "original": "Original",

@@ -221,6 +221,43 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     );
   });
 
+  // P1-15 (honesty/UX): «Сократить» активна ТОЛЬКО когда у статьи есть тело (article `ready`).
+  // Без тела (denied/error/loading) сокращать нечего → клик давал пустой summary/ошибку, поэтому
+  // блокировка честна. Сначала — denied-кейс (id=6, хост вне политики): кнопка disabled.
+  it('reader: «Сократить» disabled, когда статья не ready (denied — тела нет)', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+
+    fireEvent.click(screen.getByText('Новый метод дистилляции снижает галлюцинации на 40%'));
+    await screen.findByText(/полный текст недоступен|full text unavailable/i);
+
+    const summarizeBtn = screen.getByRole('button', { name: /сократить|summarize/i });
+    expect(summarizeBtn).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /к ленте|back to feed/i }));
+    const unread = await screen.findAllByRole('button', {
+      name: /вернуть в непрочитанные|mark as unread/i,
+    });
+    fireEvent.click(unread[unread.length - 1]);
+  });
+
+  // P1-15: для ready-статьи (тело есть) «Сократить» включена (happy-path не сломан).
+  it('reader: «Сократить» enabled, когда статья ready (тело доступно)', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+
+    fireEvent.click(screen.getByText(/GPT-5\.2 получил режим длинного контекста/));
+    await screen.findByText(/OpenAI выпустила обновление GPT-5\.2/);
+
+    expect(screen.getByRole('button', { name: /сократить|summarize/i })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /к ленте|back to feed/i }));
+    const unread = await screen.findAllByRole('button', {
+      name: /вернуть в непрочитанные|mark as unread/i,
+    });
+    fireEvent.click(unread[0]);
+  });
+
   // W-2: мёртвый LLM-эндпоинт — ВИДИМЫЙ баннер (с названным эндпоинтом из errors[]), при этом
   // существующие статьи всё равно показаны (баннер + список, не «или/или»).
   it('LLM недоступен: баннер с эндпоинтом + список статей рендерятся оба', async () => {
