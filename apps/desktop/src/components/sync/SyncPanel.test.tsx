@@ -39,6 +39,36 @@ describe('SyncPanel commit — ошибка не глотается (audit B13)'
   });
 });
 
+// P1-17: отзыв токена — кнопка видна только когда connected, клик зовёт реальный git.clearToken
+// (бэкенд git_clear_token) и сбрасывает connected → false (статус «нет токена»).
+describe('SyncPanel — отзыв токена (P1-17)', () => {
+  it('connected → кнопка «Отозвать» видна; клик зовёт git.clearToken и connected → false', async () => {
+    // На load мок hasToken=true → connected. Кнопка отзыва появляется.
+    vi.spyOn(tauriApi.git, 'hasToken').mockResolvedValue(true);
+    const clear = vi.spyOn(tauriApi.git, 'clearToken').mockResolvedValue(undefined);
+    render(<SyncPanel />);
+
+    // Дожидаемся индикатора «токен в keychain» (connected===true).
+    await screen.findByText(/токен в keychain|token in keychain/i);
+    const revoke = screen.getByRole('button', { name: /отозвать токен|revoke token/i });
+    expect(revoke).toBeInTheDocument();
+
+    fireEvent.click(revoke);
+    await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+
+    // connected → false: индикатор сменился на «нет токена», кнопка отзыва исчезла.
+    await screen.findByText(/нет токена|no token/i);
+    expect(screen.queryByRole('button', { name: /отозвать токен|revoke token/i })).toBeNull();
+  });
+
+  it('НЕ connected → кнопки «Отозвать» нет', async () => {
+    // Дефолтный мок: токена нет → hasToken=false → connected=false.
+    render(<SyncPanel />);
+    await screen.findByText(/нет токена|no token/i);
+    expect(screen.queryByRole('button', { name: /отозвать токен|revoke token/i })).toBeNull();
+  });
+});
+
 // P1-5: выборочный коммит — чекбоксы выбора файлов → коммит ТОЛЬКО выбранных через commitPaths.
 describe('SyncPanel — выборочный коммит (P1-5)', () => {
   const commitBtn = () => screen.getByRole('button', { name: /закоммитить|выбранные|^commit/i });

@@ -311,6 +311,13 @@
   font-size: var(--text-xs);
 }
 
+/* P1-17: группа кнопок remote (Подключить + Отозвать токен) — держатся вместе справа. */
+.remoteBtns {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .errorMsg {
   margin: var(--space-2) 0 0;
   font-size: var(--text-sm);

@@ -114,6 +114,14 @@ export function NewsSettingsSection() {
     void persist({ modelPref: pref });
   };
 
+  // P1-16: тоггл consent-флага `enabled` (эгресс-согласие на сбор новостей). ТОТ ЖЕ механизм, что
+  // CTA ленты (NewsView): `setConfig({...cfg, enabled})` — не новый egress-обход. persist мержит в
+  // загруженный cfg, поэтому sources/keywords/extraHosts/modelPref сохраняются (см. NewsSettingsSection:34).
+  const setEnabled = (next: boolean) => {
+    if (cfg.enabled === next) return;
+    void persist({ enabled: next });
+  };
+
   const toggleSource = (s: NewsSource) => {
     // Источник истины чекбокса — cfg.sources (override поверх дефолта реестра), он корректно
     // откатывается перечитыванием cfg при ошибке сохранения. Без оптимистичной мутации
@@ -144,6 +152,35 @@ export function NewsSettingsSection() {
   return (
     <>
       <NewsHeader title={t('settings.news.title')} sub={t('settings.news.intro')} />
+
+      {/* P1-16: consent-тоггл `enabled` — эгресс-согласие на сбор новостей (вторая точка доступа к
+          тому же механизму, что CTA ленты). Off/On-сегмент как EgressRow. */}
+      <section className={styles.group}>
+        <div className={styles.rowText}>
+          <span className={styles.label}>{t('settings.news.enabledLabel')}</span>
+          <span className={styles.rowDesc}>{t('settings.news.enabledHint')}</span>
+        </div>
+        <div className={styles.seg} role="group" aria-label={t('settings.news.enabledLabel')}>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${!cfg.enabled ? styles.on : ''}`}
+            onClick={() => setEnabled(false)}
+            aria-pressed={!cfg.enabled}
+            disabled={saving}
+          >
+            {t('settings.off')}
+          </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${cfg.enabled ? styles.on : ''}`}
+            onClick={() => setEnabled(true)}
+            aria-pressed={cfg.enabled}
+            disabled={saving}
+          >
+            {t('settings.on')}
+          </button>
+        </div>
+      </section>
 
       {/* Выбор модели пайплайна новостей — главный элемент W-40. Подписи = url разрешённых моделей. */}
       <section className={styles.group}>

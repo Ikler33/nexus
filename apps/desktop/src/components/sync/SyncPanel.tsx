@@ -125,6 +125,19 @@ export function SyncPanel() {
     }
   };
 
+  // P1-17: отзыв сохранённого git-токена из keychain. Видна только когда `connected` (токен есть).
+  // Реальный API `git.clearToken` (бэкенд `git_clear_token`); ошибку показываем как connect-флоу (B16).
+  const clearToken = async () => {
+    setRemoteError(null);
+    try {
+      await tauriApi.git.clearToken();
+      setConnected(false);
+      setTokenInput('');
+    } catch (e) {
+      setRemoteError(String(e)); // не глотаем: пользователь думал, что токен удалён (B16)
+    }
+  };
+
   const sync = async () => {
     setSyncBusy(true);
     setSyncResult(null);
@@ -259,9 +272,21 @@ export function SyncPanel() {
               <span className={connected ? styles.connected : styles.muted}>
                 {connected ? `✓ ${t('git.connected')}` : t('git.notConnected')}
               </span>
-              <button className={styles.secondaryBtn} onClick={() => void saveRemote()}>
-                {t('git.connect')}
-              </button>
+              <div className={styles.remoteBtns}>
+                {connected && (
+                  <button
+                    className={styles.secondaryBtn}
+                    onClick={() => void clearToken()}
+                    aria-label={t('git.clearToken')}
+                    title={t('git.clearToken')}
+                  >
+                    {t('git.clearToken')}
+                  </button>
+                )}
+                <button className={styles.secondaryBtn} onClick={() => void saveRemote()}>
+                  {t('git.connect')}
+                </button>
+              </div>
             </div>
             {remoteError && <p className={styles.errorMsg}>✋ {remoteError}</p>}
             {syncResult && <SyncResultView result={syncResult} />}

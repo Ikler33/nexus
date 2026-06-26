@@ -61,6 +61,34 @@ describe('NewsSettingsSection (W-40)', () => {
     expect(screen.getByText('kept.example.com')).toBeInTheDocument();
   });
 
+  it('P1-16: consent-тоггл отражает config.enabled (Вкл активна при enabled=true)', async () => {
+    render(<NewsSettingsSection />);
+    // BASE_CONFIG.enabled === true → сегмент «Вкл» нажат, «Выкл» — нет.
+    const on = await screen.findByRole('button', { name: /^вкл$/i });
+    const off = screen.getByRole('button', { name: /^выкл$/i });
+    expect(on).toHaveAttribute('aria-pressed', 'true');
+    expect(off).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('P1-16: выключение consent зовёт setConfig с enabled=false, сохраняя sources/extraHosts/keywords/model', async () => {
+    const setSpy = vi
+      .spyOn(tauriApi.news, 'setConfig')
+      .mockImplementation((cfg) => Promise.resolve(cfg));
+    render(<NewsSettingsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^выкл$/i }));
+
+    await waitFor(() => expect(setSpy).toHaveBeenCalledTimes(1));
+    const sent = setSpy.mock.calls[0][0];
+    // ЧЕСТНО меняем реальный enabled-consent…
+    expect(sent.enabled).toBe(false);
+    // …МЕРЖ не теряет прочие поля (sources/extraHosts/keywords/modelPref).
+    expect(sent.sources).toEqual({ willison: false });
+    expect(sent.extraHosts).toEqual(['kept.example.com']);
+    expect(sent.keywords).toEqual(['llm', 'rag']);
+    expect(sent.modelPref).toBe('fast');
+  });
+
   it('смена модели на «Основная» зовёт setConfig с modelPref=main БЕЗ затирания прочих полей', async () => {
     const setSpy = vi
       .spyOn(tauriApi.news, 'setConfig')
