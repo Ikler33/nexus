@@ -1123,6 +1123,119 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     );
     expect(container.querySelector('[data-dropcap]')).toBeNull();
   });
+
+  // ── Обобщение: буквица на ПЕРВОМ обычном абзаце тела в порядке чтения (а не только первом блоке) ──
+  it('обобщение: callout первым блоком тела → буквица на следующем обычном абзаце (не в callout)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Зачин\n\n> [!note] Преамбула\n> тело callout\n\nНастоящий лид-абзац документа.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.closest('[data-callout]')).toBeNull();
+    expect(cap?.textContent).toContain('Настоящий лид-абзац документа.');
+  });
+
+  it('обобщение: blockquote первым блоком тела → буквица на следующем обычном абзаце (не в цитате)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Зачин\n\n> вступительная цитата\n\nЛид-абзац документа после цитаты.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.closest('blockquote')).toBeNull();
+    expect(cap?.textContent).toContain('Лид-абзац документа после цитаты.');
+  });
+
+  it('обобщение: список первым блоком тела → буквица на первом абзаце-вне-списка', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Зачин\n\n- пункт один\n- пункт два\n\nОбычный абзац после списка.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.closest('li')).toBeNull();
+    expect(cap?.textContent).toContain('Обычный абзац после списка.');
+  });
+
+  it('обобщение: первый обычный абзац ниже по документу, не в первой секции, всё равно ловится', () => {
+    // Первая секция = только список (нет голого абзаца) → буквица уходит на абзац ВТОРОЙ секции.
+    const { container } = render(
+      <MarkdownPreview
+        source={'## Первый\n\n- только пункт\n\n## Второй\n\nПервый обычный абзац всего документа.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const caps = container.querySelectorAll('p[data-dropcap]');
+    expect(caps).toHaveLength(1);
+    expect(caps[0].textContent).toContain('Первый обычный абзац всего документа.');
+    expect(caps[0].closest('section[data-sec-id="второй"]')).not.toBeNull();
+  });
+
+  it('обобщение: абзац начинается с ЦИФРЫ → буквица-цифра', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Зачин\n\n2026 год был особенным во многих смыслах.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('2');
+  });
+
+  it('скоуп эмбеда: <p> вложенного ![[embed]] НЕ получает буквицу (буквица только в своём документе)', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Target.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('# Hello\n\nWorld body of embed.');
+    const { container } = render(
+      <MarkdownPreview
+        // Документ открывается ВСТАВКОЙ: единственный «обычный» абзац — внутри вложенной .preview эмбеда.
+        source={'![[Target]]'}
+        notePath="Notes/Host.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    // дожидаемся асинхронного рендера тела эмбеда
+    expect(await screen.findByText('World body of embed.')).toBeInTheDocument();
+    // вложенный абзац эмбеда не получил буквицы (внешний эффект скоупнут на свой previewRef)
+    expect(container.querySelector('p[data-dropcap]')).toBeNull();
+  });
+
+  it('скоуп эмбеда: свой лид-абзац получает буквицу, абзац эмбеда НИЖЕ — нет', async () => {
+    vi.spyOn(tauriApi.vault, 'resolveNote').mockResolvedValue('Notes/Target.md');
+    vi.spyOn(tauriApi.vault, 'readFile').mockResolvedValue('# Hello\n\nWorld body of embed.');
+    const { container } = render(
+      <MarkdownPreview
+        source={'# Зачин\n\nСвой лид-абзац документа-хоста.\n\n![[Target]]'}
+        notePath="Notes/Host.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(await screen.findByText('World body of embed.')).toBeInTheDocument();
+    const caps = container.querySelectorAll('p[data-dropcap]');
+    expect(caps).toHaveLength(1);
+    expect(caps[0].textContent).toContain('Свой лид-абзац документа-хоста.');
+    // абзац эмбеда без буквицы
+    expect(screen.getByText('World body of embed.').closest('p')?.hasAttribute('data-dropcap')).toBe(false);
+  });
 });
 
 // Hermes-8 S7 — ховер-превью `.popcard`. Fake timers (220мс вики / 120мс сноска) + мок резолвера/readFile.
