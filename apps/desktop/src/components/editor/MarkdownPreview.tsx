@@ -449,6 +449,18 @@ export function MarkdownPreview({
     );
   };
 
+  // S5 «Редакция»: `<hr>` (thematic break) → астеризм из трёх точек (средняя ember). Семантику разрыва
+  // сохраняем через `role=separator` (как нативный hr); сами точки — пустые `<span>` без текста (чистый
+  // декор, AT ничего не зачитывает). CSS `.asterism` (MarkdownPreview.module.css). markdown `---`/`***`/
+  // `___` дают этот узел; frontmatter-`---` уже срезан remarkFrontmatter (спурьёзного hr нет — FRONTMATTER-1).
+  components.hr = () => (
+    <div className={styles.asterism} role="separator">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+
   // S3 «Редакция»: обёртка H2-секции (rehypeSections обернул h2+тело в `<section.sec data-sec-id>`).
   // Класс `.collapsed` ставит `Section` по контексту; интерактив (клик/шеврон) — на самом h2
   // (`SectionHeading`). h2 уже отрендерен через `components.h2` (HEADANCHOR-1: id/data-outline-line целы).

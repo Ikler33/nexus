@@ -338,18 +338,42 @@
   margin-left: 0.3em;
   font-size: 0.85em;
 }
+/* Блок сносок (Hermes-8 S5 «Редакция», GFM `<section.footnotes>`): тонкий border-сверху, тело на
+   `--font-ui`, mono-счётчик ember слева. GFM сам нумерует `<ol>` (1. 2. …) — гасим нативный маркер
+   (`list-style:none`) и рисуем счётчик `::before` mono-ember, как в макете. Структурные классы GFM
+   глобальны → `:global`. Не ломаем passthrough-класс (S3) и якоря `id=…fn-N` (FOOTNOTE-1). */
 .preview :global(.footnotes) {
-  margin-top: 2em;
-  padding-top: 0.8em;
+  margin-top: 30px;
+  padding-top: 16px;
   border-top: 1px solid var(--color-border);
-  font-size: 0.88em;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--color-text-muted);
 }
 .preview :global(.footnotes) ol {
-  padding-left: 1.4em;
+  counter-reset: md-foot;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 .preview :global(.footnotes) li {
-  margin: 0.2em 0;
+  counter-increment: md-foot;
+  position: relative;
+  padding-left: 24px;
+  margin: 0 0 8px;
+}
+/* Маркеры списка сносок — псевдоэлемент ::before базового `.preview ol > li` мог бы продублироваться;
+   у `.footnotes li` гасим его и рисуем mono-ember-счётчик сносок. */
+.preview :global(.footnotes) li::before {
+  content: counter(md-foot);
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-accent);
 }
 /* Скрытый GFM-заголовок секции сносок («Footnotes») — визуально не нужен (есть разделитель). */
 .preview :global(.sr-only) {
@@ -449,61 +473,123 @@
   padding: 1px 6px;
   color: var(--color-accent);
 }
+/* Код-блок (Hermes-8 S5 «Редакция»): mono 13px/1.6, surface-фон, border + left-border faint (3px),
+   radius 9px, padding 15/18. Токен-подсветка (.cm/.kw/.st из макета) НЕ вводится — в превью нет
+   синтаксического хайлайтера (remarkHighlight = только `==mark==`); базовый pre. */
 .preview pre {
   margin: 0 0 0.9em;
-  padding: var(--space-3);
+  padding: 15px 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-text-faint);
+  border-radius: 9px;
   overflow-x: auto;
 }
 .preview pre code {
   background: none;
   border: none;
   padding: 0;
-  font-size: 0.85em;
+  font-size: 1em; /* pre задаёт 13px — код наследует без доп. усадки */
   color: inherit; /* акцент — только у инлайн-кода (макет) */
 }
 
-/* Цитата по макету: акцентная плашка со скруглением справа. */
+/* Цитата (Hermes-8 S5 «Редакция»): чистая left-border-цитата — Source Serif italic 21px/1.5 ink,
+   border-left 3px border-strong, padding-left 22px. БЕЗ accent-фоновой плашки/радиуса (убрано по макету
+   Note-Editorial). `cite` (если есть) — mono faint, `::before "— "`. */
 .preview blockquote {
   margin: 0.9em 0;
-  padding: 0.6em 1em;
-  border-left: 3px solid var(--color-accent-rim);
-  background: var(--color-accent-soft);
-  border-radius: 0 8px 8px 0;
-  color: var(--color-text-muted);
+  padding: 4px 0 4px 22px;
+  border-left: 3px solid var(--color-border-strong);
+  font-family: var(--font-note);
+  font-style: italic;
+  font-size: 21px;
+  line-height: 1.5;
+  color: var(--color-text);
 }
 .preview blockquote p:last-child {
   margin-bottom: 0;
 }
+.preview blockquote cite {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+.preview blockquote cite::before {
+  content: '— ';
+}
 
+/* Таблица (Hermes-8 S5 «Редакция», GFM `<table>`): тело Source Serif 15.5px, без рамок-сетки —
+   thead-разделитель mono-uppercase + строчные border-bottom. Первая колонка — 600 ink. `display:block`
+   + overflow-x для горизонтального скролла широких таблиц (узлы GFM — обычный thead/tbody). */
 .preview table {
   border-collapse: collapse;
   margin: 0 0 0.9em;
-  font-size: 0.95em;
+  width: 100%;
+  font-family: var(--font-note);
+  font-size: 15.5px;
   display: block;
   overflow-x: auto;
 }
-.preview th,
-.preview td {
-  border: 1px solid var(--color-border);
-  padding: 0.4em 0.7em;
-  text-align: left;
-}
-.preview th {
-  background: var(--color-surface);
+.preview thead th {
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  text-align: left;
+  padding: 0 14px 9px;
+  border-bottom: 1.5px solid var(--color-border-strong);
+}
+.preview tbody td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-note-ink);
+  vertical-align: top;
+}
+.preview tbody tr:last-child td {
+  border-bottom: none;
+}
+.preview tbody td:first-child {
+  font-weight: 600;
+  color: var(--color-text);
 }
 
 .preview img {
   max-width: 100%;
   border-radius: var(--radius-sm);
 }
+/* Тематический разрыв `<hr>` → астеризм (Hermes-8 S5 «Редакция»): три точки 5px, flex center, gap 9px,
+   средняя — ember, крайние — border-strong. Рендерит `components.hr` (MarkdownPreview.tsx) как
+   `<div class=asterism role=separator>` с тремя `<span>`. Старый `hr`-стиль (1px-линия) больше не
+   достижим, но оставляем дефолтный сброс на случай, если где-то остаётся голый `<hr>`. */
 .preview hr {
   border: none;
   border-top: 1px solid var(--color-border);
   margin: 1.4em 0;
+}
+.asterism {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 30px 0;
+}
+.asterism span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+}
+.asterism span:nth-child(2) {
+  background: var(--color-accent);
 }
 
 /* Транклюзия `![[embed]]` (Live-Preview, режим чтения): карточка вставленной заметки. */
@@ -557,17 +643,19 @@
   font-family: 'STIX Two Math', math;
 }
 
-/* Callout/admonition `> [!note]` (Live-Preview). Цвет вида — в `--callout-color` (per-kind ниже);
-   тинт фона/шапки — `color-mix` поверх поверхности (адаптируется ко всем темам), c solid-фолбэком для
-   движков без color-mix. Иконка — инлайновый SVG (lucide, currentColor). CSP: без inline-style. */
+/* Callout/admonition `> [!note]` (Live-Preview; Hermes-8 S5 «Редакция»). Цвет вида — в `--callout-color`
+   (per-kind ниже; info = slate `--color-link`). По макету: тинт фона `--callout-color ~10%`, рамка
+   `--callout-color ~20%` поверх border, left-border 3px, radius 9px. Тинт через `color-mix` (адаптируется
+   ко всем темам), c solid-фолбэком. Иконка — инлайновый SVG (lucide, currentColor). CSP: без inline-style. */
 .callout {
   --callout-color: var(--color-accent);
   margin: 0.9em 0;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border); /* фолбэк, если color-mix не поддержан */
+  border: 1px solid color-mix(in srgb, var(--callout-color) 20%, var(--color-border));
   border-left: 3px solid var(--callout-color);
-  border-radius: var(--radius-md);
+  border-radius: 9px;
   background: var(--color-surface); /* фолбэк, если color-mix не поддержан */
-  background: color-mix(in srgb, var(--callout-color) 7%, var(--color-surface));
+  background: color-mix(in srgb, var(--callout-color) 9%, var(--color-surface));
   overflow: hidden;
 }
 .calloutHeader {
@@ -601,8 +689,16 @@
   flex-shrink: 0;
   opacity: 0.7;
 }
+/* Тело callout (S5): UI-шрифт 14.5px/1.6, muted-текст (как в макете); `b/strong` → ink-акцент. */
 .calloutBody {
   padding: 0.5em 0.85em 0.65em;
+  font-family: var(--font-ui);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+.calloutBody strong,
+.calloutBody b {
   color: var(--color-text);
 }
 .calloutBody > :first-child {
