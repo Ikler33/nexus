@@ -78,7 +78,8 @@ export function BacklinksBar({ path }: { path: string }) {
       >
         <ChevronRight size={13} className={styles.twist} data-open={open || undefined} aria-hidden />
         <Link2 size={13} aria-hidden />
-        <span>{items.length ? t('backlinks.count', { count: items.length }) : t('backlinks.title')}</span>
+        <span>{t('backlinks.title')}</span>
+        {items.length > 0 && <span className={styles.count}>{items.length}</span>}
       </button>
       {!open ? null : loading ? (
         <p className={styles.state}>{t('backlinks.loading')}</p>

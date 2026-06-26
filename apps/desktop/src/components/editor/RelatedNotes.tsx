@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi, type LinkSuggestion } from '../../lib/tauri-api';
@@ -45,23 +46,31 @@ export function RelatedNotes({ path }: { path: string }) {
   if (!items.length) return <p className={styles.placeholder}>{t('inspector.relatedEmpty')}</p>;
 
   return (
-    <ul className={styles.relList}>
-      {items.map((s) => (
-        <li key={s.path}>
-          <button
-            type="button"
-            className={styles.relItem}
-            onClick={() => void openFile(s.path)}
-            title={s.path}
-          >
-            <span className={styles.relTitle}>{s.title ?? basename(s.path)}</span>
-            <span className={styles.relMeta}>
-              {Math.round(s.score * 100)}%
-              {s.reason ? ` · ${s.reason}` : ''}
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <>
+      {/* Лид (README §6): честный текст «семантически близкие заметки» (включая уже связанные) + искра. */}
+      <p className={styles.relLead}>
+        <Sparkles size={13} aria-hidden />
+        {t('inspector.relatedLead')}
+      </p>
+      <ul className={styles.relList}>
+        {items.map((s) => (
+          <li key={s.path}>
+            <button
+              type="button"
+              className={styles.relItem}
+              onClick={() => void openFile(s.path)}
+              title={s.path}
+            >
+              <span className={styles.relTop}>
+                <span className={styles.relTitle}>{s.title ?? basename(s.path)}</span>
+                {/* score = 1 − cosine-distance (usearch Cos) → осмысленная 0–1 similarity, mono toFixed(2). */}
+                <span className={styles.relScore}>{s.score.toFixed(2)}</span>
+              </span>
+              {s.reason && <span className={styles.relMeta}>{s.reason}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }

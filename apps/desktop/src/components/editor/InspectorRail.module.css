@@ -36,9 +36,12 @@
   color: var(--color-text);
 }
 
+/* Активная секция rail (README §6 «.insp-tab.on»): ember-акцент. Rail вертикальный → подчёркивание
+   слева (inset-полоска), а не снизу; цвет/вес — ember, как в макете. */
 .railBtn.on {
   background: var(--color-selected);
   color: var(--color-accent);
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
 .panel {
@@ -67,6 +70,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 13px 14px 9px;
+  /* README §6: ряд вкладок инспектора отделён тонким бордером снизу. */
+  border-bottom: 1px solid var(--color-border);
   font-size: var(--text-xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -108,39 +113,86 @@
   line-height: 1.5;
 }
 
-/* «Похожие» — порт макета app.css .insp-body .bl-item/.bl-title/.bl-ctx. */
+/* «Похожие» (README §6): семантически близкие заметки (по векторам, включая уже связанные). */
+
+/* Лид .rel-lead: честный текст «похожие заметки» + иконка-искра. */
+.relLead {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 4px 10px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--color-text-faint);
+}
+.relLead svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--color-accent);
+}
+
 .relList {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-2);
 }
+
+/* Карта .rel (README §6): paper-фон, рамка, hover → border-strong + surface. */
 .relItem {
   display: block;
   width: 100%;
   text-align: left;
-  border: none;
-  background: transparent;
-  padding: 8px 10px;
-  border-radius: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 11px 12px;
   cursor: pointer;
-  transition: background-color var(--motion-fast);
+  transition:
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
 }
 .relItem:hover {
-  background: var(--color-surface-hover);
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+}
+.relItem:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Шапка карты: заголовок .rt (Cormorant 15px) + score справа (mono). */
+.relTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
 .relTitle {
-  display: block;
-  font-size: var(--text-sm);
+  font-family: var(--font-headline);
+  font-size: 15px;
   font-weight: 600;
-  color: var(--color-link);
+  line-height: 1.2;
+  color: var(--color-text);
 }
+
+/* .score (README §6): cosine-similarity 0–1 (1 − cos-distance, usearch Cos) — осмысленна как «уверенность».
+   mono, faint, справа. */
+.relScore {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-faint);
+}
+
+/* Подзаголовок/контекст .rs (README §6). */
 .relMeta {
   display: block;
-  margin-top: 2px;
-  font-size: var(--text-xs);
+  margin-top: 4px;
+  font-size: var(--text-sm);
   color: var(--color-text-faint);
   line-height: 1.4;
   overflow: hidden;

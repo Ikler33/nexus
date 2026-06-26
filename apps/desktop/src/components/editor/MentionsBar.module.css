@@ -1,11 +1,14 @@
-/* UNLINK-1: незалинкованные упоминания. Зеркалит BacklinksBar (нижний сворачиваемый бар пейна). */
+/* UNLINK-1 / Hermes-8 S6b (README §5): незалинкованные упоминания. Зеркалит BacklinksBar (нижний
+   сворачиваемый бар пейна), но карты — `.bl.unlinked`: пунктирная рамка (визуально «связи ещё нет»).
+   ЧЕСТНОСТЬ: реального write-действия «связать» нет — клик открывает источник; фейк-бейджа «+ связать»
+   нет (нужен insert-wikilink backend — deferred). */
 .bar {
   flex: none;
-  max-height: 30%;
-  overflow: auto;
+  max-height: 230px;
+  overflow-y: auto;
   border-top: 1px solid var(--color-border);
   background: var(--color-bg-elevated);
-  padding: var(--space-2) var(--space-3);
+  padding: 12px var(--space-3) 14px;
 }
 
 .header {
@@ -38,41 +41,54 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-2);
 }
 
+/* Карта упоминания .bl.unlinked (README §5): тот же card-вид, но dashed-рамка. */
 .item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   width: 100%;
+  /* Grid-айтем (`.list` = grid auto-fill): min-width:0, иначе дефолтный min-content от nowrap-контекста
+     без пробелов (путь/URL/CJK) распирает трек и ломает ellipsis → переполнение (класс бага #144). */
+  min-width: 0;
   text-align: left;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 9px;
+  padding: 9px 12px;
   cursor: pointer;
   color: var(--color-text);
+  transition:
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
 }
 
 .item:hover {
   background: var(--color-surface);
+  border-color: var(--color-accent);
 }
 
 .item:focus-visible {
   outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .itemPath {
-  font-size: var(--text-sm);
-  color: var(--color-link);
+  font-family: var(--font-headline);
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--color-text);
+  overflow-wrap: anywhere; /* длинный заголовок-без-пробелов ломается, не распирает узкий трек */
 }
 
 .itemContext {
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
