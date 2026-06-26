@@ -136,6 +136,11 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       .mockResolvedValue({ chatApplied: true, embeddingChanged: false });
     vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
     await gotoAiStep();
+    // Дождаться, пока async `getAiConfig` префилит конфиг (в т.ч. `fast`) ДО клика «Сохранить» — иначе
+    // гонка: клик опережает загрузку → setAiConfig зовётся без fast → waitFor на fast таймаутит (флейк,
+    // мигал на CI). Сигнал загрузки — chat-URL из мока в инпуте (как в соседнем тесте «конфиг с моделью
+    // НЕ затирается», где этот гард уже есть).
+    expect(await screen.findByDisplayValue('http://h:8080')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: /Сохранить и проверить|Save & test/i }));
     await waitFor(() =>
       expect(setCfg).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
