@@ -357,3 +357,246 @@ async fn clear_wipes_all() {
     assert_eq!(count(db.reader()).await.unwrap(), 0);
     assert!(list(db.reader()).await.unwrap().is_empty());
 }
+
+/// P1-4: бэкфилл векторов памяти — зеркало `open_vault`-хука (фоновый блок). Здесь прогоняем ТУ ЖЕ
+/// петлю синхронно: факты без вектора (имитация `import_backup`, который пишет `memory_facts`, но не
+/// `memory_vectors`) → эмбеддим query-путём → upsert по ключу=id, фильтруя уже проиндексированные через
+/// `contains` (идемпотентность). КРИТИЧНО: `embed_query`, как `index_fact`/`context_facts` (память
+/// симметрична) — НЕ `embed_documents` (эпизод-путь); иначе на nomic/e5 импортированный факт лёг бы в
+/// document-субпространство и не совпал с тем же фактом, добавленным руками. Без embedder петля не зовётся.
+async fn run_memory_backfill(
+    db: &Database,
+    vectors: &VectorIndex,
+    embedder: Option<&dyn EmbeddingProvider>,
+) -> usize {
+    let Some(emb) = embedder else {
+        return 0; // нет эмбеддера (RAG off) → no-op, как в хуке (guard `if let Some(emb)`)
+    };
+    let rows = memory_facts_for_backfill(db.reader()).await.unwrap();
+    let pending: Vec<_> = rows
+        .into_iter()
+        .filter(|(id, _)| !vectors.contains(*id as u64))
+        .collect();
+    let n = pending.len();
+    for (id, text) in pending {
+        let vec = emb.embed_query(&text).await.unwrap();
+        vectors.upsert(id as u64, &vec).unwrap();
+    }
+    vectors.save().unwrap();
+    n
+}
+
+/// P1-4 (adversarial): эмбеддер, РАЗЛИЧАЮЩИЙ query/document-путь (как prod nomic/e5: разные префиксы →
+/// разные субпространства). `MockEmbedder` их НЕ различает (query==document) → не ловит регресс на
+/// `embed_documents`. Здесь document-путь префиксует текст «D:» перед хешированием → его вектор ОТЛИЧЕН
+/// от query-пути того же текста. Тест на этом эмбеддере падал бы, если бы бэкфилл звал `embed_documents`.
+struct AsymMockEmbedder {
+    dim: usize,
+}
+
+/// Детерминированный byte-hash вектор (повторяет логику `MockEmbedder::mock_vec`, недоступного извне
+/// `ai::embedder`). Префикс «D:» в document-пути сдвигает байты → ИНОЙ вектор, чем query-путь.
+fn hash_vec(text: &str, dim: usize) -> Vec<f32> {
+    let mut v = vec![0f32; dim];
+    for (i, b) in text.bytes().enumerate() {
+        v[i % dim] += f32::from(b) / 255.0;
+    }
+    crate::ai::l2_normalize(&mut v);
+    v
+}
+
+#[async_trait::async_trait]
+impl crate::ai::EmbeddingProvider for AsymMockEmbedder {
+    async fn embed_documents(&self, texts: &[&str]) -> crate::ai::AiResult<Vec<Vec<f32>>> {
+        // document-путь: непустой префикс «D:» (как search_document:/passage:) → иное подпространство.
+        Ok(texts
+            .iter()
+            .map(|t| hash_vec(&format!("D:{t}"), self.dim))
+            .collect())
+    }
+    async fn embed_query(&self, text: &str) -> crate::ai::AiResult<Vec<f32>> {
+        // query-путь: без префикса (как у index_fact/context_facts на этом эмбеддере).
+        Ok(hash_vec(text, self.dim))
+    }
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn model_id(&self) -> &str {
+        "asym-mock"
+    }
+}
+
+/// P1-4: импортированные (= без вектора) факты бэкфилл переэмбеддит → семантический recall их находит;
+/// повторный бэкфилл — no-op (идемпотентность по `contains`=id); без embedder — no-op, не падает.
+#[tokio::test]
+async fn import_backfill_vectorizes_facts_for_recall() {
+    let (_d, db) = open().await;
+    let dir = TempDir::new().unwrap();
+    let vectors = VectorIndex::open(dir.path().join("mem_backfill.usearch"), 16).unwrap();
+    let emb = MockEmbedder { dim: 16 };
+
+    // Имитация импорта из бэкапа: факты в `memory_facts`, БЕЗ записи в `memory_vectors`.
+    let rel = add(db.writer(), "Nexus проект на Rust и Tauri", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let other = add(db.writer(), "погода сегодня солнечная", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+
+    // До бэкфилла: оба факта без вектора → recall слеп (индекс пуст, top-k не ищется).
+    assert!(!vectors.contains(rel as u64));
+    assert!(!vectors.contains(other as u64));
+    let blind = context_facts(
+        db.reader(),
+        db.writer(),
+        &vectors,
+        &emb,
+        "Nexus проект на Rust и Tauri",
+        3,
+    )
+    .await
+    .unwrap();
+    assert!(
+        blind.is_empty(),
+        "до бэкфилла импортированные факты невидимы для семантического recall"
+    );
+
+    // Бэкфилл переэмбеддит оба факта.
+    let n = run_memory_backfill(&db, &vectors, Some(&emb as &dyn EmbeddingProvider)).await;
+    assert_eq!(n, 2, "бэкфилл взял ровно факты без вектора");
+    assert!(vectors.contains(rel as u64), "вектор факта в индексе");
+    assert!(vectors.contains(other as u64));
+
+    // Теперь recall находит релевантный факт (запрос = его текст → cosine 1.0 ≥ порога).
+    let found = context_facts(
+        db.reader(),
+        db.writer(),
+        &vectors,
+        &emb,
+        "Nexus проект на Rust и Tauri",
+        1,
+    )
+    .await
+    .unwrap();
+    let ids: Vec<i64> = found.iter().map(|f| f.id).collect();
+    assert!(
+        ids.contains(&rel),
+        "бэкфилл вернул факт в семантический recall"
+    );
+
+    // Идемпотентность: повторный бэкфилл ничего не делает (всё уже в индексе по `contains`).
+    let again = run_memory_backfill(&db, &vectors, Some(&emb as &dyn EmbeddingProvider)).await;
+    assert_eq!(
+        again, 0,
+        "повторный бэкфилл — no-op (идемпотентность по id)"
+    );
+
+    // Без embedder (RAG off) — no-op, не падает.
+    let no_emb = run_memory_backfill(&db, &vectors, None).await;
+    assert_eq!(no_emb, 0, "без эмбеддера бэкфилл — no-op");
+}
+
+/// P1-4 (adversarial-регресс-страж): бэкфилл ДОЛЖЕН эмбеддить query-путём (как `index_fact`), НЕ
+/// document-путём (эпизод-зеркало). На эмбеддере, РАЗЛИЧАЮЩЕМ query/document (prod nomic/e5), вектор
+/// бэкфилла обязан совпасть с вектором `index_fact` (query) и НЕ совпасть с document-путём. Если бы
+/// бэкфилл звал `embed_documents` — этот тест упал бы (вектор лёг бы в чужое субпространство).
+#[tokio::test]
+async fn backfill_uses_query_path_not_document() {
+    let (_d, db) = open().await;
+    let dir = TempDir::new().unwrap();
+    let vectors = VectorIndex::open(dir.path().join("mem_qpath.usearch"), 16).unwrap();
+    let emb = AsymMockEmbedder { dim: 16 };
+
+    let id = add(db.writer(), "владелец пишет на Rust", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+
+    // Бэкфилл индексирует факт.
+    let n = run_memory_backfill(&db, &vectors, Some(&emb as &dyn EmbeddingProvider)).await;
+    assert_eq!(n, 1);
+
+    // Эталоны: что дал бы query-путь (index_fact/recall) и что — document-путь (эпизод-зеркало, БАГ).
+    let query_vec = emb.embed_query("владелец пишет на Rust").await.unwrap();
+    let doc_vec = emb
+        .embed_documents(&["владелец пишет на Rust"])
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_ne!(
+        query_vec, doc_vec,
+        "эмбеддер ДОЛЖЕН различать query/document (иначе тест бессилен)"
+    );
+
+    // Косинус вектора в индексе с query-эталоном = 1.0 (тот же путь); с document-эталоном — ниже.
+    // VectorIndex::search вернёт score = 1−cos_dist для ближайшего; ищем по query_vec.
+    let hits = vectors.search(&query_vec, 1).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].chunk_id, id as u64);
+    assert!(
+        hits[0].score > 0.999,
+        "бэкфилл-вектор совпал с query-путём (score={}); если бы звал embed_documents — был бы < 1",
+        hits[0].score
+    );
+
+    // И recall (context_facts → embed_query) находит факт — сквозная проверка query-консистентности.
+    let found = context_facts(
+        db.reader(),
+        db.writer(),
+        &vectors,
+        &emb,
+        "владелец пишет на Rust",
+        1,
+    )
+    .await
+    .unwrap();
+    assert!(
+        found.iter().any(|f| f.id == id),
+        "recall находит бэкфилл-факт (query-путь консистентен)"
+    );
+}
+
+/// P1-4: бэкфилл НЕ индексирует супридённые факты (инвариант «жив ⟺ superseded_by IS NULL») — они и так
+/// исключены из recall (`facts_by_ids`), индексировать их незачем.
+#[tokio::test]
+async fn backfill_skips_superseded_facts() {
+    let (_d, db) = open().await;
+    let dir = TempDir::new().unwrap();
+    let vectors = VectorIndex::open(dir.path().join("mem_backfill_sup.usearch"), 16).unwrap();
+    let emb = MockEmbedder { dim: 16 };
+
+    let keep = add(db.writer(), "живой факт для recall", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let gone = add(db.writer(), "устаревший факт", SOURCE_EXPLICIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    db.writer()
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE memory_facts SET superseded_by=?2, superseded_at=1 WHERE id=?1",
+                rusqlite::params![gone, keep],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let n = run_memory_backfill(&db, &vectors, Some(&emb as &dyn EmbeddingProvider)).await;
+    assert_eq!(n, 1, "бэкфилл взял только живой факт");
+    assert!(vectors.contains(keep as u64));
+    assert!(
+        !vectors.contains(gone as u64),
+        "супридённый факт не индексируется"
+    );
+}

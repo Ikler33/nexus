@@ -409,6 +409,38 @@ pub async fn open_vault(
             }
         });
     }
+    // Бэкфилл памяти агента (MEM, P1-4): импортированные из бэкапа факты пишутся в `memory_facts`, но
+    // НЕ в `memory_vectors` (`import_backup` не сериализует/переэмбеддит вектора) → слепы для
+    // семантического recall (orphan-дыра того же класса, что закрыл эпизодный бэкфилл выше). Эмбеддим
+    // факты без вектора в фоне. `contains` — источник правды (как chat_vectors/episode_vectors).
+    // Best-effort, не держит open_vault.
+    if let (Some(mem_vec), Some(emb)) = (&memory_vectors, &embedder) {
+        let (reader, mem_vec, emb) = (db.reader().clone(), mem_vec.clone(), emb.clone());
+        tokio::spawn(async move {
+            if let Ok(rows) = crate::memory::memory_facts_for_backfill(&reader).await {
+                let pending: Vec<_> = rows
+                    .into_iter()
+                    .filter(|(id, _)| !mem_vec.contains(*id as u64))
+                    .collect();
+                if pending.is_empty() {
+                    return;
+                }
+                let n = pending.len();
+                for (id, text) in pending {
+                    // `embed_query` (НЕ `embed_documents`): память СИММЕТРИЧНА — `index_fact` и recall
+                    // `context_facts` оба эмбеддят query-путём. На bge-m3 (пустые префиксы) разницы нет,
+                    // но nomic/e5 кладут query/document в РАЗНЫЕ субпространства → импортированный факт
+                    // не совпал бы с тем же фактом, добавленным руками. (Эпизоды/чат асимметричны —
+                    // там `embed_documents` для хранения верно.)
+                    if let Ok(vec) = emb.embed_query(&text).await {
+                        let _ = mem_vec.upsert(id as u64, &vec);
+                    }
+                }
+                let _ = mem_vec.save();
+                tracing::info!(facts = n, "agent-memory: бэкфилл векторов фактов завершён");
+            }
+        });
+    }
     // Seed: gc на ближайший тик; дайджест — если просрочен (run-if-overdue, S2) и chat сконфигурирован.
     let _ = crate::scheduler::enqueue(db.writer(), crate::scheduler::KIND_GC, "", 0, 3).await;
     if chat.is_some()
@@ -840,9 +872,13 @@ async fn reconcile_embedding_model(
         let _ = std::fs::remove_file(root.join(".nexus").join("vectors.usearch"));
         // EP: эпизоды эмбеддились старой моделью → дропаем их индекс и помечаем на переэмбеддинг
         // (summary-текст остаётся, бэкфилл на открытии переэмбеддит дёшево). Иначе запрос новой моделью
-        // против старых векторов → DimMismatch/семантический мусор (ложная память). chat_vectors/
-        // memory_vectors — пред-существующая orphan-дыра того же класса, чинится отдельной задачей.
+        // против старых векторов → DimMismatch/семантический мусор (ложная память).
         let _ = std::fs::remove_file(root.join(".nexus").join("episode_vectors.usearch"));
+        // MEM (P1-4): тот же orphan-класс — факты эмбеддились старой моделью. Дропаем индекс фактов;
+        // memory-бэкфилл на открытии (фильтр по `contains`) переэмбеддит их дёшево (текст в `memory_facts`
+        // остаётся). chat_vectors остаётся отдельной задачей (бэкфилл переписки есть, но сброса индекса
+        // под смену модели у него пока нет — вне рамок P1-4).
+        let _ = std::fs::remove_file(root.join(".nexus").join("memory_vectors.usearch"));
         db.writer()
             .call(|c| {
                 c.execute("UPDATE chat_episodes SET embed_model=NULL", [])

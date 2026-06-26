@@ -278,6 +278,22 @@ pub async fn fact_history(reader: &ReadPool, fact_id: i64) -> DbResult<Vec<FactE
         .await
 }
 
+/// Все ЖИВЫЕ факты `(id, text)` — для бэкфилла векторов на открытии vault (вызывающий фильтрует по
+/// `memory_vectors.contains`). Зеркало `episode::episodes_for_backfill` / `chat_log::messages_missing_vectors`.
+/// Чинит orphan-дыру: импортированные из бэкапа факты (`import_backup` пишет `memory_facts`, но не
+/// `memory_vectors`) иначе слепы для семантического recall. `superseded_by IS NULL` — супридённый факт
+/// (MEM-8) в ретривал не попадёт (`facts_by_ids`), индексировать его незачем (инвариант «жив ⟺ NULL»).
+pub async fn memory_facts_for_backfill(reader: &ReadPool) -> DbResult<Vec<(i64, String)>> {
+    reader
+        .query(move |c| {
+            let mut stmt =
+                c.prepare("SELECT id, text FROM memory_facts WHERE superseded_by IS NULL")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await
+}
+
 /// Эмбеддит текст факта и кладёт в `memory_vectors` (ключ = id). Best-effort на уровне команды.
 pub async fn index_fact(
     vectors: &VectorIndex,
