@@ -1,4 +1,4 @@
-import { createElement, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +13,8 @@ import { makeSlugger } from '../../lib/editor/slug';
 import { EmbedContext } from '../../lib/markdown/embed-context';
 import { extractFrontmatter, parseFrontmatterFields } from '../../lib/markdown/frontmatter';
 import { rehypeKatexCsp } from '../../lib/markdown/rehypeKatexCsp';
+import { rehypeSections } from '../../lib/markdown/rehypeSections';
+import { SectionContext } from '../../lib/markdown/section-context';
 import { remarkCallouts } from '../../lib/markdown/remarkCallouts';
 import { remarkComments } from '../../lib/markdown/remarkComments';
 import { remarkEmbeds } from '../../lib/markdown/remarkEmbeds';
@@ -27,6 +29,8 @@ import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
 import { PropertiesTable } from './PropertiesTable';
+import { Section } from './Section';
+import { SectionHeading } from './SectionHeading';
 import styles from './MarkdownPreview.module.css';
 
 /**
@@ -186,6 +190,29 @@ export function MarkdownPreview({
 
   const { t, i18n } = useTranslation();
 
+  // S3 «Редакция»: свёрнутые H2-секции — Set по `data-sec-id` (slug заголовка, стабилен к правкам в
+  // других секциях). По умолчанию все РАЗВЁРНУТЫ (пустой Set). Тоггл — на клик/Enter/Space по h2.
+  // Состояние читают РАЗНЫЕ оверрайды (`h2`-кнопка, `section`-обёртка) → раздаём через SectionContext.
+  const [collapsedSecs, setCollapsedSecs] = useState<Set<string>>(() => new Set());
+  const toggleSection = useCallback((id: string) => {
+    setCollapsedSecs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const sectionState = useMemo(
+    () => ({ isCollapsed: (id: string) => collapsedSecs.has(id), toggle: toggleSection }),
+    [collapsedSecs, toggleSection],
+  );
+  // Сброс свёрнутости при смене ЗАМЕТКИ (`notePath`): иначе stale secid'ы прежней заметки копятся в Set
+  // (рост памяти) и одноимённая секция новой заметки открывалась бы уже свёрнутой. На правку source ТОЙ ЖЕ
+  // заметки НЕ сбрасываем — иначе свёрнутость терялась бы на каждое нажатие клавиши (нежелательно).
+  useEffect(() => {
+    setCollapsedSecs((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [notePath]);
+
   // MASTHEAD-1: данные editorial-шапки. Считаем всегда (дёшево, мемо), используем только когда задан
   // `masthead` (top-level превью). `body` — исходник с ОБНУЛЁННЫМ ведущим H1 (его текст ушёл в заголовок
   // шапки): обнуление, а не удаление, сохраняет номера строк для тоггла тасков/оглавления (см. masthead.ts).
@@ -337,9 +364,22 @@ export function MarkdownPreview({
     (tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'): Components['h1'] =>
     ({ node, children }) => {
       const line = node?.position?.start?.line;
+      const id = node ? slugger(hastText(node)) : undefined; // HEADANCHOR-1 (slug-якорь, дедуп с leadSlug)
+      // S3: h2 c `data-sec-id` (его проставил rehypeSections) — заголовок секции: рендерим интерактивный
+      // `SectionHeading` (шеврон + клик-сворачивание + a11y). `id`/`data-outline-line` он ставит на host-h2
+      // как есть (HEADANCHOR-1 цел). secId — ключ из rehype-дедупа (отдельно от slug-якоря: под masthead
+      // они могут различаться, и это намеренно — slug ведёт якорь, secId держит состояние сворачивания).
+      const secId = (node?.properties as Record<string, unknown> | undefined)?.['data-sec-id'];
+      if (tag === 'h2' && typeof secId === 'string' && secId) {
+        return (
+          <SectionHeading secId={secId} id={id ?? ''} outlineLine={typeof line === 'number' ? line : undefined}>
+            {children}
+          </SectionHeading>
+        );
+      }
       const props: Record<string, unknown> = {};
       if (typeof line === 'number') props['data-outline-line'] = line;
-      if (node) props.id = slugger(hastText(node)); // HEADANCHOR-1
+      if (id != null) props.id = id;
       return createElement(tag, props, children);
     };
   components.h1 = headingWithLine('h1');
@@ -409,6 +449,20 @@ export function MarkdownPreview({
     );
   };
 
+  // S3 «Редакция»: обёртка H2-секции (rehypeSections обернул h2+тело в `<section.sec data-sec-id>`).
+  // Класс `.collapsed` ставит `Section` по контексту; интерактив (клик/шеврон) — на самом h2
+  // (`SectionHeading`). h2 уже отрендерен через `components.h2` (HEADANCHOR-1: id/data-outline-line целы).
+  components.section = ({ node, children, ...rest }) => {
+    const props = (node?.properties ?? {}) as Record<string, unknown>;
+    // react-markdown@10 кладёт `data-sec-id` в node.properties БЕЗ camelCase (литеральный ключ).
+    const secId = typeof props['data-sec-id'] === 'string' ? props['data-sec-id'] : '';
+    // Не наша секция (напр. GFM-блок сносок `<section class="footnotes" data-footnotes>`): рендерим
+    // КАК ЕСТЬ с исходными props (react-markdown прокидывает className/data-* в `rest`) — иначе потеряли
+    // бы `.footnotes`-класс (FOOTNOTE-1: стили/якоря сносок завязаны на него).
+    if (!secId) return <section {...rest}>{children}</section>;
+    return <Section secId={secId}>{children}</Section>;
+  };
+
   if (onToggleTask) {
     // EDIT-5: убираем дефолтный disabled-чекбокс GFM (единственный источник `<input>` в markdown,
     // в т.ч. вложенный в `<p>` у loose-списков) — единственный чекбокс рисуем в `li`.
@@ -474,18 +528,24 @@ export function MarkdownPreview({
           </header>
         )}
         {tableFields.length > 0 && <PropertiesTable fields={tableFields} onOpenTag={onOpenTag} />}
-        <ReactMarkdown
-          // ПОРЯДОК ВАЖЕН: remarkFrontmatter/remarkComments — ПЕРВЫМИ (убрать frontmatter и вырезать
-          // `%%…%%` до embed/callout/nexus). Оба чистят узлы по позиции/тексту, тело по строкам сохранено
-          // (EDIT-5/7). pass-2 remarkComments чистит пустые абзацы — а remarkEmbeds позже делает embed-узлы
-          // «пустыми» абзацами, так что reorder remarkComments/remarkFrontmatter ПОСЛЕ embeds стёр бы вставки.
-          remarkPlugins={[remarkFrontmatter, remarkComments, remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
-          rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp]}
-          urlTransform={urlTransform}
-          components={components}
-        >
-          {body}
-        </ReactMarkdown>
+        {/* S3: контекст сворачивания секций — потребляют оверрайды h2 (кнопка) и section (класс). */}
+        <SectionContext.Provider value={sectionState}>
+          <ReactMarkdown
+            // ПОРЯДОК ВАЖЕН: remarkFrontmatter/remarkComments — ПЕРВЫМИ (убрать frontmatter и вырезать
+            // `%%…%%` до embed/callout/nexus). Оба чистят узлы по позиции/тексту, тело по строкам сохранено
+            // (EDIT-5/7). pass-2 remarkComments чистит пустые абзацы — а remarkEmbeds позже делает embed-узлы
+            // «пустыми» абзацами, так что reorder remarkComments/remarkFrontmatter ПОСЛЕ embeds стёр бы вставки.
+            remarkPlugins={[remarkFrontmatter, remarkComments, remarkEmbeds, remarkMermaid, remarkCallouts, remarkGfm, remarkHighlight, remarkNexus, [remarkMath, { singleDollarTextMath: false }]]}
+            // rehypeSections — ПОСЛЕ katex/csp: ему нужен полный, уже стабильный hast root (он лишь
+            // ПЕРЕГРУППИРОВЫВАЕТ узлы в `<section.sec>`, не трогая их содержимое). h2-узлы перемещаются
+            // as-is → React-оверрайд h2 по-прежнему проставит id/data-outline-line (HEADANCHOR-1).
+            rehypePlugins={[[rehypeKatex, { output: 'mathml', throwOnError: false, strict: false }], rehypeKatexCsp, rehypeSections]}
+            urlTransform={urlTransform}
+            components={components}
+          >
+            {body}
+          </ReactMarkdown>
+        </SectionContext.Provider>
         {/* AppendLine — только у top-level превью редактора (onAppendLine задан); embed/peek/доска не передают. */}
         {onAppendLine && fetchNotes && (
           <AppendLine onAppend={onAppendLine} fetchNotes={fetchNotes} />

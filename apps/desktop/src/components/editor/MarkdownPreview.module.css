@@ -10,6 +10,9 @@
   line-height: 1.72;
   color: var(--color-note-ink);
   overflow-wrap: anywhere;
+  /* S3 «Редакция»: счётчик H2-секций «01/02» (rehypeSections группирует тело в `.sec`); сбрасываем на
+     корне превью (аналог `.note-body` прототипа), инкремент — на `.sec h2` ниже. */
+  counter-reset: sec;
 }
 
 .preview :first-child {
@@ -63,38 +66,150 @@
   color: var(--color-text-muted);
 }
 
+/* ── S3 «Редакция»: сворачиваемые H2-секции (rehypeSections → `<section.sec>` c h2-узлом + `.sec-body`).
+   Номер «01/02» — CSS-счётчик (reset на `.preview`, increment на `.sec h2`). Шеврон `.fold` вкладывает
+   React-оверрайд Section внутрь h2. Тело — глобальный класс `.sec-body` (его ставит rehype-плагин в hast,
+   НЕ CSS-module), потому таргетим через `:global`. Свёрнутость — класс `.collapsed` (CSS-module). */
+.sec {
+  margin-top: 8px;
+}
+/* `.sec h2` (а не голый `.preview h2`) перебивает базовые правила заголовка специфичностью. Top-border —
+   тонкий разделитель секций; flex baseline + gap — место под номер/шеврон в левом поле. */
+.sec h2 {
+  counter-increment: sec;
+  position: relative;
+  margin: 30px 0 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  transition: color var(--motion-fast) var(--ease-standard);
+}
+/* Номер секции «01», «02»… — absolute в левом поле (читаемая ширина .preview центрирована). */
+.sec h2::before {
+  content: counter(sec, decimal-leading-zero);
+  position: absolute;
+  left: -54px;
+  top: 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+/* Шеврон сворачивания — реальная `<button>` (keyboard/a11y), absolute левее текста; поворот при collapsed;
+   hover h2 → ember. Сброс нативного вида кнопки (фон/рамка/паддинг), наследуем currentColor. */
+.fold {
+  position: absolute;
+  left: -30px;
+  top: 21px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+.fold:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.sec h2:hover {
+  color: var(--color-accent);
+}
+.sec h2:hover .fold {
+  color: var(--color-accent);
+}
+.sec.collapsed h2 {
+  color: var(--color-text-muted);
+}
+.sec.collapsed .fold {
+  transform: rotate(-90deg);
+}
+/* Тело секции: grid-rows-анимация сворачивания (БЕЗ потолка высоты — длинные секции не обрезаются).
+   `.sec-body` — grid c одним ребёнком `.sec-inner`: развёрнуто `1fr` = натуральная высота, свёрнуто `0fr`.
+   `.sec-inner` — `overflow:hidden; min-height:0` (обязательно для схлопывания grid-трека в 0). Классы —
+   литеральные из hast (rehypeSections), не хеш CSS-module → `:global`. */
+.sec :global(.sec-body) {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 0.28s ease,
+    opacity 0.22s ease;
+}
+.sec :global(.sec-inner) {
+  overflow: hidden;
+  min-height: 0;
+}
+.sec.collapsed :global(.sec-body) {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+/* H3 внутри секции — без верхнего border/счётчика секций (это под-заголовок, не top-level секция). */
+.sec h3 {
+  margin: 24px 0 10px;
+}
+
 .preview p {
   margin: 0 0 0.85em;
 }
 
-/* Списки по макету (DP-3): маркер-буллет в акценте, номера — faint tabular. */
+/* Списки (S3 «Редакция», README «Списки»): ember-кружок-маркер 5px, вложенный — полый (border);
+   номера ol — mono-акцент. Маркеры — псевдоэлементы (`list-style:none`), позиции в левом поле li. */
 .preview ul,
 .preview ol {
-  margin: 0 0 0.85em;
-  padding-left: 1.6em;
+  margin: 4px 0 0.85em;
+  padding-left: 0;
   list-style: none;
 }
-.preview li {
-  margin: 0.28em 0;
+.preview ul > li {
   position: relative;
+  padding-left: 22px;
+  margin: 0.28em 0;
+  line-height: 1.6;
 }
+/* ember-кружок 5px (заполненный) — top подогнан под кегль строки (.62em ≈ оптический центр). */
 .preview ul > li::before {
-  content: '•';
+  content: '';
   position: absolute;
-  left: -1.1em;
-  color: var(--color-accent);
+  left: 4px;
+  top: 0.62em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+/* Вложенный `ul ul li` — ПОЛЫЙ кружок (рамка ember, прозрачная заливка). */
+.preview ul ul > li::before {
+  background: transparent;
+  border: 1.5px solid var(--color-accent);
 }
 .preview ol {
   counter-reset: md-ol;
 }
 .preview ol > li {
   counter-increment: md-ol;
+  position: relative;
+  padding-left: 30px;
+  margin: 0.28em 0;
+  line-height: 1.6;
 }
 .preview ol > li::before {
-  content: counter(md-ol) '.';
+  content: counter(md-ol);
   position: absolute;
-  left: -1.6em;
-  color: var(--color-text-faint);
+  left: 0;
+  top: 0.04em;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent);
   font-variant-numeric: tabular-nums;
 }
 .preview li > ul,
@@ -102,20 +217,27 @@
   margin: 0.2em 0;
 }
 
-/* GFM task-list: чекбокс заменяет буллет. */
-.preview input[type='checkbox'] {
-  margin-right: 0.4em;
-  vertical-align: middle;
-}
+/* GFM task-list (EDIT-5): box-чекбокс заменяет маркер; интерактив сохраняет data-line/клик-логику. */
 .preview li:has(> input[type='checkbox']) {
-  margin-left: -1.3em;
+  padding-left: 28px;
 }
 .preview li:has(> input[type='checkbox'])::before {
   content: none;
 }
-/* EDIT-5: интерактивный чекбокс таска (клик → тоггл исходной строки + автосейв). */
+/* EDIT-5: чекбокс таска — box 18px (S3 «Редакция»), accent-цвет галочки. Native appearance:auto, чтобы
+   галочка/состояние disabled оставались доступны (клик-логика/data-line/состояние из GFM — не трогаем). */
 .taskCheckbox {
+  position: absolute;
+  left: 0;
+  top: 0.3em;
+  width: 18px;
+  height: 18px;
+  margin: 0;
   cursor: pointer;
+  accent-color: var(--color-accent);
+}
+.taskCheckbox:disabled {
+  cursor: default;
 }
 
 /* IMG-1: картинка-вложение в превью. */
