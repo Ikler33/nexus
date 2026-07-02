@@ -155,6 +155,19 @@ function freshGroups(): EditorGroup[] {
   return [{ id: INITIAL_GROUP, tabs: [], activeTab: null }];
 }
 
+/** EDFIX-4 (ревью MINOR-3): прунит записи режимов схлопнутых групп — иначе stale-записи копятся, а
+ *  воскрешённый через freshGroups() id 'g0' унаследовал бы прежний режим вместо префа noteMode.
+ *  КРИТИЧНО: фильтровать по СПИСКУ ВЫЖИВШИХ (`nonEmpty`) ДО подстановки freshGroups() — финальный
+ *  список снова содержит 'g0', и stale-запись пережила бы фильтр по нему. Пустые выжившие → {}. */
+function pruneModes(
+  modes: Record<string, 'source' | 'preview'>,
+  survivors: EditorGroup[],
+): Record<string, 'source' | 'preview'> {
+  return Object.fromEntries(
+    Object.entries(modes).filter(([id]) => survivors.some((g) => g.id === id)),
+  );
+}
+
 /** NAV-3: целевая группа для возврата записи истории — её родная группа, либо активная,
  *  если та схлопнулась (moveTab удаляет опустевшие группы). */
 function navGroup(get: () => WorkspaceState, groupId: string): string {
@@ -352,7 +365,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const buffers = Object.fromEntries(
         Object.entries(s.buffers).filter(([p]) => referenced.has(p) || s.buffers[p]?.dirty),
       );
-      return { groups, activeGroupId, buffers };
+      return { groups, activeGroupId, buffers, modes: pruneModes(s.modes, nonEmpty) };
     });
   },
 
@@ -380,7 +393,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const navHistory = s.navHistory.map((e) =>
         e.path === path && e.groupId === fromGroupId ? { ...e, groupId: toGroupId } : e,
       );
-      return { groups, activeGroupId: toGroupId, navHistory };
+      return { groups, activeGroupId: toGroupId, navHistory, modes: pruneModes(s.modes, nonEmpty) };
     });
   },
 
@@ -681,7 +694,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         else if (right !== -1) navIndex = right;
       }
       const recents = s.recents.filter((p) => !isUnder(p)); // NAV-2: и из недавних тоже (нет мёртвых)
-      return { groups: finalGroups, activeGroupId, buffers, navHistory, navIndex, recents };
+      return {
+        groups: finalGroups,
+        activeGroupId,
+        buffers,
+        navHistory,
+        navIndex,
+        recents,
+        modes: pruneModes(s.modes, nonEmpty),
+      };
     });
     saveRecents(get().recents); // персист подчищенных recents
   },

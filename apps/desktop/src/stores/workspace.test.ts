@@ -364,6 +364,37 @@ describe('workspace store (Ф0-9, Б12)', () => {
     expect(s.modes[g1]).toBe('source'); // зафиксирован, не уехал за префом
     expect(usePrefsStore.getState().noteMode).toBe('preview');
   });
+
+  // ревью MINOR-3: схлопывание групп обязано чистить modes — freshGroups() переиспользует id 'g0',
+  // и stale-запись воскрешённого g0 перебила бы преф noteMode.
+  it('EDFIX-4: воскрешённый g0 (closeTab опустошил все группы) берёт режим из ПРЕФА, не из stale-записи', async () => {
+    usePrefsStore.setState({ noteMode: 'source' });
+    await useWorkspaceStore.getState().openFile('README.md');
+    const gid = useWorkspaceStore.getState().activeGroupId;
+    useWorkspaceStore.getState().toggleMode(); // modes[gid]='preview', преф='preview'
+    expect(useWorkspaceStore.getState().modes[gid]).toBe('preview');
+    // Преф разошёлся со stale-записью (владелец позже выбрал source в другом месте).
+    usePrefsStore.setState({ noteMode: 'source' });
+    await useWorkspaceStore.getState().closeTab(gid, 'README.md'); // группа пустеет → freshGroups()
+    const s = useWorkspaceStore.getState();
+    expect(s.groups[0].id).toBe(gid); // id 'g0' переиспользован freshGroups()
+    expect(s.modes[gid]).toBeUndefined(); // stale-запись вычищена → эффективный режим = преф ('source')
+  });
+
+  it('EDFIX-4: moveTab схлопывает опустевшую группу → её запись в modes вычищается (выжившая цела)', async () => {
+    usePrefsStore.setState({ noteMode: 'source' });
+    await useWorkspaceStore.getState().openFile('README.md');
+    const g1 = useWorkspaceStore.getState().activeGroupId;
+    useWorkspaceStore.getState().splitRight(); // g2 с той же вкладкой
+    const g2 = useWorkspaceStore.getState().activeGroupId;
+    useWorkspaceStore.getState().toggleMode(g2); // modes: g2='preview', g1 зафиксирован 'source'
+    expect(useWorkspaceStore.getState().modes[g1]).toBe('source');
+    useWorkspaceStore.getState().moveTab(g2, g1, 'README.md'); // g2 пустеет → схлопывается
+    const s = useWorkspaceStore.getState();
+    expect(s.groups.some((g) => g.id === g2)).toBe(false);
+    expect(s.modes[g2]).toBeUndefined(); // запись схлопнутой группы вычищена
+    expect(s.modes[g1]).toBe('source'); // запись выжившей группы цела
+  });
 });
 
 describe('workspace external-change guard (SAFE-3)', () => {
