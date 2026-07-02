@@ -55,7 +55,10 @@ pub enum ChatStreamEvent {
     /// отказ политики эгресса (AC-EGR-14: offline | feature | host) для i18n-рендера на фронте.
     Error {
         message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        // `rename_all` на enum переименовывает ТОЛЬКО варианты, не поля struct-вариантов —
+        // без явного rename на провод уходил `denied_kind`, а TS ждёт `deniedKind` (AC-EGR-14):
+        // типизированный баннер отказа эгресса в живом app не срабатывал (P0-2 находка).
+        #[serde(rename = "deniedKind", skip_serializing_if = "Option::is_none")]
         denied_kind: Option<&'static str>,
     },
 }
@@ -841,5 +844,32 @@ mod tests {
             cancel.load(Ordering::Relaxed),
             "Stop доживает до фазы стрима — токен не перевзведён"
         );
+    }
+    /// P0-2-находка: `rename_all` на enum НЕ переименовывает поля struct-вариантов — без явного
+    /// rename фронт (tauri-api.ts `deniedKind`) не видел типизированный отказ эгресса (AC-EGR-14).
+    /// Тест пинит КЛЮЧ на проводе — регресс уронит его, а не живой баннер.
+    #[test]
+    fn error_event_wire_key_is_camel_case_denied_kind() {
+        let ev = ChatStreamEvent::Error {
+            message: "нет сети".into(),
+            denied_kind: Some("offline"),
+        };
+        let v = serde_json::to_value(&ev).expect("serialize");
+        assert_eq!(v["type"], "error");
+        assert_eq!(
+            v["deniedKind"], "offline",
+            "ключ обязан быть camelCase: {v}"
+        );
+        assert!(
+            v.get("denied_kind").is_none(),
+            "snake_case-ключа на проводе быть не должно: {v}"
+        );
+        // Отсутствие отказа → ключ опускается целиком (skip_serializing_if).
+        let ev = ChatStreamEvent::Error {
+            message: "x".into(),
+            denied_kind: None,
+        };
+        let v = serde_json::to_value(&ev).expect("serialize");
+        assert!(v.get("deniedKind").is_none() && v.get("denied_kind").is_none());
     }
 }
