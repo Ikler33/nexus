@@ -105,11 +105,12 @@ const KIND_TABLE: Record<string, Category> = {
   'web.fetch': 'web',
   search: 'web',
   fetch: 'web',
-  // read ⊇ Castor {note.read, recall, vault.read} + Hermes ACP {read} + общие {grep}
+  // read ⊇ Castor {note.read, recall, vault.read, fs.read} + Hermes ACP {read} + общие {grep}
   read: 'read',
   'note.read': 'read',
   recall: 'read',
   'vault.read': 'read',
+  'fs.read': 'read', // B4: есть в ACT (describeStep), без строки тут узел графа падал в 'think'
   grep: 'read',
   // think ⊇ {think, plan, reason} + default
   think: 'think',
