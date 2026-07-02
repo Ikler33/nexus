@@ -65,6 +65,15 @@ pub trait ToolCapableProvider: Send + Sync {
 
     /// Идентификатор модели (для истории/диагностики).
     fn model_id(&self) -> &str;
+
+    /// R-3a (характеризация bootstrap-канона): конфиг-наблюдаемые параметры провайдера одной строкой.
+    /// Вызыватели держат `Arc<dyn ToolCapableProvider>` — конкретный тип не достать, а характеризация
+    /// обязана сравнить ВСЕ параметры сборки. Дефолт пуст (моки/стабы); переопределяет только
+    /// [`OpenAiToolProvider`] (Debug-снимок).
+    #[doc(hidden)]
+    fn debug_params(&self) -> String {
+        String::new()
+    }
 }
 
 /// Tool-calling через OpenAI-совместимый `POST {base}/v1/chat/completions` со `stream:true`.
@@ -130,6 +139,23 @@ impl OpenAiToolProvider {
     pub fn with_idle_timeout(mut self, d: std::time::Duration) -> Self {
         self.idle_timeout = d;
         self
+    }
+}
+
+/// R-3a (характеризация bootstrap-канона): ВСЕ конфиг-наблюдаемые параметры провайдера; вместо
+/// объекта `client` — его профиль (`GuardedClient::debug_profile`). Снимок пинается
+/// характеризационными тестами agentd — менять формат = осознанно перепинать фикстуры.
+impl std::fmt::Debug for OpenAiToolProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiToolProvider")
+            .field("client", &self.client.debug_profile())
+            .field("feature", &self.feature)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("temperature", &self.temperature)
+            .field("first_token_timeout", &self.first_token_timeout)
+            .field("idle_timeout", &self.idle_timeout)
+            .finish()
     }
 }
 
@@ -243,6 +269,10 @@ impl ToolCapableProvider for OpenAiToolProvider {
 
     fn model_id(&self) -> &str {
         &self.model
+    }
+
+    fn debug_params(&self) -> String {
+        format!("{self:?}")
     }
 }
 

@@ -430,6 +430,11 @@ pub struct GuardedClient {
     audit: Arc<EgressAudit>,
     /// DNS-резолвер для гарда (боевой [`SystemResolver`]; в тестах/web-классе подменяется).
     resolver: Arc<dyn Resolver>,
+    /// R-3a (характеризация bootstrap-канона): человекочитаемый профиль клиента (какая фабрика +
+    /// какие таймауты). Параметры тюнинга живут в замыкании `tune` и снаружи не наблюдаемы — эта
+    /// строка делает их проверяемыми в характеризационных тестах (`debug_profile`). На рантайм не
+    /// влияет; заполняется фабриками `for_*`, у [`GuardedClient::new`] — `"custom"`.
+    profile: String,
 }
 
 impl GuardedClient {
@@ -450,7 +455,16 @@ impl GuardedClient {
             policy,
             audit,
             resolver: Arc::new(SystemResolver),
+            profile: "custom".to_string(),
         })
+    }
+
+    /// R-3a: профиль клиента (фабрика + таймауты) для характеризационных тестов bootstrap-канона —
+    /// единственный способ снаружи проверить, с какими таймаутами построен guarded-клиент (сами
+    /// значения спрятаны в tune-замыкании). Прод-код на это не смотрит.
+    #[doc(hidden)]
+    pub fn debug_profile(&self) -> &str {
+        &self.profile
     }
 
     /// Подменяет резолвер: web-класс (news/websearch) инъектит свой `Arc<dyn Resolver>` (в проде —
@@ -471,7 +485,9 @@ impl GuardedClient {
         audit: Arc<EgressAudit>,
         connect_timeout: Duration,
     ) -> Result<Self, NetError> {
-        Self::new(policy, audit, move |b| b.connect_timeout(connect_timeout))
+        let mut c = Self::new(policy, audit, move |b| b.connect_timeout(connect_timeout))?;
+        c.profile = format!("for_chat(connect_timeout={connect_timeout:?})");
+        Ok(c)
     }
 
     /// Профиль эмбеддинга: общий таймаут (батчи бывают тяжёлые). INFER-CFG: длительность принимается
@@ -481,7 +497,9 @@ impl GuardedClient {
         audit: Arc<EgressAudit>,
         timeout: Duration,
     ) -> Result<Self, NetError> {
-        Self::new(policy, audit, move |b| b.timeout(timeout))
+        let mut c = Self::new(policy, audit, move |b| b.timeout(timeout))?;
+        c.profile = format!("for_embedding(timeout={timeout:?})");
+        Ok(c)
     }
 
     /// Профиль probe (проба размерности / «Проверить связь»): короткий таймаут вызывающего.
@@ -490,7 +508,9 @@ impl GuardedClient {
         audit: Arc<EgressAudit>,
         timeout: Duration,
     ) -> Result<Self, NetError> {
-        Self::new(policy, audit, move |b| b.timeout(timeout))
+        let mut c = Self::new(policy, audit, move |b| b.timeout(timeout))?;
+        c.profile = format!("for_probe(timeout={timeout:?})");
+        Ok(c)
     }
 
     /// Профиль web (агент-инструменты web.search/web.fetch, EGR-AGENT): общий таймаут (страницы бывают
@@ -500,7 +520,9 @@ impl GuardedClient {
         audit: Arc<EgressAudit>,
         timeout: Duration,
     ) -> Result<Self, NetError> {
-        Self::new(policy, audit, move |b| b.timeout(timeout))
+        let mut c = Self::new(policy, audit, move |b| b.timeout(timeout))?;
+        c.profile = format!("for_web(timeout={timeout:?})");
+        Ok(c)
     }
 
     /// GET через политику (probe `/v1/models`). `bytes_out=None` — тела запроса нет (AC-EGR-10).
