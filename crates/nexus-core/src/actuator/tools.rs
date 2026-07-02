@@ -41,8 +41,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::agent::{Tool, ToolError, ToolSpec};
 use crate::db::WriteActor;
+use crate::tool_types::{Tool, ToolError, ToolSpec};
 
 use super::action::Action;
 use super::apply::AuditSink;
@@ -457,8 +457,8 @@ mod tests {
     use super::*;
     use crate::actuator::decision::{BatchDecision, ChannelDecision, ItemDecision, PolicyDefault};
     use crate::actuator::orchestrate::CollectingSink;
-    use crate::agent::event::AgentEvent;
     use crate::db::Database;
+    use crate::event::AgentEvent;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
