@@ -1,3 +1,4 @@
+import { deleteCharBackward, deleteCharForward } from '@codemirror/commands';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -77,12 +78,57 @@ describe('buildLivePreviewRanges (live-preview декорации — чиста
 
   it('РАСКРЫТИЕ под курсором: выделение внутри ссылки → ничего не прячем', () => {
     const text = '[[Note]]'; // 0..8
-    // Курсор на позиции 4 (внутри) — раскрыто.
+    // Курсор на позиции 4 (строго внутри) — раскрыто.
     expect(buildLivePreviewRanges(text, 4, 4)).toEqual([]);
-    // Курсор ровно на краю `]]` (8) — тоже раскрыто (края включительно — печать у конца).
-    expect(buildLivePreviewRanges(text, 8, 8)).toEqual([]);
-    // Курсор ровно на старте `[[` (0) — раскрыто.
-    expect(buildLivePreviewRanges(text, 0, 0)).toEqual([]);
+  });
+
+  // ── EDFIX-4 КОРЕНЬ 4: края раскрытия СТРОГИЕ. Прежний inclusive-тест выше кодифицировал
+  //    «курсор ровно на краю ]] — тоже раскрыто»; ОСОЗНАННО обновлён: только что набранная ссылка
+  //    (курсор сразу после `]]`) должна схлопнуться в лейбл/алиас НЕМЕДЛЕННО (репорт владельца
+  //    «алиас не работает»). Набор внутри `[[…]]` (автозакрытие) держит раскрытой — курсор строго внутри. ──
+  it('EDFIX-4 strict-края: курсор == matchEnd (сразу после набранного `]]`) → СКРЫТО', () => {
+    const text = '[[Note]]'; // 0..8: `[[` 0..2, `]]` 6..8
+    expect(buildLivePreviewRanges(text, 8, 8)).toEqual([
+      { from: 0, to: 2 },
+      { from: 6, to: 8 },
+    ]);
+  });
+
+  it('EDFIX-4 strict-края: курсор == matchStart (прямо перед `[[`) → СКРЫТО', () => {
+    const text = '[[Note]]';
+    expect(buildLivePreviewRanges(text, 0, 0)).toEqual([
+      { from: 0, to: 2 },
+      { from: 6, to: 8 },
+    ]);
+  });
+
+  it('EDFIX-4 strict-края: курсор строго внутри (даже между скобками `[|[`/`]|]`) → раскрыто', () => {
+    const text = '[[Note]]';
+    expect(buildLivePreviewRanges(text, 1, 1)).toEqual([]);
+    expect(buildLivePreviewRanges(text, 7, 7)).toEqual([]);
+  });
+
+  it('EDFIX-4 strict-края: выделение, частично пересекающее ссылку → раскрыто; касание края → скрыто', () => {
+    const text = 'ab [[Note]] cd'; // ссылка 3..11: `[[` 3..5, `]]` 9..11
+    // Выделение [0,5) захватывает `[[` → раскрыто.
+    expect(buildLivePreviewRanges(text, 0, 5)).toEqual([]);
+    // Выделение [9,14) захватывает `]]` → раскрыто.
+    expect(buildLivePreviewRanges(text, 9, 14)).toEqual([]);
+    // Выделение, лишь КАСАЮЩЕЕСЯ края (заканчивается ровно на matchStart) → скрыто.
+    expect(buildLivePreviewRanges(text, 0, 3)).toEqual([
+      { from: 3, to: 5 },
+      { from: 9, to: 11 },
+    ]);
+  });
+
+  it('EDFIX-4 strict-края: курсор в шве смежных `[[a]][[b]]` → обе СКРЫТЫ (прежде раскрывались обе)', () => {
+    const text = '[[a]][[b]]'; // a 0..5 (`[[` 0..2, `]]` 3..5), b 5..10 (`[[` 5..7, `]]` 8..10)
+    expect(buildLivePreviewRanges(text, 5, 5)).toEqual([
+      { from: 0, to: 2 },
+      { from: 3, to: 5 },
+      { from: 5, to: 7 },
+      { from: 8, to: 10 },
+    ]);
   });
 
   it('две ссылки: курсор в одной → раскрыта только она, вторая скрыта', () => {
@@ -151,7 +197,8 @@ describe('wikilinkLivePreview (интеграция в EditorView)', () => {
   });
 
   it('алиас `[[Note|Alias]]` → в DOM виден `Alias`', () => {
-    // Паддинг по краям + курсор на 0 (вне ссылки), иначе край-правило раскрыло бы единственную ссылку.
+    // Паддинг по краям + курсор на 0 (вне ссылки; края теперь строгие — EDFIX-4, паддинг оставлен
+    // для наглядности «курсор далеко от ссылки»).
     const view = mount('xx [[Note|Alias]] yy', 0);
     expect(view.dom.textContent).toBe('xx Alias yy');
     expect(view.state.doc.toString()).toBe('xx [[Note|Alias]] yy');
@@ -188,6 +235,26 @@ describe('wikilinkLivePreview (интеграция в EditorView)', () => {
       });
     }
     expect(found).toEqual({ from: 3, to: 5 });
+  });
+
+  // ── EDFIX-4 (ревью, ОСОЗНАННОЕ ПОВЕДЕНИЕ, не баг): на strict-краю схлопнутой ссылки Backspace/
+  //    Delete съедает СКРЫТЫЙ атомарный блок целиком (Obsidian-like: скрытый синтаксис ведёт себя
+  //    как один знак). Кодифицируем семантику, чтобы регресс/смена поведения были видимы. ──
+  it('EDFIX-4 атомарное удаление: Backspace сразу после схлопнутой ссылки удаляет `]]` парой', () => {
+    // `[[Note]] tail`, курсор 8 == matchEnd (strict-край → скрыто). Скрытый `]]` = 6..8.
+    const view = mount('[[Note]] tail', 8);
+    expect(view.dom.textContent).toBe('Note tail'); // схлопнута
+    deleteCharBackward(view);
+    expect(view.state.doc.toString()).toBe('[[Note tail'); // `]]` удалён как единый блок
+  });
+
+  it('EDFIX-4 атомарное удаление: Delete перед алиасной ссылкой удаляет весь скрытый `[[Target|` разом', () => {
+    // `[[Target|Alias]] tail`, курсор 0 == matchStart (strict-край → скрыто). Скрытые:
+    // `[[Target|` 0..9, `]]` 14..16.
+    const view = mount('[[Target|Alias]] tail', 0);
+    expect(view.dom.textContent).toBe('Alias tail');
+    deleteCharForward(view);
+    expect(view.state.doc.toString()).toBe('Alias]] tail'); // префикс-блок удалён целиком
   });
 });
 
