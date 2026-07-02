@@ -227,7 +227,7 @@ export function NewsView() {
     run?.llmDown && !run.llmDown.partial
       ? t('news.llmDown', {
           endpoint: run.llmDown.endpoint ?? t('news.llmDownNoEndpoint'),
-          n: run.llmFailed,
+          count: run.llmFailed,
         })
       : legacyLlmError;
 

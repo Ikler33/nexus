@@ -195,7 +195,7 @@ fn outcome_to_finish(outcome: &nexus_core::agent::LoopOutcome) -> (&'static str,
             partial,
         } => (
             run_store::STATUS_ERROR,
-            format!("прогон приостановлен (пауза агента — не ошибка выполнения); частичный ответ: {partial}"),
+            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
         ),
         LoopOutcome::BudgetExhausted { kind, partial } => (
             run_store::STATUS_ERROR,

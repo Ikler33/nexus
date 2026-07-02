@@ -347,7 +347,7 @@ export async function testEndpoint(): Promise<NewsEndpointHealth> {
   return {
     ok: true,
     message: 'анализатор новостей доступен',
-    endpoint: 'http://192.168.0.28:8084',
+    endpoint: 'http://localhost:8084',
     latencyMs: 42,
   };
 }
