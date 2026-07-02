@@ -37,7 +37,8 @@ use crate::ai::ChatMessage;
 use crate::db::{ReadPool, WriteActor};
 
 use super::super::super::event::AgentEvent;
-use super::super::super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
+use super::super::super::finish::{outcome_to_finish, CancelWording, PausePolicy};
+use super::super::super::run_store;
 use super::super::super::runner::{BudgetKind, LoopOutcome};
 use super::super::super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
 use super::super::{
@@ -369,7 +370,14 @@ async fn drive_prompt(
     // Дренаж событий завершится сам по закрытию ev_tx (move в run_agent_session forwarder уже дропнут).
     let _ = drain.await;
 
-    let (status, text) = outcome_to_finish(&outcome);
+    // Терминал по канону R-2 (зеркало handler: single-spawn, пауза → error — у ACP-сервера нет
+    // scheduler-requeue-пути возобновления).
+    let (status, text) = outcome_to_finish(
+        &outcome,
+        PausePolicy::FinalizeError,
+        CancelWording::RunCancelled,
+    )
+    .expect_finalize();
     let _ = run_store::finish_run(&cfg.writer, run_id, status, Some(&text)).await;
 
     // Мультитёрн: историю копим ТОЛЬКО на успешном Final (провальные ходы не травят контекст).
@@ -549,32 +557,6 @@ fn map_event_to_acp(session_id: &str, ev: &AgentEvent) -> Vec<RpcMessage> {
         //   ContextUsage/PlanStepStatus/ExecProposal/ExecResult/SubagentStatus/Report — нет ACP-эквивалента
         //   / актуатор-exec/делегирование/research выключены. `_` обязателен — AgentEvent `#[non_exhaustive]`.
         _ => vec![],
-    }
-}
-
-/// Маппинг исхода цикла → терминальный статус run_store (зеркало `handler::outcome_to_finish`).
-fn outcome_to_finish(outcome: &LoopOutcome) -> (&'static str, String) {
-    match outcome {
-        LoopOutcome::Final(s) => (STATUS_DONE, s.clone()),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Cancelled,
-            partial,
-        } => (
-            STATUS_CANCELLED,
-            format!("прогон отменён; частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Paused,
-            partial,
-        } => (
-            STATUS_ERROR,
-            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted { kind, partial } => (
-            STATUS_ERROR,
-            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::Error(e) => (STATUS_ERROR, e.clone()),
     }
 }
 
@@ -1764,6 +1746,61 @@ mod tests {
             stopreason_from_outcome(&LoopOutcome::Error("e".into())),
             "refusal"
         );
+    }
+
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
+    /// ЭТОГО вызывателя (канон с параметрами ACP-сервера: FinalizeError + «прогон отменён»), точным
+    /// сравнением (байт-в-байт). Тексты попадают в run_store/историю прогонов/UI — канонизация R-2
+    /// обязана сохранить их без изменений; ассерты идентичны фикстуре «до» на локальной копии.
+    #[test]
+    fn outcome_to_finish_characterization_full_table() {
+        use crate::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 7] = [
+            (LoopOutcome::Final("итог".into()), STATUS_DONE, "итог"),
+            (
+                be(BudgetKind::Cancelled),
+                STATUS_CANCELLED,
+                "прогон отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Paused),
+                STATUS_ERROR,
+                "прогон приостановлен (kill-switch); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (LoopOutcome::Error("упал".into()), STATUS_ERROR, "упал"),
+        ];
+        for (outcome, want_status, want_text) in table {
+            let (status, text) = outcome_to_finish(
+                &outcome,
+                PausePolicy::FinalizeError,
+                CancelWording::RunCancelled,
+            )
+            .expect_finalize();
+            assert_eq!(
+                (status, text.as_str()),
+                (want_status, want_text),
+                "вариант: {outcome:?}"
+            );
+        }
     }
 
     #[test]
