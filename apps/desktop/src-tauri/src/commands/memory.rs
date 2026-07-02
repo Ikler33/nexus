@@ -9,7 +9,7 @@ use crate::error::AppResult;
 use crate::memory::consolidate::{
     self, ConsolidationChoice, ConsolidationOutcome, ConsolidationPlan, PlanOp,
 };
-use crate::memory::{self, FactEvent, MemoryFact, SOURCE_AUTO, SOURCE_EXPLICIT};
+use crate::memory::{self, MemoryFact, SOURCE_AUTO, SOURCE_EXPLICIT};
 use crate::state::AppState;
 
 /// AC-MEM-2: список фактов (пины сверху, затем по дате).
@@ -125,12 +125,9 @@ pub async fn memory_delete(state: State<'_, AppState>, id: i64) -> AppResult<()>
     Ok(())
 }
 
-/// MEM-7: история событий факта (правки/удаление/замещение) — для «истории факта» в панели.
-#[tauri::command]
-pub async fn memory_fact_history(state: State<'_, AppState>, id: i64) -> AppResult<Vec<FactEvent>> {
-    let reader = state.vault().await?.db.reader().clone();
-    Ok(memory::fact_history(&reader, id).await?)
-}
+// B6: wire-команда `memory_fact_history` (MEM-7) удалена — «история факта» в UI так и не строилась,
+// фронт команду не вызывал (мёртвая API-поверхность). Ядро `memory::fact_history` остаётся, но
+// фактически test-only (прод-код его не вызывает); вернуть мост тривиально, когда появится панель.
 
 /// MEM-8 (owner-gated, флаг `aiMemoryConsolidation`): ПОСЧИТАТЬ предложение консолидации для нового
 /// факта — НИЧЕГО не пишет. Семантически близкие факты + ОСНОВНАЯ модель (`ctx.ai.chat`, 27B) решают

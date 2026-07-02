@@ -1,44 +1,13 @@
-//! Команды backup/restore (#59): экспорт durable «второго мозга» в JSON-строку (фронт сохраняет в
-//! файл) и импорт обратно с дедупом. Чистый bridge поверх `nexus_core::backup` — вся логика в ядре.
+//! Команды backup/restore (#59/W-9): экспорт durable «второго мозга» в файл по пути из OS-диалога и
+//! импорт обратно с дедупом. Чистый bridge поверх `nexus_core::backup` — вся логика в ядре.
+//! B6: JSON-строковые варианты (`backup_export_json`/`backup_import_json`) удалены — фронт после W-9
+//! ходит только файловыми путями, мёртвая wire-поверхность вычищена.
 
 use tauri::State;
 
 use crate::backup;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-
-/// Экспортирует полный бэкап (факты/переписка/эпизоды/телеметрия агент-скиллов) в pretty-JSON.
-/// Фронт сохраняет результат в файл `*.json`. Версия приложения штампуется из `CARGO_PKG_VERSION`.
-#[tauri::command]
-pub async fn backup_export_json(state: State<'_, AppState>) -> AppResult<String> {
-    let reader = state.vault().await?.db.reader().clone();
-    let envelope = backup::export_backup(&reader, env!("CARGO_PKG_VERSION")).await?;
-    serde_json::to_string_pretty(&envelope)
-        .map_err(|e| AppError::Msg(format!("сериализация бэкапа: {e}")))
-}
-
-/// Импортирует бэкап из JSON-строки с дедупом (атомарно). Чужой/битый формат, слишком большой файл
-/// или бэкап новее приложения → ошибка БЕЗ записи. Возвращает отчёт (что добавлено/пропущено) для UI.
-#[tauri::command]
-pub async fn backup_import_json(
-    state: State<'_, AppState>,
-    json: String,
-) -> AppResult<backup::ImportReport> {
-    // Anti-DoS: отсекаем гигантский/битый файл ДО материализации serde (один поток-писатель — узкое горло).
-    if json.len() > backup::MAX_BACKUP_BYTES {
-        return Err(AppError::Msg(format!(
-            "файл бэкапа слишком большой ({} байт > предела {})",
-            json.len(),
-            backup::MAX_BACKUP_BYTES
-        )));
-    }
-    let envelope: backup::BackupEnvelope =
-        serde_json::from_str(&json).map_err(|e| AppError::Msg(format!("разбор бэкапа: {e}")))?;
-    let writer = state.vault().await?.db.writer().clone();
-    backup::import_backup(&writer, envelope)
-        .await?
-        .map_err(|err| AppError::Msg(err.to_string()))
-}
 
 /// W-9: экспорт бэкапа сразу в ФАЙЛ по пути из save-диалога фронта (fs остаётся в доверенном
 /// бэкенде — фронт не получает прав на запись). Путь выбирает пользователь явным OS-диалогом.
@@ -54,8 +23,9 @@ pub async fn backup_export_to_path(state: State<'_, AppState>, path: String) -> 
     Ok(())
 }
 
-/// W-9: импорт бэкапа из ФАЙЛА по пути из open-диалога фронта. Та же дедуп-логика + лимит размера,
-/// что и `backup_import_json`.
+/// W-9: импорт бэкапа из ФАЙЛА по пути из open-диалога фронта, с дедупом (атомарно) и лимитом
+/// размера. Чужой/битый формат, слишком большой файл или бэкап новее приложения → ошибка БЕЗ записи.
+/// Возвращает отчёт (что добавлено/пропущено) для UI.
 #[tauri::command]
 pub async fn backup_import_from_path(
     state: State<'_, AppState>,

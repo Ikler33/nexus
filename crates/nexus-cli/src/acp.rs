@@ -3,7 +3,8 @@
 //! спавнит `nexus acp --vault <P>` и драйвит прогон Castor по line-delimited JSON-RPC 2.0 поверх наших
 //! stdin/stdout. Инверсия `nexus agent` (тот рисует поток в терминал; этот говорит по протоколу).
 //!
-//! **SAFE BY DEFAULT (fail-closed):** без `--actuator` — стабы, vault НЕ трогается, гейт не зовётся;
+//! **SAFE BY DEFAULT (fail-closed):** без `--actuator` — инструментов записи нет (пустой реестр, B7),
+//! vault НЕ трогается, гейт не зовётся;
 //! автономия `confirm` (каждая правка → `session/request_permission` клиенту; нет явного allow → отказ).
 //! `--auto` авто-применяет ЛИШЬ Auto-тир; Confirm-тир (риск) всё равно требует явного разрешения клиента.
 //! НЕТ `--yes`/ApproveAll (внешний клиент — единственный аппрувер; авто-одобрение по протоколу побило бы гейт).
@@ -75,7 +76,7 @@ async fn run_acp(root: PathBuf, actuator: bool, auto: bool) -> Result<(), String
          permissions=fail-closed\nговорю JSON-RPC 2.0 по stdin/stdout; жду ACP-клиента (EOF stdin → выход).",
         deps.canon_root.display(),
         deps.model,
-        if actuator { "ON" } else { "OFF (stub)" },
+        if actuator { "ON" } else { "OFF" },
     );
 
     let cfg = AcpServerConfig {
@@ -103,7 +104,7 @@ fn print_acp_help() {
          JSON-RPC 2.0 (ACP v1) по её stdin/stdout: initialize → session/new → session/prompt → …\n\n\
          ФЛАГИ:\n  \
          --vault PATH   корень vault (по умолчанию — текущий каталог; client cwd ИГНОРИРУЕТСЯ)\n  \
-         --actuator     включить живые правки vault через гейт; без него — стабы (vault не трогается)\n  \
+         --actuator     включить живые правки vault через гейт; без него правок нет (vault не трогается)\n  \
          --auto         автономия `auto`: Auto-тир применяется сам; Confirm-тир всё равно спрашивает клиента\n  \
          -h, --help     эта справка\n\n\
          БЕЗОПАСНОСТЬ (по умолчанию): актуатор ВЫКЛ, автономия confirm, permission fail-closed —\n  \

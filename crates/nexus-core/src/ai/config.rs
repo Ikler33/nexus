@@ -30,7 +30,8 @@ pub struct AiConfig {
     pub tokenizer_path: Option<String>,
 
     /// **GO-LIVE АКТУАТОРА (AGENT-3e), SAFE BY DEFAULT.** Когда `false` (ДЕФОЛТ) — прогон агента
-    /// работает ТОЛЬКО со стаб-инструментами (echo/noop); реальный vault НИКОГДА не затрагивается из
+    /// работает БЕЗ инструментов записи (реестр ПУСТ, если не подключены read-only skills/web — B7);
+    /// реальный vault НИКОГДА не затрагивается из
     /// коробки. Когда `true` — [`crate::agent::AgentRunHandler`] регистрирует файловые инструменты-
     /// актуаторы (note.create/edit/set_frontmatter), маршрутизируемые ИСКЛЮЧИТЕЛЬНО через гейт
     /// автономии (`actuator::dispatch_action`). Даже включённый, headless-agentd под `PolicyDefault`
@@ -795,8 +796,9 @@ mod tests {
             .is_none());
     }
 
-    /// AGENT-3e SAFE-BY-DEFAULT: флаг актуатора по умолчанию FALSE (нет ключа → стабы, реальный vault
-    /// не затронут). Связанные пороги по умолчанию None (берётся ядровый дефолт). Включается явно.
+    /// AGENT-3e SAFE-BY-DEFAULT: флаг актуатора по умолчанию FALSE (нет ключа → без инструментов
+    /// записи, реальный vault не затронут). Связанные пороги по умолчанию None (берётся ядровый
+    /// дефолт). Включается явно.
     #[test]
     fn agent_actuator_disabled_by_default() {
         // Пустой ai-блок → флаг false, пороги None.
