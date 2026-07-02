@@ -1022,6 +1022,79 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     expect(cap?.closest('section[data-sec-id]')).not.toBeNull();
   });
 
+  // ── EDFIX-4 КОРЕНЬ 1 (race, репорт владельца 2026-07-02): React РЕМОУНТИТ DOM-дерево превью при
+  //    смене identity `components`-useMemo (новый колбэк-проп из его deps, напр. inline-стрелка
+  //    `onOpenLink={(t) => …}` в GroupPane на КАЖДЫЙ ре-рендер, в т.ч. асинхронный setMtime) →
+  //    узел-носитель data-dropcap уничтожается. Эффект штамповки обязан перештамповать ПОСЛЕ ремоунта.
+  //    До фикса deps эффекта были [body, mastheadActive] — ремоунт невидим → буквица терялась
+  //    (живая репродукция: 1/6 циклов открытия preview успешен). ──
+  it('EDFIX-4 race: буквица переживает ремоунт превью (смена identity колбэк-пропа)', () => {
+    const src = '## X\n\nАбзац';
+    const { container, rerender } = render(
+      <MarkdownPreview source={src} notePath="f.md" onOpenLink={() => {}} masthead={{ mtime: null }} />,
+    );
+    // После первого коммита буквица есть (первый «голый» абзац внутри H2-секции).
+    expect(container.querySelector('p[data-dropcap]')).not.toBeNull();
+    // Новая identity onOpenLink (тот же контракт, что живой GroupPane) → `components` инвалидируется →
+    // markdownEl пересоздаётся → section-поддерево ремоунтится, <p> пересоздан БЕЗ атрибута.
+    rerender(
+      <MarkdownPreview source={src} notePath="f.md" onOpenLink={() => {}} masthead={{ mtime: null }} />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('А');
+  });
+
+  // ── EDFIX-4 КОРЕНЬ 2 (графем-гард): буквица только на абзаце, НАЧИНАЮЩЕМСЯ с буквы/цифры.
+  //    Реальный кейс владельца (Рескорринг.md): лид-абзац `← [[00 - Карта проекта]]` получал
+  //    data-cap='0' (первая цифра ГДЕ УГОДНО в тексте), а CSS ::first-letter раздувал «←». ──
+  it('EDFIX-4 графем-гард: абзац с лидом «←» ПРОПУСКАЕТСЯ — буквица на следующем обычном абзаце', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# T\n\n← [[00 - Карта проекта]]\n\nНормальный лид-абзац заметки.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const caps = container.querySelectorAll('p[data-dropcap]');
+    expect(caps).toHaveLength(1);
+    expect(caps[0].textContent).toContain('Нормальный лид-абзац');
+    expect(caps[0].getAttribute('data-cap')).toBe('Н');
+    // Абзац со стрелкой — БЕЗ атрибутов буквицы.
+    const arrow = Array.from(container.querySelectorAll('p')).find((p) =>
+      (p.textContent ?? '').startsWith('←'),
+    );
+    expect(arrow).toBeTruthy();
+    expect(arrow?.hasAttribute('data-dropcap')).toBe(false);
+  });
+
+  it('EDFIX-4 графем-гард: единственный абзац с лидом «←» → буквицы нет вовсе', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# T\n\n← [[00 - Карта проекта]]'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    expect(container.querySelector('[data-dropcap]')).toBeNull();
+  });
+
+  it('EDFIX-4 графем-гард: абзац с лидом-цифрой `2026 год…` → data-cap=«2» (цифра-буквица не регрессирует)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# T\n\n2026 год начался с больших планов.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('2');
+  });
+
   // ── РЕГРЕССИЯ (репорт владельца, реальная daily-заметка Daily/2026-03-01.md): режим чтения должен
   //    давать ЧИСТЫЕ вики-ссылки (без `[[ ]]`) + буквицу. Воспроизводит ВЕСЬ реальный конвейер на
   //    БАЙТ-ТОЧНОМ содержимом (frontmatter type/status, эмодзи-H1/H2, H2 `##  Связи` — после `##`

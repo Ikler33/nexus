@@ -9,7 +9,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { isTaskLine } from '../../lib/editor/format';
-import { deriveMasthead, dropCapLetter } from '../../lib/editor/masthead';
+import { deriveMasthead } from '../../lib/editor/masthead';
 import {
   bodyExcerpt,
   footnoteNumber,
@@ -91,6 +91,19 @@ const REHYPE_PLUGINS: ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
   rehypeKatexCsp,
   rehypeSections,
 ];
+
+/**
+ * Кандидат-предикат буквицы (EDFIX-4 КОРЕНЬ 2, графем-гард): абзац засчитывается ТОЛЬКО если его
+ * тримленный текст НАЧИНАЕТСЯ с буквы/цифры (`^[\p{L}\p{Nd}]`); cap — этот первый символ в верхнем
+ * регистре. Отличие от `dropCapLetter` (masthead.ts, там другие вызыватели/тесты — НЕ трогаем): тот
+ * ищет первую букву ГДЕ УГОДНО в тексте, из-за чего абзац `← [[Карта]]` получал data-cap='К', а CSS
+ * `::first-letter` раздувал «←» в гигантскую оранжевую стрелку. Лид `←`/эмодзи → '' → абзац
+ * ПРОПУСКАЕТСЯ (семантика «первый ОБЫЧНЫЙ абзац» — поиск продолжается к следующему p).
+ */
+function leadDropCap(text: string): string {
+  const m = (text || '').trim().match(/^[\p{L}\p{Nd}]/u);
+  return m ? m[0].toUpperCase() : '';
+}
 
 /** Минимальная форма hast-узла, по которой ищем состояние GFM-чекбокса (без зависимости от типов hast). */
 type HastNode = { tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
@@ -319,39 +332,6 @@ function MarkdownPreviewImpl(
     }),
     [],
   );
-
-  useLayoutEffect(() => {
-    const root = previewRef.current;
-    if (!root) return;
-    root.querySelectorAll('[data-dropcap]').forEach((el) => {
-      el.removeAttribute('data-dropcap');
-      el.removeAttribute('data-cap');
-    });
-    if (!mastheadActive) return;
-    // Буквица — на ПЕРВОМ обычном абзаце тела (порядок чтения, ГДЕ БЫ ОН НИ БЫЛ — проза-first ИЛИ
-    // первый абзац внутри H2-секции, напр. daily `## 🧠 Поток мыслей`: его `<p>` вложен в
-    // `<section><div.sec-body><div.sec-inner><p>`, querySelectorAll его видит). «Обычный» = НЕ внутри
-    // masthead/properties (шапка), callout (`<div data-callout>`, см. Callout.tsx), цитаты, списка,
-    // таблицы, figure — это не «обычный неформатированный текст» (adversarial FIX 3: иначе гигантская
-    // буквица села бы внутрь admonition/цитаты/пункта раньше реального лид-абзаца). Скоуп на СВОЙ
-    // previewRef: `querySelectorAll` спускается во вложенные `.preview` эмбедов (NoteEmbed), но буквица
-    // ставится ТОЛЬКО в своём документе → `p.closest('[class*="preview"]') === root` (как S6/S7). Нет
-    // подходящего «голого» `<p>` → буквицы нет (как list-first).
-    const EXCLUDE = `.${styles.docHead}, .${styles.properties}, [data-callout], blockquote, li, figure, table`;
-    const target = Array.from(root.querySelectorAll('p')).find(
-      (p) =>
-        p.closest('[class*="preview"]') === root &&
-        !p.closest(EXCLUDE) &&
-        dropCapLetter(p.textContent ?? '') !== '',
-    ) as HTMLElement | undefined;
-    if (target) {
-      const cap = dropCapLetter(target.textContent ?? '');
-      target.setAttribute('data-cap', cap);
-      target.setAttribute('data-dropcap', '');
-    }
-    // deps — примитивы (mastheadActive), а НЕ объект `masthead`: иначе свежий литерал {mtime,reading}
-    // на каждый ре-рендер GroupPane перезапускал бы эффект вхолостую. Штамповка зависит только от body.
-  }, [body, mastheadActive]);
 
   // ── Hermes-8 S7: ховер-превью `.popcard` (вики-ссылка 220мс / сноска 120мс) ──────────────────────
   // Карточка одна; `rect` — точка привязки (от `getBoundingClientRect` триггера). `pendingRef` держит
@@ -814,6 +794,49 @@ function MarkdownPreviewImpl(
     ),
     [body, components],
   );
+
+  // Буквица ведущего абзаца (порт dropcap.js) — ПОСЛЕ каждого пересоздания `markdownEl`.
+  useLayoutEffect(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    root.querySelectorAll('[data-dropcap]').forEach((el) => {
+      el.removeAttribute('data-dropcap');
+      el.removeAttribute('data-cap');
+    });
+    if (!mastheadActive) return;
+    // Буквица — на ПЕРВОМ обычном абзаце тела (порядок чтения, ГДЕ БЫ ОН НИ БЫЛ — проза-first ИЛИ
+    // первый абзац внутри H2-секции, напр. daily `## 🧠 Поток мыслей`: его `<p>` вложен в
+    // `<section><div.sec-body><div.sec-inner><p>`, querySelectorAll его видит). «Обычный» = НЕ внутри
+    // masthead/properties (шапка), callout (`<div data-callout>`, см. Callout.tsx), цитаты, списка,
+    // таблицы, figure — это не «обычный неформатированный текст» (adversarial FIX 3: иначе гигантская
+    // буквица села бы внутрь admonition/цитаты/пункта раньше реального лид-абзаца) — И НАЧИНАЮЩИЙСЯ
+    // с буквы/цифры (leadDropCap, EDFIX-4 КОРЕНЬ 2: абзац с лидом `←`/эмодзи пропускается — поиск идёт
+    // к следующему p, иначе CSS `::first-letter` стилизовал бы стрелку гигантской оранжевой буквицей,
+    // а data-cap нёс бы букву из середины текста). Скоуп на СВОЙ previewRef: `querySelectorAll`
+    // спускается во вложенные `.preview` эмбедов (NoteEmbed), но буквица ставится ТОЛЬКО в своём
+    // документе → `p.closest('[class*="preview"]') === root` (как S6/S7). Нет подходящего «голого»
+    // `<p>` → буквицы нет (как list-first).
+    const EXCLUDE = `.${styles.docHead}, .${styles.properties}, [data-callout], blockquote, li, figure, table`;
+    const target = Array.from(root.querySelectorAll('p')).find(
+      (p) =>
+        p.closest('[class*="preview"]') === root &&
+        !p.closest(EXCLUDE) &&
+        leadDropCap(p.textContent ?? '') !== '',
+    ) as HTMLElement | undefined;
+    if (target) {
+      const cap = leadDropCap(target.textContent ?? '');
+      target.setAttribute('data-cap', cap);
+      target.setAttribute('data-dropcap', '');
+    }
+    // deps — `markdownEl` (НЕ body!), EDFIX-4 КОРЕНЬ 1 (race): любой ремоунт DOM-дерева превью идёт
+    // через пересоздание `markdownEl` (плагины — модуль-константы, а memo `components` — единственный
+    // прочий вход ReactMarkdown; его инвалидация, напр. новой identity колбэк-пропа из GroupPane, и
+    // есть источник ремоунта). useLayoutEffect по нему перештампует атрибуты ДО paint. Прежние deps
+    // [body, …] ремоунт без смены текста НЕ видели → узел-носитель data-dropcap уничтожался React'ом,
+    // и буквица терялась (гонка со сменой identity, репро 1/6). `masthead`-объект в deps по-прежнему
+    // не нужен: свежий литерал {mtime,reading} на каждый ре-рендер гонял бы эффект вхолостую —
+    // достаточно примитива mastheadActive.
+  }, [markdownEl, mastheadActive]);
 
   return (
     <EmbedContext.Provider value={embedCtx}>
