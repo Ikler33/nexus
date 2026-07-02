@@ -11,7 +11,7 @@
 //! защита от двойного исполнения (повторная доставка джобы, requeue после краша воркера и т.п.).
 //!
 //! **AGENT-2 replay перезапускает цикл С НАЧАЛА** (не возобновляет с шага N). Это безопасно ТОЛЬКО
-//! потому, что инструменты AGENT-1 — безопасные стабы БЕЗ побочных эффектов (echo/noop): повторный
+//! потому, что при ВЫКЛ актуаторе реестр записи ПУСТ (B7) — побочных эффектов нет: повторный
 //! прогон не дублирует никакого внешнего эффекта. **AGENT-3 (актуатор) ОБЯЗАН** сделать
 //! side-effecting инструменты идемпотентными per-op-group (или сверяться с applied-ledger ДО
 //! применения), прежде чем полагаться на этот replay — иначе requeue после краша применит изменение
@@ -100,15 +100,16 @@ pub struct AgentRunHandler {
     memory: Option<Arc<dyn AgentMemory>>,
     /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие гейта/apply). Нужен ТОЛЬКО когда актуатор включён.
     canon_root: PathBuf,
-    /// **GO-LIVE-флаг актуатора (AGENT-3e), SAFE BY DEFAULT.** `false` → прогон только со стабами
-    /// (реальный vault не затрагивается); `true` → регистрируются гейтнутые инструменты-актуаторы.
+    /// **GO-LIVE-флаг актуатора (AGENT-3e), SAFE BY DEFAULT.** `false` → прогон БЕЗ инструментов
+    /// записи (пустой реестр, B7; реальный vault не затрагивается); `true` → регистрируются гейтнутые
+    /// инструменты-актуаторы.
     actuator_enabled: bool,
     /// Порог «крупной перезаписи» → Confirm-тир (из конфига). Эффект только при `actuator_enabled`.
     overwrite_threshold: usize,
     /// Кэп blast-radius прогона (анти-усталость). Эффект только при `actuator_enabled`.
     blast_cap: u32,
     /// Источник решений по предложениям. Headless agentd передаёт [`crate::actuator::PolicyDefault`]
-    /// (auto-DENY). Эффект только при `actuator_enabled` (стабы не предлагают).
+    /// (auto-DENY). Эффект только при `actuator_enabled` (без актуатора предлагать нечему).
     decision_source: Arc<dyn DecisionSource>,
     /// **SKILL-2: контекст скиллов прогона.** `Some` ⇔ skills-каталог сконфигурирован: drive инжектит
     /// tier-1 МЕНЮ каталога (user-role, фенсен) в начальный контекст И регистрирует `activate_skill`
@@ -150,7 +151,7 @@ impl AgentRunHandler {
     ///
     /// AGENT-3e (go-live актуатора): `canon_root`/`actuator_enabled`/`overwrite_threshold`/`blast_cap`/
     /// `decision_source` — параметры гейтнутого реестра. При `actuator_enabled=false` (дефолт конфига)
-    /// они НЕ используются: прогон работает со стаб-реестром, реальный vault не затрагивается.
+    /// они НЕ используются: прогон работает с пустым реестром записи (B7), vault не затрагивается.
     /// SKILL-2: `skills` — контекст скиллов (`Some` при сконфигурированном skills-каталоге → меню в
     /// контекст + tier-2/3 инструменты в реестр; `None` → без скиллов, без регрессии AGENT-2/MEM-1).
     #[allow(clippy::too_many_arguments)]
@@ -256,8 +257,8 @@ impl AgentRunHandler {
 
         // 4-5. Прогон через ЕДИНУЮ композицию [`run_agent_session`] (DRY: тот же код у desktop/коннектора).
         //    Она собирает начальный контекст ([system преамбул] + [recall памяти AGENT-MEM-1] +
-        //    [меню скиллов SKILL-2 tier-1] + [задача]), выбирает реестр (стабы при ВЫКЛ актуаторе → vault
-        //    не трогается; ВКЛ → гейтнутые актуаторы per-run DispatchPolicy с decision_source=PolicyDefault
+        //    [меню скиллов SKILL-2 tier-1] + [задача]), выбирает реестр (ПУСТОЙ при ВЫКЛ актуаторе, B7 →
+        //    vault не трогается; ВКЛ → гейтнутые актуаторы per-run DispatchPolicy с decision_source=PolicyDefault
         //    + проброс agent_paused в политику), регистрирует tier-2/3 инструменты скиллов и крутит цикл.
         //
         //    Headless-форвардер: считает `ToolResult`'ы в счётчик шагов (наблюдаемость/replay) +
@@ -430,7 +431,7 @@ impl JobHandler for AgentRunHandler {
 
 /// Ставит прогон агента в очередь: создаёт строку `agent_runs` (queued) → энкьюит джобу
 /// `KIND_AGENT_RUN` с payload = run_id → возвращает run_id (для UI/корреляции). `max_attempts` —
-/// небольшое (прогон replay-safe для AGENT-1 стабов; см. контракт replay).
+/// небольшое (прогон replay-safe при ВЫКЛ актуаторе — реестр записи пуст; см. контракт replay).
 pub async fn enqueue_agent_run(
     writer: &WriteActor,
     task: &str,
@@ -531,6 +532,8 @@ mod tests {
         })
     }
 
+    /// Вызов `debug.echo` из фейк-модели. B7: в прод-реестре (actuator OFF) стаба больше НЕТ —
+    /// диспатч даёт UnknownTool-ошибку; для lifecycle-тестов это ок (ToolResult всё равно эмитится).
     fn echo_call(id: &str) -> ToolCall {
         ToolCall {
             id: id.into(),
@@ -559,12 +562,13 @@ mod tests {
         Arc::new(AtomicBool::new(false))
     }
 
-    /// Хендлер для AGENT-2-тестов: актуатор ВЫКЛ (стабы) — не регрессируем поведение AGENT-2/MEM-1.
+    /// Хендлер для AGENT-2-тестов: актуатор ВЫКЛ (без инструментов записи) — не регрессируем
+    /// поведение AGENT-2/MEM-1.
     fn handler(db: &Database, ai: Arc<AIClient>) -> AgentRunHandler {
         handler_paused(db, ai, unpaused())
     }
 
-    /// Хендлер как [`handler`], но с ЗАДАННЫМ kill-switch (AGENT-5 тесты паузы). Актуатор ВЫКЛ (стабы).
+    /// Хендлер как [`handler`], но с ЗАДАННЫМ kill-switch (AGENT-5 тесты паузы). Актуатор ВЫКЛ.
     fn handler_paused(
         db: &Database,
         ai: Arc<AIClient>,
@@ -683,7 +687,8 @@ mod tests {
     }
 
     /// Lifecycle: handle с FakeToolProvider (ToolCalls→Final) ведёт прогон → done, исход установлен,
-    /// step бампнут (через ToolResult).
+    /// step бампнут (через ToolResult; B7: при ВЫКЛ актуаторе `debug.echo` не зарегистрирован →
+    /// UnknownTool-результат — он ТОЖЕ ToolResult, счётчик шагов честно бампается).
     #[tokio::test]
     async fn handle_drives_loop_to_done() {
         let (_d, db) = open().await;
@@ -1289,7 +1294,8 @@ mod tests {
             }
         }
 
-        // Инструменты: activate_skill + read_skill_resource зарегистрированы (плюс стабы echo/noop).
+        // Инструменты: activate_skill + read_skill_resource зарегистрированы (B7: стабов нет,
+        // при ВЫКЛ актуаторе это весь реестр).
         let tools = provider.seen_tools.lock().unwrap().clone().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
@@ -1312,7 +1318,7 @@ mod tests {
     }
 
     /// **skills НЕ сконфигурированы → НЕТ меню, НЕТ инструментов скиллов (no-regression).** Контекст =
-    /// [system, task]; tool-specs не содержат activate_skill/read_skill_resource (только стабы).
+    /// [system, task]; tool-specs не содержат activate_skill/read_skill_resource (реестр пуст, B7).
     #[tokio::test]
     async fn skills_absent_no_menu_no_tools_no_regression() {
         let (_d, db) = open().await;
@@ -1551,11 +1557,11 @@ mod tests {
             .unwrap()
     }
 
-    /// **Флаг ВЫКЛ (дефолт) → ТОЛЬКО стабы; vault НЕ затронут.** Прогон с провайдером, зовущим
-    /// `note.create`, НЕ создаёт файл: инструмент не зарегистрирован (стаб-реестр) → UnknownTool-ошибка,
+    /// **Флаг ВЫКЛ (дефолт) → реестр записи ПУСТ (B7); vault НЕ затронут.** Прогон с провайдером,
+    /// зовущим `note.create`, НЕ создаёт файл: инструмент не зарегистрирован → UnknownTool-ошибка,
     /// диск не тронут. Прогон всё равно доходит до терминала (модель видит ошибку, финализирует).
     #[tokio::test]
-    async fn flag_off_stubs_only_vault_untouched() {
+    async fn flag_off_no_write_tools_vault_untouched() {
         let (_d, root, db) = open_vault().await;
         let provider = Arc::new(FakeToolProvider::scripted(actuator_call_then_final(
             "note.create",
@@ -1575,8 +1581,8 @@ mod tests {
             !root.join("Notes/N.md").exists(),
             "флаг ВЫКЛ → актуатор не зарегистрирован → файл НЕ создан"
         );
-        // Ни одной executed-строки актуатора (стабы ledger не пишут).
-        assert_eq!(executed_count(&db, run_id).await, 0, "ledger пуст (стабы)");
+        // Ни одной executed-строки актуатора (без инструментов записи ledger пуст).
+        assert_eq!(executed_count(&db, run_id).await, 0, "ledger пуст");
         let r = run_store::get_run(db.reader(), run_id)
             .await
             .unwrap()

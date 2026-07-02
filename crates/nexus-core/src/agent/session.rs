@@ -1,5 +1,6 @@
 //! [`run_agent_session`] — ЕДИНАЯ композиция прогона агента (P0b-2): сборка начального контекста +
-//! выбор реестра (стабы | гейтнутые актуаторы) + скиллы + `run_agent_loop`. Транспорт-агностична:
+//! выбор реестра (пустой при ВЫКЛ актуаторе | гейтнутые актуаторы) + скиллы + `run_agent_loop`.
+//! Транспорт-агностична:
 //! куда уходят события — решает [`AgentEventForwarder`], переданный вызывающим.
 //!
 //! # Зачем модуль (DRY)
@@ -37,7 +38,6 @@ use super::memory::AgentMemory;
 use super::registry::ToolRegistry;
 use super::runner::{run_agent_loop, LoopBounds, LoopOutcome};
 use super::skill_tools::SkillContext;
-use super::stubs::{EchoTool, NoopTool};
 use super::web_tools::WebToolsConfig;
 
 /// СИНХРОННЫЙ форвардер событий прогона наружу. Реализуется потребителем под свой транспорт; вызывается
@@ -73,8 +73,8 @@ pub struct SessionSpec {
     pub history: Vec<ChatMessage>,
     /// Автономия прогона (`confirm`|`auto`|`None`→confirm в политике). Эффект только при `actuator_enabled`.
     pub autonomy: Option<String>,
-    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT.** `false` → только стабы (vault не трогается); `true`
-    /// → гейтнутые инструменты-актуаторы за `dispatch_action`.
+    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT.** `false` → БЕЗ инструментов записи (пустой реестр,
+    /// B7; vault не трогается); `true` → гейтнутые инструменты-актуаторы за `dispatch_action`.
     pub actuator_enabled: bool,
     /// Порог «крупной перезаписи» → Confirm-тир. Эффект только при `actuator_enabled`.
     pub overwrite_threshold: usize,
@@ -120,7 +120,7 @@ pub struct DelegationDeps {
 }
 
 /// Гонит один прогон агента: собирает начальный контекст ([system преамбул] + [recall памяти] +
-/// [меню скиллов] + [задача]), выбирает реестр (стабы | гейтнутые актуаторы с
+/// [меню скиллов] + [задача]), выбирает реестр (пустой при ВЫКЛ актуаторе | гейтнутые актуаторы с
 /// [`ForwardingEventSink`]), регистрирует tier-2/3 инструменты скиллов и крутит [`run_agent_loop`].
 /// Возвращает [`LoopOutcome`] — финализацию в `run_store` делает ВЫЗЫВАЮЩИЙ (этот слой не трогает
 /// статус-машину прогона, чтобы оставаться переиспользуемым для scheduler/desktop/коннектора).
@@ -171,7 +171,9 @@ pub async fn run_agent_session(
     let budget = ContextBudget::from_context_window(spec.context_window);
     let tk = QwenTokenizer::embedded();
 
-    // Реестр: дефолт-OFF → стабы (echo/noop, vault не трогается); ВКЛ → гейтнутые актуаторы за
+    // Реестр: дефолт-OFF → ПУСТОЙ реестр записи (B7: debug-стабы echo/noop вычищены из прод-пути —
+    // модель не видит пустышек в списке инструментов; read-only skills/web добавляются НИЖЕ независимо
+    // от флага); ВКЛ → гейтнутые актуаторы за
     // dispatch_action. Гейт получает ForwardingEventSink → Proposal/Diff уходят тем же форвардером,
     // что и события цикла. Per-run DispatchPolicy (общий blast-radius между инструментами) + проброс
     // `paused` в политику (KILL-SWITCH чек-пойнт #3: НЕ пишет под паузой даже мид-инструмент).
@@ -230,12 +232,13 @@ pub async fn run_agent_session(
         reg.insert(Arc::new(SetFrontmatterTool::new(dispatcher)));
         reg
     } else {
-        // Default-safe: стабы (НЕ касаются vault). decision_source/canon_root тогда не используются.
+        // Default-safe (B7): БЕЗ инструментов записи — пустой реестр, vault не трогается. Пустой набор
+        // корректен по всему пути: провайдер опускает `tools`/`tool_choice` из тела запроса
+        // (`request_body_adds_tools_only_when_present`), преамбула тулов не перечисляет, цикл без
+        // вызовов ждёт Final; вызов несуществующего имени → UnknownTool is_error (модель
+        // восстанавливается). decision_source/canon_root при OFF не используются.
         let _ = (&decision_source, &spec.canon_root);
-        let mut reg = ToolRegistry::new();
-        reg.insert(Arc::new(EchoTool));
-        reg.insert(Arc::new(NoopTool));
-        reg
+        ToolRegistry::new()
     };
     // SKILL-2 (tier 2 + 3): READ-ONLY инструменты скиллов (activate_skill + read_skill_resource),
     // НЕЗАВИСИМО от actuator-флага (скиллы только читают). Активация скилла НЕ добавляет иных
@@ -385,15 +388,27 @@ mod tests {
         }
     }
 
-    /// Фейк tool-провайдер: возвращает заранее заданную последовательность ходов (как agent_loop_smoke).
+    /// Фейк tool-провайдер: возвращает заранее заданную последовательность ходов (как agent_loop_smoke)
+    /// и записывает ИМЕНА тулов каждого хода (B7: доказательство состава реестра, который видит модель).
     struct FakeProvider {
         turns: Mutex<std::collections::VecDeque<AiResult<ToolTurn>>>,
+        seen_tools: Mutex<Vec<Vec<String>>>,
     }
     impl FakeProvider {
         fn new(turns: Vec<AiResult<ToolTurn>>) -> Self {
             Self {
                 turns: Mutex::new(turns.into_iter().collect()),
+                seen_tools: Mutex::new(Vec::new()),
             }
+        }
+        /// Имена тулов, показанные модели на ПЕРВОМ ходу (состав реестра фиксирован на весь прогон).
+        fn first_turn_tools(&self) -> Vec<String> {
+            self.seen_tools
+                .lock()
+                .unwrap()
+                .first()
+                .cloned()
+                .unwrap_or_default()
         }
     }
     #[async_trait]
@@ -401,11 +416,15 @@ mod tests {
         async fn stream_chat_tools(
             &self,
             _messages: &[Msg],
-            _tools: &[ToolSpec],
+            tools: &[ToolSpec],
             _on_token: &mut (dyn FnMut(String) + Send),
             _cancel: &Arc<AtomicBool>,
             _ctx: RunCtx,
         ) -> AiResult<ToolTurn> {
+            self.seen_tools
+                .lock()
+                .unwrap()
+                .push(tools.iter().map(|t| t.name.clone()).collect());
             self.turns
                 .lock()
                 .unwrap()
@@ -417,22 +436,42 @@ mod tests {
         }
     }
 
+    /// Skills-контекст с одним временным скиллом «alpha» — реальные read-only инструменты
+    /// (`activate_skill`/`read_skill_resource`) для тестов состава/сужения реестра при ВЫКЛ актуаторе
+    /// (B7: debug-стабов в прод-реестре больше нет, живые тулы дают скиллы).
+    fn skills_alpha() -> (TempDir, crate::agent::skill_tools::SkillContext) {
+        use crate::skills::discover_skills;
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let d = root.join("alpha");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("SKILL.md"),
+            "---\nname: alpha\ndescription: тестовый скилл\n---\nТЕЛО СКИЛЛА",
+        )
+        .unwrap();
+        let ctx =
+            crate::agent::skill_tools::SkillContext::new(Arc::new(discover_skills(&root)), root);
+        (tmp, ctx)
+    }
+
     async fn open_db() -> (TempDir, Database) {
         let dir = TempDir::new().unwrap();
         let db = Database::open(&dir.path().join("test.db")).await.unwrap();
         (dir, db)
     }
 
-    /// Стаб-путь (actuator OFF): фейк зовёт echo на ходу 1, Final на ходу 2. Форвардер должен увидеть
-    /// ПО ПОРЯДКУ ToolCall → ToolResult → Final, реальный vault не трогается. Доказывает, что
-    /// run_agent_session сводит события цикла в единый форвардер.
+    /// **B7, actuator OFF → реестр ПУСТ** (debug.echo/debug.noop в прод-пути больше не регистрируются:
+    /// модель не видит пустышек в списке инструментов). Фейк зовёт `debug.echo` на ходу 1 — это теперь
+    /// UnknownTool (is_error), цикл НЕ падает; Final на ходу 2. Форвардер видит ПО ПОРЯДКУ
+    /// ToolCall → ToolResult → Final (единый слитый поток), vault не трогается.
     #[tokio::test]
-    async fn stub_path_forwards_toolcall_result_final_in_order() {
+    async fn actuator_off_empty_registry_forwards_toolcall_result_final_in_order() {
         let (_dir, db) = open_db().await;
         let provider = FakeProvider::new(vec![
             Ok(ToolTurn::ToolCalls(vec![ToolCall {
                 id: "c1".into(),
-                name: "echo".into(),
+                name: "debug.echo".into(),
                 arguments: r#"{"text":"hi"}"#.into(),
             }])),
             Ok(ToolTurn::Final("готово".into())),
@@ -471,25 +510,39 @@ mod tests {
         .await;
 
         assert!(matches!(outcome, LoopOutcome::Final(s) if s == "готово"));
+        // B7-доказательство: модель на первом ходу получила ПУСТОЙ список тулов — никаких debug.*.
+        assert!(
+            provider.first_turn_tools().is_empty(),
+            "actuator OFF → пустой реестр (без debug-стабов): {:?}",
+            provider.first_turn_tools()
+        );
         let evs = fwd.events.lock().unwrap();
         let pos = |pred: &dyn Fn(&AgentEvent) -> bool| evs.iter().position(pred);
         let call = pos(&|e| matches!(e, AgentEvent::ToolCall { .. })).expect("toolcall");
         let res = pos(&|e| matches!(e, AgentEvent::ToolResult { .. })).expect("toolresult");
         let fin = pos(&|e| matches!(e, AgentEvent::Final(_))).expect("final");
         assert!(call < res && res < fin, "порядок ToolCall<ToolResult<Final");
+        // Вызов несуществующего тула честно помечен ошибкой (UnknownTool), но прогон дошёл до Final.
+        assert!(
+            matches!(evs[res], AgentEvent::ToolResult { is_error: true, .. }),
+            "debug.echo не зарегистрирован → UnknownTool is_error"
+        );
     }
 
-    /// SUB-3a (security keystone проводки): `subagent=Some(allowed)` СУЖАЕТ реестр ребёнка. Модель зовёт
-    /// `noop` (есть в полном реестре), но его НЕТ в `allowed={echo}` → реестр ребёнка его не содержит →
-    /// `UnknownTool` is_error. Эскалация инструментом сверх выданного невозможна по построению.
+    /// SUB-3a (security keystone проводки): `subagent=Some(allowed)` СУЖАЕТ реестр ребёнка. Полный
+    /// реестр (skills, B7: стабов больше нет) содержит `read_skill_resource`, но его НЕТ в
+    /// `allowed={activate_skill}` → реестр ребёнка его не содержит → `UnknownTool` is_error.
+    /// Эскалация инструментом сверх выданного невозможна по построению.
     #[tokio::test]
     async fn subagent_filtered_tool_is_unknown() {
+        use crate::agent::skill_tools::{ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL};
+        let (_sk_tmp, skills) = skills_alpha();
         let (_dir, db) = open_db().await;
         let provider = FakeProvider::new(vec![
             Ok(ToolTurn::ToolCalls(vec![ToolCall {
                 id: "c1".into(),
-                name: "debug.noop".into(),
-                arguments: "{}".into(),
+                name: READ_SKILL_RESOURCE_TOOL.into(),
+                arguments: r#"{"skill":"alpha","resource_path":"x.md"}"#.into(),
             }])),
             Ok(ToolTurn::Final("ок".into())),
         ]);
@@ -509,7 +562,7 @@ mod tests {
         let paused = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
         let allowed: std::collections::BTreeSet<String> =
-            ["debug.echo".to_string()].into_iter().collect();
+            [ACTIVATE_SKILL_TOOL.to_string()].into_iter().collect();
         let sa = SubagentSpawn {
             allowed: &allowed,
             dispatcher: None,
@@ -518,7 +571,82 @@ mod tests {
             &spec,
             &provider,
             None,
+            Some(&skills),
             None,
+            policy_default(),
+            db.writer(),
+            db.reader(),
+            &paused,
+            &cancel,
+            fwd.clone(),
+            Some(&sa),
+            None,
+            None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        )
+        .await;
+        // Сужение видно и МОДЕЛИ: в спеках ребёнка только allowed-имя (read_skill_resource удалён).
+        assert_eq!(
+            provider.first_turn_tools(),
+            vec![ACTIVATE_SKILL_TOOL.to_string()],
+            "реестр ребёнка сужен до allowed"
+        );
+        let evs = fwd.events.lock().unwrap();
+        let is_error = evs.iter().find_map(|e| match e {
+            AgentEvent::ToolResult { is_error, .. } => Some(*is_error),
+            _ => None,
+        });
+        assert_eq!(
+            is_error,
+            Some(true),
+            "read_skill_resource отфильтрован из реестра ребёнка (allowed={{activate_skill}}) → UnknownTool is_error"
+        );
+    }
+
+    /// SUB-3a контроль: инструмент, ВКЛЮЧённый в `allowed`, у ребёнка вызывается успешно (сужение не
+    /// режет лишнего). Живой тул — `activate_skill` (B7: read-only скиллы вместо вычищенных стабов).
+    #[tokio::test]
+    async fn subagent_allowed_tool_works() {
+        use crate::agent::skill_tools::{ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL};
+        let (_sk_tmp, skills) = skills_alpha();
+        let (_dir, db) = open_db().await;
+        let provider = FakeProvider::new(vec![
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: "c1".into(),
+                name: ACTIVATE_SKILL_TOOL.into(),
+                arguments: r#"{"skill":"alpha"}"#.into(),
+            }])),
+            Ok(ToolTurn::Final("ок".into())),
+        ]);
+        let fwd = Arc::new(CollectingForwarder::default());
+        let spec = SessionSpec {
+            run_id: 11,
+            task: "t".into(),
+            autonomy: None,
+            actuator_enabled: false,
+            overwrite_threshold: 100,
+            blast_cap: 10,
+            context_window: Some(4096),
+            canon_root: _dir.path().to_path_buf(),
+            history: Vec::new(),
+            skills_learning_enabled: false,
+        };
+        let paused = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let allowed: std::collections::BTreeSet<String> = [
+            ACTIVATE_SKILL_TOOL.to_string(),
+            READ_SKILL_RESOURCE_TOOL.to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let sa = SubagentSpawn {
+            allowed: &allowed,
+            dispatcher: None,
+        };
+        run_agent_session(
+            &spec,
+            &provider,
+            None,
+            Some(&skills),
             None,
             policy_default(),
             db.writer(),
@@ -538,70 +666,9 @@ mod tests {
         });
         assert_eq!(
             is_error,
-            Some(true),
-            "debug.noop отфильтрован из реестра ребёнка (allowed={{debug.echo}}) → UnknownTool is_error"
+            Some(false),
+            "activate_skill в allowed → вызывается успешно"
         );
-    }
-
-    /// SUB-3a контроль: инструмент, ВКЛЮЧённый в `allowed`, у ребёнка вызывается успешно (сужение не
-    /// режет лишнего).
-    #[tokio::test]
-    async fn subagent_allowed_tool_works() {
-        let (_dir, db) = open_db().await;
-        let provider = FakeProvider::new(vec![
-            Ok(ToolTurn::ToolCalls(vec![ToolCall {
-                id: "c1".into(),
-                name: "debug.echo".into(),
-                arguments: r#"{"text":"hi"}"#.into(),
-            }])),
-            Ok(ToolTurn::Final("ок".into())),
-        ]);
-        let fwd = Arc::new(CollectingForwarder::default());
-        let spec = SessionSpec {
-            run_id: 11,
-            task: "t".into(),
-            autonomy: None,
-            actuator_enabled: false,
-            overwrite_threshold: 100,
-            blast_cap: 10,
-            context_window: Some(4096),
-            canon_root: _dir.path().to_path_buf(),
-            history: Vec::new(),
-            skills_learning_enabled: false,
-        };
-        let paused = Arc::new(AtomicBool::new(false));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let allowed: std::collections::BTreeSet<String> =
-            ["debug.echo".to_string(), "debug.noop".to_string()]
-                .into_iter()
-                .collect();
-        let sa = SubagentSpawn {
-            allowed: &allowed,
-            dispatcher: None,
-        };
-        run_agent_session(
-            &spec,
-            &provider,
-            None,
-            None,
-            None,
-            policy_default(),
-            db.writer(),
-            db.reader(),
-            &paused,
-            &cancel,
-            fwd.clone(),
-            Some(&sa),
-            None,
-            None, // research (RES-4): default-OFF; прод-проводка в RES-5
-        )
-        .await;
-        let evs = fwd.events.lock().unwrap();
-        let is_error = evs.iter().find_map(|e| match e {
-            AgentEvent::ToolResult { is_error, .. } => Some(*is_error),
-            _ => None,
-        });
-        assert_eq!(is_error, Some(false), "echo в allowed → вызывается успешно");
     }
 
     /// SUB-3b-2b: `delegation=None` → `delegate.run` НЕ зарегистрирован → вызов модели → UnknownTool
@@ -821,9 +888,9 @@ mod tests {
     }
 
     /// `skills = Some(..)` → (а) tier-1 МЕНЮ скилла попадает в начальный контекст (имя скилла видно
-    /// провайдеру), (б) tier-2/3 инструменты (`activate_skill`/`read_skill_resource`) зарегистрированы
-    /// в реестре рядом со стабами — НЕЗАВИСИМО от actuator-флага (скиллы только читают). Покрывает
-    /// единственную ветку композиции, которую desktop не задействует (skills там всегда None).
+    /// провайдеру), (б) tier-2/3 инструменты (`activate_skill`/`read_skill_resource`) зарегистрированы —
+    /// НЕЗАВИСИМО от actuator-флага (скиллы только читают); при ВЫКЛ актуаторе они РОВНО весь реестр
+    /// (B7: debug-стабов нет).
     #[tokio::test]
     async fn skills_inject_menu_and_register_tier2_3_tools() {
         use crate::agent::skill_tools::{
@@ -887,15 +954,15 @@ mod tests {
             msgs.iter().any(|m| m.contains("alpha")),
             "tier-1 меню скилла должно быть в контексте: {msgs:?}"
         );
-        // (б) tier-2/3 инструменты скиллов зарегистрированы (рядом со стабами echo/noop).
+        // (б) tier-2/3 инструменты скиллов зарегистрированы, и при ВЫКЛ актуаторе реестр состоит РОВНО
+        // из них (B7: никаких debug.*-стабов в спеках, которые видит модель).
         let tools = provider.seen_tools.lock().unwrap();
-        assert!(
-            tools.iter().any(|t| t == ACTIVATE_SKILL_TOOL),
-            "activate_skill должен быть зарегистрирован: {tools:?}"
-        );
-        assert!(
-            tools.iter().any(|t| t == READ_SKILL_RESOURCE_TOOL),
-            "read_skill_resource должен быть зарегистрирован: {tools:?}"
+        let mut names: Vec<&str> = tools.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec![ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL],
+            "actuator OFF + skills → реестр ровно из двух read-only skill-тулов"
         );
     }
 
