@@ -19,6 +19,7 @@ import { pickActiveLine } from '../../lib/editor/outline';
 import { formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import { useInlineAIStore } from '../../stores/inlineAI';
+import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -62,7 +63,12 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const group = useWorkspaceStore((s) => s.groups.find((g) => g.id === groupId));
   const buffers = useWorkspaceStore((s) => s.buffers);
   const isActive = useWorkspaceStore((s) => s.activeGroupId === groupId);
-  const mode = useWorkspaceStore((s) => s.modes[groupId] ?? 'source');
+  // EDFIX-4 F4: fallback режима — персист-преф noteMode (последний выбранный), не хардкод 'source'.
+  // Две подписки на примитивы (без объектов из селектора) → без лишних/бесконечных ре-рендеров;
+  // подписка на prefs реактивна (новая панель без явной записи в modes следует префу; открытые панели
+  // с явной записью не трогаются — toggleMode фиксирует их режим в modes до смены префа).
+  const modePref = usePrefsStore((s) => s.noteMode);
+  const mode = useWorkspaceStore((s) => s.modes[groupId]) ?? modePref;
   const setActiveTab = useWorkspaceStore((s) => s.setActiveTab);
   const setActiveGroup = useWorkspaceStore((s) => s.setActiveGroup);
   const closeTab = useWorkspaceStore((s) => s.closeTab);
@@ -447,25 +453,28 @@ export function GroupPane({ groupId }: { groupId: string }) {
               onClose={() => useInlineAIStore.getState().close()}
             />
           )}
+          {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ.
+              EDFIX-4 F4: живёт ВНЕ скролл-контейнера (.editorCol position:relative, те же координаты
+              top:10px/right:16px) — absolute внутри .scroll уезжал вместе с прокруткой контента.
+              z-index 8 < InlineAIBar (12) — prompt-box остаётся поверх; таб-стрип вне .editorCol. */}
+          {mdActive && !reading && (
+            <button
+              className={styles.modeFloat}
+              onClick={() => toggleMode(groupId)}
+              title={mode === 'source' ? t('editor.preview') : t('editor.source')}
+              aria-label={mode === 'source' ? t('editor.preview') : t('editor.source')}
+              aria-pressed={mode === 'preview'}
+            >
+              <span key={mode} className={styles.modeIco}>
+                {mode === 'source' ? (
+                  <BookOpen size={16} aria-hidden />
+                ) : (
+                  <PenLine size={16} aria-hidden />
+                )}
+              </span>
+            </button>
+          )}
           <div className={styles.scroll} ref={scrollRef}>
-            {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ. */}
-            {mdActive && !reading && (
-              <button
-                className={styles.modeFloat}
-                onClick={() => toggleMode(groupId)}
-                title={mode === 'source' ? t('editor.preview') : t('editor.source')}
-                aria-label={mode === 'source' ? t('editor.preview') : t('editor.source')}
-                aria-pressed={mode === 'preview'}
-              >
-                <span key={mode} className={styles.modeIco}>
-                  {mode === 'source' ? (
-                    <BookOpen size={16} aria-hidden />
-                  ) : (
-                    <PenLine size={16} aria-hidden />
-                  )}
-                </span>
-              </button>
-            )}
             {isViewable(active.path) ? (
               <FileViewer path={active.path} />
             ) : mdActive && (mode === 'preview' || reading) ? (

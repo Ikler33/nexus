@@ -264,6 +264,8 @@
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
+/* EDFIX-4 F4: пилюля — absolute относительно .editorCol (position:relative), НЕ внутри .scroll:
+   absolute внутри скролл-контейнера уезжал вместе с прокруткой контента. Координаты прежние. */
 .modeFloat {
   position: absolute;
   top: 10px;

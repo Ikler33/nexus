@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from '../lib/tauri-api';
 import { flushAllDirty } from './autosave';
+import { usePrefsStore } from './prefs';
 import { useUIStore } from './ui';
 import { useVaultStore } from './vault';
 import { activeBuffer, activePath, useWorkspaceStore } from './workspace';
@@ -314,13 +315,54 @@ describe('workspace store (Ф0-9, Б12)', () => {
 
   // DP-3: режим source/preview — пер-группный, toggleMode без аргумента бьёт по активной.
   it('toggleMode переключает режим активной группы', async () => {
+    usePrefsStore.setState({ noteMode: 'source' }); // изоляция от порядка тестов (преф персистится)
     await useWorkspaceStore.getState().openFile('README.md');
     const gid = useWorkspaceStore.getState().activeGroupId;
-    expect(useWorkspaceStore.getState().modes[gid]).toBeUndefined(); // дефолт source
+    expect(useWorkspaceStore.getState().modes[gid]).toBeUndefined(); // дефолт source (из префа)
     useWorkspaceStore.getState().toggleMode();
     expect(useWorkspaceStore.getState().modes[gid]).toBe('preview');
     useWorkspaceStore.getState().toggleMode(gid);
     expect(useWorkspaceStore.getState().modes[gid]).toBe('source');
+  });
+
+  // ── EDFIX-4 F4: последний выбранный режим — персист-дефолт для новых панелей/запуска. ──
+  it('EDFIX-4: toggleMode персистит выбранный режим в преф noteMode (+localStorage)', async () => {
+    usePrefsStore.setState({ noteMode: 'source' });
+    await useWorkspaceStore.getState().openFile('README.md');
+    useWorkspaceStore.getState().toggleMode();
+    expect(usePrefsStore.getState().noteMode).toBe('preview');
+    expect(localStorage.getItem('nexus.editor.noteMode')).toBe('preview');
+    useWorkspaceStore.getState().toggleMode();
+    expect(usePrefsStore.getState().noteMode).toBe('source');
+    expect(localStorage.getItem('nexus.editor.noteMode')).toBe('source');
+  });
+
+  it('EDFIX-4: новая группа (без записи в modes) наследует преф; первый toggle идёт ОТ префа', async () => {
+    usePrefsStore.setState({ noteMode: 'preview' });
+    await useWorkspaceStore.getState().openFile('README.md');
+    const gid = useWorkspaceStore.getState().activeGroupId;
+    // Записи в modes нет → эффективный режим группы = преф ('preview', читает GroupPane).
+    expect(useWorkspaceStore.getState().modes[gid]).toBeUndefined();
+    // Первый toggle отталкивается от префа: preview → source (а не от хардкода 'source' → preview).
+    useWorkspaceStore.getState().toggleMode();
+    expect(useWorkspaceStore.getState().modes[gid]).toBe('source');
+    expect(usePrefsStore.getState().noteMode).toBe('source');
+  });
+
+  it('EDFIX-4: toggleMode НЕ трогает открытые панели ретроактивно — их режим фиксируется в modes', async () => {
+    usePrefsStore.setState({ noteMode: 'source' });
+    await useWorkspaceStore.getState().openFile('README.md');
+    const g1 = useWorkspaceStore.getState().activeGroupId;
+    useWorkspaceStore.getState().splitRight();
+    const g2 = useWorkspaceStore.getState().activeGroupId;
+    expect(g2).not.toBe(g1);
+    // Обе группы без явной записи (наследуют 'source'). Тогглим ТОЛЬКО g2 → преф станет 'preview',
+    // но g1 обязан ОСТАТЬСЯ в source: его унаследованный режим фиксируется в modes до смены префа.
+    useWorkspaceStore.getState().toggleMode(g2);
+    const s = useWorkspaceStore.getState();
+    expect(s.modes[g2]).toBe('preview');
+    expect(s.modes[g1]).toBe('source'); // зафиксирован, не уехал за префом
+    expect(usePrefsStore.getState().noteMode).toBe('preview');
   });
 });
 

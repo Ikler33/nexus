@@ -3,6 +3,9 @@ import i18n from '../i18n/setup';
 import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
 import { cancelAllAutosave, cancelAutosave, flush, scheduleAutosave } from './autosave';
+// EDFIX-4 F4: дефолт режима source/preview — из персист-префа (последний выбранный). Цикла импортов
+// нет: prefs.ts не импортирует ничего из workspace (только zustand+localStorage).
+import { usePrefsStore } from './prefs';
 import { useToastStore } from './toast';
 
 /**
@@ -383,11 +386,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   modes: {},
   toggleMode(groupId) {
-    set((s) => {
-      const gid = groupId ?? s.activeGroupId;
-      const next = (s.modes[gid] ?? 'source') === 'source' ? 'preview' : 'source';
-      return { modes: { ...s.modes, [gid]: next } };
-    });
+    // EDFIX-4 F4: дефолт (нет явной записи в modes) — из персист-префа noteMode (последний выбранный
+    // режим), а не хардкод 'source'. После переключения новое значение пишется в преф: оно становится
+    // дефолтом для НОВЫХ панелей и следующего запуска. Открытые панели ретроактивно НЕ трогаем —
+    // группам без явной записи их текущий (унаследованный от префа) режим ФИКСИРУЕТСЯ в modes до
+    // смены префа, иначе смена дефолта на лету перещёлкнула бы и их.
+    const s = get();
+    const gid = groupId ?? s.activeGroupId;
+    const pref = usePrefsStore.getState().noteMode;
+    const next = (s.modes[gid] ?? pref) === 'source' ? 'preview' : 'source';
+    const modes = { ...s.modes };
+    for (const g of s.groups) {
+      if (modes[g.id] == null) modes[g.id] = pref;
+    }
+    modes[gid] = next;
+    usePrefsStore.getState().setNoteMode(next);
+    set({ modes });
   },
 
   splitRight() {

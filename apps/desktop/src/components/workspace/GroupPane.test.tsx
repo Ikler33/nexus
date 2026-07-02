@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GroupPane } from './GroupPane';
 import { tauriApi } from '../../lib/tauri-api';
+import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 // Пустая группа (без вкладок): таб-стрип с back/forward рендерится всегда, без CM6-редактора —
@@ -85,6 +86,42 @@ describe('GroupPane close-pane (W-1)', () => {
     render(<GroupPane groupId="g1" />);
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть панель' }));
     expect(closeGroup).toHaveBeenCalledWith('g1');
+  });
+});
+
+// ── EDFIX-4 F4: mode-float пилюля ВНЕ скролл-контейнера (не уезжает при прокрутке) + fallback
+//    режима из персист-префа noteMode (новая панель без записи в modes наследует последний выбранный). ──
+describe('GroupPane mode-float + преф noteMode (EDFIX-4 F4)', () => {
+  function setupMd(noteMode: 'source' | 'preview') {
+    vi.spyOn(tauriApi.vault, 'fileMtime').mockResolvedValue(0);
+    usePrefsStore.setState({ noteMode });
+    useWorkspaceStore.setState({
+      groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
+      activeGroupId: 'g0',
+      buffers: { 'A.md': { path: 'A.md', doc: '# T\n\nтекст', dirty: false, baseHash: '' } },
+      modes: {}, // явной записи НЕТ — режим наследуется из префа
+    });
+    return render(<GroupPane groupId="g0" />);
+  }
+  afterEach(() => usePrefsStore.setState({ noteMode: 'source' }));
+
+  it('пилюля НЕ внутри .scroll (absolute относительно editorCol → не скроллится с контентом)', () => {
+    setupMd('source');
+    const pill = screen.getByRole('button', { name: 'Просмотр' });
+    expect(pill.closest('[class*="scroll"]')).toBeNull();
+    expect(pill.closest('[class*="editorCol"]')).not.toBeNull();
+  });
+
+  it('панель без записи в modes наследует преф noteMode=preview (пилюля показывает «Исходник»)', async () => {
+    setupMd('preview');
+    // Режим preview → лениво грузится MarkdownPreview, пилюля предлагает обратное действие.
+    expect(await screen.findByRole('button', { name: 'Исходник' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Исходник' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('панель без записи в modes при префе source стартует в source (пилюля «Просмотр»)', () => {
+    setupMd('source');
+    expect(screen.getByRole('button', { name: 'Просмотр' })).toHaveAttribute('aria-pressed', 'false');
   });
 });
 
