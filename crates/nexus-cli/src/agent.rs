@@ -813,13 +813,20 @@ mod tests {
             kind: BudgetKind::Paused,
             partial: "успел половину".into(),
         });
-        assert_eq!(status, run_store::STATUS_ERROR, "терминальность как в эталоне");
+        assert_eq!(
+            status,
+            run_store::STATUS_ERROR,
+            "терминальность как в эталоне"
+        );
         assert!(text.contains("приостановлен"), "got: {text}");
         assert!(
             !text.contains("бюджет исчерпан"),
             "пауза ≠ исчерпанный бюджет: {text}"
         );
-        assert!(text.contains("успел половину"), "частичный ответ виден: {text}");
+        assert!(
+            text.contains("успел половину"),
+            "частичный ответ виден: {text}"
+        );
     }
 
     /// B13 (регрессия): прочие армы маппинга не сдвинулись — done/cancelled/бюджет/ошибка как были.

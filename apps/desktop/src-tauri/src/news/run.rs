@@ -501,7 +501,10 @@ mod tests {
             vec!["deepmind: недоступен".to_string()],
             "падение источника видимо"
         );
-        assert_eq!(run.llm_down, None, "LLM жив → структурного сигнала нет (B12)");
+        assert_eq!(
+            run.llm_down, None,
+            "LLM жив → структурного сигнала нет (B12)"
+        );
         assert_eq!(run.digest_ru, "Сводка дня.");
         assert_eq!(
             chat_impl.eval_calls.load(Ordering::SeqCst),
