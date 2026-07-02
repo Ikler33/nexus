@@ -79,7 +79,14 @@ export function ActivityBar() {
           openBoard,
           boardOpen,
         )}
-        {btn(<CometIcon size={19} aria-hidden />, t('commands.view.agent'), openAgent, agentOpen)}
+        {/* P0-3-смоук: НЕ передавать openAgent голой ссылкой — onClick подставит MouseEvent в
+            optional `seed`, и `seed.trim()` бросит TypeError (кнопка Castor «мертвела»). */}
+        {btn(
+          <CometIcon size={19} aria-hidden />,
+          t('commands.view.agent'),
+          () => openAgent(),
+          agentOpen,
+        )}
         {btn(
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),
