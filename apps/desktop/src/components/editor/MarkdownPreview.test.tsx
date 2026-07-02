@@ -3,6 +3,7 @@ import { createRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../../lib/tauri-api';
+import { usePrefsStore } from '../../stores/prefs';
 import { MarkdownPreview, type MarkdownPreviewHandle } from './MarkdownPreview';
 
 // mermaid рендерится через тяжёлый dynamic-import + getBBox (jsdom не умеет) — мокаем renderMermaid
@@ -1020,6 +1021,42 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     expect(cap?.getAttribute('data-cap')).toBe('М');
     // абзац-цель реально лежит ВНУТРИ секции (S3-обёртка)
     expect(cap?.closest('section[data-sec-id]')).not.toBeNull();
+  });
+
+  // ── EDFIX-4 КОРЕНЬ 3: преф «Чистые ссылки» (wikilinkLivePreview) действует и в reading/preview —
+  //    ON → `data-clean-links` на корне `.preview` (CSS гасит скобки ::before/::after; сам content:none
+  //    jsdom не вычисляет — визуал докрывает playwright-стенд). OFF → атрибута нет, скобки S2 остаются. ──
+  it('EDFIX-4 clean-links: преф ON → data-clean-links на корне превью; OFF → атрибута нет', () => {
+    const prev = usePrefsStore.getState().wikilinkLivePreview;
+    try {
+      usePrefsStore.setState({ wikilinkLivePreview: true });
+      const on = render(<MarkdownPreview source={'см. [[Заметка]]'} onOpenLink={() => {}} />);
+      const rootOn = on.container.querySelector('[class*="preview"]');
+      expect(rootOn?.hasAttribute('data-clean-links')).toBe(true);
+      on.unmount();
+
+      usePrefsStore.setState({ wikilinkLivePreview: false });
+      const off = render(<MarkdownPreview source={'см. [[Заметка]]'} onOpenLink={() => {}} />);
+      const rootOff = off.container.querySelector('[class*="preview"]');
+      expect(rootOff?.hasAttribute('data-clean-links')).toBe(false);
+      off.unmount();
+    } finally {
+      usePrefsStore.setState({ wikilinkLivePreview: prev });
+    }
+  });
+
+  it('EDFIX-4 clean-links: смена префа на живом превью реактивно ставит/снимает атрибут', () => {
+    const prev = usePrefsStore.getState().wikilinkLivePreview;
+    try {
+      usePrefsStore.setState({ wikilinkLivePreview: true });
+      const { container } = render(<MarkdownPreview source={'см. [[Заметка]]'} onOpenLink={() => {}} />);
+      const root = container.querySelector('[class*="preview"]');
+      expect(root?.hasAttribute('data-clean-links')).toBe(true);
+      act(() => usePrefsStore.setState({ wikilinkLivePreview: false }));
+      expect(root?.hasAttribute('data-clean-links')).toBe(false);
+    } finally {
+      usePrefsStore.setState({ wikilinkLivePreview: prev });
+    }
   });
 
   // ── EDFIX-4 КОРЕНЬ 1 (race, репорт владельца 2026-07-02): React РЕМОУНТИТ DOM-дерево превью при

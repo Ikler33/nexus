@@ -34,6 +34,7 @@ import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/rem
 import { remarkStripHeadingEmoji } from '../../lib/markdown/remarkStripHeadingEmoji';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
 import { relTime } from '../../lib/time';
+import { usePrefsStore } from '../../stores/prefs';
 import { AppendLine } from './AppendLine';
 import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
@@ -254,6 +255,13 @@ function MarkdownPreviewImpl(
   );
 
   const { t, i18n } = useTranslation();
+
+  // EDFIX-4 КОРЕНЬ 3: «Чистые ссылки» действуют и в reading/preview — тот же преф, что у source-LP
+  // (prefs.ts, ВКЛ по умолчанию). ON → на корневой `.preview` ставится `data-clean-links` (attr без
+  // значения), CSS гасит декоративные скобки `.wikilink::before/::after` (S2 «Редакция» остаётся
+  // ТОЛЬКО при выключенном тумблере). Каждый инстанс MarkdownPreview ставит атрибут сам → вложенные
+  // превью NoteEmbed (рендерятся рекурсивно этим же компонентом) покрыты автоматически.
+  const cleanLinks = usePrefsStore((s) => s.wikilinkLivePreview);
 
   // S3 «Редакция»: свёрнутые H2-секции — Set по `data-sec-id` (slug заголовка, стабилен к правкам в
   // других секциях). По умолчанию все РАЗВЁРНУТЫ (пустой Set). Тоггл — на клик/Enter/Space по h2.
@@ -842,6 +850,7 @@ function MarkdownPreviewImpl(
     <EmbedContext.Provider value={embedCtx}>
       <div
         className={masthead?.reading ? `${styles.preview} ${styles.reading}` : styles.preview}
+        data-clean-links={cleanLinks ? '' : undefined}
         ref={previewRef}
         // S7: страховка скрытия — курсор покинул всё превью (mouseleave не всплывает, срабатывает на
         // реальном выходе). Контейнер стабилен (не ремонтируется при ре-рендере ReactMarkdown), потому
