@@ -5,8 +5,9 @@
 //! [`StdinStdoutTransport`]).
 //!
 //! # Безопасность (SAFE BY DEFAULT, fail-closed)
-//! - Актуатор ВЫКЛ по умолчанию (`actuator_enabled=false`) → [`run_agent_session`] ставит ТОЛЬКО стабы
-//!   (echo/noop), vault не пишется, [`AcpServerDecisionSource::decide`] не зовётся. Единственный эффект
+//! - Актуатор ВЫКЛ по умолчанию (`actuator_enabled=false`) → [`run_agent_session`] НЕ ставит
+//!   инструментов записи (реестр пуст, если не подключены read-only skills/web — B7), vault не
+//!   пишется, [`AcpServerDecisionSource::decide`] не зовётся. Единственный эффект
 //!   дефолтного `nexus acp` — строка `agent_runs`.
 //! - Автономия по умолчанию `confirm`: каждый Confirm-тир (и Auto за blast-cap) идёт в клиент как
 //!   `session/request_permission`. Любой сбой решения (send-fail/таймаут/EOF/cancel/Cancelled/неизвестная
@@ -68,7 +69,7 @@ pub struct AcpServerConfig {
     pub reader: ReadPool,
     /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие гейта/apply; client-cwd НЕ репойнтит его — R7).
     pub canon_root: PathBuf,
-    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT** (`false` → стабы, vault не трогается).
+    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT** (`false` → без инструментов записи, vault не трогается).
     pub actuator_enabled: bool,
     /// Автономия прогона (`"confirm"`|`"auto"`), default `"confirm"`. Эффект только при `actuator_enabled`.
     pub autonomy: String,

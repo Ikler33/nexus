@@ -128,8 +128,8 @@ fn clip_chars(s: &str, max: usize) -> String {
 /// - [`AgentEvent::Final`] / [`AgentEvent::Error`] ← `Final(String)` / `Error(String)`.
 ///
 /// # Что придёт ПОЗЖЕ (спроектировано как точки расширения, см. `#[non_exhaustive]`)
-/// CONTRACT-NOTES перечисляет варианты последующих срезов — здесь НЕ реализованы (стабы шлют только
-/// ToolCall/ToolResult), но enum намеренно открыт под них:
+/// CONTRACT-NOTES перечисляет варианты последующих срезов — на момент AGENT-1 не реализованы (базовый
+/// цикл слал только ToolCall/ToolResult), но enum намеренно открыт под них:
 /// - `PlanProposed(steps)` / `PlanStepStatus(id, status)` — упорядоченные шаги плана + их статусы
 ///   (правый док + инлайн-лента) — **AGENT-2** (план).
 /// - [`AgentEvent::Proposal`]/[`AgentEvent::Diff`] — поверхность changeset/аппрува актуатора
