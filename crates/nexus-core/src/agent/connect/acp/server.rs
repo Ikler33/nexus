@@ -1766,6 +1766,54 @@ mod tests {
         );
     }
 
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
+    /// ЭТОГО вызывателя, точным сравнением (байт-в-байт). Тексты попадают в run_store/историю
+    /// прогонов/UI — канонизация R-2 обязана сохранить их без изменений.
+    #[test]
+    fn outcome_to_finish_characterization_full_table() {
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 7] = [
+            (LoopOutcome::Final("итог".into()), STATUS_DONE, "итог"),
+            (
+                be(BudgetKind::Cancelled),
+                STATUS_CANCELLED,
+                "прогон отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Paused),
+                STATUS_ERROR,
+                "прогон приостановлен (kill-switch); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (LoopOutcome::Error("упал".into()), STATUS_ERROR, "упал"),
+        ];
+        for (outcome, want_status, want_text) in table {
+            let (status, text) = outcome_to_finish(&outcome);
+            assert_eq!(
+                (status, text.as_str()),
+                (want_status, want_text),
+                "вариант: {outcome:?}"
+            );
+        }
+    }
+
     #[test]
     fn concat_prompt_text_joins_text_blocks() {
         use super::super::schema::ContentBlock;

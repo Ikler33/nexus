@@ -1612,4 +1612,71 @@ mod tests {
             "без Approve файл НЕ записан (fail-closed)"
         );
     }
+
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
+    /// `finish_in_store` ЭТОГО вызывателя, точным сравнением (байт-в-байт). Тексты попадают в
+    /// run_store/историю прогонов/UI — канонизация R-2 обязана сохранить их без изменений.
+    #[tokio::test]
+    async fn finish_in_store_characterization_full_table() {
+        use nexus_core::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
+        use nexus_core::agent::BudgetKind;
+        let (_dir, db, _canon) = open_db().await;
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 7] = [
+            (LoopOutcome::Final("итог".into()), STATUS_DONE, "итог"),
+            (
+                be(BudgetKind::Cancelled),
+                STATUS_CANCELLED,
+                "прогон отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Paused),
+                STATUS_ERROR,
+                "прогон приостановлен (kill-switch); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (LoopOutcome::Error("упал".into()), STATUS_ERROR, "упал"),
+        ];
+        for (outcome, want_status, want_text) in table {
+            // Свежая строка прогона на каждый вариант — finish_run пишет в реальный run_store.
+            let run_id = run_store::create_run(db.writer(), "задача", Some("fake"), None)
+                .await
+                .unwrap();
+            let debug_outcome = format!("{outcome:?}");
+            let (status, text) = finish_in_store(db.writer(), run_id, outcome).await;
+            assert_eq!(
+                (status, text.as_str()),
+                (want_status, want_text),
+                "вариант: {debug_outcome}"
+            );
+            // Терминал реально записан в run_store с теми же статусом/текстом.
+            let run = run_store::get_run(db.reader(), run_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(run.status, want_status, "вариант: {debug_outcome}");
+            assert_eq!(
+                run.outcome.as_deref(),
+                Some(want_text),
+                "вариант: {debug_outcome}"
+            );
+        }
+    }
 }

@@ -856,4 +856,62 @@ mod tests {
         let (st, tx) = outcome_to_finish(&LoopOutcome::Error("упал".into()));
         assert_eq!((st, tx.as_str()), (run_store::STATUS_ERROR, "упал"));
     }
+
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
+    /// ЭТОГО вызывателя, точным сравнением (байт-в-байт). Известное pre-existing расхождение CLI —
+    /// Cancelled-текст «отменён; …» (БЕЗ «прогон», в отличие от desktop/connect/agentd) — сохраняется
+    /// как есть: R-2 строго behavior-preserving.
+    #[test]
+    fn outcome_to_finish_characterization_full_table() {
+        use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 7] = [
+            (
+                LoopOutcome::Final("итог".into()),
+                run_store::STATUS_DONE,
+                "итог",
+            ),
+            (
+                be(BudgetKind::Cancelled),
+                run_store::STATUS_CANCELLED,
+                "отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Paused),
+                run_store::STATUS_ERROR,
+                "прогон приостановлен (kill-switch); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                run_store::STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                run_store::STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                run_store::STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (
+                LoopOutcome::Error("упал".into()),
+                run_store::STATUS_ERROR,
+                "упал",
+            ),
+        ];
+        for (outcome, want_status, want_text) in table {
+            let (status, text) = outcome_to_finish(&outcome);
+            assert_eq!(
+                (status, text.as_str()),
+                (want_status, want_text),
+                "вариант: {outcome:?}"
+            );
+        }
+    }
 }
