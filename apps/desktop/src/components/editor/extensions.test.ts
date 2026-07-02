@@ -1,3 +1,4 @@
+import { deleteCharBackward, deleteCharForward } from '@codemirror/commands';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -234,6 +235,26 @@ describe('wikilinkLivePreview (интеграция в EditorView)', () => {
       });
     }
     expect(found).toEqual({ from: 3, to: 5 });
+  });
+
+  // ── EDFIX-4 (ревью, ОСОЗНАННОЕ ПОВЕДЕНИЕ, не баг): на strict-краю схлопнутой ссылки Backspace/
+  //    Delete съедает СКРЫТЫЙ атомарный блок целиком (Obsidian-like: скрытый синтаксис ведёт себя
+  //    как один знак). Кодифицируем семантику, чтобы регресс/смена поведения были видимы. ──
+  it('EDFIX-4 атомарное удаление: Backspace сразу после схлопнутой ссылки удаляет `]]` парой', () => {
+    // `[[Note]] tail`, курсор 8 == matchEnd (strict-край → скрыто). Скрытый `]]` = 6..8.
+    const view = mount('[[Note]] tail', 8);
+    expect(view.dom.textContent).toBe('Note tail'); // схлопнута
+    deleteCharBackward(view);
+    expect(view.state.doc.toString()).toBe('[[Note tail'); // `]]` удалён как единый блок
+  });
+
+  it('EDFIX-4 атомарное удаление: Delete перед алиасной ссылкой удаляет весь скрытый `[[Target|` разом', () => {
+    // `[[Target|Alias]] tail`, курсор 0 == matchStart (strict-край → скрыто). Скрытые:
+    // `[[Target|` 0..9, `]]` 14..16.
+    const view = mount('[[Target|Alias]] tail', 0);
+    expect(view.dom.textContent).toBe('Alias tail');
+    deleteCharForward(view);
+    expect(view.state.doc.toString()).toBe('Alias]] tail'); // префикс-блок удалён целиком
   });
 });
 

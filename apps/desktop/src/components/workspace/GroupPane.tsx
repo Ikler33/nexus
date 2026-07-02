@@ -194,6 +194,27 @@ export function GroupPane({ groupId }: { groupId: string }) {
     };
   }, [spyActive, activePath, computeActiveLine]);
 
+  // ── EDFIX-4 перф (ревью #5): колбэки для MarkdownPreview/Editor СТАБИЛИЗИРОВАНЫ useCallback.
+  // Inline-стрелки (новая identity на каждый рендер GroupPane — setMtime, scroll-spy, любой чих)
+  // инвалидировали `components`-useMemo превью → ПОЛНЫЙ remark/rehype-репарс + ремоунт DOM (это и
+  // был источник race, убивавшего буквицу до F1). Стор-экшены zustand (openLink/updateBufferDoc)
+  // стабильны; примитивы activeDoc/activePath — реальные deps тоггла. Хуки — ДО conditional-return
+  // (`if (!group)`) — порядок хуков стабилен. ──
+  const activeDoc = activeBuf?.doc ?? null;
+  const handleOpenLink = useCallback((target: string) => void openLink(target), [openLink]);
+  const handleToggleTask = useCallback(
+    (line: number) => {
+      // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
+      // toggleTaskAtLine вернёт null, если строка уже не таск (дрейф) — тогда no-op.
+      if (activeDoc == null || activePath == null) return;
+      const next = toggleTaskAtLine(activeDoc, line);
+      if (next != null) updateBufferDoc(activePath, next);
+    },
+    [activeDoc, activePath, updateBufferDoc],
+  );
+  // Заметки по подстроке для `[[…` — общий для превью (AppendLine) и CM6-автокомплита; tauriApi стабилен.
+  const fetchNotes = useCallback((q: string) => tauriApi.vault.listNotes(q, 50), []);
+
   if (!group) return null;
   const active = group.activeTab ? buffers[group.activeTab] : null;
   const mdActive = active != null && !isViewable(active.path) && isMarkdown(active.path);
@@ -483,19 +504,17 @@ export function GroupPane({ groupId }: { groupId: string }) {
                     внутри MarkdownPreview (шапка и первый абзац должны быть соседями для буквицы).
                     `mtime` (живое состояние GroupPane) и `reading` (⌘R) прокидываем; остальное —
                     title/теги/слова — MarkdownPreview считает из источника сам. */}
+                {/* EDFIX-4 перф: onOpenLink/onToggleTask/fetchNotes — стабильные useCallback (выше),
+                    НЕ inline-стрелки: их identity входит в deps `components`-useMemo превью, и свежая
+                    стрелка на каждый рендер GroupPane гоняла бы полный remark/rehype-репарс + ремоунт. */}
                 <MarkdownPreview
                   ref={previewRef}
                   source={active.doc}
                   notePath={active.path}
                   masthead={{ mtime, reading }}
-                  onOpenLink={(target) => void openLink(target)}
+                  onOpenLink={handleOpenLink}
                   onOpenTag={openTagFilter}
-                  onToggleTask={(line) => {
-                    // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
-                    // toggleTaskAtLine вернёт null, если строка уже не таск (дрейф) — тогда no-op.
-                    const next = toggleTaskAtLine(active.doc, line);
-                    if (next != null) updateBufferDoc(active.path, next);
-                  }}
+                  onToggleTask={handleToggleTask}
                   // AppendLine (макет): дописать строку в конец через буфер — НЕ новый бэкенд, обычная
                   // правка (updateBufferDoc → dirty → автосейв). В режиме чтения не показываем (это правка).
                   onAppendLine={
@@ -506,7 +525,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                           updateBufferDoc(active.path, `${active.doc}${sep}${line}\n`);
                         }
                   }
-                  fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
+                  fetchNotes={fetchNotes}
                 />
               </Suspense>
             ) : (
@@ -521,8 +540,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
                   void saveBuffer(active.path, true); // Ctrl-S — ручная точка истории (SAFE-5)
                 }}
                 onBlur={() => void flush(active.path)}
-                onOpenLink={(t) => void openLink(t)}
-                fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
+                onOpenLink={handleOpenLink}
+                fetchNotes={fetchNotes}
                 fetchTags={() => tauriApi.vault.listTags().then((ts) => ts.map((t) => t.name))}
               />
             )}
