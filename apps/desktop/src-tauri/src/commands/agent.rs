@@ -11,8 +11,8 @@
 //!
 //! # Зеркало композиции agentd (НЕ дубль логики ядра)
 //! Реестр инструментов строится КАК в `nexus-agentd::main` / [`nexus_core::agent::AgentRunHandler`]:
-//! actuator default-OFF (`ai.agent_actuator_enabled` нет/false → СТАБЫ echo/noop, реальный vault НЕ
-//! трогается) → стабы; ВКЛ → гейтнутые инструменты-актуаторы за `actuator::dispatch_action` (тот же
+//! actuator default-OFF (`ai.agent_actuator_enabled` нет/false → ПУСТОЙ реестр записи (B7), реальный
+//! vault НЕ трогается); ВКЛ → гейтнутые инструменты-актуаторы за `actuator::dispatch_action` (тот же
 //! гейт, тот же `GuardedClient`). РАЗНИЦА с agentd: agentd гоняет цикл ВНУТРИ `AgentRunHandler::handle`
 //! (его `on_event` внутренний — `FIXME(UI-1)`); здесь мы гоним [`run_agent_loop`] НАПРЯМУЮ, чтобы
 //! контролировать `on_event` → стрим в Channel в реальном времени. И UI-DecisionSource заменяет
@@ -199,7 +199,7 @@ fn normalize_autonomy(autonomy: &str) -> &'static str {
 /// СРАЗУ (прогон асинхронный). НЕ блокирует.
 ///
 /// Композиция зеркалит agentd / [`agent::AgentRunHandler`]: tool-провайдер из `ai.chat`, токенайзер/
-/// бюджет, реестр (стабы при выключенном актуаторе [дефолт], гейтнутые инструменты при ВКЛ), память
+/// бюджет, реестр (ПУСТОЙ при выключенном актуаторе [дефолт, B7], гейтнутые инструменты при ВКЛ), память
 /// (recall + Add-only запись), UI-DecisionSource, per-run kill-switch.
 /// W-4: элемент истории переписки из десктоп-чата (мультитёрн). `role` — `"assistant"` → assistant-
 /// сообщение, иначе user. Фронт шлёт прошлые ходы, чтобы follow-up продолжал работу, см. SessionSpec.
@@ -308,7 +308,8 @@ pub(crate) async fn run_impl(
         })
     });
 
-    // Параметры гейта актуатора из конфига — ДЕФОЛТ-OFF (флаг отсутствует/false → стабы). НЕ меняем дефолт.
+    // Параметры гейта актуатора из конфига — ДЕФОЛТ-OFF (флаг отсутствует/false → без инструментов
+    // записи). НЕ меняем дефолт.
     let actuator_enabled = cfg
         .as_ref()
         .map(|c| c.ai.agent_actuator_enabled)
@@ -393,7 +394,7 @@ pub(crate) async fn run_impl(
     // (desktop agent_run всегда top-level — subagent=None ниже); дети делегировать не могут (рекурсия-стоп).
     // Some только при enabled И наличии провайдера (без него цикл и так деградирует error-терминалом).
     // Клонируем Arc провайдера ДО его move в drive_run. Субагенты наследуют actuator-постуру родителя
-    // (при OFF — read-only/стабы), флаги независимы.
+    // (при OFF — read-only, без инструментов записи), флаги независимы.
     let delegation: Option<DelegationDeps> = cfg
         .as_ref()
         .map(|c| c.ai.delegation.clone())
@@ -435,7 +436,7 @@ pub(crate) async fn run_impl(
     state.register_agent_run(
         run_id,
         AgentRunEntry {
-            // decision-канал нужен только при ВКЛ актуаторе (стабы не предлагают). Но регистрируем
+            // decision-канал нужен только при ВКЛ актуаторе (без него предлагать нечему). Но регистрируем
             // всегда для единообразия approve-команды; при OFF предложений не будет (gate не строится).
             decisions: Some(decision_tx),
             paused: paused.clone(),
@@ -805,7 +806,8 @@ async fn drive_run(
     // Прогон через ЕДИНУЮ ядровую композицию [`run_agent_session`] (DRY: тот же код у agentd/коннектора).
     // Форвардер `ChannelForwarder` стримит и события цикла, и Proposal/Diff гейта в один Channel (фронт
     // видит changeset ДО решения; гейт блокируется на UI-DecisionSource, ожидая agent_approve). Реестр/
-    // recall/скиллы/budget — внутри сессии (actuator default-OFF → стабы, vault не трогается). Skills у
+    // recall/скиллы/budget — внутри сессии (actuator default-OFF → пустой реестр записи, B7; vault не
+    // трогается). Skills у
     // desktop пока нет (None). `RunCtx::run(run_id)` строит сама сессия.
     let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(ChannelForwarder {
         channel: channel.clone(),
@@ -1123,6 +1125,26 @@ mod tests {
         (dir, db, canon)
     }
 
+    /// Skills-контекст с одним временным скиллом «alpha»: живой read-only инструмент `activate_skill`
+    /// для стрим-тестов успешного tool-шага (B7: debug-стабов в прод-реестре больше нет — при ВЫКЛ
+    /// актуаторе реестр наполняют только скиллы/web).
+    fn skills_alpha() -> (TempDir, nexus_core::agent::SkillContext) {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let d = root.join("alpha");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("SKILL.md"),
+            "---\nname: alpha\ndescription: тестовый скилл\n---\nТЕЛО СКИЛЛА",
+        )
+        .unwrap();
+        let ctx = nexus_core::agent::SkillContext::new(
+            Arc::new(nexus_core::skills::discover_skills(&root)),
+            root,
+        );
+        (tmp, ctx)
+    }
+
     /// Пустая память (recall → пусто): тот же эффект, что VaultAgentMemory без эмбеддера/индексов.
     fn empty_memory(db: &Database) -> Arc<dyn AgentMemory> {
         Arc::new(VaultAgentMemory::new(
@@ -1149,17 +1171,19 @@ mod tests {
     // ── 2. Смоук: drive_run против фейк-провайдера (стабы) → Channel получает ToolCall/Result/Final ─
 
     /// КЛЮЧЕВОЕ ДОКАЗАТЕЛЬСТВО (offline, как agentd `agent_loop_smoke`): фейк-провайдер возвращает
-    /// ToolCalls([echo]) на ходу 1, Final на ходу 2. `drive_run` (actuator ВЫКЛ → стабы) гонит цикл и
-    /// форвардит события в наш collector-Channel. Проверяем: поток несёт toolCall → toolResult → final
-    /// ПО ПОРЯДКУ + хотя бы один contextUsage; исход done. Сети/модели нет.
+    /// ToolCalls([activate_skill]) на ходу 1, Final на ходу 2. `drive_run` (actuator ВЫКЛ → без
+    /// инструментов записи; живой read-only тул даёт skills, B7) гонит цикл и форвардит события в наш
+    /// collector-Channel. Проверяем: поток несёт toolCall → toolResult → final ПО ПОРЯДКУ + хотя бы
+    /// один contextUsage; исход done, tool-шаг УСПЕШЕН (isError=false). Сети/модели нет.
     #[tokio::test]
     async fn drive_run_streams_toolcall_result_final_in_order() {
         let (_dir, db, canon) = open_db().await;
+        let (_sk_tmp, skills) = skills_alpha();
         let provider = FakeProvider::new(vec![
             Ok(ToolTurn::ToolCalls(vec![ToolCall {
                 id: "c1".into(),
-                name: "debug.echo".into(),
-                arguments: r#"{"text":"привет"}"#.into(),
+                name: nexus_core::agent::ACTIVATE_SKILL_TOOL.into(),
+                arguments: r#"{"skill":"alpha"}"#.into(),
             }])),
             Ok(ToolTurn::Final("готово".into())),
         ]);
@@ -1168,19 +1192,19 @@ mod tests {
 
         let outcome = drive_run(
             1,
-            "smoke: позови echo".into(),
+            "smoke: активируй скилл".into(),
             vec![],
             "auto",
             Some(provider),
-            false, // actuator ВЫКЛ → стабы (vault не трогается)
+            false, // actuator ВЫКЛ → без инструментов записи (vault не трогается)
             64 * 1024,
             16,
             Some(32768),
-            None,  // web (AGENT-0.2): тест без веб-инструментов
-            None,  // skills (AGENT-0.2): тест без навыков
-            false, // skills_learning_enabled
-            None,  // delegation (W-24)
-            None,  // research (W-25)
+            None,         // web (AGENT-0.2): тест без веб-инструментов
+            Some(skills), // skills: живой read-only тул (B7: стабов нет)
+            false,        // skills_learning_enabled
+            None,         // delegation (W-24)
+            None,         // research (W-25)
             Arc::new(decision),
             empty_memory(&db),
             canon,
@@ -1206,7 +1230,7 @@ mod tests {
             events.iter().any(|v| type_of(v) == "contextUsage"),
             "есть хотя бы один contextUsage"
         );
-        // Корреляция call↔result по id + содержимое echo.
+        // Корреляция call↔result по id + успешный результат живого тула (activate_skill).
         let call = events.iter().find(|v| type_of(v) == "toolCall").unwrap();
         let res = events.iter().find(|v| type_of(v) == "toolResult").unwrap();
         assert_eq!(call["id"], "c1");
@@ -1222,11 +1246,12 @@ mod tests {
     async fn drive_run_accumulates_and_persists_turn_for_history() {
         let (_dir, db, canon) = open_db().await;
         let session_id = "sess-hist-1";
+        let (_sk_tmp, skills) = skills_alpha();
         let provider = FakeProvider::new(vec![
             Ok(ToolTurn::ToolCalls(vec![ToolCall {
                 id: "c1".into(),
-                name: "debug.echo".into(),
-                arguments: r#"{"text":"привет"}"#.into(),
+                name: nexus_core::agent::ACTIVATE_SKILL_TOOL.into(),
+                arguments: r#"{"skill":"alpha"}"#.into(),
             }])),
             Ok(ToolTurn::Final("итог хода".into())),
         ]);
@@ -1255,7 +1280,7 @@ mod tests {
             16,
             Some(32768),
             None,
-            None,
+            Some(skills), // живой read-only тул для успешного шага (B7: стабов нет)
             false,
             None,
             None,
@@ -1278,9 +1303,9 @@ mod tests {
             let g = accum.lock().unwrap();
             (g.text.clone(), g.steps.clone())
         };
-        // Аккумулятор поймал шаг echo (его result) — даже если текста ассистента в стабах не было.
+        // Аккумулятор поймал шаг activate_skill (его result) — даже без текста ассистента.
         assert_eq!(steps.len(), 1, "accum поймал один tool-шаг");
-        assert_eq!(steps[0].kind, "debug.echo");
+        assert_eq!(steps[0].kind, nexus_core::agent::ACTIVATE_SKILL_TOOL);
         assert!(steps[0].result.is_some(), "результат шага зафиксирован");
         assert!(!steps[0].is_error);
 
@@ -1309,7 +1334,10 @@ mod tests {
         assert_eq!(turns[0].status, run_store::STATUS_DONE);
         assert_eq!(turns[0].report.as_deref(), Some("итог хода"));
         assert_eq!(turns[0].steps.len(), 1);
-        assert_eq!(turns[0].steps[0].kind, "debug.echo");
+        assert_eq!(
+            turns[0].steps[0].kind,
+            nexus_core::agent::ACTIVATE_SKILL_TOOL
+        );
 
         // И в списке сессий появилась наша переписка.
         let sessions = run_store::list_agent_sessions(db.reader()).await.unwrap();

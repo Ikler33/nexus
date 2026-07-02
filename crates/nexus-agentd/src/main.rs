@@ -752,7 +752,7 @@ async fn run() -> Result<(), String> {
         ));
     // AGENT-3e (GO-LIVE актуатора, SAFE BY DEFAULT): хендлер строит ГЕЙТНУТЫЙ реестр инструментов-
     // актуаторов ПО-ПРОГОННО — но ТОЛЬКО когда `ai.agent_actuator_enabled` ВКЛ (по умолчанию ВЫКЛ →
-    // стабы, реальный vault НЕ затрагивается из коробки). Зависимости гейта:
+    // пустой реестр записи (B7), реальный vault НЕ затрагивается из коробки). Зависимости гейта:
     //  - canon_root = root (КАНОНИЗИРОВАН выше) — предусловие resolve_vault_path_for_write/apply;
     //  - overwrite_threshold / blast_cap — из конфига (дефолты ядра, если не заданы);
     //  - decision_source = PolicyDefault — HEADLESS auto-DENY: unattended agentd НИКОГДА не
@@ -803,7 +803,9 @@ async fn run() -> Result<(), String> {
              реальный vault может изменяться на autonomy=auto-прогонах (Auto-тир)"
         );
     } else {
-        tracing::info!("actuator GO-LIVE ВЫКЛ (safe-default): прогон агента — только стабы");
+        tracing::info!(
+            "actuator GO-LIVE ВЫКЛ (safe-default): прогон агента без инструментов записи"
+        );
     }
     // KILL-SWITCH (AGENT-5): process-global пауза агента. RESTORE персиста `agent.json` из app-config-dir
     // (зеркало egress kill-switch) ДО регистрации хендлера — так headless ЧЕСТИТ паузу владельца с самого
@@ -989,7 +991,7 @@ async fn run() -> Result<(), String> {
     // Crash-recovery НА УРОВНЕ ПРОГОНА (AGENT-2): прогоны, застрявшие в 'running' дольше TTL (приложение
     // упало во время прогона), возвращаются в 'queued' (их джобы — отдельный crash-recovery планировщика
     // requeue_running в worker_loop). Replay идемпотентен на уровне прогона (handle на терминальном — no-op)
-    // и безопасен с AGENT-1 стаб-инструментами (без побочных эффектов); AGENT-3-актуатор обязан сделать
+    // и безопасен при ВЫКЛ актуаторе (реестр записи пуст, B7 — без побочных эффектов); AGENT-3-актуатор обязан сделать
     // side-effecting инструменты идемпотентными per-op-group ДО опоры на replay (см. agent/job.rs).
     match nexus_core::agent::requeue_stale_running(
         db.writer(),
@@ -1189,7 +1191,7 @@ async fn run() -> Result<(), String> {
 
 /// AGENT-2 smoke: опрашивает БД, пока прогон `run_id` не достигнет терминала ('done'/'error'/
 /// 'cancelled') ИЛИ не истечёт `deadline`. Возвращает терминальный снимок или `None` (дедлайн).
-/// Короткий интервал опроса (тик планировщика 5 с — прогон стаб-цикла мгновенен после клейма).
+/// Короткий интервал опроса (тик планировщика 5 с — smoke-прогон мгновенен после клейма).
 async fn wait_for_terminal_run(
     db: &Database,
     run_id: i64,

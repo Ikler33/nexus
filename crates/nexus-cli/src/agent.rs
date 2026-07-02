@@ -7,7 +7,8 @@
 //! зеркалит `nexus-agentd --sandbox-run` (egress-политика + audit + общий
 //! [`build_agent_tool_provider`]), но БЕЗ песочницы и БЕЗ актуатора.
 //!
-//! **SAFE BY DEFAULT (срез 1):** `actuator_enabled=false` → агент работает на СТАБАХ, vault не
+//! **SAFE BY DEFAULT (срез 1):** `actuator_enabled=false` → агент работает БЕЗ инструментов записи
+//! (пустой реестр, B7), vault не
 //! трогается, гейт подтверждения не дёргается ([`PolicyDefault`] всё равно fail-closed). Единственный
 //! побочный эффект — строка в `agent_runs` (как у любого прогона). Живой актуатор + TTY-аппрув —
 //! срез 2 (W-29). REPL — срез 3 (W-30).
@@ -22,7 +23,8 @@ use nexus_core::ai::ChatMessage;
 /// Опции прогона из флагов командной строки (W-29).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct AgentOpts {
-    /// `--actuator` — включить АКТУАТОР (живые правки vault через гейт). По умолчанию OFF (стабы).
+    /// `--actuator` — включить АКТУАТОР (живые правки vault через гейт). По умолчанию OFF (без
+    /// инструментов записи).
     actuator: bool,
     /// `--auto` — автономия `auto` (low-risk применяется без спроса; Confirm-тир всё равно спрашивает).
     auto: bool,
@@ -84,19 +86,20 @@ fn parse_task(args: &[&str]) -> Result<String, String> {
 /// Какой источник решений по changeset'у использовать (чистый выбор — для юнит-теста).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DecisionMode {
-    /// Актуатор выключен → стабы не предлагают → источник не спрашивается (fail-closed `PolicyDefault`).
-    Stub,
+    /// Актуатор выключен → инструментов записи нет (пустой реестр, B7), предлагать нечему → источник
+    /// не спрашивается (fail-closed `PolicyDefault`).
+    Off,
     /// Актуатор включён, интерактивно → `TtyDecisionSource` (y/N по каждому айтему).
     TtyConfirm,
     /// Актуатор включён + `--yes` → `ApproveAll` (неинтерактивно одобрить всё).
     ApproveAllYes,
 }
 
-/// Выбор режима решения по флагам. Без `--actuator` — всегда `Stub` (vault не трогается), даже если
+/// Выбор режима решения по флагам. Без `--actuator` — всегда `Off` (vault не трогается), даже если
 /// заданы `--yes`/`--auto` (они тогда no-op — предупреждаем отдельно).
 fn select_decision_mode(opts: AgentOpts) -> DecisionMode {
     if !opts.actuator {
-        DecisionMode::Stub
+        DecisionMode::Off
     } else if opts.yes {
         DecisionMode::ApproveAllYes
     } else {
@@ -165,7 +168,7 @@ fn make_decision(actuator: bool, yes: bool) -> Arc<dyn nexus_core::actuator::Dec
         auto: false,
     });
     match mode {
-        DecisionMode::Stub => Arc::new(PolicyDefault),
+        DecisionMode::Off => Arc::new(PolicyDefault),
         DecisionMode::TtyConfirm => Arc::new(TtyDecisionSource),
         DecisionMode::ApproveAllYes => Arc::new(ApproveAll),
     }
@@ -197,7 +200,7 @@ async fn run_turn(
         task: task.to_string(),
         history,
         autonomy: Some(autonomy.to_string()),
-        actuator_enabled: actuator, // --actuator → живые правки через гейт; иначе стабы
+        actuator_enabled: actuator, // --actuator → живые правки через гейт; иначе без инструментов записи
         overwrite_threshold: OVERWRITE_THRESHOLD,
         blast_cap: AiConfig::DEFAULT_BLAST_RADIUS_CAP,
         context_window: deps.context_window,
@@ -259,7 +262,7 @@ async fn run_once(root: PathBuf, task: String, opts: AgentOpts) -> Result<(), St
     let deps = build_deps(root).await?;
     let autonomy = if opts.auto { "auto" } else { "confirm" };
     let (actuator_label, decision_label) = match select_decision_mode(opts) {
-        DecisionMode::Stub => ("OFF (stub)", "—"),
+        DecisionMode::Off => ("OFF", "—"),
         DecisionMode::TtyConfirm => ("ON", "TTY y/N"),
         DecisionMode::ApproveAllYes => ("ON", "--yes (auto-approve)"),
     };
@@ -333,7 +336,7 @@ async fn run_repl(root: PathBuf, opts: AgentOpts) -> Result<(), String> {
                     actuator = !actuator;
                     // Сообщение ЧЕСТНО отражает режим решения: при --yes правки НЕ спрашивают.
                     let note = if !actuator {
-                        " — стабы, vault не трогается"
+                        " — без инструментов записи, vault не трогается"
                     } else if opts.yes {
                         " — АВТО-ОДОБРЕНИЕ всех правок (--yes), БЕЗ запроса [y/N]"
                     } else {
@@ -626,14 +629,14 @@ fn print_agent_help() {
          nexus agent [ФЛАГИ]               REPL: диалог построчно, история между ходами (/help внутри)\n\n\
          ФЛАГИ:\n  \
          --vault PATH   корень vault (по умолчанию — текущий каталог)\n  \
-         --actuator     включить живые правки vault (через гейт подтверждения); без него — стабы\n  \
+         --actuator     включить живые правки vault (через гейт подтверждения); без него правок нет\n  \
          --auto         автономия `auto` (low-risk применяется без спроса; Confirm-тир всё равно спрашивает)\n  \
          --yes          неинтерактивно одобрять ВСЕ предложения (только с --actuator)\n  \
          -h, --help     эта справка\n\n\
          ПРИМЕРЫ:\n  \
          nexus agent --vault ~/SA-Vault \"перечисли мои заметки про Rust\"\n  \
          nexus agent --vault ~/SA-Vault --actuator \"создай заметку Идеи.md\"   # спросит [y/N] перед записью\n\n\
-         Без --actuator vault НЕ изменяется (стабы). Нужен .nexus/local.json с ai.chat (url/model).\n  \
+         Без --actuator vault НЕ изменяется (инструментов записи нет). Нужен .nexus/local.json с ai.chat (url/model).\n  \
          С --actuator каждая запись требует подтверждения [y/N] (fail-closed: не-«да» = отказ)."
     );
 }
@@ -699,15 +702,15 @@ mod tests {
     #[test]
     fn select_decision_mode_by_flags() {
         let off = AgentOpts::default();
-        assert_eq!(select_decision_mode(off), DecisionMode::Stub);
-        // --yes/--auto без актуатора всё равно Stub (vault не трогается).
+        assert_eq!(select_decision_mode(off), DecisionMode::Off);
+        // --yes/--auto без актуатора всё равно Off (vault не трогается).
         assert_eq!(
             select_decision_mode(AgentOpts {
                 yes: true,
                 auto: true,
                 ..off
             }),
-            DecisionMode::Stub
+            DecisionMode::Off
         );
         assert_eq!(
             select_decision_mode(AgentOpts {
