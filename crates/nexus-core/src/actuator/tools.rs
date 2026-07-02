@@ -1,7 +1,7 @@
 //! Файловые инструменты-актуаторы (AGENT-3c/3e, Фаза 1): `note.create` / `note.edit` /
 //! `note.set_frontmatter` — ПЕРВЫЕ инструменты с побочным эффектом (запись в vault).
 //!
-//! Каждый реализует [`crate::agent::Tool`]. `invoke(args)`:
+//! Каждый реализует [`crate::tool_types::Tool`]. `invoke(args)`:
 //!  1. строгий разбор аргументов (`serde` + `deny_unknown_fields`) → [`ToolError::BadArgs`] (I-4 fail-closed);
 //!  2. сборка типизированного [`Action`];
 //!  3. **маршрутизация ТОЛЬКО через ШОВ актуатора** [`ActionDispatcher`] — инструмент держит
@@ -41,8 +41,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::agent::{Tool, ToolError, ToolSpec};
 use crate::db::WriteActor;
+use crate::tool_types::{Tool, ToolError, ToolSpec};
 
 use super::action::Action;
 use super::apply::AuditSink;
@@ -457,8 +457,8 @@ mod tests {
     use super::*;
     use crate::actuator::decision::{BatchDecision, ChannelDecision, ItemDecision, PolicyDefault};
     use crate::actuator::orchestrate::CollectingSink;
-    use crate::agent::event::AgentEvent;
     use crate::db::Database;
+    use crate::event::AgentEvent;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

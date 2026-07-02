@@ -3,6 +3,9 @@ import i18n from '../i18n/setup';
 import { isViewable } from '../lib/file-kind';
 import { tauriApi } from '../lib/tauri-api';
 import { cancelAllAutosave, cancelAutosave, flush, scheduleAutosave } from './autosave';
+// EDFIX-4 F4: дефолт режима source/preview — из персист-префа (последний выбранный). Цикла импортов
+// нет: prefs.ts не импортирует ничего из workspace (только zustand+localStorage).
+import { usePrefsStore } from './prefs';
 import { useToastStore } from './toast';
 
 /**
@@ -150,6 +153,19 @@ interface WorkspaceState {
 
 function freshGroups(): EditorGroup[] {
   return [{ id: INITIAL_GROUP, tabs: [], activeTab: null }];
+}
+
+/** EDFIX-4 (ревью MINOR-3): прунит записи режимов схлопнутых групп — иначе stale-записи копятся, а
+ *  воскрешённый через freshGroups() id 'g0' унаследовал бы прежний режим вместо префа noteMode.
+ *  КРИТИЧНО: фильтровать по СПИСКУ ВЫЖИВШИХ (`nonEmpty`) ДО подстановки freshGroups() — финальный
+ *  список снова содержит 'g0', и stale-запись пережила бы фильтр по нему. Пустые выжившие → {}. */
+function pruneModes(
+  modes: Record<string, 'source' | 'preview'>,
+  survivors: EditorGroup[],
+): Record<string, 'source' | 'preview'> {
+  return Object.fromEntries(
+    Object.entries(modes).filter(([id]) => survivors.some((g) => g.id === id)),
+  );
 }
 
 /** NAV-3: целевая группа для возврата записи истории — её родная группа, либо активная,
@@ -349,7 +365,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const buffers = Object.fromEntries(
         Object.entries(s.buffers).filter(([p]) => referenced.has(p) || s.buffers[p]?.dirty),
       );
-      return { groups, activeGroupId, buffers };
+      return { groups, activeGroupId, buffers, modes: pruneModes(s.modes, nonEmpty) };
     });
   },
 
@@ -377,17 +393,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const navHistory = s.navHistory.map((e) =>
         e.path === path && e.groupId === fromGroupId ? { ...e, groupId: toGroupId } : e,
       );
-      return { groups, activeGroupId: toGroupId, navHistory };
+      return { groups, activeGroupId: toGroupId, navHistory, modes: pruneModes(s.modes, nonEmpty) };
     });
   },
 
   modes: {},
   toggleMode(groupId) {
-    set((s) => {
-      const gid = groupId ?? s.activeGroupId;
-      const next = (s.modes[gid] ?? 'source') === 'source' ? 'preview' : 'source';
-      return { modes: { ...s.modes, [gid]: next } };
-    });
+    // EDFIX-4 F4: дефолт (нет явной записи в modes) — из персист-префа noteMode (последний выбранный
+    // режим), а не хардкод 'source'. После переключения новое значение пишется в преф: оно становится
+    // дефолтом для НОВЫХ панелей и следующего запуска. Открытые панели ретроактивно НЕ трогаем —
+    // группам без явной записи их текущий (унаследованный от префа) режим ФИКСИРУЕТСЯ в modes до
+    // смены префа, иначе смена дефолта на лету перещёлкнула бы и их.
+    const s = get();
+    const gid = groupId ?? s.activeGroupId;
+    const pref = usePrefsStore.getState().noteMode;
+    const next = (s.modes[gid] ?? pref) === 'source' ? 'preview' : 'source';
+    const modes = { ...s.modes };
+    for (const g of s.groups) {
+      if (modes[g.id] == null) modes[g.id] = pref;
+    }
+    modes[gid] = next;
+    usePrefsStore.getState().setNoteMode(next);
+    set({ modes });
   },
 
   splitRight() {
@@ -667,7 +694,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         else if (right !== -1) navIndex = right;
       }
       const recents = s.recents.filter((p) => !isUnder(p)); // NAV-2: и из недавних тоже (нет мёртвых)
-      return { groups: finalGroups, activeGroupId, buffers, navHistory, navIndex, recents };
+      return {
+        groups: finalGroups,
+        activeGroupId,
+        buffers,
+        navHistory,
+        navIndex,
+        recents,
+        modes: pruneModes(s.modes, nonEmpty),
+      };
     });
     saveRecents(get().recents); // персист подчищенных recents
   },

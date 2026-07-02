@@ -19,6 +19,7 @@ import { pickActiveLine } from '../../lib/editor/outline';
 import { formatCombo } from '../../lib/commands';
 import { tauriApi } from '../../lib/tauri-api';
 import { useInlineAIStore } from '../../stores/inlineAI';
+import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -62,7 +63,12 @@ export function GroupPane({ groupId }: { groupId: string }) {
   const group = useWorkspaceStore((s) => s.groups.find((g) => g.id === groupId));
   const buffers = useWorkspaceStore((s) => s.buffers);
   const isActive = useWorkspaceStore((s) => s.activeGroupId === groupId);
-  const mode = useWorkspaceStore((s) => s.modes[groupId] ?? 'source');
+  // EDFIX-4 F4: fallback режима — персист-преф noteMode (последний выбранный), не хардкод 'source'.
+  // Две подписки на примитивы (без объектов из селектора) → без лишних/бесконечных ре-рендеров;
+  // подписка на prefs реактивна (новая панель без явной записи в modes следует префу; открытые панели
+  // с явной записью не трогаются — toggleMode фиксирует их режим в modes до смены префа).
+  const modePref = usePrefsStore((s) => s.noteMode);
+  const mode = useWorkspaceStore((s) => s.modes[groupId]) ?? modePref;
   const setActiveTab = useWorkspaceStore((s) => s.setActiveTab);
   const setActiveGroup = useWorkspaceStore((s) => s.setActiveGroup);
   const closeTab = useWorkspaceStore((s) => s.closeTab);
@@ -187,6 +193,27 @@ export function GroupPane({ groupId }: { groupId: string }) {
       if (initRaf) cancelAnimationFrame(initRaf);
     };
   }, [spyActive, activePath, computeActiveLine]);
+
+  // ── EDFIX-4 перф (ревью #5): колбэки для MarkdownPreview/Editor СТАБИЛИЗИРОВАНЫ useCallback.
+  // Inline-стрелки (новая identity на каждый рендер GroupPane — setMtime, scroll-spy, любой чих)
+  // инвалидировали `components`-useMemo превью → ПОЛНЫЙ remark/rehype-репарс + ремоунт DOM (это и
+  // был источник race, убивавшего буквицу до F1). Стор-экшены zustand (openLink/updateBufferDoc)
+  // стабильны; примитивы activeDoc/activePath — реальные deps тоггла. Хуки — ДО conditional-return
+  // (`if (!group)`) — порядок хуков стабилен. ──
+  const activeDoc = activeBuf?.doc ?? null;
+  const handleOpenLink = useCallback((target: string) => void openLink(target), [openLink]);
+  const handleToggleTask = useCallback(
+    (line: number) => {
+      // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
+      // toggleTaskAtLine вернёт null, если строка уже не таск (дрейф) — тогда no-op.
+      if (activeDoc == null || activePath == null) return;
+      const next = toggleTaskAtLine(activeDoc, line);
+      if (next != null) updateBufferDoc(activePath, next);
+    },
+    [activeDoc, activePath, updateBufferDoc],
+  );
+  // Заметки по подстроке для `[[…` — общий для превью (AppendLine) и CM6-автокомплита; tauriApi стабилен.
+  const fetchNotes = useCallback((q: string) => tauriApi.vault.listNotes(q, 50), []);
 
   if (!group) return null;
   const active = group.activeTab ? buffers[group.activeTab] : null;
@@ -447,25 +474,28 @@ export function GroupPane({ groupId }: { groupId: string }) {
               onClose={() => useInlineAIStore.getState().close()}
             />
           )}
+          {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ.
+              EDFIX-4 F4: живёт ВНЕ скролл-контейнера (.editorCol position:relative, те же координаты
+              top:10px/right:16px) — absolute внутри .scroll уезжал вместе с прокруткой контента.
+              z-index 8 < InlineAIBar (12) — prompt-box остаётся поверх; таб-стрип вне .editorCol. */}
+          {mdActive && !reading && (
+            <button
+              className={styles.modeFloat}
+              onClick={() => toggleMode(groupId)}
+              title={mode === 'source' ? t('editor.preview') : t('editor.source')}
+              aria-label={mode === 'source' ? t('editor.preview') : t('editor.source')}
+              aria-pressed={mode === 'preview'}
+            >
+              <span key={mode} className={styles.modeIco}>
+                {mode === 'source' ? (
+                  <BookOpen size={16} aria-hidden />
+                ) : (
+                  <PenLine size={16} aria-hidden />
+                )}
+              </span>
+            </button>
+          )}
           <div className={styles.scroll} ref={scrollRef}>
-            {/* Mode-float (DP-3): плавающая пилюля Edit/Preview — иконка показывает ДЕЙСТВИЕ. */}
-            {mdActive && !reading && (
-              <button
-                className={styles.modeFloat}
-                onClick={() => toggleMode(groupId)}
-                title={mode === 'source' ? t('editor.preview') : t('editor.source')}
-                aria-label={mode === 'source' ? t('editor.preview') : t('editor.source')}
-                aria-pressed={mode === 'preview'}
-              >
-                <span key={mode} className={styles.modeIco}>
-                  {mode === 'source' ? (
-                    <BookOpen size={16} aria-hidden />
-                  ) : (
-                    <PenLine size={16} aria-hidden />
-                  )}
-                </span>
-              </button>
-            )}
             {isViewable(active.path) ? (
               <FileViewer path={active.path} />
             ) : mdActive && (mode === 'preview' || reading) ? (
@@ -474,19 +504,17 @@ export function GroupPane({ groupId }: { groupId: string }) {
                     внутри MarkdownPreview (шапка и первый абзац должны быть соседями для буквицы).
                     `mtime` (живое состояние GroupPane) и `reading` (⌘R) прокидываем; остальное —
                     title/теги/слова — MarkdownPreview считает из источника сам. */}
+                {/* EDFIX-4 перф: onOpenLink/onToggleTask/fetchNotes — стабильные useCallback (выше),
+                    НЕ inline-стрелки: их identity входит в deps `components`-useMemo превью, и свежая
+                    стрелка на каждый рендер GroupPane гоняла бы полный remark/rehype-репарс + ремоунт. */}
                 <MarkdownPreview
                   ref={previewRef}
                   source={active.doc}
                   notePath={active.path}
                   masthead={{ mtime, reading }}
-                  onOpenLink={(target) => void openLink(target)}
+                  onOpenLink={handleOpenLink}
                   onOpenTag={openTagFilter}
-                  onToggleTask={(line) => {
-                    // EDIT-5: клик по чекбоксу в превью → флип исходной строки + dirty/автосейв.
-                    // toggleTaskAtLine вернёт null, если строка уже не таск (дрейф) — тогда no-op.
-                    const next = toggleTaskAtLine(active.doc, line);
-                    if (next != null) updateBufferDoc(active.path, next);
-                  }}
+                  onToggleTask={handleToggleTask}
                   // AppendLine (макет): дописать строку в конец через буфер — НЕ новый бэкенд, обычная
                   // правка (updateBufferDoc → dirty → автосейв). В режиме чтения не показываем (это правка).
                   onAppendLine={
@@ -497,7 +525,7 @@ export function GroupPane({ groupId }: { groupId: string }) {
                           updateBufferDoc(active.path, `${active.doc}${sep}${line}\n`);
                         }
                   }
-                  fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
+                  fetchNotes={fetchNotes}
                 />
               </Suspense>
             ) : (
@@ -512,8 +540,8 @@ export function GroupPane({ groupId }: { groupId: string }) {
                   void saveBuffer(active.path, true); // Ctrl-S — ручная точка истории (SAFE-5)
                 }}
                 onBlur={() => void flush(active.path)}
-                onOpenLink={(t) => void openLink(t)}
-                fetchNotes={(q) => tauriApi.vault.listNotes(q, 50)}
+                onOpenLink={handleOpenLink}
+                fetchNotes={fetchNotes}
                 fetchTags={() => tauriApi.vault.listTags().then((ts) => ts.map((t) => t.name))}
               />
             )}

@@ -34,6 +34,7 @@ import { remarkNexus, TAG_SCHEME, WIKILINK_SCHEME } from '../../lib/markdown/rem
 import { remarkStripHeadingEmoji } from '../../lib/markdown/remarkStripHeadingEmoji';
 import { tauriApi, type NoteRef } from '../../lib/tauri-api';
 import { relTime } from '../../lib/time';
+import { usePrefsStore } from '../../stores/prefs';
 import { AppendLine } from './AppendLine';
 import { Callout, CalloutTitle } from './Callout';
 import { MermaidDiagram } from './MermaidDiagram';
@@ -242,6 +243,13 @@ function MarkdownPreviewImpl(
 
   const { t, i18n } = useTranslation();
 
+  // EDFIX-4 КОРЕНЬ 3: «Чистые ссылки» действуют и в reading/preview — тот же преф, что у source-LP
+  // (prefs.ts, ВКЛ по умолчанию). ON → на корневой `.preview` ставится `data-clean-links` (attr без
+  // значения), CSS гасит декоративные скобки `.wikilink::before/::after` (S2 «Редакция» остаётся
+  // ТОЛЬКО при выключенном тумблере). Каждый инстанс MarkdownPreview ставит атрибут сам → вложенные
+  // превью NoteEmbed (рендерятся рекурсивно этим же компонентом) покрыты автоматически.
+  const cleanLinks = usePrefsStore((s) => s.wikilinkLivePreview);
+
   // S3 «Редакция»: свёрнутые H2-секции — Set по `data-sec-id` (slug заголовка, стабилен к правкам в
   // других секциях). По умолчанию все РАЗВЁРНУТЫ (пустой Set). Тоггл — на клик/Enter/Space по h2.
   // Состояние читают РАЗНЫЕ оверрайды (`h2`-кнопка, `section`-обёртка) → раздаём через SectionContext.
@@ -319,39 +327,6 @@ function MarkdownPreviewImpl(
     }),
     [],
   );
-
-  useLayoutEffect(() => {
-    const root = previewRef.current;
-    if (!root) return;
-    root.querySelectorAll('[data-dropcap]').forEach((el) => {
-      el.removeAttribute('data-dropcap');
-      el.removeAttribute('data-cap');
-    });
-    if (!mastheadActive) return;
-    // Буквица — на ПЕРВОМ обычном абзаце тела (порядок чтения, ГДЕ БЫ ОН НИ БЫЛ — проза-first ИЛИ
-    // первый абзац внутри H2-секции, напр. daily `## 🧠 Поток мыслей`: его `<p>` вложен в
-    // `<section><div.sec-body><div.sec-inner><p>`, querySelectorAll его видит). «Обычный» = НЕ внутри
-    // masthead/properties (шапка), callout (`<div data-callout>`, см. Callout.tsx), цитаты, списка,
-    // таблицы, figure — это не «обычный неформатированный текст» (adversarial FIX 3: иначе гигантская
-    // буквица села бы внутрь admonition/цитаты/пункта раньше реального лид-абзаца). Скоуп на СВОЙ
-    // previewRef: `querySelectorAll` спускается во вложенные `.preview` эмбедов (NoteEmbed), но буквица
-    // ставится ТОЛЬКО в своём документе → `p.closest('[class*="preview"]') === root` (как S6/S7). Нет
-    // подходящего «голого» `<p>` → буквицы нет (как list-first).
-    const EXCLUDE = `.${styles.docHead}, .${styles.properties}, [data-callout], blockquote, li, figure, table`;
-    const target = Array.from(root.querySelectorAll('p')).find(
-      (p) =>
-        p.closest('[class*="preview"]') === root &&
-        !p.closest(EXCLUDE) &&
-        dropCapLetter(p.textContent ?? '') !== '',
-    ) as HTMLElement | undefined;
-    if (target) {
-      const cap = dropCapLetter(target.textContent ?? '');
-      target.setAttribute('data-cap', cap);
-      target.setAttribute('data-dropcap', '');
-    }
-    // deps — примитивы (mastheadActive), а НЕ объект `masthead`: иначе свежий литерал {mtime,reading}
-    // на каждый ре-рендер GroupPane перезапускал бы эффект вхолостую. Штамповка зависит только от body.
-  }, [body, mastheadActive]);
 
   // ── Hermes-8 S7: ховер-превью `.popcard` (вики-ссылка 220мс / сноска 120мс) ──────────────────────
   // Карточка одна; `rect` — точка привязки (от `getBoundingClientRect` триггера). `pendingRef` держит
@@ -815,10 +790,55 @@ function MarkdownPreviewImpl(
     [body, components],
   );
 
+  // Буквица ведущего абзаца (порт dropcap.js) — ПОСЛЕ каждого пересоздания `markdownEl`.
+  useLayoutEffect(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    root.querySelectorAll('[data-dropcap]').forEach((el) => {
+      el.removeAttribute('data-dropcap');
+      el.removeAttribute('data-cap');
+    });
+    if (!mastheadActive) return;
+    // Буквица — на ПЕРВОМ обычном абзаце тела (порядок чтения, ГДЕ БЫ ОН НИ БЫЛ — проза-first ИЛИ
+    // первый абзац внутри H2-секции, напр. daily `## 🧠 Поток мыслей`: его `<p>` вложен в
+    // `<section><div.sec-body><div.sec-inner><p>`, querySelectorAll его видит). «Обычный» = НЕ внутри
+    // masthead/properties (шапка), callout (`<div data-callout>`, см. Callout.tsx), цитаты, списка,
+    // таблицы, figure — это не «обычный неформатированный текст» (adversarial FIX 3: иначе гигантская
+    // буквица села бы внутрь admonition/цитаты/пункта раньше реального лид-абзаца) — И проходящий
+    // графем-гард dropCapLetter (EDFIX-4 КОРЕНЬ 2, семантика в masthead.ts): лид-пунктуация
+    // («кавычки», — тире диалога) ПРОПУСКАЕТСЯ до первой буквы/цифры, а лид-СИМВОЛ (`←`, эмодзи)
+    // дисквалифицирует абзац ('' → поиск идёт к следующему p) — иначе CSS `::first-letter`
+    // стилизовал бы стрелку гигантской оранжевой буквицей. Скоуп на СВОЙ previewRef:
+    // `querySelectorAll` спускается во вложенные `.preview` эмбедов (NoteEmbed), но буквица ставится
+    // ТОЛЬКО в своём документе → `p.closest('[class*="preview"]') === root` (как S6/S7). Нет
+    // подходящего «голого» `<p>` → буквицы нет (как list-first).
+    const EXCLUDE = `.${styles.docHead}, .${styles.properties}, [data-callout], blockquote, li, figure, table`;
+    const target = Array.from(root.querySelectorAll('p')).find(
+      (p) =>
+        p.closest('[class*="preview"]') === root &&
+        !p.closest(EXCLUDE) &&
+        dropCapLetter(p.textContent ?? '') !== '',
+    ) as HTMLElement | undefined;
+    if (target) {
+      const cap = dropCapLetter(target.textContent ?? '');
+      target.setAttribute('data-cap', cap);
+      target.setAttribute('data-dropcap', '');
+    }
+    // deps — `markdownEl` (НЕ body!), EDFIX-4 КОРЕНЬ 1 (race): любой ремоунт DOM-дерева превью идёт
+    // через пересоздание `markdownEl` (плагины — модуль-константы, а memo `components` — единственный
+    // прочий вход ReactMarkdown; его инвалидация, напр. новой identity колбэк-пропа из GroupPane, и
+    // есть источник ремоунта). useLayoutEffect по нему перештампует атрибуты ДО paint. Прежние deps
+    // [body, …] ремоунт без смены текста НЕ видели → узел-носитель data-dropcap уничтожался React'ом,
+    // и буквица терялась (гонка со сменой identity, репро 1/6). `masthead`-объект в deps по-прежнему
+    // не нужен: свежий литерал {mtime,reading} на каждый ре-рендер гонял бы эффект вхолостую —
+    // достаточно примитива mastheadActive.
+  }, [markdownEl, mastheadActive]);
+
   return (
     <EmbedContext.Provider value={embedCtx}>
       <div
         className={masthead?.reading ? `${styles.preview} ${styles.reading}` : styles.preview}
+        data-clean-links={cleanLinks ? '' : undefined}
         ref={previewRef}
         // S7: страховка скрытия — курсор покинул всё превью (mouseleave не всплывает, срабатывает на
         // реальном выходе). Контейнер стабилен (не ремонтируется при ре-рендере ReactMarkdown), потому
