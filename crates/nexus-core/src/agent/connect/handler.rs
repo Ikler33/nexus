@@ -1109,8 +1109,7 @@ mod tests {
                 if method == "agent/event" {
                     match params["type"].as_str().unwrap_or("") {
                         "toolCall" => {
-                            toolcall_kinds
-                                .push(params["kind"].as_str().unwrap_or("").to_string());
+                            toolcall_kinds.push(params["kind"].as_str().unwrap_or("").to_string());
                             eprintln!("LIVE toolCall: {}", params);
                         }
                         "assistantToken" => { /* стрим контента */ }
