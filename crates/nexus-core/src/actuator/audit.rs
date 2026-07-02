@@ -59,7 +59,7 @@ pub const TIER_CONFIRM: &str = "confirm";
 pub const TIER_HARDBLOCKED: &str = "hardblocked";
 
 /// Вид изменения файла для [`DiffSummary`] — СТРУКТУРНЫЙ дискриминант (new|edit), НЕ содержимое.
-/// Локален для audit (зеркало [`crate::agent::event::FileStatus`], но НЕ зависим от него: журнал
+/// Локален для audit (зеркало [`crate::event::FileStatus`], но НЕ зависим от него: журнал
 /// подотчётности не должен тащить UI-тип). По построению несёт только перечислимый статус.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
