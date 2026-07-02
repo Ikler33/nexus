@@ -17,6 +17,15 @@ afterEach(() => {
     pluginsOpen: false,
     conflictOpen: false,
     versionsOpen: false,
+    // B2: trap/floating-слои, участвующие в blocked-наборе toggleChat.
+    goalsOpen: false,
+    memoryOpen: false,
+    episodesOpen: false,
+    digestOpen: false,
+    contradictionsOpen: false,
+    paletteOpen: false,
+    cheatsheetOpen: false,
+    tweaksOpen: false,
   });
 });
 
@@ -138,6 +147,42 @@ describe('ui-стор: переход на main-вью гасит плавающ
     const s = useUIStore.getState();
     expect(s.chatOpen).toBe(true); // не закрыли — вернули
     expect(s.graphOpen).toBe(false);
+  });
+});
+
+describe('ui-стор: toggleChat знает ВСЕ блокирующие слои (B2 — goals/memory/episodes/digest/contradictions)', () => {
+  // Каждая из 5 панелей, которых не было в рукописном списке: чат «открыт», но скрыт под панелью →
+  // toggleChat возвращает его в поле зрения (гасит панель), а НЕ закрывает чат под ней.
+  const panels = [
+    'goalsOpen',
+    'memoryOpen',
+    'episodesOpen',
+    'digestOpen',
+    'contradictionsOpen',
+  ] as const;
+  for (const panel of panels) {
+    it(`чат скрыт под ${panel} → возврат в поле зрения (панель гаснет, чат остаётся открыт)`, () => {
+      useUIStore.setState({ chatOpen: true, homeOpen: false, [panel]: true });
+      useUIStore.getState().toggleChat();
+      const s = useUIStore.getState();
+      expect(s.chatOpen).toBe(true); // не закрыли — вернули
+      expect(s[panel]).toBe(false); // блокирующий слой погашен
+    });
+  }
+
+  it('дрейф-гард: ЛЮБОЙ ключ SWITCH_MAIN блокирует (набор проверки = набор гашения)', () => {
+    // Открытие чата из workspace гасит ровно SWITCH_MAIN-набор → повторный toggle при любом
+    // взведённом ключе из него обязан возвращать чат, не закрывать.
+    useUIStore.setState({ chatOpen: true, homeOpen: false, paletteOpen: true });
+    useUIStore.getState().toggleChat();
+    let s = useUIStore.getState();
+    expect(s.chatOpen).toBe(true);
+    expect(s.paletteOpen).toBe(false);
+
+    // Чистый workspace (ничего не блокирует) → toggle закрывает чат, как и раньше.
+    useUIStore.getState().toggleChat();
+    s = useUIStore.getState();
+    expect(s.chatOpen).toBe(false);
   });
 });
 

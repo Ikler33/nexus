@@ -34,8 +34,8 @@ import { lineDiff, type DiffLine } from '../../lib/diff';
 import { tauriApi, type AgentFileStatus } from '../../lib/tauri-api';
 import styles from './AgentView.module.css';
 
-/** Доступные модели для отображаемого селектора (per-run политика UI; реальный выбор — конфиг бэка). */
-const MODELS = ['qwen3:35b', 'llama3.3', 'gpt-5'] as const;
+// B10: селектора моделей здесь больше НЕТ — выпадашка была фикцией (значение никуда не передавалось,
+// реальную модель выбирает бэкенд по конфигу). Вернём при INFER-CFG (честный per-run выбор).
 
 /**
  * Вкладка Агента (UI-1b) — полноэкранный агентский воркспейс на контракте UI-1a (`Channel<AgentStreamEvent>`).
@@ -54,14 +54,12 @@ export function AgentView() {
 
   const turns = useAgentStore((s) => s.turns);
   const autonomy = useAgentStore((s) => s.autonomy);
-  const model = useAgentStore((s) => s.model);
   const perms = useAgentStore((s) => s.perms);
   const context = useAgentStore((s) => s.context);
   const approving = useAgentStore((s) => s.approving);
 
   const run = useAgentStore((s) => s.run);
   const setAutonomy = useAgentStore((s) => s.setAutonomy);
-  const setModel = useAgentStore((s) => s.setModel);
   const setPerm = useAgentStore((s) => s.setPerm);
   const setFileDecision = useAgentStore((s) => s.setFileDecision);
   const setAllDecisions = useAgentStore((s) => s.setAllDecisions);
@@ -179,20 +177,6 @@ export function AgentView() {
           </button>
           {settingsOpen && (
             <div className={styles.settings} role="menu">
-              <div className={styles.asSec}>{t('agent.model')}</div>
-              <div className={styles.asSeg}>
-                {MODELS.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={model === m ? styles.segOn : ''}
-                    onClick={() => setModel(m)}
-                    disabled={active}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
               <div className={styles.asSec}>{t('agent.autonomy')}</div>
               <div className={styles.asSeg} role="radiogroup" aria-label={t('agent.autonomy')}>
                 <button
@@ -319,11 +303,12 @@ export function AgentView() {
               </button>
             </div>
             <div className={styles.foot}>
+              {/* B10: тега с именем модели больше нет (показывал фикцию 'qwen3:35b' независимо от
+                  реальной модели бэкенда); «мышление»-индикатор активного прогона остаётся. */}
               <span className={styles.footTag}>
                 <BrandThinking size={12} animate={active} />
-                {model}
+                {autonomy === 'confirm' ? t('agent.confirm') : t('agent.auto')}
               </span>
-              <span className={styles.footTag}>{autonomy === 'confirm' ? t('agent.confirm') : t('agent.auto')}</span>
               <span className={styles.footTip}>{t('agent.composer.tip')}</span>
             </div>
           </div>

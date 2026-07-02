@@ -23,7 +23,7 @@ import type {
  * ошибка (`error`). Загрузка контекста (`contextUsage`) — на уровне сессии (питает %-бар шапки).
  *
  * Один активный ход за раз (бэкенд держит реестр по run_id). `run()` — no-op, пока активный ход идёт.
- * autonomy/model/perms — политика сессии (читаются в момент `run`, на лету не меняют идущий ход).
+ * autonomy/perms — политика сессии (читаются в момент `run`, на лету не меняют идущий ход).
  * «Новая сессия» (`newSession`) очищает ленту. Персист истории между запусками — отдельный срез.
  */
 
@@ -149,8 +149,8 @@ interface AgentState {
    *  `agent_run` как group-ключ персиста ходов. Меняется на загруженный при `loadSession`. */
   currentSessionId: string;
   autonomy: AgentAutonomy;
-  /** Отображаемая модель (per-run политика UI; реальную выбирает бэкенд по конфигу). */
-  model: string;
+  // B10: стейта «модель» здесь больше НЕТ — селектор был фикцией (реальную модель выбирает бэкенд
+  // по конфигу, значение никуда не передавалось). Вернём при INFER-CFG (per-run выбор на бэкенде).
   perms: AgentPerms;
   context: ContextUsage | null;
   /** Идёт ли отправка решений в `agent_approve` (блок кнопок аппрува). */
@@ -159,7 +159,6 @@ interface AgentState {
   /** Запускает ход по задаче (читает текущие autonomy/perms). No-op во время активного хода. */
   run: (task: string) => void;
   setAutonomy: (autonomy: AgentAutonomy) => void;
-  setModel: (model: string) => void;
   setPerm: (key: keyof AgentPerms, value: boolean) => void;
   /** Поставить решение по файлу активного хода (повтор того же решения снимает — как тоггл макета). */
   setFileDecision: (actionId: number, decision: 'applied' | 'rejected') => void;
@@ -210,7 +209,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   ...INITIAL,
   currentSessionId: newSessionId(),
   autonomy: 'confirm',
-  model: 'qwen3:35b',
   perms: { read: true, write: true, web: false },
 
   run(task) {
@@ -466,10 +464,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   setAutonomy(autonomy) {
     if (isActive(sessionStatus(get().turns))) return; // per-run политика — на лету не меняем
     set({ autonomy });
-  },
-  setModel(model) {
-    if (isActive(sessionStatus(get().turns))) return;
-    set({ model });
   },
   setPerm(key, value) {
     if (isActive(sessionStatus(get().turns))) return;

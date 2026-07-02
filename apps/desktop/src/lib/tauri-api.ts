@@ -875,6 +875,16 @@ export interface NewsItem {
   commentsUrl: string | null;
 }
 
+/** B12: структурный сигнал «LLM-анализатор недоступен» (зеркалит Rust `news::LlmDownInfo`) —
+ *  замена RU-префикс-протокола в `errors[]`, который FE сниффил регексом. */
+export interface LlmDownInfo {
+  /** URL эндпоинта оценки, который был недоступен; `null` — эндпоинт ИИ не задан. */
+  endpoint: string | null;
+  /** `true` — часть батчей прошла (лента обновлена частично, баннер не нужен);
+   *  `false` — недоступен весь прогон (тотально → баннер). */
+  partial: boolean;
+}
+
 /** Итог последнего прогона ленты (зеркалит Rust `news::NewsRun`): шапка-сводка дня. */
 export interface NewsRun {
   runAt: number;
@@ -885,6 +895,9 @@ export interface NewsRun {
   llmFailed: number;
   /** Видимые ошибки источников («источник: причина») — no silent caps (AC-NF-1). */
   errors: string[];
+  /** B12: сбой ВЫЗОВА LLM-оценки в прогоне; `null`/отсутствует — вызовы живы (или запись сделана
+   *  версией до миграции 027 — тогда действует legacy-сниффер строки в `errors`). */
+  llmDown?: LlmDownInfo | null;
 }
 
 /** Здоровье эндпоинта анализатора новостей (W-39, зеркалит Rust `commands::news::NewsEndpointHealth`):
