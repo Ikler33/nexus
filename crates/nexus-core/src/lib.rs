@@ -31,6 +31,9 @@ pub mod parser;
 pub mod plugin;
 /// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
 pub mod redact;
+/// Транспорт-нейтральные примитивы JSON-RPC 2.0 (R-1): `RpcMessage`/`RpcError` + `Transport` +
+/// line-delimited framing — общие для коннектора (`agent::connect` реэкспортирует) и песочницы.
+pub mod rpc;
 /// OS-песочница прогона агента (Фаза-2 каркас, `docs/specs/agent-sandbox.md`). SANDBOX-1: чистый рендер
 /// хардненного `podman run` argv + конфиг (default-OFF). Рантайм/GuardedProxy/host-actuator — позже.
 pub mod sandbox;

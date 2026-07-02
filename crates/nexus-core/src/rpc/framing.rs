@@ -1,7 +1,9 @@
 //! Общий line-delimited JSON-RPC framing для потоковых транспортов (AF_UNIX и stdio). Вынесен из
-//! `afunix.rs`, чтобы [`AfUnixTransport`] (CONN-2) и [`super::stdio::StdioTransport`] (ACP-1) НЕ дрейфовали
-//! по форматированию/анти-OOM-капам. Спека ACP: «Messages are delimited by newlines (`\n`), and MUST NOT
-//! contain embedded newlines» — идентично нашему AF_UNIX-фреймингу, поэтому код общий.
+//! `afunix.rs`, чтобы `AfUnixTransport` (CONN-2) и `StdioTransport` (ACP-1, `agent::connect::stdio`)
+//! НЕ дрейфовали по форматированию/анти-OOM-капам. Спека ACP: «Messages are delimited by newlines
+//! (`\n`), and MUST NOT contain embedded newlines» — идентично нашему AF_UNIX-фреймингу, поэтому код
+//! общий. R-1: живёт в транспорт-нейтральном [`crate::rpc`]; путь `agent::connect::framing` сохранён
+//! pub(crate)-реэкспортом.
 
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
