@@ -79,6 +79,14 @@ export function NewsDiagnostics({
   // Вероятная причина пустоты ленты по последнему прогону (приоритет: анализатор → источники → дедуп).
   const emptyReason = (): string => {
     if (!lastRun) return t('news.diag.emptyUnknown');
+    // B12: структурное поле llmDown — эндпоинт берём из него, без regex по строке.
+    if (lastRun.llmDown && !lastRun.llmDown.partial) {
+      return lastRun.llmDown.endpoint
+        ? t('news.diag.emptyLlm', { endpoint: lastRun.llmDown.endpoint })
+        : t('news.diag.emptyLlmGeneric');
+    }
+    // @deprecated legacy-сниффер: записи news_runs до миграции 027 несут только RU-строку с
+    // префиксом (URL выковыривается регексом) — держим, пока такие записи живы (ретенция 30 дней).
     const llmErr = lastRun.errors.find((e) => e.startsWith('Анализатор новостей недоступен'));
     if (llmErr) {
       const url = llmErr.match(/https?:\/\/[^\s—]+/)?.[0];

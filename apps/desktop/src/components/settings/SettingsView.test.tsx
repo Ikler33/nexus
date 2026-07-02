@@ -345,7 +345,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
 
     // Старт: local-транспорт → поле локальной команды видно, ssh-полей нет.
     expect(await screen.findByDisplayValue('hermes acp')).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/artanov@/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/user@host/)).not.toBeInTheDocument();
 
     // Переключаем транспорт на SSH. Имя-строка для getByRole = точное совпадение accessible-name
     // (regex цеплял бы соседнюю кнопку сегмента подстрочно).
@@ -359,8 +359,8 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     await vi.waitFor(() =>
       expect(setConn).toHaveBeenCalledWith('acp', null, null, null, 'ssh', null, null, null),
     );
-    // 3 ssh-поля появились (host/key/remote-command по плейсхолдерам).
-    expect(await screen.findByPlaceholderText(/artanov@/)).toBeInTheDocument();
+    // 3 ssh-поля появились (host/key/remote-command по плейсхолдерам; B9 — нейтральный user@host).
+    expect(await screen.findByPlaceholderText(/user@host/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/id_ed25519/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/docker exec/)).toBeInTheDocument();
 
@@ -380,7 +380,7 @@ describe('SettingsView (кросс-план #11, оболочка раздела
     useUIStore.setState({ settingsSection: 'ai' });
     render(<SettingsView />);
 
-    const hostInput = await screen.findByPlaceholderText(/artanov@/);
+    const hostInput = await screen.findByPlaceholderText(/user@host/);
     fireEvent.change(hostInput, { target: { value: 'artanov@192.168.0.28' } });
     fireEvent.blur(hostInput);
 

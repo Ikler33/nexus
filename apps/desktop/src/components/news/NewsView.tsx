@@ -217,10 +217,19 @@ export function NewsView() {
           return topic && !head.includes(topic) ? [...head, topic] : head;
         })();
   const runFailed = run !== null && run.sourcesOk === 0 && run.errors.length > 0;
-  // W-2: эндпоинт ОЦЕНКИ недоступен — backend кладёт ОДНУ строку «Анализатор новостей недоступен:
-  // <url> …» в errors[] (только при сбое ВЫЗОВА, не на паре кривых JSON). Баннер ключуем на её
-  // наличие (а НЕ на llmFailed>0, который растёт и от обычных парс-фейлов отдельных записей).
-  const llmError = run?.errors.find((e) => e.startsWith('Анализатор новостей недоступен'));
+  // W-2/B12: эндпоинт ОЦЕНКИ недоступен — backend отдаёт структурное поле `llmDown` (только при
+  // сбое ВЫЗОВА, не на паре кривых JSON; тотально = partial:false). Баннер ключуем на него (а НЕ на
+  // llmFailed>0, который растёт и от обычных парс-фейлов отдельных записей).
+  // @deprecated legacy-сниффер: записи news_runs, сделанные ДО миграции 027, несут только RU-строку
+  // с префиксом — распознаём её, пока такие записи живы (ретенция 30 дней). Новые прогоны идут полем.
+  const legacyLlmError = run?.errors.find((e) => e.startsWith('Анализатор новостей недоступен'));
+  const llmError =
+    run?.llmDown && !run.llmDown.partial
+      ? t('news.llmDown', {
+          endpoint: run.llmDown.endpoint ?? t('news.llmDownNoEndpoint'),
+          count: run.llmFailed,
+        })
+      : legacyLlmError;
 
   const card = (it: NewsItem) => (
     <div key={it.id} className={`${styles.card} ${it.read ? styles.cardRead : ''}`}>

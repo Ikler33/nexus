@@ -289,22 +289,13 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => {
       logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
       if (!s.chatOpen) return { ...SWITCH_MAIN, chatOpen: true };
-      // Панель уже «открыта», но скрыта за main-вью ИЛИ плавающим слоем (граф/Tasks/Inbox/Sync/…) →
-      // клик возвращает её в поле зрения (W-6: учитываем и оверлеи, не только main-вью).
-      if (
-        s.homeOpen ||
-        s.newsOpen ||
-        s.boardOpen ||
-        s.todayOpen ||
-        s.agentOpen ||
-        s.graphOpen ||
-        s.tasksOpen ||
-        s.inboxOpen ||
-        s.syncOpen ||
-        s.pluginsOpen ||
-        s.tweaksOpen
-      )
-        return { ...SWITCH_MAIN };
+      // Панель уже «открыта», но скрыта за main-вью ИЛИ плавающим/trap-слоем (граф/Tasks/Inbox/Goals/
+      // Memory/Episodes/Digest/Contradictions/Sync/…) → клик возвращает её в поле зрения (W-6).
+      // B2: набор блокирующих слоёв = РОВНО ключи SWITCH_MAIN (что ветка гасит — то и проверяет,
+      // список не дрейфует). Раньше рукописный список терял goals/memory/episodes/digest/
+      // contradictions, и чат «открывался» ПОД ними.
+      const blocked = (Object.keys(SWITCH_MAIN) as (keyof typeof SWITCH_MAIN)[]).some((k) => s[k]);
+      if (blocked) return { ...SWITCH_MAIN };
       return { chatOpen: false };
     }),
   openPlugins: () => set({ pluginsOpen: true }),

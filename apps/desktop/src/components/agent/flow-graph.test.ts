@@ -43,6 +43,7 @@ describe('classifyKind (нормализация Castor + Hermes ACP, default th
     ['web.fetch', 'web'],
     ['shell', 'command'],
     ['note.read', 'read'],
+    ['fs.read', 'read'], // B4: kind из ACT (describeStep) — раньше падал в 'think'
     ['recall', 'read'],
     ['think', 'think'],
   ];
@@ -74,6 +75,7 @@ describe('classifyKind (нормализация Castor + Hermes ACP, default th
     expect(classifyKind('execute')).toBe(classifyKind('shell'));
     expect(classifyKind('search')).toBe(classifyKind('web.search'));
     expect(classifyKind('read')).toBe(classifyKind('note.read'));
+    expect(classifyKind('fs.read')).toBe(classifyKind('note.read')); // B4
   });
 });
 

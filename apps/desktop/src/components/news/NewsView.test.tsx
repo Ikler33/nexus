@@ -330,6 +330,51 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     expect(screen.queryByText(/Анализатор новостей недоступен|News analyzer unavailable/)).toBeNull();
   });
 
+  // B12: новый бэкенд отдаёт СТРУКТУРНОЕ поле llmDown — баннер строится из него (i18n с эндпоинтом
+  // и счётчиком), БЕЗ сниффинга RU-строки в errors[] (в фикстуре строки-протокола нет намеренно).
+  it('B12: структурное поле llmDown (тотально) → баннер называет эндпоинт без строки-протокола', async () => {
+    const run = {
+      runAt: 1_700_000_000,
+      digestRu: '',
+      itemsNew: 0,
+      sourcesOk: 1,
+      sourcesTotal: 1,
+      llmFailed: 5,
+      errors: [],
+      llmDown: { endpoint: 'http://10.0.0.7:8084', partial: false },
+    };
+    const spy = vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run });
+    render(<NewsView />);
+    expect(
+      await screen.findByText(/Анализатор новостей недоступен|News analyzer unavailable/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/10\.0\.0\.7:8084/)).toBeInTheDocument();
+    expect(screen.getByText(/5 зап\.|5 entries/)).toBeInTheDocument();
+    // Пустая лента при недоступном анализаторе → состояние ошибки, не «свежих новостей нет».
+    expect(screen.queryByText(/Свежих новостей нет|No fresh news/)).toBeNull();
+    spy.mockRestore();
+  });
+
+  // B12: частичный сбой (partial=true, часть батчей прошла) баннер НЕ поднимает — лента обновлена,
+  // мягкая строка живёт только в раскрываемом списке ошибок прогона (двухуровневость W-2).
+  it('B12: llmDown.partial → баннера нет', async () => {
+    const run = {
+      runAt: 1_700_000_000,
+      digestRu: 'Сводка.',
+      itemsNew: 3,
+      sourcesOk: 1,
+      sourcesTotal: 1,
+      llmFailed: 1,
+      errors: ['ИИ-анализатор частично недоступен: http://10.0.0.7:8084 — 1 зап. не оценены в этот прогон (повтор при следующем обновлении); остальные новости добавлены'],
+      llmDown: { endpoint: 'http://10.0.0.7:8084', partial: true },
+    };
+    const spy = vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run });
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+    expect(screen.queryByText(/Анализатор новостей недоступен|News analyzer unavailable/)).toBeNull();
+    spy.mockRestore();
+  });
+
   // Чипы тем — серверный фильтр: выбор темы перезапрашивает страницу и оставляет одну рубрику.
   it('фильтр темы: чип сужает ленту до рубрики', async () => {
     render(<NewsView />);
