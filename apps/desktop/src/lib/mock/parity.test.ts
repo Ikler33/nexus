@@ -102,7 +102,8 @@ describe('P0-2 гейт (а): мок агента эмитит каждый ва
     await until(() => types().includes('final'));
 
     // Сценарий 2: терминальная ошибка хода (провайдер упал) — единственный вариант вне сценария 1.
-    await mockAgent.run('ошибка провайдера', 'confirm', onEvent);
+    // Узкий демо-маркер: обычное слово «ошибка» в задаче мок не роняет (анти-футган смоука).
+    await mockAgent.run('демо-ошибка провайдера', 'confirm', onEvent);
     await until(() => types().includes('error'));
 
     // Равенство МНОЖЕСТВ: и «мок не эмитит вариант» (дыра), и «эмитит неизвестный тип» — красный.
@@ -118,8 +119,8 @@ describe('P0-2 гейт (б): мок чата эмитит каждый вари
     all.push(...(await chatScenario('Roadmap', { episodic: true, deep: true })));
     // Web-режим: webSources (без sources — web-план замещает RAG-ветку, как в chat_rag).
     all.push(...(await chatScenario('что нового в мире', { web: true })));
-    // Терминальная ошибка (форма Error{message, deniedKind?}).
-    all.push(...(await chatScenario('ошибка провайдера')));
+    // Терминальная ошибка (форма Error{message, deniedKind?}) — узкий демо-маркер.
+    all.push(...(await chatScenario('демо-ошибка провайдера')));
 
     expect(sortedUnique(all.map((e) => e.type))).toEqual(sortedUnique(CHAT_EVENT_TYPES));
   });

@@ -524,7 +524,8 @@ export interface MockChatOpts {
 /**
  * Симуляция RAG-чат-стрима — зеркало ПОРЯДКА и СОБЫТИЙ `chat_rag` (Rust `ChatStreamEvent`):
  * (web → `webSources` | grounded → `sources` | общий → `sources:[]`) → `episodeSources`? →
- * `memorySources`? → (deep: `reasoning`… + `reasoningSummary`) → `token`… → `done` | `error`.
+ * `memorySources`? → (deep: `reasoning`… + живая `reasoningSummary`) → `token`… →
+ * (deep: ФИНАЛЬНАЯ `reasoningSummary` — после конца токенов, как chat.rs) → `done` | `error`.
  *
  * P0-2 (mock-must-match-backend): ВСЕ опции команды приняты и наблюдаемы —
  * - `k` клампится 1..20 (зеркало `.clamp(1, 20)`);
@@ -535,9 +536,9 @@ export interface MockChatOpts {
  * - `agentMemory`/`pinned` — событий на проводе НЕТ (бэкенд молча подмешивает их в промпт) —
  *   наблюдаемость через текст ответа; pinned фильтруется зеркалом `is_pinnable` + бюджет 5;
  * - `deep` — reasoning-события и доп. задержка ТОЛЬКО в «Глубоком» (зеркало выбора chat vs
- *   chat_fast: «Быстрый» БЕЗ CoT → без 💭);
- * - вопрос с «error/ошибк» → терминальный `error` (с `deniedKind:'offline'`, если рядом «офлайн» —
- *   форма отказа эгресса AC-EGR-14).
+ *   chat_fast: «Быстрый» БЕЗ CoT → без 💭); живые сводки ПО ХОДУ + финальная ПОСЛЕ токенов;
+ * - УЗКИЙ демо-маркер «демо-ошибка»/«demo-error» → терминальный `error` (с `deniedKind:'offline'`,
+ *   если рядом «офлайн» — форма отказа эгресса AC-EGR-14); обычное слово «ошибка» мок не роняет.
  */
 export function streamChat(
   question: string,
@@ -621,7 +622,9 @@ export function streamChat(
 
     // Триггер терминальной ошибки (провайдер упал / отказ эгресса): форма — зеркало Rust
     // `Error{message, denied_kind?}` → `{message, deniedKind?}` (AC-EGR-14 для i18n-баннера).
-    if (/error|ошибк/i.test(question)) {
+    // Маркер УЗКИЙ («демо-ошибка»/«demo-error») — анти-футган: легитимный вопрос «найди заметку
+    // про ошибку» мок НЕ роняет (Playwright-смоук ходит по реальным фразам).
+    if (/демо-ошибка|demo-error/i.test(question)) {
       onEvent(
         /офлайн|offline/i.test(question)
           ? { type: 'error', message: 'мок: эгресс запрещён (офлайн-режим)', deniedKind: 'offline' }
@@ -632,7 +635,7 @@ export function streamChat(
 
     // R1: reasoning-события — ТОЛЬКО «Глубокий» (deep → модель С CoT; «Быстрый» = chat_fast БЕЗ
     // reasoning → бэкенд не шлёт ни `reasoning`, ни `reasoningSummary`). Сырые дельты CoT (спойлер
-    // «развернуть») + живая сводка; deep заметно медленнее — доп. задержка.
+    // «развернуть») + ЖИВАЯ сводка по ходу; deep заметно медленнее — доп. задержка.
     if (deep) {
       for (const delta of ['Смотрю найденные заметки. ', 'Сопоставляю факты и формулирую вывод.']) {
         if (cancelled) return;
@@ -647,7 +650,12 @@ export function streamChat(
       await new Promise((r) => setTimeout(r, 15));
       onEvent({ type: 'token', text: tok });
     }
-    if (!cancelled) onEvent({ type: 'done', full: answer });
+    if (cancelled) return;
+    // R1 (зеркало chat.rs: финал стрима): ФИНАЛЬНАЯ сводка по ПОЛНОМУ размышлению эмитится ПОСЛЕ
+    // конца токенов, ПЕРЕД Done (короткий CoT мог не успеть тикнуть в живом таске-суммаризаторе) —
+    // «summary всегда до token» на живом проводе НЕВЕРНО, мок это кодифицирует.
+    if (deep) onEvent({ type: 'reasoningSummary', text: 'Свёл ответ по найденным заметкам' });
+    onEvent({ type: 'done', full: answer });
   })();
   return () => {
     cancelled = true;

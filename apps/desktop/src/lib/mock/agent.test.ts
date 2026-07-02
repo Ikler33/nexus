@@ -178,9 +178,9 @@ describe('mock/agent P0-2 — exec/report/error по триггерам зада
     expect(Object.keys(rep).sort()).toEqual(['path', 'rounds', 'runId', 'sourcesCount', 'title', 'type']);
   });
 
-  it('«ошибка»: терминальный error — final НЕ приходит (как в реальном цикле)', async () => {
+  it('«демо-ошибка»: терминальный error — final НЕ приходит (как в реальном цикле)', async () => {
     const { events, onEvent } = collect();
-    await mockAgent.run('ошибка провайдера', 'auto', onEvent);
+    await mockAgent.run('демо-ошибка провайдера', 'auto', onEvent);
     await until(() => typesOf(events).includes('error'));
     await new Promise((r) => setTimeout(r, 100));
 
@@ -201,5 +201,35 @@ describe('mock/agent P0-2 — exec/report/error по триггерам зада
     for (const t of ['execProposal', 'execResult', 'report', 'error'] as const) {
       expect(types).not.toContain(t);
     }
+  });
+
+  it('анти-футган: «execute…» НЕ триггерит exec-пару; обычная «ошибка» НЕ роняет прогон', async () => {
+    // \bexec\b: в «execute» нет границы слова после exec → пары нет.
+    const a = collect();
+    await mockAgent.run('выполни execute план', 'auto', a.onEvent);
+    await until(() => typesOf(a.events).includes('final'));
+    expect(typesOf(a.events)).not.toContain('execProposal');
+    expect(typesOf(a.events)).not.toContain('execResult');
+
+    // Легитимная задача про ошибки (смоук ходит по реальным фразам) — прогон живёт до final.
+    const b = collect();
+    await mockAgent.run('разбери ошибку в заметке про кэш', 'auto', b.onEvent);
+    await until(() => typesOf(b.events).includes('final'));
+    expect(typesOf(b.events)).not.toContain('error');
+  });
+
+  it('пауза (kill-switch) подавляет exec между proposal и result', async () => {
+    const { events, onEvent } = collect();
+    const runId = await mockAgent.run('exec: собери проект', 'auto', onEvent);
+    // Пауза ставится на plan-фазе — ДО exec-пары (между planProposed и waitWhilePaused exec-гейта
+    // пауза-чеков нет, поэтому execProposal ещё дойдёт, а «исполнение» замрёт на kill-switch).
+    await until(() => typesOf(events).includes('planProposed'));
+    await mockAgent.pause(runId);
+    await until(() => typesOf(events).includes('execProposal'));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(typesOf(events)).not.toContain('execResult'); // под паузой exec НЕ «исполняется»
+    await mockAgent.resume(runId);
+    await until(() => typesOf(events).includes('final'));
+    expect(typesOf(events)).toContain('execResult'); // после снятия паузы exec доехал
   });
 });

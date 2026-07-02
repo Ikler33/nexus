@@ -270,13 +270,20 @@ describe('mock streamChat P0-2 — опции и события памяти (з
     expect(off.map((e) => e.type)).not.toContain('memorySources');
   });
 
-  it('deep: сырые reasoning-дельты + живая сводка ДО токенов (зеркало выбора chat vs chat_fast)', async () => {
+  it('deep: reasoning-дельты + живая сводка ПО ХОДУ + ФИНАЛЬНАЯ сводка после токенов (порядок chat.rs)', async () => {
     const events = await chatRun('Roadmap', { deep: true });
     const types = events.map((e) => e.type);
     expect(types).toContain('reasoning');
-    expect(types).toContain('reasoningSummary');
-    expect(types.indexOf('reasoning')).toBeLessThan(types.indexOf('reasoningSummary'));
-    expect(types.indexOf('reasoningSummary')).toBeLessThan(types.indexOf('token'));
+    // Живая сводка — после начала размышления, до токенов ответа.
+    const firstSummary = types.indexOf('reasoningSummary');
+    expect(types.indexOf('reasoning')).toBeLessThan(firstSummary);
+    expect(firstSummary).toBeLessThan(types.indexOf('token'));
+    // ФИНАЛЬНАЯ сводка по полному размышлению — ПОСЛЕ последнего token, ПЕРЕД done (зеркало
+    // chat.rs: финал шлётся после конца стрима; «summary всегда до token» на живом проводе неверно).
+    const lastSummary = types.lastIndexOf('reasoningSummary');
+    expect(lastSummary).toBeGreaterThan(types.lastIndexOf('token'));
+    expect(lastSummary).toBeLessThan(types.indexOf('done'));
+    expect(types.filter((t) => t === 'reasoningSummary').length).toBeGreaterThanOrEqual(2);
   });
 
   it('rerank наблюдаемо меняет порядок источников (пайплайн retrieve-глубже → LLM-порядок → k)', async () => {
@@ -327,18 +334,23 @@ describe('mock streamChat P0-2 — опции и события памяти (з
     expect(memDone.full).toContain('учтены факты памяти агента');
   });
 
-  it('триггер «ошибка»: терминальный error; с «офлайн» — deniedKind offline (форма AC-EGR-14)', async () => {
-    const plain = await chatRun('это ошибка провайдера');
+  it('демо-маркер ошибки: терминальный error; с «офлайн» — deniedKind offline (форма AC-EGR-14)', async () => {
+    const plain = await chatRun('покажи демо-ошибка провайдера');
     const err = plain.at(-1);
     if (err?.type !== 'error') throw new Error('нет error');
     expect(err.message.length).toBeGreaterThan(0);
     expect(err.deniedKind).toBeUndefined();
     expect(plain.map((e) => e.type)).not.toContain('done'); // error терминален
 
-    const denied = await chatRun('ошибка офлайн');
+    const denied = await chatRun('демо-ошибка офлайн');
     const dErr = denied.at(-1);
     if (dErr?.type !== 'error') throw new Error('нет error');
     expect(dErr.deniedKind).toBe('offline');
+
+    // Анти-футган: легитимный вопрос со словом «ошибка» мок НЕ роняет (смоук ходит по реальным
+    // фразам) — стрим завершается done.
+    const legit = await chatRun('найди заметку про ошибку в кэше');
+    expect(legit.at(-1)?.type).toBe('done');
   });
 });
 

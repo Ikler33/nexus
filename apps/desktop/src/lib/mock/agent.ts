@@ -14,10 +14,12 @@
 //
 // P0-2 (полнота юниона): мок обязан уметь эмитить КАЖДЫЙ вариант `AgentStreamEvent` (гейт —
 // `parity.test.ts`). Редкие варианты включаются триггерами по тексту задачи (как web/grounded-флаги
-// у streamChat), дефолтный сценарий не меняется:
-// - задача содержит «exec»        → пара `execProposal`→`execResult` (SANDBOX-6c, после плана);
-// - задача содержит «report/отчёт» → `report` (RES-5, после фазы changeset, перед final);
-// - задача содержит «error/ошибк»  → терминальный `error` ВМЕСТО final (провайдер упал).
+// у streamChat), дефолтный сценарий не меняется. Маркеры УЗКИЕ (анти-футган для смоуков):
+// - слово «exec» (границы слова; «execute» НЕ триггерит) → пара `execProposal`→`execResult`
+//   (SANDBOX-6c, после плана);
+// - «report/отчёт»                → `report` (RES-5, после фазы changeset, перед final);
+// - «демо-ошибка»/«demo-error»    → терминальный `error` ВМЕСТО final (провайдер упал);
+//   обычные слова «ошибка/error» в задаче мок НЕ роняют.
 
 import type {
   AgentApprovalDecision,
@@ -100,9 +102,12 @@ export function run(
   void history; // принимаем по контракту; детерминированный мок-proposal от истории не зависит
   void sessionId; // W-38: браузер-мок не персистит историю (фейковый список ниже)
   // P0-2: триггеры редких вариантов юниона по тексту задачи (дефолтный прогон не меняется).
-  const wantExec = /exec/i.test(task);
+  // Узкие маркеры — анти-футган для Playwright-смоука: «execute…» НЕ триггерит exec (границы
+  // слова), а легитимная задача про ошибки («разбери ошибку X») НЕ роняет мок — терминальный
+  // error только по явному демо-маркеру «демо-ошибка»/«demo-error».
+  const wantExec = /\bexec\b/i.test(task);
   const wantReport = /report|отч[её]т/i.test(task);
-  const wantError = /error|ошибк/i.test(task);
+  const wantError = /демо-ошибка|demo-error/i.test(task);
   const runId = nextRunId++;
   const files: MockFile[] = [
     { path: 'RMS-B2B/Идея — кэш контекста.md', add: 8, del: 0, status: 'new', kind: 'file', actionId: runId * 100 + 1 },
@@ -192,10 +197,12 @@ export function run(
       // P0-2 (SANDBOX-6c): exec-пара песочницы — `execProposal` (редакция-безопасный СИЛУЭТ: имя
       // инструмента + счётчики, БЕЗ сырых argv/env — приватность §5.6) → `execResult` (exit-код +
       // finalized, БЕЗ stdout/stderr). Формы — байт-в-байт зеркало Rust wire (`runId`/`actionId`/
-      // `exitCode` — явный camelCase). Мок моделирует exec, одобренный ПОЛИТИКОЙ хоста
-      // (`dispatch_exec_decision`: classify_exec → approve) — решение выносит политика, НЕ файловый
-      // гейт ниже, поэтому пара не ждёт `agent_approve`. Порядок как в реальном цикле: exec-вызов
-      // инструмента идёт ВНУТРИ хода (после плана), до end-of-turn changeset.
+      // `exitCode` — явный camelCase). Семантика: exec НИКОГДА не Auto — в реале между парой ВСЕГДА
+      // стоит `decision_source.decide()`. Пара мока моделирует exec, УЖЕ ОДОБРЕННЫЙ host-side у
+      // connected/ACP-бэкенда: в десктоп exec-события только ПРИХОДЯТ, решение выносится на стороне
+      // хоста агента — десктоп для exec-решений зритель, UI-аппрува для exec нет НАМЕРЕННО (W-26).
+      // Порядок как в реальном цикле: exec-вызов идёт ВНУТРИ хода (после плана), до end-of-turn
+      // changeset. Пауза (kill-switch) подавляет «исполнение» между proposal и result.
       if (wantExec) {
         const execActionId = runId * 100 + 50;
         onEvent({
@@ -205,6 +212,7 @@ export function run(
           summary: 'shell.run · 2 args',
         });
         await sleep(STEP_MS * 2);
+        await waitWhilePaused(run);
         if (run.cancelled) return;
         onEvent({
           type: 'execResult',
