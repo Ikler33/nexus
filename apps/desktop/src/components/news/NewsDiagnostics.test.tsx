@@ -85,7 +85,8 @@ describe('NewsDiagnostics (W-39)', () => {
 
     expect(await screen.findByText(/почему пусто|why empty/i)).toBeInTheDocument();
     // Эндпоинт назван в блоке причины (и заодно в списке ошибок последнего прогона) — оба места.
-    expect(screen.getAllByText(/localhost:8084/).length).toBeGreaterThanOrEqual(1);
+    // Legacy-фикстура (:80) намеренно с историческим .28 — сниффер извлекает её эндпоинт как есть.
+    expect(screen.getAllByText(/192\.168\.0\.28:8084/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/анализатор недоступен|analyzer unavailable/i)).toBeInTheDocument();
   });
 
