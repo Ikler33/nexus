@@ -35,9 +35,9 @@ use crate::ai::tools::ToolCapableProvider;
 use crate::db::{ReadPool, WriteActor};
 
 use super::super::event::AgentEvent;
+use super::super::finish::{outcome_to_finish, CancelWording, PausePolicy};
 use super::super::memory::AgentMemory;
-use super::super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
-use super::super::runner::{BudgetKind, LoopOutcome};
+use super::super::run_store;
 use super::super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
 use super::super::skill_tools::SkillContext;
 use super::super::web_tools::WebToolsConfig;
@@ -149,33 +149,6 @@ impl ConnectAgentHandler {
             out,
             sessions: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-}
-
-/// Маппинг исхода цикла → терминальный статус run_store (как desktop `finish_in_store`: single-spawn,
-/// пауза → error, т.к. у коннектора нет scheduler-requeue headless-пути).
-fn outcome_to_finish(outcome: &LoopOutcome) -> (&'static str, String) {
-    match outcome {
-        LoopOutcome::Final(s) => (STATUS_DONE, s.clone()),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Cancelled,
-            partial,
-        } => (
-            STATUS_CANCELLED,
-            format!("прогон отменён; частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Paused,
-            partial,
-        } => (
-            STATUS_ERROR,
-            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted { kind, partial } => (
-            STATUS_ERROR,
-            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::Error(e) => (STATUS_ERROR, e.clone()),
     }
 }
 
@@ -296,7 +269,14 @@ impl ConnectHandler for ConnectAgentHandler {
                 Some(&deps.research), // RES-5: research.run (default-OFF; регистрируется при всех условиях)
             )
             .await;
-            let (status, text) = outcome_to_finish(&outcome);
+            // Терминал по канону R-2 (как desktop `finish_in_store`: single-spawn, пауза → error,
+            // т.к. у коннектора нет scheduler-requeue headless-пути возобновления).
+            let (status, text) = outcome_to_finish(
+                &outcome,
+                PausePolicy::FinalizeError,
+                CancelWording::RunCancelled,
+            )
+            .expect_finalize();
             let _ = run_store::finish_run(&deps.writer, run_id, status, Some(&text)).await;
             // Дерегистрируем сессию ТОЛЬКО если хендл всё ещё ЭТОТ прогон (guard по run_id) — defense in
             // depth на случай, если сессию переиспользовали (новый прогон не должен быть снят нашим
@@ -398,10 +378,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::super::{channel_pair, dispatch, RpcMessage};
+    use crate::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
+    use crate::agent::runner::{BudgetKind, LoopOutcome};
 
     /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
-    /// ЭТОГО вызывателя, точным сравнением (байт-в-байт). Тексты попадают в run_store/историю
-    /// прогонов/UI — канонизация R-2 обязана сохранить их без изменений.
+    /// ЭТОГО вызывателя (канон с параметрами хендлера: FinalizeError + «прогон отменён»), точным
+    /// сравнением (байт-в-байт). Тексты попадают в run_store/историю прогонов/UI — канонизация R-2
+    /// обязана сохранить их без изменений; ассерты идентичны фикстуре «до» на локальной копии.
     #[test]
     fn outcome_to_finish_characterization_full_table() {
         let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
@@ -438,7 +421,12 @@ mod tests {
             (LoopOutcome::Error("упал".into()), STATUS_ERROR, "упал"),
         ];
         for (outcome, want_status, want_text) in table {
-            let (status, text) = outcome_to_finish(&outcome);
+            let (status, text) = outcome_to_finish(
+                &outcome,
+                PausePolicy::FinalizeError,
+                CancelWording::RunCancelled,
+            )
+            .expect_finalize();
             assert_eq!(
                 (status, text.as_str()),
                 (want_status, want_text),

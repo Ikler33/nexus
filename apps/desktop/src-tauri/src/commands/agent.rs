@@ -846,11 +846,13 @@ async fn drive_run(
     .await
 }
 
-/// Финализирует прогон в run_store по исходу цикла (зеркало терминала `AgentRunHandler::drive`):
-/// Final→done, Cancelled→cancelled, прочее исчерпание бюджета→error, Error→error. Пауза мид-ран
-/// (BudgetExhausted{Paused}) здесь трактуется как НЕ-терминал в desktop-модели: цикл драйвится единым
-/// `tokio::spawn` (не реквью планировщика) — если пауза остановила цикл, мы помечаем прогон error с
-/// пометкой паузы (UI может перезапустить). Это desktop-упрощение vs agentd-requeue (план планировщика).
+/// Финализирует прогон в run_store по исходу цикла — маппинг статусов/текстов идёт КАНОНОМ R-2
+/// (`nexus_core::agent::outcome_to_finish`, зеркало терминала `AgentRunHandler::drive`): Final→done,
+/// Cancelled→cancelled («прогон отменён; …»), прочее исчерпание бюджета→error. Пауза мид-ран
+/// (BudgetExhausted{Paused}) финализируется `PausePolicy::FinalizeError`: цикл драйвится единым
+/// `tokio::spawn` (не реквью планировщика) — если пауза остановила цикл, помечаем прогон error с
+/// пометкой паузы (UI может перезапустить). Это desktop-упрощение vs agentd-requeue (парковка
+/// `PausePolicy::Requeue` — только у scheduler-пути).
 /// Возвращает финальный `(status, text)` (W-38: используется и для персиста хода истории — report для
 /// done, error-текст иначе).
 async fn finish_in_store(
@@ -858,30 +860,13 @@ async fn finish_in_store(
     run_id: i64,
     outcome: LoopOutcome,
 ) -> (&'static str, String) {
-    use nexus_core::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
-    use nexus_core::agent::BudgetKind;
-    let (status, text) = match outcome {
-        LoopOutcome::Final(s) => (STATUS_DONE, s),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Cancelled,
-            partial,
-        } => (
-            STATUS_CANCELLED,
-            format!("прогон отменён; частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Paused,
-            partial,
-        } => (
-            STATUS_ERROR,
-            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted { kind, partial } => (
-            STATUS_ERROR,
-            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::Error(e) => (STATUS_ERROR, e),
-    };
+    use nexus_core::agent::{outcome_to_finish, CancelWording, PausePolicy};
+    let (status, text) = outcome_to_finish(
+        &outcome,
+        PausePolicy::FinalizeError,
+        CancelWording::RunCancelled,
+    )
+    .expect_finalize();
     let _ = run_store::finish_run(writer, run_id, status, Some(&text)).await;
     (status, text)
 }
