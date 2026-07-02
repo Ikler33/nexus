@@ -2,20 +2,32 @@ import { describe, expect, it } from 'vitest';
 
 import { basenameTitle, deriveMasthead, dropCapLetter } from './masthead';
 
-describe('dropCapLetter', () => {
+describe('dropCapLetter (EDFIX-4: пунктуация-лид пропускается, символ/эмодзи-лид дисквалифицирует)', () => {
   it('берёт первую букву в верхнем регистре', () => {
     expect(dropCapLetter('много текста')).toBe('М');
     expect(dropCapLetter('the quick brown')).toBe('T');
   });
-  it('пропускает ведущие пробелы/символы до первой буквы', () => {
+  it('пропускает ведущие пробелы/ПУНКТУАЦИЮ до первой буквы (русская проза)', () => {
     expect(dropCapLetter('  «слово»')).toBe('С');
     expect(dropCapLetter('— тире')).toBe('Т');
+    expect(dropCapLetter('«Все счастливые семьи…»')).toBe('В');
+    expect(dropCapLetter('— Привет, — сказал он.')).toBe('П'); // тире Pd + пробел Zs — цепочка не рвётся
+    expect(dropCapLetter('„Цитата“')).toBe('Ц');
+    expect(dropCapLetter('(скобка)')).toBe('С');
+  });
+  it('в data-cap уходит ТОЛЬКО буква (без лид-пунктуации) — CSS-зазор матчит одиночный глиф', () => {
+    expect(dropCapLetter('«Вопрос»')).toBe('В'); // не '«В'
   });
   it('ведущая ЦИФРА → буквица-цифра (владелец просил «большую красную цифру»)', () => {
     expect(dropCapLetter('2026 год')).toBe('2');
     expect(dropCapLetter('123 456')).toBe('1');
     expect(dropCapLetter('  «2026»')).toBe('2'); // пропускает пунктуацию до первой цифры
     expect(dropCapLetter('— 7 правил')).toBe('7');
+  });
+  it('EDFIX-4 графем-гард: лид-СИМВОЛ (стрелка/эмодзи, \\p{S}) дисквалифицирует абзац → ""', () => {
+    expect(dropCapLetter('← [[00 - Карта проекта]]')).toBe(''); // Рескорринг.md — репорт владельца
+    expect(dropCapLetter('🚀 Запуск')).toBe('');
+    expect(dropCapLetter('→ дальше по тексту')).toBe('');
   });
   it('пусто, если нет ни буквы, ни цифры', () => {
     expect(dropCapLetter('   ')).toBe('');

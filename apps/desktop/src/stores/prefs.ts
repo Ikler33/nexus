@@ -65,6 +65,23 @@ function readPalette(): PaletteStyle {
   return 'top';
 }
 
+/** EDFIX-4 F4: режим заметки source/preview. Последний ВЫБРАННЫЙ режим (toggleMode) становится
+ *  дефолтом для НОВЫХ панелей и следующего запуска (прежде режим не запоминался вовсе и владелец
+ *  каждый раз попадал в source). Открытые панели ретроактивно не трогаются — их явные значения
+ *  живут в workspace.modes. */
+export type NoteMode = 'source' | 'preview';
+const NOTE_MODE_KEY = 'nexus.editor.noteMode';
+
+function readNoteMode(): NoteMode {
+  try {
+    const v = localStorage.getItem(NOTE_MODE_KEY);
+    if (v === 'source' || v === 'preview') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'source';
+}
+
 /** MEM-8c-b: режим консолидации памяти. `propose` — каждое слияние/замещение через чип (безопасно по
  *  умолчанию); `auto` — применять автоматически (кроме explicit-фактов §4.3), с undo-тостом. */
 export type ConsolidationMode = 'propose' | 'auto';
@@ -169,6 +186,9 @@ interface PrefsState {
   wikilinkLivePreview: boolean;
   /** Имя пользователя для приветствия HOME (необязательное, локальное). */
   userName: string;
+  /** Режим заметки source/preview: последний выбранный (toggleMode) — дефолт для новых панелей
+   *  и следующего запуска (EDFIX-4 F4). */
+  noteMode: NoteMode;
   /** Позиция командной палитры (DP-11). */
   paletteStyle: PaletteStyle;
   /** Расположение AI-панели (DP-12). */
@@ -205,6 +225,7 @@ interface PrefsState {
   setReadableLineWidth: (on: boolean) => void;
   setWikilinkLivePreview: (on: boolean) => void;
   setUserName: (name: string) => void;
+  setNoteMode: (mode: NoteMode) => void;
   setPaletteStyle: (style: PaletteStyle) => void;
   setAiLayout: (layout: AiLayout) => void;
   setRagSources: (style: RagSources) => void;
@@ -224,6 +245,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   readableLineWidth: START_READABLE,
   wikilinkLivePreview: START_WIKILINK_LP,
   userName: readString(USER_NAME_KEY),
+  noteMode: readNoteMode(),
   paletteStyle: readPalette(),
   aiLayout: readAiLayout(),
   ragSources: readRagSources(),
@@ -256,6 +278,15 @@ export const usePrefsStore = create<PrefsState>((set) => ({
         /* ignore */
       }
       return { userName: name };
+    }),
+  setNoteMode: (mode) =>
+    set(() => {
+      try {
+        localStorage.setItem(NOTE_MODE_KEY, mode);
+      } catch {
+        /* ignore */
+      }
+      return { noteMode: mode };
     }),
   setPaletteStyle: (style) =>
     set(() => {

@@ -416,6 +416,14 @@
   content: ']]';
   opacity: 0.32;
 }
+/* EDFIX-4 КОРЕНЬ 3: преф «Чистые ссылки» (wikilinkLivePreview) действует и в reading/preview —
+   при ON компонент ставит `data-clean-links` на корень `.preview`, декоративные скобки гаснут.
+   Скобки S2 «Редакция» остаются ТОЛЬКО при выключенном тумблере. Селектор с `.preview`-префиксом
+   покрывает и вложенные превью эмбедов (каждый инстанс ставит атрибут сам). */
+.preview[data-clean-links] .wikilink::before,
+.preview[data-clean-links] .wikilink::after {
+  content: none;
+}
 /* Тег-пилюля по макету (sage). */
 .tag {
   color: var(--color-tag);
