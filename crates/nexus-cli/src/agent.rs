@@ -171,6 +171,40 @@ fn make_decision(actuator: bool, yes: bool) -> Arc<dyn nexus_core::actuator::Dec
     }
 }
 
+/// Маппинг исхода цикла → терминальный статус run_store. Локальная копия семантики эталона
+/// `nexus-core::agent::connect::handler::outcome_to_finish` (НЕ дедуплицируем намеренно — объединение
+/// копий это стадия R-2, здесь только выравнивание).
+///
+/// B13: у `Paused` — СВОЙ арм с честным сообщением «прогон приостановлен» (пауза агента ≠ ошибка
+/// выполнения и ≠ исчерпанный бюджет); раньше пауза падала в общий арм и врала «бюджет исчерпан
+/// (Paused)». Статус остаётся `error`, как в эталоне: у one-shot CLI (как и у коннектора) нет
+/// scheduler-requeue-пути возобновления, статус обязан быть терминальным.
+fn outcome_to_finish(outcome: &nexus_core::agent::LoopOutcome) -> (&'static str, String) {
+    use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
+    match outcome {
+        LoopOutcome::Final(s) => (run_store::STATUS_DONE, s.clone()),
+        LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Cancelled,
+            partial,
+        } => (
+            run_store::STATUS_CANCELLED,
+            format!("отменён; частичный ответ: {partial}"),
+        ),
+        LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Paused,
+            partial,
+        } => (
+            run_store::STATUS_ERROR,
+            format!("прогон приостановлен (пауза агента — не ошибка выполнения); частичный ответ: {partial}"),
+        ),
+        LoopOutcome::BudgetExhausted { kind, partial } => (
+            run_store::STATUS_ERROR,
+            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
+        ),
+        LoopOutcome::Error(e) => (run_store::STATUS_ERROR, e.clone()),
+    }
+}
+
 /// Гонит ОДИН ход агента (create_run → сессия → finish_run). Переиспользуется one-shot и REPL.
 /// `Err` — только сбой подготовки (create_run); сам исход прогона (cancelled/error) едет в `TurnOutcome`.
 async fn run_turn(
@@ -182,7 +216,7 @@ async fn run_turn(
     decision: Arc<dyn nexus_core::actuator::DecisionSource>,
 ) -> Result<TurnOutcome, String> {
     use nexus_core::actuator::OVERWRITE_THRESHOLD;
-    use nexus_core::agent::{run_agent_session, run_store, BudgetKind, LoopOutcome, SessionSpec};
+    use nexus_core::agent::{run_agent_session, run_store, SessionSpec};
     use nexus_core::ai::AiConfig;
 
     // NB: создаём строку `agent_runs` БЕЗ джобы `KIND_AGENT_RUN` → осиротевшая `queued`-строка (Ctrl-C
@@ -227,21 +261,7 @@ async fn run_turn(
     .await;
 
     // Финализация в run_store (зеркало `finish_in_store`).
-    let (status, text) = match &outcome {
-        LoopOutcome::Final(s) => (run_store::STATUS_DONE, s.clone()),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Cancelled,
-            partial,
-        } => (
-            run_store::STATUS_CANCELLED,
-            format!("отменён; частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted { kind, partial } => (
-            run_store::STATUS_ERROR,
-            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::Error(e) => (run_store::STATUS_ERROR, e.clone()),
-    };
+    let (status, text) = outcome_to_finish(&outcome);
     let _ = run_store::finish_run(deps.db.writer(), run_id, status, Some(&text)).await;
     Ok(TurnOutcome {
         run_id,
@@ -781,5 +801,49 @@ mod tests {
         // 5 кириллических букв, лимит 3 → 3 буквы + многоточие (не паника на байтах).
         assert_eq!(clip("абвгд", 3), "абв…");
         assert_eq!(clip("абв", 3), "абв");
+    }
+
+    /// B13: `Paused` имеет СВОЙ арм — честное «прогон приостановлен», а не ложное
+    /// «бюджет исчерпан (Paused)». Статус — терминальный `error`, как в эталоне
+    /// (`connect::handler::outcome_to_finish`): у one-shot CLI нет пути возобновления.
+    #[test]
+    fn outcome_to_finish_paused_is_honest_not_budget() {
+        use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
+        let (status, text) = outcome_to_finish(&LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Paused,
+            partial: "успел половину".into(),
+        });
+        assert_eq!(status, run_store::STATUS_ERROR, "терминальность как в эталоне");
+        assert!(text.contains("приостановлен"), "got: {text}");
+        assert!(
+            !text.contains("бюджет исчерпан"),
+            "пауза ≠ исчерпанный бюджет: {text}"
+        );
+        assert!(text.contains("успел половину"), "частичный ответ виден: {text}");
+    }
+
+    /// B13 (регрессия): прочие армы маппинга не сдвинулись — done/cancelled/бюджет/ошибка как были.
+    #[test]
+    fn outcome_to_finish_other_arms_unchanged() {
+        use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
+        let (st, tx) = outcome_to_finish(&LoopOutcome::Final("итог".into()));
+        assert_eq!((st, tx.as_str()), (run_store::STATUS_DONE, "итог"));
+
+        let (st, tx) = outcome_to_finish(&LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Cancelled,
+            partial: "часть".into(),
+        });
+        assert_eq!(st, run_store::STATUS_CANCELLED);
+        assert!(tx.contains("отменён") && tx.contains("часть"), "got: {tx}");
+
+        let (st, tx) = outcome_to_finish(&LoopOutcome::BudgetExhausted {
+            kind: BudgetKind::Steps,
+            partial: "часть".into(),
+        });
+        assert_eq!(st, run_store::STATUS_ERROR);
+        assert!(tx.contains("бюджет исчерпан"), "got: {tx}");
+
+        let (st, tx) = outcome_to_finish(&LoopOutcome::Error("упал".into()));
+        assert_eq!((st, tx.as_str()), (run_store::STATUS_ERROR, "упал"));
     }
 }
