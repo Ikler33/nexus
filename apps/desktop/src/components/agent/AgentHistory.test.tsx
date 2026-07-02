@@ -10,7 +10,6 @@ function reset() {
     turns: [],
     currentSessionId: 'sess-x',
     autonomy: 'confirm',
-    model: 'qwen3:35b',
     perms: { read: true, write: true, web: false },
     context: null,
     approving: false,
