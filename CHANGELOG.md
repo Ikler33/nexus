@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Изменено · nexus-core — R-1: развязка циклов слоёв (нейтральные `event`/`tool_types`/`rpc`)
+
+Рефакторинг направления зависимостей ядра (REFACTOR-PLAN §3, стадия R-1). **Строго behavior-preserving**: wire-форматы, публичные сигнатуры (кроме путей модулей) и логика не менялись; все существующие тесты зелёные без правок ожиданий.
+
+- **`crate::event`** (было `agent::event`): контракт событий хода (`AgentEvent`, `FileStatus`, `ProposedFile`, `PlanStep`/`PlanStepState`, `SubagentState`, капы/конструкторы) — нейтрален к слоям; его используют и агент (эмиттер цикла), и актуатор (`Proposal`/`Diff` в `orchestrate`).
+- **`crate::tool_types`** (было `agent::tool`): `Tool`/`ToolSpec`/`ToolCall`/`ToolError` — общие для agent/actuator/ai.
+- **`crate::rpc`** (было в `agent::connect`): транспорт-нейтральное JSON-RPC-ядро — `RpcMessage`/`RpcError`, `Transport`/`TransportError`, `ChannelTransport`/`channel_pair`, `Arc<T>`-делегат, line-delimited `framing` (капы анти-OOM/анти-спам). Протокол-специфика коннектора (методы `agent/*`, params/result, `dispatch`, negotiate, `EVENT_CHANNEL_CAP`) осталась в `agent::connect`.
+- Старые пути (`agent::event`, `agent::tool`, `agent::connect::{RpcMessage,…}`) сохранены **реэкспортами** — потребители (desktop/agentd/cli/sandbox) не правятся.
+- Разорваны обратные рёбра слоёв: в `actuator/*` и `ai/*` не осталось ни одного `use crate::agent::` (grep-инвариант). `sandbox` осознанно не тронут (`child.rs` — composition-root). Дедупликация копий correlator-логики — отдельная стадия R-9.
+
 ### Исправлено · Редактор — доверие к «Редакции»: буквица, чистые ссылки в просмотре, алиасы, режим (EDFIX-4, репорт владельца 2026-07-02)
 
 Четыре корня репорта «ссылки без `[[]]` так и не заработали, алиас не отображается, буквица так и не появилась» (диагностика — живая репродукция playwright-webkit на реальных байтах заметок владельца). Всё FE-only, проверено 5 стенд-прогонами против live-vite.

@@ -23,8 +23,8 @@ use serde::Deserialize;
 
 use super::chat::ChatMessage;
 use super::{AiError, AiResult};
-use crate::agent::tool::{ToolCall, ToolSpec};
 use crate::net::{EgressFeature, GuardedClient, RunCtx};
+use crate::tool_types::{ToolCall, ToolSpec};
 
 /// Idle-таймаут стрима ПОСЛЕ первого байта (зеркалит `chat.rs`): нет чанка за это время → рвём (не
 /// виснем вечно). INFER-CFG: дефолт; конфигурируется `ChatConfig::idle_timeout()`.

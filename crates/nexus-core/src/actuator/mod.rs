@@ -14,7 +14,7 @@
 //!   symlink rampart → drift → ledger write-before-act → snapshot manual=true → atomic_write → finish)
 //!   + [`apply::AuditSink`] (обёртка ledger).
 //! - [`tools`] (3c/3e) — файловые инструменты [`tools::NoteCreateTool`]/[`tools::NoteEditTool`]/
-//!   [`tools::SetFrontmatterTool`] (impl [`crate::agent::Tool`]): `invoke` маршрутизирует ТОЛЬКО через
+//!   [`tools::SetFrontmatterTool`] (impl [`crate::tool_types::Tool`]): `invoke` маршрутизирует ТОЛЬКО через
 //!   гейт [`orchestrate::dispatch_action`] (3e hard-gate #1 — ungated direct-apply путь УДАЛЁН).
 //! - [`decision`] (3d) — [`decision::DecisionSource`] (fail-closed [`decision::PolicyDefault`] +
 //!   [`decision::ChannelDecision`]) + [`decision::ProposalBatch`]/[`decision::BatchDecision`]

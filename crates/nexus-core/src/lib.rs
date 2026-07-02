@@ -20,6 +20,9 @@ pub mod ai;
 pub mod chunker;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
 pub mod db;
+/// Нейтральный контракт событий хода агента (`AgentEvent` + сателлиты) — R-1: общий для agent
+/// (эмиттер цикла) и actuator (Proposal/Diff), без ребра actuator→agent; `agent::event` реэкспортирует.
+pub mod event;
 /// Egress-граница ядра (ADR-005-ext): `GuardedClient` + политика + audit — единый chokepoint HTTP.
 pub mod net;
 /// Markdown-парсер (frontmatter, ссылки, теги).
@@ -28,12 +31,18 @@ pub mod parser;
 pub mod plugin;
 /// `Redacted<T>`: безопасные Debug/Display (контент/пути не утекают в логи по неосторожности) — AC-SEC-6.
 pub mod redact;
+/// Транспорт-нейтральные примитивы JSON-RPC 2.0 (R-1): `RpcMessage`/`RpcError` + `Transport` +
+/// line-delimited framing — общие для коннектора (`agent::connect` реэкспортирует) и песочницы.
+pub mod rpc;
 /// OS-песочница прогона агента (Фаза-2 каркас, `docs/specs/agent-sandbox.md`). SANDBOX-1: чистый рендер
 /// хардненного `podman run` argv + конфиг (default-OFF). Рантайм/GuardedProxy/host-actuator — позже.
 pub mod sandbox;
 /// Планировщик фоновых задач (ADR-007) — обобщённый движок (очередь+диспатч+воркер-луп через хуки),
 /// tauri-free (CORE-1b). App-specific spawn/handlers — в `crate::scheduler` desktop-крейта.
 pub mod scheduler;
+/// Нейтральные типы границы инструментов (`Tool`/`ToolSpec`/`ToolCall`/`ToolError`) — R-1: общие для
+/// agent/actuator/ai, без рёбер actuator→agent и ai→agent; `agent::tool` реэкспортирует.
+pub mod tool_types;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
 /// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.

@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::agent::event::{AgentEvent, FileStatus, ProposedFile};
-use crate::agent::ToolError;
+use crate::event::{AgentEvent, FileStatus, ProposedFile};
+use crate::tool_types::ToolError;
 
 use super::action::{Action, ActionTarget};
 use super::apply::{apply_action, ApplyOutcome, AuditSink};
