@@ -38,9 +38,9 @@ use crate::db::{ReadPool, WriteActor};
 use crate::scheduler::{self, Job, JobHandler};
 
 use super::event::AgentEvent;
+use super::finish::{outcome_to_finish, CancelWording, PausePolicy, RunFinish};
 use super::memory::AgentMemory;
-use super::run_store::{self, STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
-use super::runner::{BudgetKind, LoopOutcome};
+use super::run_store::{self, STATUS_ERROR};
 use super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
 use super::skill_tools::SkillContext;
 use super::web_tools::WebToolsConfig;
@@ -321,57 +321,43 @@ impl AgentRunHandler {
             }
         }
 
-        // 7a. KILL-SWITCH (AGENT-5, чек-пойнт #2): пауза мид-ран — НЕ терминал. Прогон ВОЗВРАЩАЕТСЯ в
-        //     `queued` + пере-кьюется (как чек-пойнт #1), чтобы возобновиться на un-pause. replay-safe:
-        //     повторный заход перезапускает цикл С НАЧАЛА (актуатор идемпотентен per-op-group), а под
-        //     паузой записей всё равно не было (чек-пойнт #3 + цикл-чек остановил ДО хода). НЕ пишем
-        //     finish (прогон не завершён) — наоборот, requeue_to_queued возвращает строку в queued.
-        if let LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Paused,
-            ..
-        } = outcome
-        {
-            run_store::requeue_to_queued(&self.writer, run_id)
+        // 7. Терминал/парковка прогона — КАНОН R-2 (`agent::finish::outcome_to_finish`).
+        //    PausePolicy::Requeue — ЕДИНСТВЕННЫЙ вызыватель с парковкой паузы (scheduler-путь).
+        match outcome_to_finish(&outcome, PausePolicy::Requeue, CancelWording::RunCancelled) {
+            // 7a. KILL-SWITCH (AGENT-5, чек-пойнт #2): пауза мид-ран — НЕ терминал. Прогон ВОЗВРАЩАЕТСЯ
+            //     в `queued` + пере-кьюется (как чек-пойнт #1), чтобы возобновиться на un-pause.
+            //     replay-safe: повторный заход перезапускает цикл С НАЧАЛА (актуатор идемпотентен
+            //     per-op-group), а под паузой записей всё равно не было (чек-пойнт #3 + цикл-чек
+            //     остановил ДО хода). НЕ пишем finish (прогон не завершён) — наоборот,
+            //     requeue_to_queued возвращает строку в queued.
+            RunFinish::Park => {
+                run_store::requeue_to_queued(&self.writer, run_id)
+                    .await
+                    .map_err(|e| format!("agent_run {run_id}: пауза мид-ран → queued: {e}"))?;
+                scheduler::enqueue(
+                    &self.writer,
+                    KIND_AGENT_RUN,
+                    &run_id.to_string(),
+                    scheduler::now_secs() + PAUSE_REQUEUE_DELAY_SECS,
+                    3,
+                )
                 .await
-                .map_err(|e| format!("agent_run {run_id}: пауза мид-ран → queued: {e}"))?;
-            scheduler::enqueue(
-                &self.writer,
-                KIND_AGENT_RUN,
-                &run_id.to_string(),
-                scheduler::now_secs() + PAUSE_REQUEUE_DELAY_SECS,
-                3,
-            )
-            .await
-            .map_err(|e| format!("agent_run {run_id}: пере-кью паузы мид-ран: {e}"))?;
-            tracing::info!(
-                run_id,
-                "agent_run: kill-switch ВЗВЕДЁН мид-ран — прогон → queued, пере-кью на un-pause"
-            );
-            return Ok(());
+                .map_err(|e| format!("agent_run {run_id}: пере-кью паузы мид-ран: {e}"))?;
+                tracing::info!(
+                    run_id,
+                    "agent_run: kill-switch ВЗВЕДЁН мид-ран — прогон → queued, пере-кью на un-pause"
+                );
+            }
+            // 7b. Терминал прогона по исходу цикла. Отмена (cancel) → `cancelled` (отдельный
+            //     терминал, не error): таксономия статусов не врёт. Прочее исчерпание бюджета (steps/
+            //     wall_clock/tokens) → error (прогон не довёл задачу).
+            RunFinish::Finalize { status, text } => {
+                run_store::finish_run(&self.writer, run_id, status, Some(&text))
+                    .await
+                    .map_err(|e| format!("agent_run {run_id}: finish({status}): {e}"))?;
+                tracing::info!(run_id, status, "agent_run: прогон завершён");
+            }
         }
-
-        // 7b. Терминал прогона по исходу цикла. Отмена (cancel) → STATUS_CANCELLED (отдельный
-        //    терминал, не error): таксономия статусов не врёт. Прочее исчерпание бюджета (steps/
-        //    wall_clock/tokens) → error (прогон не довёл задачу).
-        let (status, outcome_text) = match outcome {
-            LoopOutcome::Final(s) => (STATUS_DONE, s),
-            LoopOutcome::BudgetExhausted {
-                kind: BudgetKind::Cancelled,
-                partial,
-            } => (
-                STATUS_CANCELLED,
-                format!("прогон отменён; частичный ответ: {partial}"),
-            ),
-            LoopOutcome::BudgetExhausted { kind, partial } => (
-                STATUS_ERROR,
-                format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-            ),
-            LoopOutcome::Error(e) => (STATUS_ERROR, e),
-        };
-        run_store::finish_run(&self.writer, run_id, status, Some(&outcome_text))
-            .await
-            .map_err(|e| format!("agent_run {run_id}: finish({status}): {e}"))?;
-        tracing::info!(run_id, status, "agent_run: прогон завершён");
         Ok(())
     }
 }
@@ -462,6 +448,66 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    use crate::agent::run_store::{STATUS_CANCELLED, STATUS_DONE};
+    use crate::agent::runner::{BudgetKind, LoopOutcome};
+
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): параметризация канона ЭТОЙ джобы
+    /// (PausePolicy::Requeue + «прогон отменён») — терминальные армы байт-в-байт как у инлайн-копии
+    /// до дедупа; Paused → Park, НЕ терминал (requeue-путь; живой прогон доказывает
+    /// `paused_actuator_run_writes_nothing_and_requeues`).
+    #[test]
+    fn outcome_to_finish_characterization_full_table() {
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 6] = [
+            (LoopOutcome::Final("итог".into()), STATUS_DONE, "итог"),
+            (
+                be(BudgetKind::Cancelled),
+                STATUS_CANCELLED,
+                "прогон отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (LoopOutcome::Error("упал".into()), STATUS_ERROR, "упал"),
+        ];
+        for (outcome, want_status, want_text) in table {
+            let got =
+                outcome_to_finish(&outcome, PausePolicy::Requeue, CancelWording::RunCancelled);
+            assert_eq!(
+                got,
+                RunFinish::Finalize {
+                    status: want_status,
+                    text: want_text.into()
+                },
+                "вариант: {outcome:?}"
+            );
+        }
+        // Пауза мид-ран — парковка (7a), finish_run НЕ пишется.
+        assert_eq!(
+            outcome_to_finish(
+                &be(BudgetKind::Paused),
+                PausePolicy::Requeue,
+                CancelWording::RunCancelled
+            ),
+            RunFinish::Park
+        );
+    }
 
     async fn open() -> (TempDir, Database) {
         let dir = TempDir::new().unwrap();

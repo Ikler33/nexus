@@ -174,38 +174,19 @@ fn make_decision(actuator: bool, yes: bool) -> Arc<dyn nexus_core::actuator::Dec
     }
 }
 
-/// Маппинг исхода цикла → терминальный статус run_store. Локальная копия семантики эталона
-/// `nexus-core::agent::connect::handler::outcome_to_finish` (НЕ дедуплицируем намеренно — объединение
-/// копий это стадия R-2, здесь только выравнивание).
-///
-/// B13: у `Paused` — СВОЙ арм с честным сообщением «прогон приостановлен» (пауза агента ≠ ошибка
-/// выполнения и ≠ исчерпанный бюджет); раньше пауза падала в общий арм и врала «бюджет исчерпан
-/// (Paused)». Статус остаётся `error`, как в эталоне: у one-shot CLI (как и у коннектора) нет
-/// scheduler-requeue-пути возобновления, статус обязан быть терминальным.
-fn outcome_to_finish(outcome: &nexus_core::agent::LoopOutcome) -> (&'static str, String) {
-    use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
-    match outcome {
-        LoopOutcome::Final(s) => (run_store::STATUS_DONE, s.clone()),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Cancelled,
-            partial,
-        } => (
-            run_store::STATUS_CANCELLED,
-            format!("отменён; частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Paused,
-            partial,
-        } => (
-            run_store::STATUS_ERROR,
-            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted { kind, partial } => (
-            run_store::STATUS_ERROR,
-            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::Error(e) => (run_store::STATUS_ERROR, e.clone()),
-    }
+/// Параметры канона `nexus_core::agent::outcome_to_finish` для one-shot CLI (R-2, дедуп копий):
+/// `PausePolicy::FinalizeError` — у CLI (как и у коннектора) нет scheduler-requeue-пути возобновления,
+/// пауза (B13) финализируется терминальным `error` с честным «прогон приостановлен (kill-switch)»;
+/// `CancelWording::CancelledBare` — историческая CLI-формулировка «отменён; …» (pre-existing
+/// расхождение с «прогон отменён» других вызывателей сохранено как есть).
+fn cli_finish(outcome: &nexus_core::agent::LoopOutcome) -> (&'static str, String) {
+    use nexus_core::agent::{outcome_to_finish, CancelWording, PausePolicy};
+    outcome_to_finish(
+        outcome,
+        PausePolicy::FinalizeError,
+        CancelWording::CancelledBare,
+    )
+    .expect_finalize()
 }
 
 /// Гонит ОДИН ход агента (create_run → сессия → finish_run). Переиспользуется one-shot и REPL.
@@ -263,8 +244,8 @@ async fn run_turn(
     )
     .await;
 
-    // Финализация в run_store (зеркало `finish_in_store`).
-    let (status, text) = outcome_to_finish(&outcome);
+    // Финализация в run_store (зеркало `finish_in_store`) — канон R-2 c CLI-параметрами.
+    let (status, text) = cli_finish(&outcome);
     let _ = run_store::finish_run(deps.db.writer(), run_id, status, Some(&text)).await;
     Ok(TurnOutcome {
         run_id,
@@ -807,12 +788,12 @@ mod tests {
     }
 
     /// B13: `Paused` имеет СВОЙ арм — честное «прогон приостановлен», а не ложное
-    /// «бюджет исчерпан (Paused)». Статус — терминальный `error`, как в эталоне
-    /// (`connect::handler::outcome_to_finish`): у one-shot CLI нет пути возобновления.
+    /// «бюджет исчерпан (Paused)». Статус — терминальный `error` (канон R-2,
+    /// `PausePolicy::FinalizeError`): у one-shot CLI нет пути возобновления.
     #[test]
     fn outcome_to_finish_paused_is_honest_not_budget() {
         use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
-        let (status, text) = outcome_to_finish(&LoopOutcome::BudgetExhausted {
+        let (status, text) = cli_finish(&LoopOutcome::BudgetExhausted {
             kind: BudgetKind::Paused,
             partial: "успел половину".into(),
         });
@@ -836,24 +817,83 @@ mod tests {
     #[test]
     fn outcome_to_finish_other_arms_unchanged() {
         use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
-        let (st, tx) = outcome_to_finish(&LoopOutcome::Final("итог".into()));
+        let (st, tx) = cli_finish(&LoopOutcome::Final("итог".into()));
         assert_eq!((st, tx.as_str()), (run_store::STATUS_DONE, "итог"));
 
-        let (st, tx) = outcome_to_finish(&LoopOutcome::BudgetExhausted {
+        let (st, tx) = cli_finish(&LoopOutcome::BudgetExhausted {
             kind: BudgetKind::Cancelled,
             partial: "часть".into(),
         });
         assert_eq!(st, run_store::STATUS_CANCELLED);
         assert!(tx.contains("отменён") && tx.contains("часть"), "got: {tx}");
 
-        let (st, tx) = outcome_to_finish(&LoopOutcome::BudgetExhausted {
+        let (st, tx) = cli_finish(&LoopOutcome::BudgetExhausted {
             kind: BudgetKind::Steps,
             partial: "часть".into(),
         });
         assert_eq!(st, run_store::STATUS_ERROR);
         assert!(tx.contains("бюджет исчерпан"), "got: {tx}");
 
-        let (st, tx) = outcome_to_finish(&LoopOutcome::Error("упал".into()));
+        let (st, tx) = cli_finish(&LoopOutcome::Error("упал".into()));
         assert_eq!((st, tx.as_str()), (run_store::STATUS_ERROR, "упал"));
+    }
+
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
+    /// ЭТОГО вызывателя (проекция канона `cli_finish`), точным сравнением (байт-в-байт). Известное
+    /// pre-existing расхождение CLI — Cancelled-текст «отменён; …» (БЕЗ «прогон», в отличие от
+    /// desktop/connect/agentd) — сохранено параметром `CancelWording::CancelledBare`; ассерты
+    /// идентичны фикстуре «до» на локальной копии: R-2 строго behavior-preserving.
+    #[test]
+    fn outcome_to_finish_characterization_full_table() {
+        use nexus_core::agent::{run_store, BudgetKind, LoopOutcome};
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 7] = [
+            (
+                LoopOutcome::Final("итог".into()),
+                run_store::STATUS_DONE,
+                "итог",
+            ),
+            (
+                be(BudgetKind::Cancelled),
+                run_store::STATUS_CANCELLED,
+                "отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Paused),
+                run_store::STATUS_ERROR,
+                "прогон приостановлен (kill-switch); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                run_store::STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                run_store::STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                run_store::STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (
+                LoopOutcome::Error("упал".into()),
+                run_store::STATUS_ERROR,
+                "упал",
+            ),
+        ];
+        for (outcome, want_status, want_text) in table {
+            let (status, text) = cli_finish(&outcome);
+            assert_eq!(
+                (status, text.as_str()),
+                (want_status, want_text),
+                "вариант: {outcome:?}"
+            );
+        }
     }
 }

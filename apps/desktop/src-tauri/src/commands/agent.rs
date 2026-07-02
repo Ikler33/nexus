@@ -846,11 +846,13 @@ async fn drive_run(
     .await
 }
 
-/// Финализирует прогон в run_store по исходу цикла (зеркало терминала `AgentRunHandler::drive`):
-/// Final→done, Cancelled→cancelled, прочее исчерпание бюджета→error, Error→error. Пауза мид-ран
-/// (BudgetExhausted{Paused}) здесь трактуется как НЕ-терминал в desktop-модели: цикл драйвится единым
-/// `tokio::spawn` (не реквью планировщика) — если пауза остановила цикл, мы помечаем прогон error с
-/// пометкой паузы (UI может перезапустить). Это desktop-упрощение vs agentd-requeue (план планировщика).
+/// Финализирует прогон в run_store по исходу цикла — маппинг статусов/текстов идёт КАНОНОМ R-2
+/// (`nexus_core::agent::outcome_to_finish`, зеркало терминала `AgentRunHandler::drive`): Final→done,
+/// Cancelled→cancelled («прогон отменён; …»), прочее исчерпание бюджета→error. Пауза мид-ран
+/// (BudgetExhausted{Paused}) финализируется `PausePolicy::FinalizeError`: цикл драйвится единым
+/// `tokio::spawn` (не реквью планировщика) — если пауза остановила цикл, помечаем прогон error с
+/// пометкой паузы (UI может перезапустить). Это desktop-упрощение vs agentd-requeue (парковка
+/// `PausePolicy::Requeue` — только у scheduler-пути).
 /// Возвращает финальный `(status, text)` (W-38: используется и для персиста хода истории — report для
 /// done, error-текст иначе).
 async fn finish_in_store(
@@ -858,30 +860,13 @@ async fn finish_in_store(
     run_id: i64,
     outcome: LoopOutcome,
 ) -> (&'static str, String) {
-    use nexus_core::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
-    use nexus_core::agent::BudgetKind;
-    let (status, text) = match outcome {
-        LoopOutcome::Final(s) => (STATUS_DONE, s),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Cancelled,
-            partial,
-        } => (
-            STATUS_CANCELLED,
-            format!("прогон отменён; частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted {
-            kind: BudgetKind::Paused,
-            partial,
-        } => (
-            STATUS_ERROR,
-            format!("прогон приостановлен (kill-switch); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::BudgetExhausted { kind, partial } => (
-            STATUS_ERROR,
-            format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
-        ),
-        LoopOutcome::Error(e) => (STATUS_ERROR, e),
-    };
+    use nexus_core::agent::{outcome_to_finish, CancelWording, PausePolicy};
+    let (status, text) = outcome_to_finish(
+        &outcome,
+        PausePolicy::FinalizeError,
+        CancelWording::RunCancelled,
+    )
+    .expect_finalize();
     let _ = run_store::finish_run(writer, run_id, status, Some(&text)).await;
     (status, text)
 }
@@ -1611,5 +1596,72 @@ mod tests {
             !canon.join("Notes/NoApprove.md").exists(),
             "без Approve файл НЕ записан (fail-closed)"
         );
+    }
+
+    /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
+    /// `finish_in_store` ЭТОГО вызывателя, точным сравнением (байт-в-байт). Тексты попадают в
+    /// run_store/историю прогонов/UI — канонизация R-2 обязана сохранить их без изменений.
+    #[tokio::test]
+    async fn finish_in_store_characterization_full_table() {
+        use nexus_core::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
+        use nexus_core::agent::BudgetKind;
+        let (_dir, db, _canon) = open_db().await;
+        let be = |kind: BudgetKind| LoopOutcome::BudgetExhausted {
+            kind,
+            partial: "часть".into(),
+        };
+        let table: [(LoopOutcome, &str, &str); 7] = [
+            (LoopOutcome::Final("итог".into()), STATUS_DONE, "итог"),
+            (
+                be(BudgetKind::Cancelled),
+                STATUS_CANCELLED,
+                "прогон отменён; частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Paused),
+                STATUS_ERROR,
+                "прогон приостановлен (kill-switch); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Steps),
+                STATUS_ERROR,
+                "бюджет исчерпан (Steps); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::WallClock),
+                STATUS_ERROR,
+                "бюджет исчерпан (WallClock); частичный ответ: часть",
+            ),
+            (
+                be(BudgetKind::Tokens),
+                STATUS_ERROR,
+                "бюджет исчерпан (Tokens); частичный ответ: часть",
+            ),
+            (LoopOutcome::Error("упал".into()), STATUS_ERROR, "упал"),
+        ];
+        for (outcome, want_status, want_text) in table {
+            // Свежая строка прогона на каждый вариант — finish_run пишет в реальный run_store.
+            let run_id = run_store::create_run(db.writer(), "задача", Some("fake"), None)
+                .await
+                .unwrap();
+            let debug_outcome = format!("{outcome:?}");
+            let (status, text) = finish_in_store(db.writer(), run_id, outcome).await;
+            assert_eq!(
+                (status, text.as_str()),
+                (want_status, want_text),
+                "вариант: {debug_outcome}"
+            );
+            // Терминал реально записан в run_store с теми же статусом/текстом.
+            let run = run_store::get_run(db.reader(), run_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(run.status, want_status, "вариант: {debug_outcome}");
+            assert_eq!(
+                run.outcome.as_deref(),
+                Some(want_text),
+                "вариант: {debug_outcome}"
+            );
+        }
     }
 }
