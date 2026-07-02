@@ -4,6 +4,7 @@ import type {
   ChatStreamEvent,
   Contradiction,
   Digest,
+  EpisodeHit,
   FileEntry,
   FullGraph,
   GoalEntry,
@@ -12,6 +13,7 @@ import type {
   InlineMode,
   InlineStreamEvent,
   LinkSuggestion,
+  MemoryHit,
   NoteRef,
   SearchHit,
   VaultInfo,
@@ -355,13 +357,18 @@ export async function searchContent(
   const terms = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   if (terms.length === 0) return [];
 
+  // P0-2: граф-ранг от «центра» (открытого файла) — наблюдаемое зеркало `SearchOptions.center`
+  // бэкенд-hybrid_search: соседи центра по графу вики-ссылок ранжируются выше (буст к score).
+  const centerNeighbors = opts?.center ? (buildAdjacency().get(opts.center) ?? null) : null;
+
   const hits: SearchHit[] = [];
   for (const [path, content] of Object.entries(CONTENT)) {
     if (opts?.folder && path !== opts.folder && !path.startsWith(`${opts.folder}/`)) continue;
     const lower = content.toLowerCase();
-    // Псевдо-RRF-score: число вхождений терминов (приближение релевантности для превью).
-    const score = terms.reduce((s, t) => s + lower.split(t).length - 1, 0);
+    // Псевдо-RRF-score: число вхождений терминов (приближение релевантности для превью) + граф-буст.
+    let score = terms.reduce((s, t) => s + lower.split(t).length - 1, 0);
     if (score === 0) continue;
+    if (centerNeighbors?.has(path)) score += 2;
     const idx = lower.indexOf(terms[0]);
     const snippet = content.slice(Math.max(0, idx - 40), idx + 200).replace(/\s+/g, ' ').trim();
     hits.push({ chunkId: hits.length, path, title: null, headingPath: null, snippet, score });
@@ -450,18 +457,114 @@ export async function getDigest(): Promise<Digest> {
   };
 }
 
-/** Симуляция RAG-чат-стрима для превью/тестов: sources → токены (по словам) → done. */
+// ── P0-2: мок-чат — ПОЛНОЕ зеркало входа/событий команды `chat_rag` ──────────────────────────────
+// Константы = бэкенд-константам (chat.rs / search::rerank / episode) — чтобы капы были наблюдаемо
+// теми же: DEFAULT_K=8, MEMORY_K=3, EPISODE_K=2, RERANK_RETRIEVE=24, PINNED_MAX_NOTES=5.
+const DEFAULT_K = 8;
+const MEMORY_K = 3;
+const EPISODE_K = 2;
+const RERANK_RETRIEVE = 24;
+const PINNED_MAX_NOTES = 5;
+
+/** Память переписки (N4b, зеркало Rust `chat_log::MemoryHit` — camelCase на проводе): фейковые
+ *  фрагменты прошлых диалогов для чипов «из прошлых разговоров» в превью/тестах. */
+const MOCK_MEMORY: MemoryHit[] = [
+  { sessionId: 101, sessionTitle: 'Планирование Alpha', role: 'user', snippet: 'Договорились: спека Alpha — приоритет недели.', score: 0.62 },
+  { sessionId: 102, sessionTitle: 'Разбор Inbox', role: 'assistant', snippet: 'Предлагал переносить быстрые заметки из Inbox в проекты.', score: 0.54 },
+  { sessionId: 103, sessionTitle: 'Идеи по Roadmap', role: 'user', snippet: 'Хотели добавить в Roadmap веху про поиск.', score: 0.47 },
+  { sessionId: 104, sessionTitle: 'Ретро недели', role: 'assistant', snippet: 'Итог ретро: меньше контекст-свитчинга.', score: 0.41 },
+];
+
+/** Эпизодическая память (EP-2, зеркало Rust `episode::EpisodeHit`): саммари прошлых сессий.
+ *  Сессии 101/102 пересекаются с MOCK_MEMORY — чтобы дедуп «эпизод глушит сырые реплики» был
+ *  наблюдаем (как exclude_sessions в `search_memory`). */
+const MOCK_EPISODES: EpisodeHit[] = [
+  { episodeId: 11, sessionId: 101, sessionTitle: 'Планирование Alpha', summarySnippet: 'Обсуждали приоритеты проекта Alpha: спека, ревью, дедлайны.', startedAt: 1_733_000_000, endedAt: 1_733_003_600, score: 0.58 },
+  { episodeId: 13, sessionId: 102, sessionTitle: 'Разбор Inbox', summarySnippet: 'Разобрали входящие: быстрые заметки уехали в проекты.', startedAt: 1_732_950_000, endedAt: 1_732_953_600, score: 0.5 },
+  { episodeId: 12, sessionId: 105, sessionTitle: 'Наброски статьи', summarySnippet: 'Собирали тезисы статьи о «втором мозге» и цитаты.', startedAt: 1_732_900_000, endedAt: 1_732_903_600, score: 0.44 },
+];
+
+/** Зеркало бэкенд-`is_pinnable` (chat.rs): в закреплённый контекст идут только `.md`-заметки БЕЗ
+ *  dot-компонентов (`.nexus`/`.git`/dot-файлы) — анти-эксфильтрация секретов в LLM-канал. */
+function isPinnable(path: string): boolean {
+  return /\.md$/i.test(path) && !path.split('/').some((s) => s.startsWith('.'));
+}
+
+/** Мок LLM-реранка (зеркало пайплайна `search::rerank::llm_rerank`): ДРУГАЯ функция релевантности —
+ *  число РАЗЛИЧНЫХ терминов запроса в пути+сниппете («понимание темы»), не сырая частота вхождений.
+ *  Детерминирован; наблюдаемо меняет порядок против базового ретрива. */
+function rerankHits(question: string, hits: SearchHit[]): SearchHit[] {
+  const terms = question.trim().toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const distinct = (h: SearchHit) => {
+    const hay = `${h.path} ${h.snippet}`.toLowerCase();
+    return terms.filter((t) => hay.includes(t)).length;
+  };
+  return [...hits].sort(
+    (a, b) => distinct(b) - distinct(a) || b.score - a.score || a.path.localeCompare(b.path),
+  );
+}
+
+/** Опции мок-чата — зеркало ВХОДА `chat_rag` (все параметры фронта; «молча выброшенных» нет — P0-2).
+ *  Дефолты = дефолтам бэкенда (`unwrap_or`): grounded=true, web=false, rerank=true, memory=true,
+ *  agentMemory=false, episodic=false, deep=false, k=DEFAULT_K. */
+export interface MockChatOpts {
+  k?: number;
+  center?: string;
+  grounded?: boolean;
+  web?: boolean;
+  rerank?: boolean;
+  memory?: boolean;
+  agentMemory?: boolean;
+  episodic?: boolean;
+  deep?: boolean;
+  sessionId?: number | null;
+  pinned?: string[];
+}
+
+/**
+ * Симуляция RAG-чат-стрима — зеркало ПОРЯДКА и СОБЫТИЙ `chat_rag` (Rust `ChatStreamEvent`):
+ * (web → `webSources` | grounded → `sources` | общий → `sources:[]`) → `episodeSources`? →
+ * `memorySources`? → (deep: `reasoning`… + живая `reasoningSummary`) → `token`… →
+ * (deep: ФИНАЛЬНАЯ `reasoningSummary` — после конца токенов, как chat.rs) → `done` | `error`.
+ *
+ * P0-2 (mock-must-match-backend): ВСЕ опции команды приняты и наблюдаемы —
+ * - `k` клампится 1..20 (зеркало `.clamp(1, 20)`);
+ * - `center` — граф-буст соседей открытого файла (см. searchContent);
+ * - `rerank` — ретрив глубже (RERANK_RETRIEVE) → LLM-переупорядочивание → обрезка до k;
+ * - `memory`/`episodic` — чипы памяти: эпизоды считаются ПЕРВЫМИ, память исключает сессии,
+ *   уже всплывшие эпизодом (дедуп, как exclude_sessions), и текущую `sessionId`;
+ * - `agentMemory`/`pinned` — событий на проводе НЕТ (бэкенд молча подмешивает их в промпт) —
+ *   наблюдаемость через текст ответа; pinned фильтруется зеркалом `is_pinnable` + бюджет 5;
+ * - `deep` — reasoning-события и доп. задержка ТОЛЬКО в «Глубоком» (зеркало выбора chat vs
+ *   chat_fast: «Быстрый» БЕЗ CoT → без 💭); живые сводки ПО ХОДУ + финальная ПОСЛЕ токенов;
+ * - УЗКИЙ демо-маркер «демо-ошибка»/«demo-error» → терминальный `error` (с `deniedKind:'offline'`,
+ *   если рядом «офлайн» — форма отказа эгресса AC-EGR-14); обычное слово «ошибка» мок не роняет.
+ */
 export function streamChat(
   question: string,
   onEvent: (event: ChatStreamEvent) => void,
-  opts: { k?: number; grounded?: boolean; web?: boolean } = {},
+  opts: MockChatOpts = {},
 ): () => void {
-  const { k = 8, grounded = true, web = false } = opts;
+  const {
+    k = DEFAULT_K,
+    center,
+    grounded = true,
+    web = false,
+    rerank = true,
+    memory = true,
+    agentMemory = false,
+    episodic = false,
+    deep = false,
+    sessionId = null,
+    pinned,
+  } = opts;
   let cancelled = false;
   void (async () => {
+    const kEff = Math.min(20, Math.max(1, Math.trunc(k))); // зеркало k.clamp(1, 20)
     let answer: string;
     if (web) {
-      // W-2 (мок): web-агент «нашёл» источники в SearXNG и отвечает с цитатами.
+      // W-2 (мок): web-агент «нашёл» источники в SearXNG и отвечает с цитатами. Успешный web-план
+      // ЗАМЕЩАЕТ RAG-ветку (как в chat_rag) — событие `sources` не эмитится.
       onEvent({
         type: 'webSources',
         sources: [
@@ -471,8 +574,14 @@ export function streamChat(
       });
       answer = `По результатам веб-поиска: ${question} — см. источники [1][2].`;
     } else if (grounded) {
-      const sources = await searchContent(question, { limit: k });
+      // Реранк-пайплайн (зеркало chat_rag): do_rerank → ретрив глубже (RERANK_RETRIEVE), мок-«LLM»
+      // переупорядочивает, обрезаем до k. Без реранка — прямой ретрив с limit=k.
+      const retrieved = await searchContent(question, {
+        limit: rerank ? RERANK_RETRIEVE : kEff,
+        center,
+      });
       if (cancelled) return;
+      const sources = rerank ? rerankHits(question, retrieved).slice(0, kEff) : retrieved;
       onEvent({ type: 'sources', sources });
       answer = sources.length
         ? `На основе заметок: ${sources[0].snippet.slice(0, 80)}… [1]`
@@ -482,18 +591,71 @@ export function streamChat(
       onEvent({ type: 'sources', sources: [] });
       answer = `(общий чат) Отвечаю напрямую: ${question}`;
     }
-    // R1 (мок): живая сводка размышления стримится в индикатор «думает» до ответа (как gemma+Qwen
-    // в реале — обновляется по ходу). Сырой CoT не эмитим: фронт его всё равно не рендерит.
-    onEvent({ type: 'reasoningSummary', text: 'Анализирую вопрос' });
-    await new Promise((r) => setTimeout(r, 15));
-    if (cancelled) return;
-    onEvent({ type: 'reasoningSummary', text: 'Формулирую ответ' });
+
+    // EP-2: эпизоды считаются ПЕРВЫМИ (для дедупа с памятью переписки), текущая сессия исключена,
+    // кап EPISODE_K. Событие уходит только при непустых hits (зеркало `Ok(hits) if !hits.is_empty()`).
+    const episodeSessions = new Set<number>();
+    if (episodic) {
+      const hits = MOCK_EPISODES.filter((e) => e.sessionId !== sessionId)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, EPISODE_K);
+      if (hits.length) {
+        for (const h of hits) episodeSessions.add(h.sessionId);
+        onEvent({ type: 'episodeSources', sources: hits });
+      }
+    }
+    // N4b: память переписки — исключая текущую сессию И сессии, уже всплывшие эпизодом (дедуп
+    // exclude_sessions), кап MEMORY_K. Только непустые.
+    if (memory) {
+      const hits = MOCK_MEMORY.filter(
+        (m) => m.sessionId !== sessionId && !episodeSessions.has(m.sessionId),
+      ).slice(0, MEMORY_K);
+      if (hits.length) onEvent({ type: 'memorySources', sources: hits });
+    }
+    // MEM (D2): факты агента событий на проводе НЕ имеют (бэкенд подмешивает их в промпт) —
+    // наблюдаемость мока через текст ответа (опция не выброшена молча).
+    if (agentMemory) answer += ' (учтены факты памяти агента)';
+    // P6-PIN: закреплённые — зеркало is_pinnable (.md без dot-компонентов) + бюджет PINNED_MAX_NOTES;
+    // события нет (гарантированный контекст промпта) — наблюдаемость через ответ.
+    const pinnedOk = (pinned ?? []).filter(isPinnable).slice(0, PINNED_MAX_NOTES);
+    if (pinnedOk.length) answer += ` (закреплённых заметок в контексте: ${pinnedOk.length})`;
+
+    // Триггер терминальной ошибки (провайдер упал / отказ эгресса): форма — зеркало Rust
+    // `Error{message, denied_kind?}` → `{message, deniedKind?}` (AC-EGR-14 для i18n-баннера).
+    // Маркер УЗКИЙ («демо-ошибка»/«demo-error») — анти-футган: легитимный вопрос «найди заметку
+    // про ошибку» мок НЕ роняет (Playwright-смоук ходит по реальным фразам).
+    if (/демо-ошибка|demo-error/i.test(question)) {
+      onEvent(
+        /офлайн|offline/i.test(question)
+          ? { type: 'error', message: 'мок: эгресс запрещён (офлайн-режим)', deniedKind: 'offline' }
+          : { type: 'error', message: 'мок: chat-провайдер недоступен' },
+      );
+      return;
+    }
+
+    // R1: reasoning-события — ТОЛЬКО «Глубокий» (deep → модель С CoT; «Быстрый» = chat_fast БЕЗ
+    // reasoning → бэкенд не шлёт ни `reasoning`, ни `reasoningSummary`). Сырые дельты CoT (спойлер
+    // «развернуть») + ЖИВАЯ сводка по ходу; deep заметно медленнее — доп. задержка.
+    if (deep) {
+      for (const delta of ['Смотрю найденные заметки. ', 'Сопоставляю факты и формулирую вывод.']) {
+        if (cancelled) return;
+        await new Promise((r) => setTimeout(r, 15));
+        onEvent({ type: 'reasoning', text: delta });
+      }
+      onEvent({ type: 'reasoningSummary', text: 'Сопоставляю заметки и формулирую ответ' });
+      await new Promise((r) => setTimeout(r, 30));
+    }
     for (const tok of answer.split(/(\s+)/)) {
       if (cancelled) return;
       await new Promise((r) => setTimeout(r, 15));
       onEvent({ type: 'token', text: tok });
     }
-    if (!cancelled) onEvent({ type: 'done', full: answer });
+    if (cancelled) return;
+    // R1 (зеркало chat.rs: финал стрима): ФИНАЛЬНАЯ сводка по ПОЛНОМУ размышлению эмитится ПОСЛЕ
+    // конца токенов, ПЕРЕД Done (короткий CoT мог не успеть тикнуть в живом таске-суммаризаторе) —
+    // «summary всегда до token» на живом проводе НЕВЕРНО, мок это кодифицирует.
+    if (deep) onEvent({ type: 'reasoningSummary', text: 'Свёл ответ по найденным заметкам' });
+    onEvent({ type: 'done', full: answer });
   })();
   return () => {
     cancelled = true;

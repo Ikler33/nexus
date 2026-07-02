@@ -199,6 +199,161 @@ describe('mock streamChat (контракт Ф1-7)', () => {
   });
 });
 
+/** Прогоняет мок-чат до терминального события (done|error), возвращает все события. */
+function chatRun(question: string, opts?: Parameters<typeof streamChat>[2]) {
+  return new Promise<ChatStreamEvent[]>((resolve, reject) => {
+    const events: ChatStreamEvent[] = [];
+    const t = setTimeout(() => reject(new Error('мок-чат не завершился за таймаут')), 5000);
+    streamChat(
+      question,
+      (e) => {
+        events.push(e);
+        if (e.type === 'done' || e.type === 'error') {
+          clearTimeout(t);
+          resolve(events);
+        }
+      },
+      opts,
+    );
+  });
+}
+
+// P0-2: опции chat_rag приняты и наблюдаемы; события памяти зеркалят Rust-структуры поле-в-поле.
+describe('mock streamChat P0-2 — опции и события памяти (зеркало chat_rag)', () => {
+  it('episodic+memory: порядок sources → episodeSources → memorySources → token; формы hit\'ов байт-в-байт', async () => {
+    const events = await chatRun('Roadmap', { episodic: true });
+    const types = events.map((e) => e.type);
+    // Порядок как в chat_rag: ретрив → эпизоды → память → стрим.
+    expect(types.indexOf('sources')).toBeLessThan(types.indexOf('episodeSources'));
+    expect(types.indexOf('episodeSources')).toBeLessThan(types.indexOf('memorySources'));
+    expect(types.indexOf('memorySources')).toBeLessThan(types.indexOf('token'));
+
+    const ep = events.find((e) => e.type === 'episodeSources');
+    if (ep?.type !== 'episodeSources') throw new Error('нет episodeSources');
+    // Кап EPISODE_K=2 (в корпусе 3 эпизода) + сортировка по score.
+    expect(ep.sources).toHaveLength(2);
+    expect(ep.sources[0].score).toBeGreaterThanOrEqual(ep.sources[1].score);
+    // Байт-в-байт ключи Rust `episode::EpisodeHit` (serde camelCase).
+    expect(Object.keys(ep.sources[0]).sort()).toEqual([
+      'endedAt', 'episodeId', 'score', 'sessionId', 'sessionTitle', 'startedAt', 'summarySnippet',
+    ]);
+
+    const mem = events.find((e) => e.type === 'memorySources');
+    if (mem?.type !== 'memorySources') throw new Error('нет memorySources');
+    // EP-2-дедуп: сессии, всплывшие эпизодом (101/102), из памяти переписки ИСКЛЮЧЕНЫ.
+    const episodeSessions = new Set(ep.sources.map((s) => s.sessionId));
+    for (const m of mem.sources) expect(episodeSessions.has(m.sessionId)).toBe(false);
+    // Байт-в-байт ключи Rust `chat_log::MemoryHit` (serde camelCase).
+    expect(Object.keys(mem.sources[0]).sort()).toEqual([
+      'role', 'score', 'sessionId', 'sessionTitle', 'snippet',
+    ]);
+  });
+
+  it('sessionId: текущая сессия исключается из эпизодов и памяти (зеркало exclude_session)', async () => {
+    const events = await chatRun('Roadmap', { episodic: true, sessionId: 101 });
+    const ep = events.find((e) => e.type === 'episodeSources');
+    const mem = events.find((e) => e.type === 'memorySources');
+    if (ep?.type !== 'episodeSources' || mem?.type !== 'memorySources') throw new Error('нет событий памяти');
+    expect(ep.sources.some((s) => s.sessionId === 101)).toBe(false);
+    expect(mem.sources.some((s) => s.sessionId === 101)).toBe(false);
+  });
+
+  it('дефолты зеркалят бэкенд: memory=true (чипы живы), episodic=false, reasoning-событий нет (Быстрый)', async () => {
+    const events = await chatRun('Roadmap');
+    const types = events.map((e) => e.type);
+    expect(types).toContain('memorySources'); // memory.unwrap_or(true)
+    expect(types).not.toContain('episodeSources'); // episodic.unwrap_or(false)
+    expect(types).not.toContain('reasoning'); // Быстрый = chat_fast БЕЗ CoT
+    expect(types).not.toContain('reasoningSummary');
+    // memory=false выключает чипы (опция не игнорируется).
+    const off = await chatRun('Roadmap', { memory: false });
+    expect(off.map((e) => e.type)).not.toContain('memorySources');
+  });
+
+  it('deep: reasoning-дельты + живая сводка ПО ХОДУ + ФИНАЛЬНАЯ сводка после токенов (порядок chat.rs)', async () => {
+    const events = await chatRun('Roadmap', { deep: true });
+    const types = events.map((e) => e.type);
+    expect(types).toContain('reasoning');
+    // Живая сводка — после начала размышления, до токенов ответа.
+    const firstSummary = types.indexOf('reasoningSummary');
+    expect(types.indexOf('reasoning')).toBeLessThan(firstSummary);
+    expect(firstSummary).toBeLessThan(types.indexOf('token'));
+    // ФИНАЛЬНАЯ сводка по полному размышлению — ПОСЛЕ последнего token, ПЕРЕД done (зеркало
+    // chat.rs: финал шлётся после конца стрима; «summary всегда до token» на живом проводе неверно).
+    const lastSummary = types.lastIndexOf('reasoningSummary');
+    expect(lastSummary).toBeGreaterThan(types.lastIndexOf('token'));
+    expect(lastSummary).toBeLessThan(types.indexOf('done'));
+    expect(types.filter((t) => t === 'reasoningSummary').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rerank наблюдаемо меняет порядок источников (пайплайн retrieve-глубже → LLM-порядок → k)', async () => {
+    // Выделенный корпус: Freq — высокая ЧАСТОТА одного термина; Both — оба термина (тема понята).
+    await writeFile('P02/Freq.md', 'квазар квазар квазар квазар');
+    await writeFile('P02/Both.md', 'квазар пульсар');
+    const base = await chatRun('квазар пульсар', { rerank: false });
+    const rr = await chatRun('квазар пульсар', { rerank: true });
+    const first = (evs: ChatStreamEvent[]) => {
+      const s = evs.find((e) => e.type === 'sources');
+      if (s?.type !== 'sources') throw new Error('нет sources');
+      return s.sources.map((h) => h.path);
+    };
+    // Базовый ретрив — частотный: Freq выше. Мок-реранк — по числу РАЗЛИЧНЫХ терминов: Both выше.
+    expect(first(base)[0]).toBe('P02/Freq.md');
+    expect(first(rr)[0]).toBe('P02/Both.md');
+  });
+
+  it('center: граф-буст соседей открытого файла (зеркало SearchOptions.center)', async () => {
+    await writeFile('P02/Center.md', 'хаб [[P02/Nbr]]');
+    await writeFile('P02/Nbr.md', 'сингулярность');
+    await writeFile('P02/Far.md', 'сингулярность сингулярность');
+    const plain = await searchContent('сингулярность');
+    const boosted = await searchContent('сингулярность', { center: 'P02/Center.md' });
+    expect(plain[0].path).toBe('P02/Far.md'); // без центра — частотный порядок
+    expect(boosted[0].path).toBe('P02/Nbr.md'); // сосед центра по графу — выше
+  });
+
+  it('k клампится 1..20 (зеркало .clamp); pinned фильтруется зеркалом is_pinnable; agentMemory наблюдаем', async () => {
+    // k=0 → кламп до 1 источника.
+    const one = await chatRun('квазар пульсар', { k: 0, rerank: false });
+    const s = one.find((e) => e.type === 'sources');
+    if (s?.type !== 'sources') throw new Error('нет sources');
+    expect(s.sources).toHaveLength(1);
+
+    // pinned: .md без dot-компонентов проходят; .nexus/картинки — нет (анти-эксфильтрация).
+    const pinnedRun = await chatRun('Roadmap', {
+      pinned: ['.nexus/local.json', '.nexus/secret.md', 'Notes/diagram.png', 'Inbox.md', 'README.md'],
+    });
+    const done = pinnedRun.at(-1);
+    if (done?.type !== 'done') throw new Error('нет done');
+    expect(done.full).toContain('закреплённых заметок в контексте: 2');
+
+    // agentMemory: событий на проводе нет (как у бэкенда) — наблюдаемость через ответ.
+    const memRun = await chatRun('Roadmap', { agentMemory: true });
+    const memDone = memRun.at(-1);
+    if (memDone?.type !== 'done') throw new Error('нет done');
+    expect(memDone.full).toContain('учтены факты памяти агента');
+  });
+
+  it('демо-маркер ошибки: терминальный error; с «офлайн» — deniedKind offline (форма AC-EGR-14)', async () => {
+    const plain = await chatRun('покажи демо-ошибка провайдера');
+    const err = plain.at(-1);
+    if (err?.type !== 'error') throw new Error('нет error');
+    expect(err.message.length).toBeGreaterThan(0);
+    expect(err.deniedKind).toBeUndefined();
+    expect(plain.map((e) => e.type)).not.toContain('done'); // error терминален
+
+    const denied = await chatRun('демо-ошибка офлайн');
+    const dErr = denied.at(-1);
+    if (dErr?.type !== 'error') throw new Error('нет error');
+    expect(dErr.deniedKind).toBe('offline');
+
+    // Анти-футган: легитимный вопрос со словом «ошибка» мок НЕ роняет (смоук ходит по реальным
+    // фразам) — стрим завершается done.
+    const legit = await chatRun('найди заметку про ошибку в кэше');
+    expect(legit.at(-1)?.type).toBe('done');
+  });
+});
+
 describe('mock graph (контракт ADR-004 / AC-DOD-Ф3)', () => {
   it('единый граф: с большим лимитом отдаёт все узлы и не обрезан', async () => {
     const full = await getFullGraph(10_000);

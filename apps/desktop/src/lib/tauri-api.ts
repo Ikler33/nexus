@@ -1496,11 +1496,22 @@ export const tauriApi = {
         pinned?: string[];
       },
     ): (() => void) => {
+      // P0-2 (mock-must-match-backend): мок получает ВСЕ опции команды `chat_rag` — раньше
+      // rerank/memory/agentMemory/episodic/deep/pinned/sessionId/center молча выбрасывались,
+      // и превью/тесты «зеленели» на усечённом контракте.
       if (!isTauri())
         return mockVault.streamChat(question, onEvent, {
           k: opts?.k,
+          center: opts?.center,
           grounded: opts?.grounded,
           web: opts?.web,
+          rerank: opts?.rerank,
+          memory: opts?.memory,
+          agentMemory: opts?.agentMemory,
+          episodic: opts?.episodic,
+          deep: opts?.deep,
+          sessionId: opts?.sessionId,
+          pinned: opts?.pinned,
         });
       const channel = new Channel<ChatStreamEvent>();
       channel.onmessage = onEvent;

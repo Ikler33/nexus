@@ -16,6 +16,15 @@ function collect() {
 
 const typesOf = (events: AgentStreamEvent[]) => events.map((e) => e.type);
 
+/** Поллит условие вместо фикс-слипов (STEP_MS мока = 8мс, но порядок недетерминирован по времени). */
+async function until(cond: () => boolean, ms = 3000): Promise<void> {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error('условие не наступило за таймаут');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 beforeEach(() => mockAgent.__reset());
 afterEach(() => mockAgent.__reset());
 
@@ -116,5 +125,111 @@ describe('mock/agent — зеркало контракта UI-1a', () => {
     expect(await mockAgent.undo(runId)).toBe(3);
     // Идемпотентно: повтор — 0.
     expect(await mockAgent.undo(runId)).toBe(0);
+  });
+});
+
+// P0-2: редкие варианты юниона — триггеры по тексту задачи. Формы сверены с Rust wire.rs поле-в-поле
+// (runId/actionId/exitCode/sourcesCount — явный camelCase; см. `agent::connect::wire::AgentStreamEvent`).
+describe('mock/agent P0-2 — exec/report/error по триггерам задачи', () => {
+  it('«exec»: пара execProposal→execResult после плана, до proposal; формы wire байт-в-байт', async () => {
+    const { events, onEvent } = collect();
+    const runId = await mockAgent.run('exec: собери проект', 'confirm', onEvent);
+    await until(() => typesOf(events).includes('proposal'));
+
+    const types = typesOf(events);
+    const pos = (t: AgentStreamEvent['type']) => types.indexOf(t);
+    // Реалистичный порядок цикла: exec-вызов идёт ВНУТРИ хода (после плана), до end-of-turn changeset.
+    expect(pos('planProposed')).toBeLessThan(pos('execProposal'));
+    expect(pos('execProposal')).toBeLessThan(pos('execResult'));
+    expect(pos('execResult')).toBeLessThan(pos('proposal'));
+
+    const ep = events.find((e) => e.type === 'execProposal');
+    const er = events.find((e) => e.type === 'execResult');
+    if (ep?.type !== 'execProposal' || er?.type !== 'execResult') throw new Error('нет exec-пары');
+    // Корреляция пары и прогона (как run_id/action_id ledger'а).
+    expect(ep.runId).toBe(runId);
+    expect(er.runId).toBe(runId);
+    expect(er.actionId).toBe(ep.actionId);
+    // Силуэт-приватность §5.6: summary — строка-силуэт; результат — exit-код + finalized, БЕЗ stdout.
+    expect(ep.summary.length).toBeGreaterThan(0);
+    expect(er.exitCode).toBe(0);
+    expect(er.finalized).toBe(true);
+    // Байт-в-байт имена ключей провода (никаких лишних/переименованных полей).
+    expect(Object.keys(ep).sort()).toEqual(['actionId', 'runId', 'summary', 'type']);
+    expect(Object.keys(er).sort()).toEqual(['actionId', 'exitCode', 'finalized', 'runId', 'type']);
+  });
+
+  it('«отчёт»: report после фазы changeset, перед final; форма wire байт-в-байт', async () => {
+    const { events, onEvent } = collect();
+    const runId = await mockAgent.run('подготовь отчёт по теме', 'auto', onEvent);
+    await until(() => typesOf(events).includes('final'));
+
+    const types = typesOf(events);
+    expect(types.indexOf('diff')).toBeLessThan(types.indexOf('report')); // после changeset
+    expect(types.indexOf('report')).toBeLessThan(types.indexOf('final')); // ближе к финалу
+
+    const rep = events.find((e) => e.type === 'report');
+    if (rep?.type !== 'report') throw new Error('нет report');
+    expect(rep.runId).toBe(runId);
+    expect(rep.title.length).toBeGreaterThan(0);
+    expect(rep.path.endsWith('.md')).toBe(true);
+    expect(rep.sourcesCount).toBeGreaterThan(0);
+    expect(rep.rounds).toBeGreaterThan(0);
+    expect(Object.keys(rep).sort()).toEqual(['path', 'rounds', 'runId', 'sourcesCount', 'title', 'type']);
+  });
+
+  it('«демо-ошибка»: терминальный error — final НЕ приходит (как в реальном цикле)', async () => {
+    const { events, onEvent } = collect();
+    await mockAgent.run('демо-ошибка провайдера', 'auto', onEvent);
+    await until(() => typesOf(events).includes('error'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    const types = typesOf(events);
+    expect(types.at(-1)).toBe('error'); // error терминален
+    expect(types).not.toContain('final');
+    const err = events.find((e) => e.type === 'error');
+    if (err?.type !== 'error') throw new Error('нет error');
+    expect(err.message.length).toBeGreaterThan(0);
+    expect(Object.keys(err).sort()).toEqual(['message', 'type']);
+  });
+
+  it('дефолтная задача БЕЗ триггеров: exec/report/error не эмитятся (сценарии превью не тронуты)', async () => {
+    const { events, onEvent } = collect();
+    await mockAgent.run('задача', 'auto', onEvent);
+    await until(() => typesOf(events).includes('final'));
+    const types = typesOf(events);
+    for (const t of ['execProposal', 'execResult', 'report', 'error'] as const) {
+      expect(types).not.toContain(t);
+    }
+  });
+
+  it('анти-футган: «execute…» НЕ триггерит exec-пару; обычная «ошибка» НЕ роняет прогон', async () => {
+    // \bexec\b: в «execute» нет границы слова после exec → пары нет.
+    const a = collect();
+    await mockAgent.run('выполни execute план', 'auto', a.onEvent);
+    await until(() => typesOf(a.events).includes('final'));
+    expect(typesOf(a.events)).not.toContain('execProposal');
+    expect(typesOf(a.events)).not.toContain('execResult');
+
+    // Легитимная задача про ошибки (смоук ходит по реальным фразам) — прогон живёт до final.
+    const b = collect();
+    await mockAgent.run('разбери ошибку в заметке про кэш', 'auto', b.onEvent);
+    await until(() => typesOf(b.events).includes('final'));
+    expect(typesOf(b.events)).not.toContain('error');
+  });
+
+  it('пауза (kill-switch) подавляет exec между proposal и result', async () => {
+    const { events, onEvent } = collect();
+    const runId = await mockAgent.run('exec: собери проект', 'auto', onEvent);
+    // Пауза ставится на plan-фазе — ДО exec-пары (между planProposed и waitWhilePaused exec-гейта
+    // пауза-чеков нет, поэтому execProposal ещё дойдёт, а «исполнение» замрёт на kill-switch).
+    await until(() => typesOf(events).includes('planProposed'));
+    await mockAgent.pause(runId);
+    await until(() => typesOf(events).includes('execProposal'));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(typesOf(events)).not.toContain('execResult'); // под паузой exec НЕ «исполняется»
+    await mockAgent.resume(runId);
+    await until(() => typesOf(events).includes('final'));
+    expect(typesOf(events)).toContain('execResult'); // после снятия паузы exec доехал
   });
 });
