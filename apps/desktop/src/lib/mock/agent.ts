@@ -11,6 +11,15 @@
 // - `approve(runId, decisions)` — кормит ожидающий прогон решениями (как `agent_approve` → UiDecisionSource).
 // - `pause/resume` — тоггл паузы (стрим замирает/продолжается). `cancel` — обрывает стрим (как cancel-флаг).
 // - `undo(runId)` — число «откаченных» действий (мок: количество применённых файлов прогона).
+//
+// P0-2 (полнота юниона): мок обязан уметь эмитить КАЖДЫЙ вариант `AgentStreamEvent` (гейт —
+// `parity.test.ts`). Редкие варианты включаются триггерами по тексту задачи (как web/grounded-флаги
+// у streamChat), дефолтный сценарий не меняется. Маркеры УЗКИЕ (анти-футган для смоуков):
+// - слово «exec» (границы слова; «execute» НЕ триггерит) → пара `execProposal`→`execResult`
+//   (SANDBOX-6c, после плана);
+// - «report/отчёт»                → `report` (RES-5, после фазы changeset, перед final);
+// - «демо-ошибка»/«demo-error»    → терминальный `error` ВМЕСТО final (провайдер упал);
+//   обычные слова «ошибка/error» в задаче мок НЕ роняют.
 
 import type {
   AgentApprovalDecision,
@@ -92,6 +101,13 @@ export function run(
 ): Promise<number> {
   void history; // принимаем по контракту; детерминированный мок-proposal от истории не зависит
   void sessionId; // W-38: браузер-мок не персистит историю (фейковый список ниже)
+  // P0-2: триггеры редких вариантов юниона по тексту задачи (дефолтный прогон не меняется).
+  // Узкие маркеры — анти-футган для Playwright-смоука: «execute…» НЕ триггерит exec (границы
+  // слова), а легитимная задача про ошибки («разбери ошибку X») НЕ роняет мок — терминальный
+  // error только по явному демо-маркеру «демо-ошибка»/«demo-error».
+  const wantExec = /\bexec\b/i.test(task);
+  const wantReport = /report|отч[её]т/i.test(task);
+  const wantError = /демо-ошибка|demo-error/i.test(task);
   const runId = nextRunId++;
   const files: MockFile[] = [
     { path: 'RMS-B2B/Идея — кэш контекста.md', add: 8, del: 0, status: 'new', kind: 'file', actionId: runId * 100 + 1 },
@@ -116,6 +132,13 @@ export function run(
       // 1. Ассистент отвечает планом (стрим токенов). Текст короткий — стрим снапается быстро (превью/тест).
       const ok1 = await streamTokens(run, `Принял задачу: ${task}. План на 3 шага.`, onEvent);
       if (!ok1) return;
+
+      // P0-2: терминальная ошибка хода (зеркало `AgentStreamEvent::Error` — провайдер упал / бюджет
+      // инициации стрима исчерпан). Как в реальном цикле: error ТЕРМИНАЛЕН — final не приходит.
+      if (wantError) {
+        onEvent({ type: 'error', message: 'мок: chat-провайдер недоступен (терминальная ошибка хода)' });
+        return;
+      }
 
       // 2. Вызов инструмента ДО исполнения (`toolCall`) → результат (`toolResult`), корреляция по id.
       const callId = 'mock-c1';
@@ -171,6 +194,36 @@ export function run(
       });
       await sleep(STEP_MS);
 
+      // P0-2 (SANDBOX-6c): exec-пара песочницы — `execProposal` (редакция-безопасный СИЛУЭТ: имя
+      // инструмента + счётчики, БЕЗ сырых argv/env — приватность §5.6) → `execResult` (exit-код +
+      // finalized, БЕЗ stdout/stderr). Формы — байт-в-байт зеркало Rust wire (`runId`/`actionId`/
+      // `exitCode` — явный camelCase). Семантика: exec НИКОГДА не Auto — в реале между парой ВСЕГДА
+      // стоит `decision_source.decide()`. Пара мока моделирует exec, УЖЕ ОДОБРЕННЫЙ host-side у
+      // connected/ACP-бэкенда: в десктоп exec-события только ПРИХОДЯТ, решение выносится на стороне
+      // хоста агента — десктоп для exec-решений зритель, UI-аппрува для exec нет НАМЕРЕННО (W-26).
+      // Порядок как в реальном цикле: exec-вызов идёт ВНУТРИ хода (после плана), до end-of-turn
+      // changeset. Пауза (kill-switch) подавляет «исполнение» между proposal и result.
+      if (wantExec) {
+        const execActionId = runId * 100 + 50;
+        onEvent({
+          type: 'execProposal',
+          runId,
+          actionId: execActionId,
+          summary: 'shell.run · 2 args',
+        });
+        await sleep(STEP_MS * 2);
+        await waitWhilePaused(run);
+        if (run.cancelled) return;
+        onEvent({
+          type: 'execResult',
+          runId,
+          actionId: execActionId,
+          exitCode: 0,
+          finalized: true,
+        });
+        await sleep(STEP_MS);
+      }
+
       // 3. Загрузка контекстного окна (`contextUsage`) — питает %-бар шапки.
       onEvent({ type: 'contextUsage', used: 24_000, window: 64_000 });
       await sleep(STEP_MS);
@@ -223,6 +276,22 @@ export function run(
 
       await waitWhilePaused(run);
       if (run.cancelled) return;
+
+      // P0-2 (RES-5): отчёт deep-research — карточка дока. В реале эмитится ПОСЛЕ успешной записи
+      // заметки отчёта через гейт → в моке после фазы changeset, ближе к финалу. Форма — зеркало
+      // Rust wire (`runId`/`sourcesCount` — явный camelCase).
+      if (wantReport) {
+        onEvent({
+          type: 'report',
+          runId,
+          title: 'Кэш контекста агентов — сводка',
+          path: 'Research/Кэш контекста агентов.md',
+          sourcesCount: 12,
+          rounds: 3,
+        });
+        await sleep(STEP_MS);
+      }
+
       // 5. Финал хода.
       onEvent({
         type: 'final',
