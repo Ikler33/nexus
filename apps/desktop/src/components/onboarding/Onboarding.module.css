@@ -251,6 +251,12 @@
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
+/* B9: подсказка с примером адреса под полем эндпоинта (поле само пустое, без хардкод-дефолта). */
+.aiHint {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  opacity: 0.85;
+}
 .aiSave {
   align-self: flex-start;
   font-family: inherit;

@@ -1312,7 +1312,7 @@ function ConnectionModeBlock() {
                 <input
                   type="text"
                   className={styles.skillsInput}
-                  placeholder="artanov@192.168.0.28"
+                  placeholder="user@host"
                   value={acpSshHostDraft}
                   onChange={(e) => setAcpSshHostDraft(e.target.value)}
                   onBlur={() => persist('acp', null, null, null, null, acpSshHostDraft)}

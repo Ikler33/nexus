@@ -22,10 +22,10 @@ import styles from './Onboarding.module.css';
 type Step = 'welcome' | 'vault' | 'ai' | 'index';
 type Health = 'none' | 'checking' | 'ok' | 'bad';
 
-// W-7/W-11: дефолтные локальные эндпоинты (прод-риг .28) — предзаполняют форму онбординга, чтобы
-// новый пользователь запускался без ручной возни. Local-first: можно изменить или оставить пустыми.
-const DEFAULT_CHAT_URL = 'http://192.168.0.28:8080';
-const DEFAULT_EMBED_URL = 'http://192.168.0.28:8083';
+// B9: примеры-плейсхолдеры полей эндпоинтов (НЕ предзаполнение — поля пустые). Раньше форму
+// предзаполнял хардкод владельческого рига 192.168.0.28, бессмысленный на чужой машине.
+const EXAMPLE_CHAT_URL = 'http://localhost:8080/v1';
+const EXAMPLE_EMBED_URL = 'http://localhost:8083/v1';
 
 /** Индикатор шагов 1–3 (vault → AI → индексация), как в макете. */
 function StepDots({ step }: { step: Step }) {
@@ -85,7 +85,7 @@ export function Onboarding() {
   // W-7 (ревью): предзаполняем форму ОДИН раз — иначе re-entry шага AI (Назад→снова) затрёт правки юзера.
   const prefilledRef = useRef(false);
 
-  // Шаг AI: читаем конфиг открытого vault, предзаполняем форму (или дефолтами .28) и пробуем chat-эндпоинт.
+  // Шаг AI: читаем конфиг открытого vault, предзаполняем форму и пробуем chat-эндпоинт.
   useEffect(() => {
     if (step !== 'ai') return;
     let alive = true;
@@ -96,12 +96,13 @@ export function Onboarding() {
         if (!alive) return;
         setAiUrl(url);
         setNeedRestart(false); // свежий заход на шаг — старую подсказку убираем
-        // Предзаполнение ОДИН раз (ревью): настроенное → как есть; пусто → дефолты .28 (W-11); модели
-        // сохраняем. Re-entry не затирает несохранённые правки юзера.
+        // Предзаполнение ОДИН раз (ревью): настроенное → как есть; пусто → ПУСТО (B9: без хардкода
+        // владельческого рига — подсказка с примером живёт под полем); модели сохраняем. Re-entry
+        // не затирает несохранённые правки юзера.
         if (!prefilledRef.current) {
           prefilledRef.current = true;
-          setChatUrl(cfg.chat?.url ?? DEFAULT_CHAT_URL);
-          setEmbedUrl(cfg.embedding?.url ?? DEFAULT_EMBED_URL);
+          setChatUrl(cfg.chat?.url ?? '');
+          setEmbedUrl(cfg.embedding?.url ?? '');
           setChatModel(cfg.chat?.model ?? null);
           setEmbedModel(cfg.embedding?.model ?? null);
           setFastEp(cfg.fast ?? null);
@@ -296,7 +297,7 @@ export function Onboarding() {
               {healthPill()}
             </div>
             {/* W-7: ввод эндпоинтов + сохранение и проверка (ST-A3) — чтобы новый юзер настроил AI
-                прямо в онбординге, а не уходил в Настройки. Предзаполнено дефолтами .28. */}
+                прямо в онбординге, а не уходил в Настройки. B9: поля пустые, пример — в подсказке. */}
             <div className={styles.aiForm}>
               <label className={styles.aiField}>
                 <span>{t('onboarding.aiChatUrl')}</span>
@@ -305,10 +306,11 @@ export function Onboarding() {
                   className={styles.aiInput}
                   value={chatUrl}
                   onChange={(e) => setChatUrl(e.target.value)}
-                  placeholder={DEFAULT_CHAT_URL}
+                  placeholder={EXAMPLE_CHAT_URL}
                   spellCheck={false}
                   autoComplete="off"
                 />
+                <span className={styles.aiHint}>{t('onboarding.aiChatUrlHint')}</span>
               </label>
               <label className={styles.aiField}>
                 <span>{t('onboarding.aiEmbedUrl')}</span>
@@ -317,10 +319,11 @@ export function Onboarding() {
                   className={styles.aiInput}
                   value={embedUrl}
                   onChange={(e) => setEmbedUrl(e.target.value)}
-                  placeholder={DEFAULT_EMBED_URL}
+                  placeholder={EXAMPLE_EMBED_URL}
                   spellCheck={false}
                   autoComplete="off"
                 />
+                <span className={styles.aiHint}>{t('onboarding.aiEmbedUrlHint')}</span>
               </label>
               <button
                 type="button"

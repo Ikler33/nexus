@@ -25,7 +25,9 @@ async function gotoAiStep() {
 }
 
 describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
-  it('эндпоинты предзаполнены дефолтами .28, когда конфиг пуст', async () => {
+  // B9: пустой конфиг → поля ПУСТЫЕ (никаких хардкод-дефолтов чужого рига), под полями — подсказки
+  // с примером адреса, в самих полях — пример-плейсхолдер.
+  it('эндпоинты НЕ предзаполнены при пустом конфиге; видны подсказки с примером', async () => {
     vi.spyOn(tauriApi.settings, 'getAiConfig').mockResolvedValue({
       chat: null,
       embedding: null,
@@ -52,10 +54,18 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       shellSupported: false,
     });
     await gotoAiStep();
-    await waitFor(() =>
-      expect(screen.getByDisplayValue('http://192.168.0.28:8080')).toBeInTheDocument(),
-    );
-    expect(screen.getByDisplayValue('http://192.168.0.28:8083')).toBeInTheDocument();
+    const chatInput = await screen.findByPlaceholderText('http://localhost:8080/v1');
+    expect(chatInput).toHaveValue('');
+    expect(screen.getByPlaceholderText('http://localhost:8083/v1')).toHaveValue('');
+    // Хардкод владельческого рига исчез из предзаполнения.
+    expect(screen.queryByDisplayValue(/192\.168\.0\.28/)).toBeNull();
+    // Подсказки с примером адреса под полями (RU/EN).
+    expect(
+      screen.getByText(/адрес твоего llm-сервера|address of your llm server/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/сервера эмбеддингов|embedding server/i),
+    ).toBeInTheDocument();
   });
 
   it('«Сохранить и проверить» пишет set_ai_config и тестирует связь', async () => {
@@ -89,15 +99,22 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
       .mockResolvedValue({ chatApplied: true, embeddingChanged: true });
     const probe = vi.spyOn(tauriApi.settings, 'testConnection').mockResolvedValue();
     await gotoAiStep();
+    // B9: поля пустые при пустом конфиге — юзер вводит адреса сам.
+    fireEvent.change(await screen.findByPlaceholderText('http://localhost:8080/v1'), {
+      target: { value: 'http://myhost:8080' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('http://localhost:8083/v1'), {
+      target: { value: 'http://myhost:8083' },
+    });
     fireEvent.click(await screen.findByRole('button', { name: /Сохранить и проверить|Save & test/i }));
     await waitFor(() =>
       expect(setCfg).toHaveBeenCalledWith(
-        { url: 'http://192.168.0.28:8080', model: null },
-        { url: 'http://192.168.0.28:8083', model: null },
+        { url: 'http://myhost:8080', model: null },
+        { url: 'http://myhost:8083', model: null },
         null, // fast сохраняется (тут не задан)
       ),
     );
-    await waitFor(() => expect(probe).toHaveBeenCalledWith('http://192.168.0.28:8080'));
+    await waitFor(() => expect(probe).toHaveBeenCalledWith('http://myhost:8080'));
     // Здоров → пилюля «Готов».
     expect(await screen.findByText(/Готов|Ready/i)).toBeInTheDocument();
     // embeddingChanged=true → подсказка о перезапуске/переиндексации (ревью W-7).
@@ -142,8 +159,10 @@ describe('Onboarding — шаг настройки AI (W-7, ST-A3)', () => {
     // НЕ затирается», где этот гард уже есть).
     expect(await screen.findByDisplayValue('http://h:8080')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: /Сохранить и проверить|Save & test/i }));
+    // B9: embedding в конфиге нет и поле больше НЕ предзаполняется хардкодом → честный null
+    // (expect.anything() не матчит null, поэтому 2-й аргумент проверяем явно).
     await waitFor(() =>
-      expect(setCfg).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      expect(setCfg).toHaveBeenCalledWith({ url: 'http://h:8080', model: null }, null, {
         url: 'http://h:8084',
         model: 'qwen3-4b',
       }),
