@@ -69,7 +69,7 @@ pub struct ConnectDeps {
     pub reader: ReadPool,
     /// КАНОНИЗИРОВАННЫЙ корень vault (предусловие гейта/apply + база undo).
     pub canon_root: PathBuf,
-    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT** (`false` → стабы echo/noop, vault не трогается).
+    /// **GO-LIVE-флаг актуатора, SAFE BY DEFAULT** (`false` → без инструментов записи, vault не трогается).
     pub actuator_enabled: bool,
     /// **Автономия прогонов коннектора** (`"confirm"` | `"auto"`), default `"confirm"`
     /// (безопасно для интерактивного десктопа: человек-в-петле — ВСЕ тиры предлагаются). При `"auto"`
@@ -489,8 +489,9 @@ mod tests {
             .expect("transport closed")
     }
 
-    /// E2E offline: initialize → agent/run (echo-стаб) → клиент видит ack{runId} + поток agent/event
-    /// (toolCall → toolResult → final). Доказывает, что протокол ДРАЙВИТ реальный цикл и стримит wire-DTO.
+    /// E2E offline: initialize → agent/run → клиент видит ack{runId} + поток agent/event
+    /// (toolCall → toolResult → final; вызов `echo` при пустом OFF-реестре (B7) даёт UnknownTool-результат —
+    /// стрим-порядок от этого не зависит). Доказывает, что протокол ДРАЙВИТ реальный цикл и стримит wire-DTO.
     #[tokio::test]
     async fn connect_drives_run_end_to_end_offline() {
         let (client, server) = channel_pair();
@@ -1014,13 +1015,17 @@ mod tests {
     //    --lib agent::connect::handler::tests::live -- --ignored --nocapture`. Гейт env-флагом + ignore-атрибутом ──
 
     /// LIVE tool-loop на риге: реальный OpenAI-tool-провайдер (Qwen3.6-27B на llama.cpp) драйвит цикл
-    /// через коннектор; стабы echo/noop (actuator ВЫКЛ — vault не трогается). Ждём, что модель ВЫЗОВЕТ
-    /// инструмент (toolCall) и завершит ход (final). Доказывает реальный tool-calling end-to-end.
+    /// через коннектор. Actuator ВЫКЛ (vault не трогается) → реестр записи ПУСТ (B7: стабов echo/noop
+    /// больше нет); живой read-only инструмент даёт SKILLS (временный каталог с навыком «alpha» →
+    /// `activate_skill`). Ждём, что модель ВЫЗОВЕТ именно его (toolCall kind=activate_skill) и завершит
+    /// ход (final). Доказывает реальный tool-calling end-to-end.
     #[tokio::test]
     #[ignore = "нужен живой chat-риг (NEXUS_LIVE_CHAT=1, NEXUS_LIVE_CHAT_URL, default 192.168.0.31:8080)"]
     async fn live_connect_tool_loop_on_rig() {
+        use crate::agent::skill_tools::{SkillContext, ACTIVATE_SKILL_TOOL};
         use crate::ai::tools::OpenAiToolProvider;
         use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+        use crate::skills::discover_skills;
 
         if std::env::var("NEXUS_LIVE_CHAT").ok().as_deref() != Some("1") {
             eprintln!("SKIP: NEXUS_LIVE_CHAT!=1");
@@ -1041,10 +1046,41 @@ mod tests {
             Some(0.2),
         ));
 
+        // Живой read-only инструмент при OFF-актуаторе: временный skills-каталог с навыком «alpha»
+        // (тот же приём, что юниты session/drive_run) → в реестре activate_skill/read_skill_resource.
+        let skills_tmp = tempfile::TempDir::new().unwrap();
+        let skills_root = skills_tmp.path().canonicalize().unwrap();
+        let sk_dir = skills_root.join("alpha");
+        std::fs::create_dir_all(&sk_dir).unwrap();
+        std::fs::write(
+            sk_dir.join("SKILL.md"),
+            "---\nname: alpha\ndescription: тестовый навык live-прогона\n---\nТЕЛО СКИЛЛА",
+        )
+        .unwrap();
+        let skills = SkillContext::new(Arc::new(discover_skills(&skills_root)), skills_root);
+
         let (client, server) = channel_pair();
         let server = Arc::new(server);
         let (_dir, db) = open_db().await;
-        let deps = deps_with(provider, _dir.path().to_path_buf(), &db, false); // actuator OFF (echo/noop)
+        // actuator OFF: как deps_with, но skills=Some (реестр записи пуст — B7).
+        let deps = Arc::new(ConnectDeps {
+            provider,
+            memory: None,
+            writer: db.writer().clone(),
+            reader: db.reader().clone(),
+            canon_root: _dir.path().to_path_buf(),
+            actuator_enabled: false,
+            autonomy: "confirm".to_string(),
+            overwrite_threshold: 64 * 1024,
+            blast_cap: 16,
+            context_window: Some(32768),
+            skills: Some(skills),
+            web: None,
+            skills_learning_enabled: false,
+            delegation: crate::ai::DelegationConfig::default(),
+            research: crate::ai::ResearchConfig::default(),
+            agent_paused: Arc::new(AtomicBool::new(false)),
+        });
         let handler = Arc::new(ConnectAgentHandler::new(deps, server.clone()));
         serve(handler, server.clone());
 
@@ -1054,15 +1090,15 @@ mod tests {
                 "agent/run",
                 json!({
                     "sessionId": "live",
-                    "prompt": "Вызови инструмент `echo` с аргументом text=\"привет с рига\", \
-                               затем дай короткий финальный ответ.",
+                    "prompt": "Активируй навык «alpha» инструментом `activate_skill` \
+                               (аргумент skill=\"alpha\"), затем дай короткий финальный ответ.",
                 }),
             ))
             .await
             .unwrap();
 
         // Живой первый токен может занять до ~3 мин (cold-start). Длинный таймаут на ход.
-        let mut got_toolcall = false;
+        let mut toolcall_kinds: Vec<String> = Vec::new();
         let mut got_final = false;
         for _ in 0..200 {
             let m = tokio::time::timeout(Duration::from_secs(200), client.recv())
@@ -1073,7 +1109,8 @@ mod tests {
                 if method == "agent/event" {
                     match params["type"].as_str().unwrap_or("") {
                         "toolCall" => {
-                            got_toolcall = true;
+                            toolcall_kinds
+                                .push(params["kind"].as_str().unwrap_or("").to_string());
                             eprintln!("LIVE toolCall: {}", params);
                         }
                         "assistantToken" => { /* стрим контента */ }
@@ -1089,8 +1126,9 @@ mod tests {
             }
         }
         assert!(
-            got_toolcall,
-            "модель вызвала инструмент (real tool-calling)"
+            toolcall_kinds.iter().any(|k| k == ACTIVATE_SKILL_TOOL),
+            "модель вызвала activate_skill (real tool-calling; B7: единственный живой тул при \
+             OFF-актуаторе): {toolcall_kinds:?}"
         );
         assert!(got_final, "прогон дошёл до final на живой модели");
     }

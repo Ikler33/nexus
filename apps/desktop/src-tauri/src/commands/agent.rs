@@ -807,8 +807,8 @@ async fn drive_run(
     // Форвардер `ChannelForwarder` стримит и события цикла, и Proposal/Diff гейта в один Channel (фронт
     // видит changeset ДО решения; гейт блокируется на UI-DecisionSource, ожидая agent_approve). Реестр/
     // recall/скиллы/budget — внутри сессии (actuator default-OFF → пустой реестр записи, B7; vault не
-    // трогается). Skills у
-    // desktop пока нет (None). `RunCtx::run(run_id)` строит сама сессия.
+    // трогается). Skills приходят параметром из `ai.agent_skills_dir` (None, если каталог не задан).
+    // `RunCtx::run(run_id)` строит сама сессия.
     let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(ChannelForwarder {
         channel: channel.clone(),
         accum,

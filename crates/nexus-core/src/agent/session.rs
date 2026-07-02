@@ -890,8 +890,7 @@ mod tests {
     /// `skills = Some(..)` → (а) tier-1 МЕНЮ скилла попадает в начальный контекст (имя скилла видно
     /// провайдеру), (б) tier-2/3 инструменты (`activate_skill`/`read_skill_resource`) зарегистрированы —
     /// НЕЗАВИСИМО от actuator-флага (скиллы только читают); при ВЫКЛ актуаторе они РОВНО весь реестр
-    /// (B7: debug-стабов нет). Покрывает единственную ветку композиции, которую desktop не задействует
-    /// (skills там всегда None).
+    /// (B7: debug-стабов нет).
     #[tokio::test]
     async fn skills_inject_menu_and_register_tier2_3_tools() {
         use crate::agent::skill_tools::{

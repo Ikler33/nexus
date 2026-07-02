@@ -76,7 +76,7 @@ async fn run_acp(root: PathBuf, actuator: bool, auto: bool) -> Result<(), String
          permissions=fail-closed\nговорю JSON-RPC 2.0 по stdin/stdout; жду ACP-клиента (EOF stdin → выход).",
         deps.canon_root.display(),
         deps.model,
-        if actuator { "ON" } else { "OFF (stub)" },
+        if actuator { "ON" } else { "OFF" },
     );
 
     let cfg = AcpServerConfig {
