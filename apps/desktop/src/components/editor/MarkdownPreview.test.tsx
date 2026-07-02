@@ -1118,6 +1118,35 @@ describe('MarkdownPreview: MASTHEAD-1 (editorial-шапка + буквица)', 
     expect(container.querySelector('[data-dropcap]')).toBeNull();
   });
 
+  // MAJOR-1 ревью: пунктуационные лиды русской прозы НЕ должны терять буквицу (регрессия против main).
+  it('EDFIX-4 графем-гард: «кавычка-лид» сохраняет буквицу — data-cap=«В» (без кавычки)', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# T\n\n«Все счастливые семьи похожи друг на друга».'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('В'); // одиночный глиф (не «В) — CSS-зазор матчит
+  });
+
+  it('EDFIX-4 графем-гард: «— диалог-лид» (тире+пробел) сохраняет буквицу — data-cap=«П»', () => {
+    const { container } = render(
+      <MarkdownPreview
+        source={'# T\n\n— Привет, — сказал он.'}
+        notePath="f.md"
+        onOpenLink={() => {}}
+        masthead={{ mtime: null }}
+      />,
+    );
+    const cap = container.querySelector('p[data-dropcap]');
+    expect(cap).not.toBeNull();
+    expect(cap?.getAttribute('data-cap')).toBe('П');
+  });
+
   it('EDFIX-4 графем-гард: абзац с лидом-цифрой `2026 год…` → data-cap=«2» (цифра-буквица не регрессирует)', () => {
     const { container } = render(
       <MarkdownPreview
