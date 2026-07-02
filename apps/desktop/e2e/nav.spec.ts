@@ -6,7 +6,9 @@ import {
   mainViewAnchor,
   openFileFromTree,
   openMainView,
+  runPaletteCommand,
   test,
+  type MainView,
 } from './fixtures';
 
 /**
@@ -34,6 +36,15 @@ test('файлы-редактор: клик по README в дереве откр
   await expect(mainViewAnchor(page, 'home')).toBeHidden();
 });
 
+/** Тогл-команда палитры, закрывающая main-вью (commands.view.*). У «Доски» тогла НЕТ нигде в UI
+ *  (ни команды палитры, ни шортката — baseline): закрыть её можно только переходом в другую вью. */
+const TOGGLE_COMMAND: Partial<Record<MainView, string>> = {
+  home: 'Home',
+  today: 'Сегодня',
+  news: 'Новости',
+  agent: 'Castor',
+};
+
 test('main↔main: попарные переключения не оставляют прежнюю вью поверх (SWITCH_MAIN)', async ({
   page,
 }) => {
@@ -43,6 +54,18 @@ test('main↔main: попарные переключения не оставля
       await openMainView(page, from);
       await openMainView(page, to); // якорь `to` виден
       await expect(mainViewAnchor(page, from)).toBeHidden(); // прежний слой погашен
+      // Усиление оракула (ревью P0-3): App.tsx рендерит main-вью приоритетным тернарником
+      // (agent > today > home > news > board) → в DOM всегда одна вью, и ассерт «from скрыта»
+      // не может упасть для направлений, где from ниже по приоритету (stale-флаг невидим).
+      // Закрываем `to` её тоглом: под ней обязан оказаться РЕДАКТОР (все main-флаги погашены),
+      // а не stale-`from`.
+      const toggle = TOGGLE_COMMAND[to];
+      if (!toggle) continue; // to=Доска: тогла нет (baseline) — направление покрыто ассертом выше
+      await runPaletteCommand(page, toggle);
+      await expect(page.getByText(/Выберите файл в дереве слева/)).toBeVisible(); // редактор
+      for (const view of MAIN_VIEWS) {
+        await expect(mainViewAnchor(page, view)).toBeHidden();
+      }
     }
   }
 });

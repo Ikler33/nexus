@@ -29,8 +29,10 @@ jobs:
   # P0-3: Playwright-смоук БРАУЗЕРНОЙ сборки. ЧЕСТНОСТЬ (W-22): джоба гоняет vite preview
   # (прод-сборку фронта) с mock-слоем `lib/mock/*` вместо Tauri-бэка — доказывает межкомпонентную
   # проводку фронта (App↔ActivityBar↔оверлеи↔редактор↔чат↔агент), НЕ поведение shipped Tauri-app.
-  # Движок webkit — ближайший к WKWebView Tauri. Джоба БЛОКИРУЮЩАЯ: это единственный
-  # behavior-preserving оракул фронт-рефакторинга (REFACTOR-PLAN §2). Детали: apps/desktop/e2e/README.md.
+  # Движок webkit — ближайший к WKWebView Tauri. Блокирующая ПО ДИСЦИПЛИНЕ КОНВЕЙЕРА (красный
+  # смоук = не мержим); required-checks в настройках репо НЕ включены — владельческая настройка,
+  # вопрос поднят отдельно. Это единственный behavior-preserving оракул фронт-рефакторинга
+  # (REFACTOR-PLAN §2). Детали: apps/desktop/e2e/README.md.
   e2e-web-smoke:
     name: E2E web smoke (web+mock-слой, НЕ shipped-app)
     runs-on: ubuntu-latest

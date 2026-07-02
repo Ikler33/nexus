@@ -47,35 +47,40 @@ test('полный прогон: план, дерево субагентов, ch
   await expect(page.locator('[title*="Сводка по проекту RMS-B2B"]').first()).toBeVisible();
 });
 
-// TODO(P0-2): снять skip после мержа test/p0-2-mock-parity — пара `execProposal`→`execResult`
-// (SANDBOX-6c: редакция-безопасный exec-силуэт + exit-код) эмитится моком только там, по узкому
-// триггеру `\bexec\b` в тексте задачи («execute…» НЕ триггерит). В текущем main мок шлёт только
-// exec-строку внутри proposal (покрыто тестом полного прогона выше).
-test.skip('задача с `exec` → exec-пара песочницы (execProposal → execResult) в ленте хода', async ({
+test('задача с `exec` → exec-пара песочницы (execProposal→execResult) → узел команды в графе', async ({
   page,
 }) => {
   await openMainView(page, AGENT);
+  // P0-2: узкий триггер `\bexec\b` («execute…» НЕ триггерит) → execProposal (редакция-безопасный
+  // СИЛУЭТ «shell.run · 2 args», без argv/env — §5.6) → execResult (exit-код). UI-аппрува для
+  // exec нет НАМЕРЕННО (W-26: десктоп — зритель, решение выносится на стороне хоста агента).
   await page.getByPlaceholder('Поручите задачу агенту…').fill('exec: проверь статус репозитория');
   await page.getByRole('button', { name: 'Запустить', exact: true }).click();
 
-  // Силуэт exec-вызова: имя инструмента + счётчики, БЕЗ сырых argv/env (приватность §5.6);
-  // затем результат с exit-кодом. Точные якоря уточнить при ребейзе на P0-2.
-  await expect(page.getByText(/\$ git status --short/).first()).toBeVisible();
+  // exec-пара эмитится ВНУТРИ хода (после плана, до changeset) → к моменту confirm-гейта
+  // силуэт уже в сторе. Док «Граф выполнения»: command-узел с summary силуэта (foreignObject →
+  // матч по title-атрибуту, см. тест выше).
+  await expect(page.locator('[data-status="awaiting"]')).toBeVisible();
+  await page.getByRole('button', { name: 'Граф выполнения', exact: true }).click();
+  await expect(page.locator('[title*="shell.run"]').first()).toBeVisible();
+
+  // Прогон завершаем штатно: «Подтвердить» → final; узел exec остаётся в графе.
+  await page.getByRole('button', { name: 'Подтвердить', exact: true }).click();
   await expect(page.locator('[data-status="done"]')).toBeVisible();
+  await expect(page.locator('[title*="shell.run"]').first()).toBeVisible();
 });
 
-// TODO(P0-2): снять skip после мержа test/p0-2-mock-parity — событие `report` (RES-5) мок эмитит
-// только там, по триггеру /report|отч[её]т/ в тексте задачи. Рендер дока «Отчёт» (ReportPane)
-// уже есть в main — не хватает именно мок-события.
-test.skip('задача с «report» → карточка отчёта в доке «Отчёт»', async ({ page }) => {
+test('задача с «отчёт» → карточка research-отчёта в доке «Отчёт» (RES-5)', async ({ page }) => {
   await openMainView(page, AGENT);
+  // P0-2: триггер /report|отч[её]т/ → событие `report` ПОСЛЕ фазы changeset, перед `final`.
   await page.getByPlaceholder('Поручите задачу агенту…').fill('Составь отчёт по входящим');
   await page.getByRole('button', { name: 'Запустить', exact: true }).click();
 
   await page.getByRole('button', { name: 'Подтвердить', exact: true }).click();
   await expect(page.locator('[data-status="done"]')).toBeVisible();
-  // Док «Отчёт»: карточка отчёта прогона (не пустой стейт «Отчёт появится…»).
+  // Док «Отчёт»: карточка research-отчёта (title + мета «источников/раундов» + «Открыть отчёт»).
   await page.getByRole('button', { name: 'Отчёт', exact: true }).click();
-  const reportDock = page.locator('aside').filter({ hasText: 'Отчёт' });
-  await expect(reportDock.getByText(/Отчёт появится/)).toBeHidden();
+  await expect(page.getByText('Кэш контекста агентов — сводка')).toBeVisible();
+  await expect(page.getByText(/источников: 12/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Открыть отчёт' })).toBeVisible();
 });

@@ -29,17 +29,16 @@ test('вопрос → sources-чипы → стрим токенов → done',
   await expect(activityBar(page)).toBeVisible();
 });
 
-// TODO(P0-2): снять skip после мержа test/p0-2-mock-parity — узкий демо-маркер «демо-ошибка»/
-// «demo-error» в streamChat (терминальный `error`) появляется именно там; в текущем main
-// мок-чат ошибку не эмитит вообще.
-test.skip('вопрос с «демо-ошибка» → error-состояние без падения app', async ({ page }) => {
+test('вопрос с «демо-ошибка» → error-состояние без падения app', async ({ page }) => {
   await page.getByRole('button', { name: 'AI-панель' }).click();
   const input = page.getByPlaceholder('Спросите о заметках…');
+  // P0-2: УЗКИЙ демо-маркер «демо-ошибка»/«demo-error» → терминальный `error`
+  // (легитимный вопрос со словом «ошибка» мок НЕ роняет — анти-футган).
   await input.fill('демо-ошибка');
   await page.getByRole('button', { name: 'Отправить', exact: true }).click();
 
   // Терминальный error рендерится в теле сообщения (chat.error = «Ошибка: …»), app живёт дальше.
-  await expect(page.getByText(/^Ошибка:/)).toBeVisible();
+  await expect(page.getByText('Ошибка: мок: chat-провайдер недоступен')).toBeVisible();
   await expect(activityBar(page)).toBeVisible();
   // Поле ввода снова доступно — можно задать следующий вопрос.
   await expect(input).toBeEnabled();
