@@ -4,7 +4,7 @@
 //! прогона); сводка/статы прогона — `news_runs` (видимые пропуски источников, no silent caps).
 
 use rusqlite::{params, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::{DbResult, ReadPool, WriteActor};
 
@@ -44,6 +44,19 @@ pub struct NewsItem {
     pub comments_url: Option<String>,
 }
 
+/// B12: структурный сигнал «LLM-анализатор недоступен» (вместо RU-префикс-протокола в `errors[]`,
+/// который фронт сниффил регексом). Персистится JSON'ом в nullable-колонке `news_runs.llm_down`
+/// (миграция 027); человекочитаемая строка в `errors[]` остаётся (видимый список ошибок прогона).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmDownInfo {
+    /// URL эндпоинта оценки, который был недоступен; `None` — эндпоинт ИИ не задан.
+    pub endpoint: Option<String>,
+    /// `true` — часть батчей прошла, лента обновлена частично; `false` — недоступен весь прогон
+    /// (двухуровневость W-2: баннер фронта — только на тотальный сбой).
+    pub partial: bool,
+}
+
 /// Итог прогона для шапки страницы (последняя запись `news_runs`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +69,9 @@ pub struct NewsRun {
     pub llm_failed: i64,
     /// Видимые ошибки источников («источник: причина») — no silent caps (AC-NF-1).
     pub errors: Vec<String>,
+    /// B12: сбой ВЫЗОВА LLM-оценки в этом прогоне; `None` — вызовы живы (или старая запись до
+    /// миграции 027 — тогда фронт распознаёт legacy-строку в `errors`).
+    pub llm_down: Option<LlmDownInfo>,
 }
 
 /// Вставляет оценённые записи; возвращает число НОВЫХ (дубликаты по url молча пропущены —
@@ -276,14 +292,19 @@ pub async fn retention_gc(writer: &WriteActor, now: i64) -> DbResult<usize> {
         .await
 }
 
-/// Фиксирует итог прогона (сводка + статы + видимые ошибки источников).
+/// Фиксирует итог прогона (сводка + статы + видимые ошибки источников + LLM-down-сигнал B12).
 pub async fn record_run(writer: &WriteActor, run: NewsRun) -> DbResult<()> {
     writer
         .call(move |c| {
             let errors = serde_json::to_string(&run.errors).unwrap_or_else(|_| "[]".into());
+            // B12: NULL — сбоя вызова LLM не было; JSON {endpoint, partial} — был.
+            let llm_down = run
+                .llm_down
+                .as_ref()
+                .and_then(|i| serde_json::to_string(i).ok());
             c.execute(
                 "INSERT INTO news_runs(run_at,digest_ru,items_new,sources_ok,sources_total,\
-                 llm_failed,errors) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                 llm_failed,errors,llm_down) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     run.run_at,
                     run.digest_ru,
@@ -291,7 +312,8 @@ pub async fn record_run(writer: &WriteActor, run: NewsRun) -> DbResult<()> {
                     run.sources_ok,
                     run.sources_total,
                     run.llm_failed,
-                    errors
+                    errors,
+                    llm_down
                 ],
             )?;
             Ok(())
@@ -305,12 +327,13 @@ pub async fn list_runs(reader: &ReadPool, limit: i64) -> DbResult<Vec<NewsRun>> 
     reader
         .query(move |c| {
             let mut stmt = c.prepare(
-                "SELECT run_at,digest_ru,items_new,sources_ok,sources_total,llm_failed,errors \
-                 FROM news_runs ORDER BY run_at DESC, id DESC LIMIT ?1",
+                "SELECT run_at,digest_ru,items_new,sources_ok,sources_total,llm_failed,errors,\
+                 llm_down FROM news_runs ORDER BY run_at DESC, id DESC LIMIT ?1",
             )?;
             let rows = stmt
                 .query_map([limit], |r| {
                     let errors_raw: String = r.get(6)?;
+                    let llm_down_raw: Option<String> = r.get(7)?;
                     Ok(NewsRun {
                         run_at: r.get(0)?,
                         digest_ru: r.get(1)?,
@@ -319,6 +342,7 @@ pub async fn list_runs(reader: &ReadPool, limit: i64) -> DbResult<Vec<NewsRun>> 
                         sources_total: r.get(4)?,
                         llm_failed: r.get(5)?,
                         errors: serde_json::from_str(&errors_raw).unwrap_or_default(),
+                        llm_down: llm_down_raw.and_then(|s| serde_json::from_str(&s).ok()),
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -332,11 +356,12 @@ pub async fn latest_run(reader: &ReadPool) -> DbResult<Option<NewsRun>> {
     reader
         .query(|c| {
             c.query_row(
-                "SELECT run_at,digest_ru,items_new,sources_ok,sources_total,llm_failed,errors \
-                 FROM news_runs ORDER BY run_at DESC, id DESC LIMIT 1",
+                "SELECT run_at,digest_ru,items_new,sources_ok,sources_total,llm_failed,errors,\
+                 llm_down FROM news_runs ORDER BY run_at DESC, id DESC LIMIT 1",
                 [],
                 |r| {
                     let errors_raw: String = r.get(6)?;
+                    let llm_down_raw: Option<String> = r.get(7)?;
                     Ok(NewsRun {
                         run_at: r.get(0)?,
                         digest_ru: r.get(1)?,
@@ -345,6 +370,7 @@ pub async fn latest_run(reader: &ReadPool) -> DbResult<Option<NewsRun>> {
                         sources_total: r.get(4)?,
                         llm_failed: r.get(5)?,
                         errors: serde_json::from_str(&errors_raw).unwrap_or_default(),
+                        llm_down: llm_down_raw.and_then(|s| serde_json::from_str(&s).ok()),
                     })
                 },
             )
@@ -506,6 +532,7 @@ mod tests {
                 sources_total: 1,
                 llm_failed: 0,
                 errors: vec![],
+                llm_down: None,
             },
         )
         .await
@@ -523,6 +550,7 @@ mod tests {
     }
 
     /// Сводка прогона: запись/чтение последней, ошибки источников — JSON-roundtrip (no silent caps).
+    /// B12: llm_down здесь None → NULL-колонка → None при чтении (здоровый прогон).
     #[tokio::test]
     async fn run_record_and_latest_roundtrip() {
         let (_d, db) = open().await;
@@ -537,6 +565,7 @@ mod tests {
                 sources_total: 16,
                 llm_failed: 2,
                 errors: vec!["mistral: timeout".into()],
+                llm_down: None,
             },
         )
         .await
@@ -553,6 +582,65 @@ mod tests {
             (7, 15, 16, 2)
         );
         assert_eq!(run.errors, vec!["mistral: timeout".to_string()]);
+        assert_eq!(run.llm_down, None, "здоровый прогон → llm_down NULL");
+    }
+
+    /// B12: структурный LLM-down-сигнал переживает запись/чтение (latest_run и list_runs) —
+    /// endpoint и partial возвращаются как записаны, без строкового сниффинга.
+    #[tokio::test]
+    async fn run_llm_down_roundtrip() {
+        let (_d, db) = open().await;
+        let (w, r) = (db.writer(), db.reader());
+        let info = LlmDownInfo {
+            endpoint: Some("http://192.168.0.31:8084".into()),
+            partial: false,
+        };
+        record_run(
+            w,
+            NewsRun {
+                run_at: 100,
+                digest_ru: String::new(),
+                items_new: 0,
+                sources_ok: 1,
+                sources_total: 1,
+                llm_failed: 4,
+                errors: vec!["Анализатор новостей недоступен: …".into()],
+                llm_down: Some(info.clone()),
+            },
+        )
+        .await
+        .unwrap();
+        // Второй прогон — частичный сбой без названного эндпоинта.
+        record_run(
+            w,
+            NewsRun {
+                run_at: 200,
+                digest_ru: "Сводка.".into(),
+                items_new: 3,
+                sources_ok: 1,
+                sources_total: 1,
+                llm_failed: 1,
+                errors: vec![],
+                llm_down: Some(LlmDownInfo {
+                    endpoint: None,
+                    partial: true,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+
+        let latest = latest_run(r).await.unwrap().expect("прогон записан");
+        assert_eq!(
+            latest.llm_down,
+            Some(LlmDownInfo {
+                endpoint: None,
+                partial: true
+            })
+        );
+        let all = list_runs(r, 10).await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[1].llm_down, Some(info), "endpoint+partial как записаны");
     }
 
     /// W-39: история прогонов отдаётся в порядке убывания run_at и уважает limit; ошибки —
@@ -582,6 +670,7 @@ mod tests {
                     } else {
                         vec![]
                     },
+                    llm_down: None,
                 },
             )
             .await

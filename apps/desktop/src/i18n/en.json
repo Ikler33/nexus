@@ -1038,6 +1038,8 @@
     "neverTitle": "The feed hasn't run yet",
     "neverSub": "Start the first run — fetching and summarizing takes about a minute.",
     "offlineBanner": "Offline — feed paused. Showing last run's data.",
+    "llmDown": "News analyzer unavailable: {{endpoint}} — {{n}} entries not scored; the feed won't update until the endpoint is fixed (Settings → AI)",
+    "llmDownNoEndpoint": "(AI endpoint not set)",
     "pageSettings": "Page settings",
     "disable": "Disable feed",
     "trustedHosts": "Trusted article hosts",

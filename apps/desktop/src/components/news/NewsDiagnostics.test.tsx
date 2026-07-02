@@ -70,8 +70,9 @@ describe('NewsDiagnostics (W-39)', () => {
     spy.mockRestore();
   });
 
-  // Empty-state по ПРИЧИНЕ: анализатор недоступен (строка errors[]) → блок «почему пусто» с эндпоинтом.
-  it('пусто: причина — анализатор недоступен (с эндпоинтом)', async () => {
+  // Empty-state по ПРИЧИНЕ (legacy-путь): старая запись news_runs несёт ТОЛЬКО RU-строку в errors[]
+  // (без поля llmDown) → deprecated-сниффер всё ещё распознаёт её и называет эндпоинт.
+  it('пусто: причина — анализатор недоступен (legacy-строка без llmDown)', async () => {
     const lastRun = run({
       itemsNew: 0,
       llmFailed: 5,
@@ -86,6 +87,38 @@ describe('NewsDiagnostics (W-39)', () => {
     // Эндпоинт назван в блоке причины (и заодно в списке ошибок последнего прогона) — оба места.
     expect(screen.getAllByText(/192\.168\.0\.28:8084/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/анализатор недоступен|analyzer unavailable/i)).toBeInTheDocument();
+  });
+
+  // B12: структурное поле llmDown → причина с эндпоинтом БЕЗ строки-протокола в errors[] (regex
+  // не задействован — эндпоинт берётся из поля).
+  it('пусто: причина — анализатор недоступен (структурное поле llmDown)', async () => {
+    const lastRun = run({
+      itemsNew: 0,
+      llmFailed: 5,
+      errors: [],
+      llmDown: { endpoint: 'http://10.0.0.7:8084', partial: false },
+    });
+    render(<NewsDiagnostics lastRun={lastRun} feedEmpty={true} />);
+    openPanel();
+
+    expect(await screen.findByText(/почему пусто|why empty/i)).toBeInTheDocument();
+    expect(screen.getByText(/10\.0\.0\.7:8084/)).toBeInTheDocument();
+    expect(screen.getByText(/анализатор недоступен|analyzer unavailable/i)).toBeInTheDocument();
+  });
+
+  // B12: llmDown без эндпоинта (не задан) → generic-формулировка (без пустого «: —»).
+  it('пусто: llmDown без эндпоинта → generic-причина', async () => {
+    const lastRun = run({
+      itemsNew: 0,
+      llmFailed: 2,
+      errors: [],
+      llmDown: { endpoint: null, partial: false },
+    });
+    render(<NewsDiagnostics lastRun={lastRun} feedEmpty={true} />);
+    openPanel();
+    expect(
+      await screen.findByText(/был недоступен в последнем прогоне|was unavailable in the last run/i),
+    ).toBeInTheDocument();
   });
 
   // Empty-state по ПРИЧИНЕ: источники не ответили (sourcesOk==0).

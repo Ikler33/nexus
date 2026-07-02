@@ -121,6 +121,7 @@ let run: NewsRun | null = {
   sourcesTotal: 6,
   llmFailed: 1,
   errors: ['Mistral блог: таймаут (15с), будет повтор в следующем прогоне'],
+  llmDown: null, // B12: зеркалим контракт бэкенда (здоровый LLM → null)
 };
 
 export async function page(opts?: {
@@ -321,6 +322,7 @@ const RUNS_HISTORY: NewsRun[] = [
     sourcesTotal: 6,
     llmFailed: 0,
     errors: [],
+    llmDown: null,
   },
   {
     runAt: NOW - 50 * H,
@@ -330,6 +332,7 @@ const RUNS_HISTORY: NewsRun[] = [
     sourcesTotal: 6,
     llmFailed: 0,
     errors: ['DeepMind блог: 503, будет повтор', 'Simon Willison: таймаут (15с)'],
+    llmDown: null,
   },
 ].filter((r) => r.runAt);
 

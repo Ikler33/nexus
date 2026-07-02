@@ -200,6 +200,15 @@ pub async fn run_news_pipeline(
     // одного батча из многих (ревью W-2): items_new==0 → эндпоинт фактически недоступен весь прогон;
     // items_new>0 → часть прошла, лента обновлена частично. Неоценённые url не пишутся → повтор на
     // следующем прогоне, когда эндпоинт оживёт (graceful degrade без dedup-«вечно неоценено»).
+    // B12: тот же сигнал — ещё и структурным полем (фронт ключуется на него, не на RU-префикс);
+    // человекочитаемая строка в errors[] остаётся (видимый список ошибок прогона).
+    let llm_down = (batch_errors > 0).then(|| super::LlmDownInfo {
+        endpoint: chat_endpoint
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(str::to_string),
+        partial: items_new > 0,
+    });
     if batch_errors > 0 {
         errors.push(llm_unavailable_msg(chat_endpoint, llm_failed, items_new));
     }
@@ -212,6 +221,7 @@ pub async fn run_news_pipeline(
         sources_total: sources.len() as i64,
         llm_failed,
         errors,
+        llm_down,
     };
     super::record_run(writer, run.clone()).await?;
     Ok(run)
@@ -491,6 +501,7 @@ mod tests {
             vec!["deepmind: недоступен".to_string()],
             "падение источника видимо"
         );
+        assert_eq!(run.llm_down, None, "LLM жив → структурного сигнала нет (B12)");
         assert_eq!(run.digest_ru, "Сводка дня.");
         assert_eq!(
             chat_impl.eval_calls.load(Ordering::SeqCst),
@@ -584,6 +595,15 @@ mod tests {
             named[0].contains("192.168.0.31:8084"),
             "ошибка называет недостижимый эндпоинт: {}",
             named[0]
+        );
+
+        // B12: тот же сигнал — структурным полем (фронт ключуется на него, не на RU-префикс).
+        assert_eq!(
+            run.llm_down,
+            Some(super::super::LlmDownInfo {
+                endpoint: Some("http://192.168.0.31:8084".into()),
+                partial: false, // items_new == 0 → тотальный сбой (баннер)
+            })
         );
 
         // Лента действительно пуста (UI покажет баннер + причину, не молчаливый «нет новостей»).

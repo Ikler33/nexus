@@ -209,6 +209,13 @@ const MIGRATIONS: &[Migration] = &[
         rebuild_fts: false, // персист ходов агента (W-38): история переписок, заметочных производных не трогает
         rebuild_chat_fts: false,
     },
+    Migration {
+        version: 27,
+        name: "news_llm_down",
+        sql: include_str!("migrations/027_news_llm_down.sql"),
+        rebuild_fts: false, // nullable-колонка структурного LLM-down-сигнала (B12), производных не трогает
+        rebuild_chat_fts: false,
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
