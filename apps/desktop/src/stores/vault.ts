@@ -89,7 +89,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // Новый vault → кэши, ключованные путями заметок, недействительны (стартовые вопросы чата и т.п.).
     // Window-событие вместо прямого импорта components/chat (F-1: stores не знают компоненты) —
     // заинтересованная сторона подписывается сама; dispatchEvent синхронен, порядок прежний.
-    window.dispatchEvent(new Event(VAULT_SWITCHED_EVENT));
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(VAULT_SWITCHED_EVENT));
     // Сбрасываем отклонённые предложения связей: ключ — относительный путь, в новом vault он чужой
     // (иначе dismiss «Notes/A.md» в vault A прячет связь в vault B с тем же путём — находка аудита).
     const { useSuggestStore } = await import('./suggest');

@@ -87,6 +87,23 @@ function restrictFeatureImports(allowed) {
   ];
 }
 
+/** Компаньон для динамических `import()` (P2 ревью F-1): `no-restricted-imports` НЕ проверяет
+ *  ImportExpression — без этого правила ratchet обходился одной строкой `await import('../x/…')`.
+ *  Те же зоны/whitelist, что у статического правила (применяются парой). */
+function restrictFeatureDynamicImports(allowed) {
+  const banned = FEATURE_DIRS.filter((f) => !allowed.includes(f));
+  if (banned.length === 0) return 'off';
+  const alt = banned.join('|');
+  const message =
+    'Динамический import() кросс-фичи запрещён (F-1, границы модулей) — тот же ratchet, ' +
+    'что у статических импортов; см. CROSS_IMPORT_WHITELIST.';
+  return [
+    'error',
+    { selector: `ImportExpression > Literal[value=/^\\.\\.\\u002F(${alt})\\u002F/]`, message },
+    { selector: `ImportExpression > Literal[value=/components\\u002F(${alt})\\u002F/]`, message },
+  ];
+}
+
 export default tseslint.config(
   { ignores: ['dist', 'src-tauri', 'coverage', 'e2e/playwright-report', 'e2e/test-results'] },
   {
@@ -111,18 +128,27 @@ export default tseslint.config(
   // Фича-зоны (F-1): по блоку на зону; своя зона разрешена, чужие — нет.
   ...FEATURE_DIRS.map((feature) => ({
     files: [`src/components/${feature}/**/*.{ts,tsx}`],
-    rules: { 'no-restricted-imports': restrictFeatureImports([feature]) },
+    rules: {
+      'no-restricted-imports': restrictFeatureImports([feature]),
+      'no-restricted-syntax': restrictFeatureDynamicImports([feature]),
+    },
   })),
   // common — общий слой: сам не импортирует ни одну фича-зону.
   {
     files: ['src/components/common/**/*.{ts,tsx}'],
-    rules: { 'no-restricted-imports': restrictFeatureImports([]) },
+    rules: {
+      'no-restricted-imports': restrictFeatureImports([]),
+      'no-restricted-syntax': restrictFeatureDynamicImports([]),
+    },
   },
   // Точечные исключения ratchet'а — идут ПОСЛЕ зон и сужают запрет только для указанного файла.
   ...CROSS_IMPORT_WHITELIST.map(({ files, zone, allow }) => ({
     files: [files],
     rules: {
       'no-restricted-imports': restrictFeatureImports(
+        zone === 'common' ? allow : [zone, ...allow],
+      ),
+      'no-restricted-syntax': restrictFeatureDynamicImports(
         zone === 'common' ? allow : [zone, ...allow],
       ),
     },
