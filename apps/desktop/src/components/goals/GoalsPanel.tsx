@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useGoalsStore } from '../../stores/goals';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
 import styles from './GoalsPanel.module.css';

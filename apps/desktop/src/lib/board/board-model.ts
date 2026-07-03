@@ -1,7 +1,7 @@
 // Чистая модель доски (BOARD-4): группировка карточек по колонкам + утилиты карточек. Без React/IO —
 // юнит-тестируемо. Колонкование делает фронт (бэкенд `list_board` отдаёт плоский список, §5 спеки).
 
-import type { StaleTask, TaskCard } from '../../lib/tauri-api';
+import type { StaleTask, TaskCard } from '../tauri-api';
 
 /** Дефолтные колонки доски (BOARD-4; конфигурируемые доски/переименование — BOARD-3). id = значение `status`. */
 export const DEFAULT_COLUMN_IDS = ['todo', 'doing', 'done'] as const;

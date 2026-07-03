@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { StaleTask, TaskCard } from '../../lib/tauri-api';
+import type { StaleTask, TaskCard } from '../tauri-api';
 import {
   applyOrder,
   basename,

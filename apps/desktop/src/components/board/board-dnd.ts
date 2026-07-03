@@ -1,7 +1,7 @@
 // Чистая модель drag-n-drop доски (BOARD-5): вычисление нового порядка + смены статуса при перетаскивании
 // карточки. Без React/IO — юнит-тестируемо. Состояние-машина (optimistic/rollback) — в BoardView.
 
-import { OTHER_COLUMN_ID } from './board-model';
+import { OTHER_COLUMN_ID } from '../../lib/board/board-model';
 
 /** Данные перетаскиваемой карточки (кладутся в dataTransfer). */
 export interface DragData {

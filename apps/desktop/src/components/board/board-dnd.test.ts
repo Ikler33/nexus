@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { OTHER_COLUMN_ID } from './board-model';
+import { OTHER_COLUMN_ID } from '../../lib/board/board-model';
 import { planMove } from './board-dnd';
 
 const displayed = {

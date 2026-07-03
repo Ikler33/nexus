@@ -1,13 +1,13 @@
 import { useEffect } from 'react';
 import { Newspaper, RefreshCw, X } from 'lucide-react';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { renderBold } from '../../lib/render';
 import { useDigestStore } from '../../stores/digest';
 import { useUIStore } from '../../stores/ui';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './DigestPanel.module.css';
 
 /** Unix-секунды → локальная дата-время (короткий формат). */

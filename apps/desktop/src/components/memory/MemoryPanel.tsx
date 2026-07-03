@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { MEM_CAP, staleFactIds, useMemoryStore } from '../../stores/memory';
 import { useUIStore } from '../../stores/ui';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './MemoryPanel.module.css';
 
 /**

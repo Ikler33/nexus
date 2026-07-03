@@ -8,7 +8,7 @@ import { showTooltip, type Tooltip, tooltips } from '@codemirror/view';
 import i18n from '../../i18n/setup';
 import type { InlineMode } from '../../lib/tauri-api';
 import { useInlineStore } from '../../stores/inline';
-import { ghostField } from './inlineGhost';
+import { ghostField } from '../../lib/editor/inlineGhost';
 
 const ACTIONS: { mode: InlineMode; key: string }[] = [
   { mode: 'rewrite', key: 'inline.rewrite' },

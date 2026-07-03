@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { VAULT_SWITCHED_EVENT } from '../../lib/app-events';
 import {
   clearStartingQuestionsCache,
   getCachedQuestions,
@@ -36,5 +37,13 @@ describe('startingQuestionsCache (AIP-SQ, кап B11)', () => {
     setCachedQuestions('n200.md', ['q200']); // переполнение → вытесняет n1 (новый старейший), не n0
     expect(getCachedQuestions('n0.md')).toEqual(['fresh']);
     expect(getCachedQuestions('n1.md')).toBeUndefined();
+  });
+
+  // F-1: смена vault больше не зовёт clearStartingQuestionsCache напрямую — vault-стор эмитит
+  // window-событие, кэш подписан сам (модульная подписка). Характеризация чат-стороны.
+  it(`window-событие ${VAULT_SWITCHED_EVENT} сбрасывает кэш`, () => {
+    setCachedQuestions('Notes/A.md', ['q1']);
+    window.dispatchEvent(new Event(VAULT_SWITCHED_EVENT));
+    expect(getCachedQuestions('Notes/A.md')).toBeUndefined();
   });
 });

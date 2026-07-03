@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Изменено · F-1 — дешёвые нити развязки фронта + CI-линт границ модулей
+
+Первая стадия фронт-волны REFACTOR-PLAN §4 (сцепки §3.3 thermo-аудита, «дешёвые нити»). **Behavior-preserving**: чистые переносы файлов (содержимое компонентов не тронуто, только пути импортов) + один переход прямого вызова на событие. Rust не тронут.
+
+- **`Brand*` + `MermaidDiagram` → `components/common/`.** `BrandGlyphs`/`BrandMark`(+css)/`BrandThinking` жили в `chrome/`, их тянули 15 чужих фич (21 файл); `MermaidDiagram` жил в `editor/`, его тянули chat и common. Перенос `git mv` + обновление путей у всех импортёров; разорвано 26 кросс-фичевых рёбер. Остаток: CSS-модуль `MermaidDiagram` остаётся в `editor/MarkdownPreview.module.css` (перенос без правки содержимого) — ребро в whitelist линта, рубится в F-X.
+- **`board-model` → `lib/board/`.** Чистую модель доски (только типы/функции поверх `lib/tauri-api`) тянули `editor/NoteEmbed` и `today/TodayView` — board не вырезался модулем. Перенос модели+теста, 7 импортёров обновлены; рёбра editor→board и today→board разорваны.
+- **`inlineGhost` (CM6 ghost inline-LLM) → `lib/editor/`.** `stores/inline.ts` импортировал `components/editor/inlineGhost` (инверсия stores→components). Модуль — чистый CM6 без React («без сети/стора» по собственной шапке): перенесён целиком с тестом; stores больше не знают components (0 импортов).
+- **`vault` → чат-кэш через событие `vault:switched`.** `stores/vault.ts` импортировал `components/chat/startingQuestionsCache` (вторая инверсия). Теперь `openVault` эмитит window-событие (существующий паттерн window-событий фронта, ср. `resize` в `stores/theme.ts`; НЕ новая шина — только константа имени в `lib/app-events.ts`), кэш стартовых вопросов подписан сам и чистит себя. Поведение идентично (`dispatchEvent` синхронен, точка вызова та же); характеризация: интеграционный тест «смена vault → кэш вопросов сброшен» (vault.test) + юнит подписки (startingQuestionsCache.test).
+- **CI-линт границ «фича не импортирует фичу»** (ключ среза): в `apps/desktop/eslint.config.js` по зоне на каждый из 23 каталогов `src/components/<фича>` — импорт из чужой зоны красный (`no-restricted-imports` ядра, без новой зависимости; `common` — общий слой: разрешённая цель, сам фичи не импортирует). Честный ratchet: 4 легитимных старых ребра, НЕ разрываемых этим срезом, — явный `CROSS_IMPORT_WHITELIST` с обоснованиями (board/TaskPeek→editor/MarkdownPreview; editor/InspectorRail→chat/SuggestView; workspace/GroupPane→editor-начинка; common/MermaidDiagram→editor-css), каждое помечено «рубится в F-X». Любой НОВЫЙ кросс-импорт — ошибка (проверено пробным импортом: красный, откачен).
+- Гейт: `tsc --noEmit` ✅, `eslint --max-warnings 0` ✅, vitest 1341/1341 (1339 базовых + 2 характеризации события) ✅, coverage-храповик ✅, **Playwright e2e-смоук 28/28** (оракул переноса) ✅.
+
 ### Изменено · R-3a — канон сборки LLM-провайдеров `bootstrap::ProviderSet` (agentd переключён)
 
 Первый срез стадии R-3 REFACTOR-PLAN §3 (thermo-смелл №3: сборка провайдеров ×3 бинаря), строитель-за-строителем × бинарь-за-бинарём. **Behavior-preserving**: параметры собранных провайдеров байт-идентичны прежним — доказано характеризацией, а не задекларировано.

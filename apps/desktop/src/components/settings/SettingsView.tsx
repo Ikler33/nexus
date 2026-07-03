@@ -17,10 +17,10 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
-import { BrandMark } from '../chrome/BrandMark';
+import { BrandMark } from '../common/BrandMark';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { changeLocale } from '../../i18n/setup';
 import { commands, eventToCombo, formatCombo, spellCombo } from '../../lib/commands';

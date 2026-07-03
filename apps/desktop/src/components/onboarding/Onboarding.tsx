@@ -15,8 +15,8 @@ import { isTauri, tauriApi, type AiEndpoint } from '../../lib/tauri-api';
 import { useThemeStore } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
-import { BrandMark } from '../chrome/BrandMark';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandMark } from '../common/BrandMark';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './Onboarding.module.css';
 
 type Step = 'welcome' | 'vault' | 'ai' | 'index';

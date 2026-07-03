@@ -1,7 +1,7 @@
 import ReactMarkdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { MermaidDiagram } from '../editor/MermaidDiagram';
+import { MermaidDiagram } from './MermaidDiagram';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
 import styles from './Markdown.module.css';
 

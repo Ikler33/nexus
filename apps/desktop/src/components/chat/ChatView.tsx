@@ -21,14 +21,14 @@ import {
   History,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { CITE_SCHEME, remarkCitations } from '../../lib/markdown/remarkCitations';
 import { remarkMermaid } from '../../lib/markdown/remarkMermaid';
-import { MermaidDiagram } from '../editor/MermaidDiagram';
+import { MermaidDiagram } from '../common/MermaidDiagram';
 import { StreamingMarkdown } from '../common/StreamingMarkdown';
 
 import {
@@ -45,7 +45,7 @@ import { tauriApi } from '../../lib/tauri-api';
 import type { EpisodeHit, LinkSuggestion, MemoryHit, WebSource } from '../../lib/tauri-api';
 import { usePrefsStore } from '../../stores/prefs';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import { StartingQuestions } from './StartingQuestions';
 import styles from './ChatPanel.module.css';
 

@@ -3,8 +3,8 @@ import type { ComponentType } from 'react';
 import { AlertTriangle, BookOpen, FileText, Globe, Share2, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { OrbitIcon } from '../chrome/BrandGlyphs';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { OrbitIcon } from '../common/BrandGlyphs';
+import { BrandThinking } from '../common/BrandThinking';
 import { useAgentStore } from '../../stores/agent';
 import { useWorkspaceStore } from '../../stores/workspace';
 import {
