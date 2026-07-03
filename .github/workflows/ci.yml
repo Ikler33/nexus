@@ -26,6 +26,46 @@ jobs:
       - run: pnpm test:coverage  # тесты + coverage-гейт (V1.2): пороги в vitest.config.ts (храповик «не ниже»)
       - run: pnpm build
 
+  # P0-3: Playwright-смоук БРАУЗЕРНОЙ сборки. ЧЕСТНОСТЬ (W-22): джоба гоняет vite preview
+  # (прод-сборку фронта) с mock-слоем `lib/mock/*` вместо Tauri-бэка — доказывает межкомпонентную
+  # проводку фронта (App↔ActivityBar↔оверлеи↔редактор↔чат↔агент), НЕ поведение shipped Tauri-app.
+  # Движок webkit — ближайший к WKWebView Tauri. Блокирующая ПО ДИСЦИПЛИНЕ КОНВЕЙЕРА (красный
+  # смоук = не мержим); required-checks в настройках репо НЕ включены — владельческая настройка,
+  # вопрос поднят отдельно. Это единственный behavior-preserving оракул фронт-рефакторинга
+  # (REFACTOR-PLAN §2). Детали: apps/desktop/e2e/README.md.
+  e2e-web-smoke:
+    name: E2E web smoke (web+mock-слой, НЕ shipped-app)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Кэш браузеров Playwright: ключ = версия @playwright/test из lockfile (смена версии →
+      # новая ревизия webkit → новый кэш). --with-deps гоняем всегда: apt-зависимости webkit
+      # в кэш не входят.
+      - name: Playwright version → cache key
+        id: pw-version
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-webkit-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - run: npx playwright install --with-deps webkit
+      - run: pnpm e2e
+      - name: Upload playwright report (on failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/desktop/e2e/playwright-report
+            apps/desktop/e2e/test-results
+          retention-days: 7
+
   rust:
     name: Rust (build · clippy · test)
     strategy:

@@ -51,7 +51,11 @@ export function TemplatePicker() {
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!items || items.length === 0) {
-      if (e.key === 'Escape') close();
+      if (e.key === 'Escape') {
+        // preventDefault — как в основной ветке: сигнал «обработано» для reading-Esc-гейта App.tsx.
+        e.preventDefault();
+        close();
+      }
       return;
     }
     switch (e.key) {
