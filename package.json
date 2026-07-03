@@ -14,8 +14,12 @@
     "build:app": "pnpm --filter @nexus/desktop app:build",
     "preview": "pnpm --filter @nexus/desktop preview",
     "test": "pnpm -r --if-present test",
+    "e2e": "playwright test --config apps/desktop/e2e/playwright.config.ts",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "test:coverage": "pnpm -r --if-present test:coverage"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
   }
 }

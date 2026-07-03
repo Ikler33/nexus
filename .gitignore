@@ -48,3 +48,7 @@ Thumbs.db
 
 # Claude Code local config
 .claude/
+
+# Playwright (P0-3 web-смоук): отчёты и артефакты прогонов
+apps/desktop/e2e/playwright-report/
+apps/desktop/e2e/test-results/

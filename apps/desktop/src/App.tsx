@@ -205,6 +205,11 @@ export function App() {
     if (!reading) return;
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // P0-3-смоук (регресс reading-esc-precedence): оверлеи, закрывающие себя по Esc БЕЗ
+      // stopPropagation (палитра/QuickCapture/TemplatePicker), обновляют стор СИНХРОННО — гейт
+      // ниже видел уже-закрытое состояние, и один Esc гасил и оверлей, и режим чтения «сквозь»
+      // него. Обработанный ближе к фокусу Esc не дублируем (паттерн useKeymap: defaultPrevented).
+      if (e.defaultPrevented) return;
       const s = useUIStore.getState();
       // Любой оверлей поверх reading имеет приоритет на Esc (у него свой close) — иначе Esc закрыл бы
       // весь режим чтения «сквозь» открытую модалку (находки аудита reading-esc-precedence +

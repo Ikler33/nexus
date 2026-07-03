@@ -40,12 +40,20 @@ function buildSections(t: TFunction) {
 }
 
 export function HotkeysCheatsheet() {
-  const { t } = useTranslation();
   const open = useUIStore((s) => s.cheatsheetOpen);
+  // P0-3-смоук: гейт ВНЕ компонента с трапом. Раньше `useFocusTrap` жил здесь же над
+  // `if (!open) return null`: компонент смонтирован всегда (App.tsx), эффект трапа отрабатывал
+  // один раз при open=false (ref=null → ранний return) и НЕ перевешивался при открытии —
+  // Esc не закрывал шпаргатку, фокус в неё не переводился (сломан весь focus-trap, a11y P9).
+  if (!open) return null;
+  return <CheatsheetSheet />;
+}
+
+/** Само окно шпаргалки: монтируется только открытым → эффект focus-trap видит ref. */
+function CheatsheetSheet() {
+  const { t } = useTranslation();
   const close = useUIStore((s) => s.closeCheatsheet);
   const ref = useFocusTrap<HTMLDivElement>(close);
-
-  if (!open) return null;
   const sections = buildSections(t);
 
   return (
