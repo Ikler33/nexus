@@ -838,6 +838,128 @@ mod tests {
         assert_eq!((st, tx.as_str()), (run_store::STATUS_ERROR, "упал"));
     }
 
+    // ── R-3c: ХАРАКТЕРИЗАЦИЯ сборки зависимостей cli (REFACTOR-PLAN §3, thermo-смелл №3) ─────────
+    //
+    // Фикстура «до»: снимки конфиг-наблюдаемых параметров tool-провайдера (`debug_params`) и ТЕКСТЫ
+    // ошибок онбординга (`load_local_config` / `build_deps`) сняты со СТАРОГО cli-пути (прямой
+    // `ai::tools::build_agent_tool_provider` + локальная sync-реплика `load_local_config`) в
+    // КОММИТЕ 1 этого среза (двухкоммитный приём R-2/R-3a/R-3b) — и НЕ менялись при переключении
+    // сборки на канон `bootstrap::ProviderSet` (коммит 2). Тесты гоняют ЖИВОЙ производственный
+    // `build_deps` на временном vault (без сети: конструкция провайдера локальна). Снимки и тексты
+    // НЕ «пере-снимать» при рефакторе — они и есть контракт (тексты — онбординг-эргономика
+    // `nexus agent`: «нет файла» и «битый JSON» различаются).
+
+    /// «Полный» конфиг cli-среза: chat с моделью и context_window + посторонние секции fast/embedding
+    /// (характеризует, что на состав `Deps` они НЕ влияют — cli строит только tool-провайдер).
+    const CLI_BOOT_CFG_FULL: &str = r#"{
+      "ai": {
+        "chat":      { "url": "http://192.168.0.28:8080", "model": "qwen3-30b", "context_window": 32768 },
+        "fast":      { "url": "http://192.168.0.28:8084", "model": "gemma-4b" },
+        "embedding": { "url": "http://192.168.0.28:8083", "model": "bge-m3", "dim": 1024 }
+      }
+    }"#;
+
+    /// Кастомные INFER-CFG параметры chat (connect/first_token/idle/temperature), модель НЕ задана
+    /// (дефолт "chat"), url с хвостом `/v1` (нормализация api_base), context_window НЕ задан.
+    const CLI_BOOT_CFG_CUSTOM: &str = r#"{
+      "ai": {
+        "chat": {
+          "url": "http://127.0.0.1:9201/v1",
+          "connect_timeout_secs": 5,
+          "first_token_timeout_secs": 45,
+          "idle_timeout_secs": 10,
+          "retry_attempts": 7,
+          "temperature": 0.9
+        }
+      }
+    }"#;
+
+    /// Временный vault: `.nexus/local.json` с заданным содержимым (или вовсе без файла).
+    fn cli_vault(local_json: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        if let Some(json) = local_json {
+            std::fs::create_dir_all(dir.path().join(".nexus")).unwrap();
+            std::fs::write(dir.path().join(".nexus").join("local.json"), json).unwrap();
+        }
+        dir
+    }
+
+    /// Полный конфиг: tool-провайдер агента — ai.chat-хост/модель, БЕЗ retry-поля (повторами
+    /// заведует цикл агента), таймауты стрима из конфига; model/context_window доезжают до `Deps`.
+    #[tokio::test]
+    async fn boot_agent_tools_full_config() {
+        let dir = cli_vault(Some(CLI_BOOT_CFG_FULL));
+        let deps = build_deps(dir.path().to_path_buf()).await.expect("deps");
+        assert_eq!(
+            deps.provider.debug_params(),
+            r#"OpenAiToolProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s }"#
+        );
+        assert_eq!(deps.model, "qwen3-30b");
+        assert_eq!(deps.context_window, Some(32768));
+        assert_eq!(deps.canon_root, dir.path());
+    }
+
+    /// Кастомные таймауты: INFER-CFG параметры конфига доезжают до tool-провайдера (connect/
+    /// first_token/idle/temperature), дефолт-модель "chat", `/v1`-хвост не удваивается;
+    /// context_window не задан → None.
+    #[tokio::test]
+    async fn boot_agent_tools_custom_timeouts_default_model() {
+        let dir = cli_vault(Some(CLI_BOOT_CFG_CUSTOM));
+        let deps = build_deps(dir.path().to_path_buf()).await.expect("deps");
+        assert_eq!(
+            deps.provider.debug_params(),
+            r#"OpenAiToolProvider { client: "for_chat(connect_timeout=5s)", feature: Chat, endpoint: "http://127.0.0.1:9201/v1/chat/completions", model: "chat", temperature: 0.9, first_token_timeout: 45s, idle_timeout: 10s }"#
+        );
+        assert_eq!(deps.model, "chat");
+        assert_eq!(deps.context_window, None);
+    }
+
+    /// `Err`-ветка `build_deps` (у `Deps` нет Debug → `unwrap_err` неприменим).
+    async fn build_deps_err(root: &Path) -> String {
+        match build_deps(root.to_path_buf()).await {
+            Err(e) => e,
+            Ok(_) => panic!("ожидалась ошибка build_deps"),
+        }
+    }
+
+    /// Конфиг без `ai.chat` → ПРЕЖНИЙ текст ошибки «нечем думать» (онбординг-контракт).
+    #[tokio::test]
+    async fn boot_no_chat_section_error_text() {
+        let dir = cli_vault(Some("{}"));
+        let err = build_deps_err(dir.path()).await;
+        assert_eq!(
+            err,
+            "нет ai.chat в .nexus/local.json (url/model) — агенту нечем думать; задай эндпоинт LLM"
+        );
+    }
+
+    /// Нет `.nexus/local.json` → ПРЕЖНИЙ онбординг-текст с полным путём (и через `build_deps` тоже).
+    #[tokio::test]
+    async fn boot_missing_local_json_error_text() {
+        let dir = cli_vault(None);
+        let want = format!(
+            "нет {} — задай LLM-эндпоинт (онбординг приложения или вручную ai.chat.url/model)",
+            dir.path().join(".nexus").join("local.json").display()
+        );
+        assert_eq!(load_local_config(dir.path()).unwrap_err(), want);
+        assert_eq!(build_deps_err(dir.path()).await, want);
+    }
+
+    /// Битый JSON → ПРЕЖНИЙ текст «битый JSON (…)» с полным путём и ошибкой парсера внутри
+    /// (различение с «нет файла» — онбординг-эргономика cli).
+    #[tokio::test]
+    async fn boot_broken_local_json_error_text() {
+        let dir = cli_vault(Some("{ битый"));
+        let err = load_local_config(dir.path()).unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "{}: битый JSON (config: key must be a string at line 1 column 3)",
+                dir.path().join(".nexus").join("local.json").display()
+            )
+        );
+    }
+
     /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
     /// ЭТОГО вызывателя (проекция канона `cli_finish`), точным сравнением (байт-в-байт). Известное
     /// pre-existing расхождение CLI — Cancelled-текст «отменён; …» (БЕЗ «прогон», в отличие от
