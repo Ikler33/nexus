@@ -133,6 +133,15 @@ pub trait ChatProvider: Send + Sync {
 
     /// Идентификатор модели (для истории/диагностики).
     fn model_id(&self) -> &str;
+
+    /// R-3a (характеризация bootstrap-канона): конфиг-наблюдаемые параметры провайдера одной строкой.
+    /// Нужен, потому что вызыватели держат `Arc<dyn ChatProvider>` (конкретный тип не достать), а
+    /// характеризационные тесты обязаны сравнивать ВСЕ параметры сборки. Дефолт пуст — мокам/стабам
+    /// нечего показывать; переопределяет только [`OpenAiChatProvider`] (Debug-снимок).
+    #[doc(hidden)]
+    fn debug_params(&self) -> String {
+        String::new()
+    }
 }
 
 /// Idle-таймаут стрима модели ПОСЛЕ первого байта (steady-state): если сервер не прислал чанк за это
@@ -393,6 +402,27 @@ impl OpenAiChatProvider {
     }
 }
 
+/// R-3a (характеризация bootstrap-канона): ВСЕ конфиг-наблюдаемые параметры провайдера. Вместо
+/// объекта `client` печатается его профиль (`GuardedClient::debug_profile` — фабрика + таймауты;
+/// сами значения живут в tune-замыкании и иначе не наблюдаемы). Снимок пинается характеризационными
+/// тестами agentd (байт-идентичность канона старым строителям): менять формат = осознанно перепинать
+/// фикстуры.
+impl std::fmt::Debug for OpenAiChatProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiChatProvider")
+            .field("client", &self.client.debug_profile())
+            .field("feature", &self.feature)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("temperature", &self.temperature)
+            .field("first_token_timeout", &self.first_token_timeout)
+            .field("idle_timeout", &self.idle_timeout)
+            .field("retry", &self.retry)
+            .field("enable_thinking", &self.enable_thinking)
+            .finish()
+    }
+}
+
 #[async_trait]
 impl ChatProvider for OpenAiChatProvider {
     async fn stream_chat(
@@ -522,6 +552,10 @@ impl ChatProvider for OpenAiChatProvider {
 
     fn model_id(&self) -> &str {
         &self.model
+    }
+
+    fn debug_params(&self) -> String {
+        format!("{self:?}")
     }
 }
 

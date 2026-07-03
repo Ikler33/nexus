@@ -16,6 +16,15 @@ pub trait EmbeddingProvider: Send + Sync {
     fn dim(&self) -> usize;
     /// Идентификатор модели (для инвалидации векторов при смене — §6.5).
     fn model_id(&self) -> &str;
+
+    /// R-3a (характеризация bootstrap-канона): конфиг-наблюдаемые параметры провайдера одной строкой.
+    /// Вызыватели держат `Arc<dyn EmbeddingProvider>` — конкретный тип не достать, а характеризация
+    /// обязана сравнить ВСЕ параметры сборки. Дефолт пуст (моки); переопределяет только
+    /// [`OpenAiEmbedder`] (Debug-снимок).
+    #[doc(hidden)]
+    fn debug_params(&self) -> String {
+        String::new()
+    }
 }
 
 /// L2-нормализация на месте (идемпотентна; страхует, если сервер не нормализует).
@@ -175,6 +184,27 @@ impl EmbeddingProvider for OpenAiEmbedder {
 
     fn model_id(&self) -> &str {
         &self.model
+    }
+
+    fn debug_params(&self) -> String {
+        format!("{self:?}")
+    }
+}
+
+/// R-3a (характеризация bootstrap-канона): ВСЕ конфиг-наблюдаемые параметры эмбеддера; вместо объекта
+/// `client` — его профиль (`GuardedClient::debug_profile`). Снимок пинается характеризационными
+/// тестами agentd — менять формат = осознанно перепинать фикстуры.
+impl std::fmt::Debug for OpenAiEmbedder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiEmbedder")
+            .field("client", &self.client.debug_profile())
+            .field("feature", &self.feature)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("dim", &self.dim)
+            .field("query_prefix", &self.query_prefix)
+            .field("document_prefix", &self.document_prefix)
+            .finish()
     }
 }
 

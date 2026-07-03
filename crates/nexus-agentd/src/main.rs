@@ -2,10 +2,11 @@
 //!
 //! МИНИМАЛЬНЫЙ бинарь, доказывающий, что `nexus-core` переиспользуемо БЕЗ Tauri-десктопа: открывает
 //! vault headless (БД + конфиг + AIClient + GuardedClient + индексатор-фундамент) и крутит воркер-луп
-//! планировщика. НЕТ Tauri, НЕТ зависимостей `apps/desktop`, НЕТ agent-loop/tools/skills — чистый
-//! SKELETON. Композиция реплицирует МИНИМУМ проводки из app-приватных `open_vault`/`build_rag`/
-//! `build_chat`/`build_util_chat` (`apps/desktop/src-tauri/src/commands/vault.rs`), используя ТОЛЬКО
-//! публичные типы `nexus-core` (копируем тела, app не трогаем — PREFER copy over expose).
+//! планировщика. НЕТ Tauri, НЕТ зависимостей `apps/desktop` — чистый композиционный корень над
+//! публичными типами `nexus-core`. Сборка LLM-провайдеров — КАНОН
+//! `nexus_core::bootstrap::ProviderSet` (R-3a; бывшие локальные реплики `build_*_min` эпохи
+//! «PREFER copy over expose» удалены — политика отменена владельцем §8.8); здесь остаётся
+//! vault-состояние RAG (reconcile + открытие usearch-индексов, см. `build_rag_min`).
 //!
 //! Запуск: `nexus-agentd <vault>` или `NEXUS_VAULT=<vault> nexus-agentd`.
 //! `NEXUS_AGENTD_SMOKE=1` → один ограниченный прогон (несколько тиков) и выход 0 (headless smoke).
@@ -25,13 +26,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nexus_core::ai::tools::{OpenAiToolProvider, ToolCapableProvider};
-use nexus_core::ai::{
-    self, AIClient, ChatConfig, ChatProvider, EmbeddingProvider, LocalConfig, OpenAiChatProvider,
-    OpenAiEmbedder,
-};
+use nexus_core::ai::tools::ToolCapableProvider;
+use nexus_core::ai::{self, AIClient, EmbeddingProvider, LocalConfig};
 use nexus_core::db::{Database, WriteActor};
-use nexus_core::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
+use nexus_core::net::{EgressAudit, EgressFeature, EgressPolicy};
 use nexus_core::vector::VectorIndex;
 
 mod health;
@@ -638,12 +636,32 @@ async fn run() -> Result<(), String> {
             .unwrap_or_default(),
     );
 
-    // RAG-фундамент + ПАМЯТЬ агента (AGENT-MEM-1): эмбеддер + note-RAG индекс + ТРИ индекса памяти
-    // (переписка/факты/эпизоды). build_rag_min теперь ГОНИТ reconcile_embedding_model (CORE-2a #2):
-    // stale on-disk индекс под другой моделью/dim сбрасывается ДО открытия → нет DimMismatch на первом
-    // search/upsert (раньше skeleton наследовал чужой индекс — комментарий-предупреждение был, гард — нет).
-    let rag = match &local_cfg {
-        Some(cfg) => build_rag_min(&db, &root, cfg, &egress_policy, &egress_audit).await,
+    // Сборка LLM-провайдеров — КАНОН `nexus_core::bootstrap::ProviderSet` (R-3a): chat-пара
+    // (reasoning + fast) + утилитарная `ai.fast` (fallback на chat_fast) + tool-провайдер агента
+    // (AGENT-1, I-5) + embedding-фундамент. Бывшие локальные реплики build_chat_min/build_util_chat_min/
+    // build_agent_tools_min и embedder-часть build_rag_min удалены; байт-идентичность параметров
+    // доказана характеризацией (tests::boot_*, двухкоммитный приём R-2). Опции FULL: agentd строит
+    // ВСЁ (агенту нечем думать без agent_tools; RAG/память — на embedding).
+    let providers = match &local_cfg {
+        Some(cfg) => {
+            nexus_core::bootstrap::ProviderSet::from_config(
+                cfg,
+                &egress_policy,
+                &egress_audit,
+                nexus_core::bootstrap::ProviderSetOptions::FULL,
+            )
+            .await
+        }
+        None => nexus_core::bootstrap::ProviderSet::default(),
+    };
+
+    // RAG-фундамент + ПАМЯТЬ агента (AGENT-MEM-1): note-RAG индекс + ТРИ индекса памяти (переписка/
+    // факты/эпизоды) поверх канонного эмбеддера. build_rag_min ГОНИТ reconcile_embedding_model
+    // (CORE-2a #2): stale on-disk индекс под другой моделью/dim сбрасывается ДО открытия → нет
+    // DimMismatch на первом search/upsert. Эмбеддер попадает в AIClient ТОЛЬКО из собранного бандла
+    // (reconcile/usearch не удались → RAG off ЦЕЛИКОМ, эмбеддер без индексов не отдаём — как раньше).
+    let rag = match providers.embedding {
+        Some(eb) => build_rag_min(&db, &root, eb).await,
         None => None,
     };
     let (vectors, chat_vectors, memory_vectors, episode_vectors, embedder) = match rag {
@@ -657,38 +675,15 @@ async fn run() -> Result<(), String> {
         None => (None, None, None, None, None),
     };
 
-    // Chat-провайдеры (реплика build_chat): обычный (reasoning) + быстрый (без reasoning).
-    let (chat, chat_fast) = match &local_cfg {
-        Some(cfg) => match build_chat_min(cfg, &egress_policy, &egress_audit) {
-            Some((normal, fast)) => (Some(normal), Some(fast)),
-            None => (None, None),
-        },
-        None => (None, None),
-    };
-    // Утилитарная модель (реплика build_util_chat): `ai.fast` без reasoning, fallback на chat_fast.
-    let chat_util = match &local_cfg {
-        Some(cfg) => build_util_chat_min(cfg, &egress_policy, &egress_audit),
-        None => None,
-    }
-    .or_else(|| chat_fast.clone());
-
-    // AGENT-1 (I-5): tool-capable провайдер из ТОГО ЖЕ GuardedClient::for_chat + EgressFeature::Chat,
-    // что и build_chat_min — но ОТДЕЛЬНЫЙ тип (OpenAiToolProvider), tools не протекают в chat-путь.
-    // Это единственное место в проекте (вне ядра/тестов), где он конструируется (десктоп держит None).
-    let agent_tools = match &local_cfg {
-        Some(cfg) => build_agent_tools_min(cfg, &egress_policy, &egress_audit),
-        None => None,
-    };
-
     // AIClient (тот же контейнер, что десктоп кладёт в VaultContext) — собран из ядровых провайдеров.
     // AGENT-2: потребляется AgentRunHandler (нужен `agent_tools` + токенайзер/бюджет внутри хендлера),
     // поэтому в `Arc` (хендлер держит долю).
     let ai_client = Arc::new(AIClient {
-        chat,
-        chat_fast,
-        chat_util,
+        chat: providers.chat,
+        chat_fast: providers.chat_fast,
+        chat_util: providers.chat_util,
         embedder: embedder.clone(),
-        agent_tools,
+        agent_tools: providers.agent_tools,
         policy: egress_policy.clone(),
     });
     let ai_ready = ai_client.chat.is_some();
@@ -1356,11 +1351,12 @@ fn maybe_spawn_connect_server(
     });
 }
 
-/// RAG + ПАМЯТЬ агента headless (AGENT-MEM-1): эмбеддер + note-RAG индекс + ТРИ индекса памяти
-/// (переписка/факты/эпизоды). Зеркало `vault::build_rag`, но: (1) ГОНИТ `reconcile_embedding_model`
-/// (CORE-2a #2) ДО открытия индексов — stale on-disk индекс под другой моделью/dim сбрасывается, иначе
-/// запрос новой моделью против старого индекса → `DimMismatch`/семантический мусор; (2) открывает все
-/// четыре индекса (десктоп держит их в VaultContext, agentd теперь читает память тем же эмбеддером).
+/// RAG + ПАМЯТЬ агента headless (AGENT-MEM-1): note-RAG индекс + ТРИ индекса памяти (переписка/факты/
+/// эпизоды) поверх КАНОННОГО эмбеддера ([`nexus_core::bootstrap::EmbeddingBootstrap`], R-3a). Здесь
+/// остаётся vault-состояние (вне канона): (1) `reconcile_embedding_model` (CORE-2a #2) ДО открытия
+/// индексов — stale on-disk индекс под другой моделью/dim сбрасывается, иначе запрос новой моделью
+/// против старого индекса → `DimMismatch`/семантический мусор; (2) открытие всех четырёх индексов
+/// (десктоп держит их в VaultContext, agentd читает память тем же эмбеддером).
 struct RagBundle {
     embedder: Arc<dyn EmbeddingProvider>,
     vectors: Arc<VectorIndex>,
@@ -1372,50 +1368,19 @@ struct RagBundle {
 async fn build_rag_min(
     db: &Database,
     root: &Path,
-    cfg: &LocalConfig,
-    policy: &Arc<EgressPolicy>,
-    audit: &Arc<EgressAudit>,
+    eb: nexus_core::bootstrap::EmbeddingBootstrap,
 ) -> Option<RagBundle> {
-    let emb = cfg.ai.embedding.as_ref()?;
-    let model = emb.model.clone().unwrap_or_else(|| "embedding".to_string());
-
-    let dim = match emb.dim {
-        Some(d) => d,
-        None => {
-            let probe =
-                GuardedClient::for_probe(policy.clone(), audit.clone(), Duration::from_secs(30))
-                    .map_err(|e| tracing::warn!(error = %e, "probe-клиент не построился — RAG off"))
-                    .ok()?;
-            OpenAiEmbedder::probe_dim(&probe, &emb.url, &model)
-                .await
-                .map_err(|e| tracing::warn!(error = %e, "проба размерности не удалась — RAG off"))
-                .ok()?
-        }
-    };
-
-    let guarded = GuardedClient::for_embedding(policy.clone(), audit.clone(), emb.timeout())
-        .map_err(|e| tracing::warn!(error = %e, "эмбеддер не инициализирован — RAG off"))
-        .ok()?;
-    let embedder = OpenAiEmbedder::new(
-        &guarded,
-        EgressFeature::Embed,
-        &emb.url,
-        &model,
-        dim,
-        ai::default_prefixes(&model),
-    );
-
     // CORE-2a #2: сверяем on-disk индексы с активной моделью/dim ДО открытия. Смена → сброс файлов
     // (перезаполнятся индексатором/бэкфиллом). Ошибка БД → RAG off (не открываем потенциально
     // несовместимые индексы).
-    let reindex = nexus_core::vector::reconcile_embedding_model(db, root, &model, dim)
+    let reindex = nexus_core::vector::reconcile_embedding_model(db, root, &eb.model, eb.dim)
         .await
         .map_err(|e| tracing::warn!(error = %e, "reconcile embedding-модели не удался — RAG off"))
         .ok()?;
 
     let nexus = root.join(".nexus");
     let open = |name: &str| {
-        VectorIndex::open(nexus.join(name), dim)
+        VectorIndex::open(nexus.join(name), eb.dim)
             .map_err(
                 |e| tracing::warn!(error = %e, index = name, "usearch open не удался — RAG off"),
             )
@@ -1427,88 +1392,14 @@ async fn build_rag_min(
     let memory_vectors = open("memory_vectors.usearch")?;
     let episode_vectors = open("episode_vectors.usearch")?;
 
-    tracing::info!(model = %model, dim, reindex, "RAG + память агента включены (headless)");
+    tracing::info!(model = %eb.model, dim = eb.dim, reindex, "RAG + память агента включены (headless)");
     Some(RagBundle {
-        embedder: Arc::new(embedder),
+        embedder: eb.embedder,
         vectors,
         chat_vectors,
         memory_vectors,
         episode_vectors,
     })
-}
-
-/// INFER-CFG: применяет к chat-провайдеру таймауты/retry из `ChatConfig` (first_token/idle/retry).
-/// Температуру задаёт уже `new(..., Some(c.temperature()))`. Connect-таймаут — у guarded-клиента.
-fn apply_chat_cfg(p: OpenAiChatProvider, c: &ChatConfig) -> OpenAiChatProvider {
-    p.with_first_token_timeout(c.first_token_timeout())
-        .with_idle_timeout(c.idle_timeout())
-        .with_retry_attempts(c.retry_attempts())
-}
-
-/// Реплика `vault::build_chat`: пара провайдеров `(reasoning, fast)` из `ai.chat`. Доступность сервера
-/// здесь не проверяем (выяснится при первом стриме) — как в app.
-fn build_chat_min(
-    cfg: &LocalConfig,
-    policy: &Arc<EgressPolicy>,
-    audit: &Arc<EgressAudit>,
-) -> Option<(Arc<dyn ChatProvider>, Arc<dyn ChatProvider>)> {
-    let chat = cfg.ai.chat.as_ref()?;
-    let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
-    // INFER-CFG: connect-таймаут и температура/таймауты стрима/retry из конфига (дефолты при отсутствии).
-    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), chat.connect_timeout())
-        .map_err(|e| tracing::warn!(error = %e, "chat-провайдер не инициализирован"))
-        .ok()?;
-    let normal = apply_chat_cfg(
-        OpenAiChatProvider::new(
-            &guarded,
-            EgressFeature::Chat,
-            &chat.url,
-            &model,
-            Some(chat.temperature()),
-        ),
-        chat,
-    );
-    let fast = apply_chat_cfg(
-        OpenAiChatProvider::new(
-            &guarded,
-            EgressFeature::Chat,
-            &chat.url,
-            &model,
-            Some(chat.temperature()),
-        ),
-        chat,
-    )
-    .without_reasoning();
-    tracing::info!(model = %model, "chat-провайдеры включены (reasoning + fast)");
-    Some((Arc::new(normal), Arc::new(fast)))
-}
-
-/// AGENT-1 (I-5): tool-capable провайдер для цикла агента. Тот же `ai.chat`-хост/модель и тот же
-/// `GuardedClient::for_chat` + `EgressFeature::Chat`, что и `build_chat_min`, но ОТДЕЛЬНЫЙ тип
-/// `OpenAiToolProvider` (tools НЕ протекают в chat-путь). `None` — нет `ai.chat` / клиент не построился.
-fn build_agent_tools_min(
-    cfg: &LocalConfig,
-    policy: &Arc<EgressPolicy>,
-    audit: &Arc<EgressAudit>,
-) -> Option<Arc<dyn ToolCapableProvider>> {
-    let chat = cfg.ai.chat.as_ref()?;
-    let model = chat.model.clone().unwrap_or_else(|| "chat".to_string());
-    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), chat.connect_timeout())
-        .map_err(|e| tracing::warn!(error = %e, "tool-провайдер агента не инициализирован"))
-        .ok()?;
-    // INFER-CFG: температура + cold-start-таймауты стрима из конфига (у tool-провайдера нет retry —
-    // повторами ходов заведует сам цикл агента). Connect-таймаут — у guarded-клиента выше.
-    let provider = OpenAiToolProvider::new(
-        &guarded,
-        EgressFeature::Chat,
-        &chat.url,
-        &model,
-        Some(chat.temperature()),
-    )
-    .with_first_token_timeout(chat.first_token_timeout())
-    .with_idle_timeout(chat.idle_timeout());
-    tracing::info!(model = %model, "tool-capable провайдер агента включён (AGENT-1)");
-    Some(Arc::new(provider))
 }
 
 /// AGENT-1 offline smoke: гоняет цикл агента против ФЕЙКОВОГО провайдера (без сети) и безопасного
@@ -1787,35 +1678,6 @@ async fn actuator_gate_smoke() {
     );
 }
 
-/// Реплика `vault::build_util_chat`: утилитарная мелкая модель из `ai.fast`, всегда без reasoning.
-/// `None` — секции нет / клиент не построился → вызывающий делает fallback на chat_fast.
-fn build_util_chat_min(
-    cfg: &LocalConfig,
-    policy: &Arc<EgressPolicy>,
-    audit: &Arc<EgressAudit>,
-) -> Option<Arc<dyn ChatProvider>> {
-    let fast = cfg.ai.fast.as_ref()?;
-    let model = fast.model.clone().unwrap_or_else(|| "fast".to_string());
-    let guarded = GuardedClient::for_chat(policy.clone(), audit.clone(), fast.connect_timeout())
-        .map_err(
-            |e| tracing::warn!(error = %e, "ai.fast: провайдер не создан — fallback на chat_fast"),
-        )
-        .ok()?;
-    let provider = apply_chat_cfg(
-        OpenAiChatProvider::new(
-            &guarded,
-            EgressFeature::Chat,
-            &fast.url,
-            &model,
-            Some(fast.temperature()),
-        ),
-        fast,
-    )
-    .without_reasoning();
-    tracing::info!(model = %model, url = %fast.url, "ai.fast (утилитарная модель) включена");
-    Some(Arc::new(provider))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2029,6 +1891,236 @@ mod tests {
         assert!(
             !agent_paused.load(std::sync::atomic::Ordering::Relaxed),
             "нет файла → агент НЕ на паузе (работает из коробки)"
+        );
+    }
+
+    // ── R-3a: ХАРАКТЕРИЗАЦИЯ сборки провайдеров (REFACTOR-PLAN §3, thermo-смелл №3) ────────────────
+    //
+    // Фикстура «до»: снимки ВСЕХ конфиг-наблюдаемых параметров провайдеров (`debug_params`) были
+    // СНЯТЫ со старых строителей agentd (`build_chat_min`/`build_util_chat_min`/`build_agent_tools_min`
+    // /embedder-часть `build_rag_min` + композиция `run()`) в КОММИТЕ 1 этого среза (двухкоммитный
+    // приём R-2) — и НЕ менялись при переключении сборки на канон `nexus_core::bootstrap::ProviderSet`
+    // (коммит 2, этот код): байт-идентичность канона доказана, не задекларирована.
+    // Строки-снимки НЕ «пере-снимать» при рефакторе канона — они и есть контракт.
+
+    /// «Полный» конфиг: chat+fast+embedding, модели заданы, dim задан (без сетевой пробы),
+    /// таймауты/температуры дефолтные.
+    const BOOT_CFG_FULL: &str = r#"{
+      "ai": {
+        "chat":      { "url": "http://192.168.0.28:8080", "model": "qwen3-30b", "context_window": 32768 },
+        "fast":      { "url": "http://192.168.0.28:8084", "model": "gemma-4b" },
+        "embedding": { "url": "http://192.168.0.28:8083", "model": "bge-m3", "dim": 1024 }
+      }
+    }"#;
+
+    /// Без `ai.fast`: chat_util обязан упасть в fallback на chat_fast (композиция `run()`);
+    /// embedding — nomic (характеризует task-префиксы).
+    const BOOT_CFG_NO_FAST: &str = r#"{
+      "ai": {
+        "chat":      { "url": "http://127.0.0.1:9101", "model": "qwen3-30b" },
+        "embedding": { "url": "http://127.0.0.1:9103", "model": "nomic-embed-text", "dim": 768 }
+      }
+    }"#;
+
+    /// Без `ai.embedding`: RAG off, chat+fast живут.
+    const BOOT_CFG_NO_EMBEDDING: &str = r#"{
+      "ai": {
+        "chat": { "url": "http://127.0.0.1:9101", "model": "qwen3-30b" },
+        "fast": { "url": "http://127.0.0.1:9104", "model": "gemma-4b" }
+      }
+    }"#;
+
+    /// Кастомные таймауты/температуры/ретраи ВЕЗДЕ; модели НЕ заданы (дефолты "chat"/"fast"/
+    /// "embedding"); chat-url с хвостом `/v1` (характеризует нормализацию `api_base`).
+    const BOOT_CFG_CUSTOM: &str = r#"{
+      "ai": {
+        "chat": {
+          "url": "http://127.0.0.1:9201/v1",
+          "connect_timeout_secs": 5,
+          "first_token_timeout_secs": 45,
+          "idle_timeout_secs": 10,
+          "retry_attempts": 7,
+          "temperature": 0.9
+        },
+        "fast": {
+          "url": "http://127.0.0.1:9202",
+          "connect_timeout_secs": 2,
+          "first_token_timeout_secs": 20,
+          "idle_timeout_secs": 4,
+          "retry_attempts": 1,
+          "temperature": 0.05
+        },
+        "embedding": { "url": "http://127.0.0.1:9203", "dim": 512, "timeout_secs": 120 }
+      }
+    }"#;
+
+    /// Пустой конфиг: ни одного провайдера.
+    const BOOT_CFG_EMPTY: &str = r#"{}"#;
+
+    fn boot_cfg(json: &str) -> LocalConfig {
+        LocalConfig::parse(json).expect("фикстурный конфиг валиден")
+    }
+
+    fn boot_edges() -> (Arc<EgressPolicy>, Arc<EgressAudit>) {
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        (policy, Arc::new(EgressAudit::default()))
+    }
+
+    /// Сборка ТЕКУЩИМ путём agentd — теперь это КАНОН `bootstrap::ProviderSet::from_config` с
+    /// опциями FULL, как в `run()` (в коммите 1 здесь была реплика старой композиции
+    /// `build_chat_min` → `build_util_chat_min` + fallback → `build_agent_tools_min`;
+    /// ассерты тестов НЕ менялись при переключении).
+    async fn build_current_way(cfg_json: &str) -> nexus_core::bootstrap::ProviderSet {
+        let cfg = boot_cfg(cfg_json);
+        let (policy, audit) = boot_edges();
+        nexus_core::bootstrap::ProviderSet::from_config(
+            &cfg,
+            &policy,
+            &audit,
+            nexus_core::bootstrap::ProviderSetOptions::FULL,
+        )
+        .await
+    }
+
+    /// Эмбеддер ТЕКУЩИМ путём agentd: канонный `EmbeddingBootstrap` СКВОЗЬ `build_rag_min`
+    /// (reconcile+usearch на временном vault — живой RAG-путь `run()`; dim задан в фикстурах →
+    /// сетевой пробы нет). В коммите 1 тот же путь шёл через старый монолитный `build_rag_min`.
+    async fn build_embedder_current_way(cfg_json: &str) -> Option<Arc<dyn EmbeddingProvider>> {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let db = Database::open(root.join(".nexus").join("nexus.db"))
+            .await
+            .unwrap();
+        let eb = build_current_way(cfg_json).await.embedding?;
+        build_rag_min(&db, &root, eb).await.map(|r| r.embedder)
+    }
+
+    /// Полный конфиг: пара chat-провайдеров — один сервер/модель/температура/таймауты/ретрай,
+    /// различие ТОЛЬКО в reasoning (normal ON, fast OFF).
+    #[tokio::test]
+    async fn boot_chat_pair_full_config() {
+        let p = build_current_way(BOOT_CFG_FULL).await;
+        assert_eq!(
+            p.chat.expect("ai.chat → провайдер").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: true }"#
+        );
+        assert_eq!(
+            p.chat_fast.expect("ai.chat → быстрый").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: false }"#
+        );
+    }
+
+    /// Полный конфиг: утилитарная модель из `ai.fast` — свой сервер/модель, ВСЕГДА без reasoning.
+    #[tokio::test]
+    async fn boot_util_chat_full_config() {
+        let p = build_current_way(BOOT_CFG_FULL).await;
+        assert_eq!(
+            p.chat_util.expect("ai.fast → утилитарная").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8084/v1/chat/completions", model: "gemma-4b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: false }"#
+        );
+    }
+
+    /// Полный конфиг: tool-capable провайдер агента — тот же ai.chat-хост/модель, БЕЗ retry-поля
+    /// (повторами заведует цикл агента), таймауты стрима из конфига.
+    #[tokio::test]
+    async fn boot_agent_tools_full_config() {
+        let p = build_current_way(BOOT_CFG_FULL).await;
+        assert_eq!(
+            p.agent_tools
+                .expect("ai.chat → tool-провайдер")
+                .debug_params(),
+            r#"OpenAiToolProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s }"#
+        );
+    }
+
+    /// Кастомные таймауты: ВСЕ INFER-CFG параметры конфига доезжают до провайдеров (connect/
+    /// first_token/idle/retry/temperature), дефолт-модели "chat"/"fast", `/v1`-хвост не удваивается.
+    #[tokio::test]
+    async fn boot_custom_timeouts_reach_providers() {
+        let p = build_current_way(BOOT_CFG_CUSTOM).await;
+        assert_eq!(
+            p.chat.expect("ai.chat → провайдер").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=5s)", feature: Chat, endpoint: "http://127.0.0.1:9201/v1/chat/completions", model: "chat", temperature: 0.9, first_token_timeout: 45s, idle_timeout: 10s, retry: RetryPolicy { max_attempts: 7, base: 300ms, cap: 2s }, enable_thinking: true }"#
+        );
+        assert_eq!(
+            p.chat_util.expect("ai.fast → утилитарная").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=2s)", feature: Chat, endpoint: "http://127.0.0.1:9202/v1/chat/completions", model: "fast", temperature: 0.05, first_token_timeout: 20s, idle_timeout: 4s, retry: RetryPolicy { max_attempts: 1, base: 300ms, cap: 2s }, enable_thinking: false }"#
+        );
+        assert_eq!(
+            p.agent_tools
+                .expect("ai.chat → tool-провайдер")
+                .debug_params(),
+            r#"OpenAiToolProvider { client: "for_chat(connect_timeout=5s)", feature: Chat, endpoint: "http://127.0.0.1:9201/v1/chat/completions", model: "chat", temperature: 0.9, first_token_timeout: 45s, idle_timeout: 10s }"#
+        );
+    }
+
+    /// Без `ai.fast`: утилитарный канал = ТОТ ЖЕ Arc, что chat_fast (fallback композиции — дайджест/
+    /// примитивы не дохнут без отдельной мелкой модели).
+    #[tokio::test]
+    async fn boot_util_falls_back_to_chat_fast() {
+        let p = build_current_way(BOOT_CFG_NO_FAST).await;
+        let fast = p.chat_fast.expect("ai.chat → быстрый");
+        let util = p.chat_util.expect("fallback → chat_fast");
+        assert!(
+            Arc::ptr_eq(&fast, &util),
+            "без ai.fast chat_util обязан быть ТЕМ ЖЕ провайдером, что chat_fast"
+        );
+    }
+
+    /// Пустой конфиг: ни одного провайдера (vault работает без AI — local-first).
+    #[tokio::test]
+    async fn boot_empty_config_builds_nothing() {
+        let p = build_current_way(BOOT_CFG_EMPTY).await;
+        assert!(p.chat.is_none(), "нет ai.chat → нет chat");
+        assert!(p.chat_fast.is_none(), "нет ai.chat → нет chat_fast");
+        assert!(p.chat_util.is_none(), "нет ai.fast И нет chat_fast → None");
+        assert!(p.agent_tools.is_none(), "нет ai.chat → нет tool-провайдера");
+    }
+
+    /// Полный конфиг: эмбеддер — url/model/dim/таймаут guarded-клиента; bge → БЕЗ task-префиксов.
+    #[tokio::test]
+    async fn boot_embedder_full_config() {
+        let e = build_embedder_current_way(BOOT_CFG_FULL)
+            .await
+            .expect("ai.embedding+dim → эмбеддер без пробы");
+        assert_eq!(
+            e.debug_params(),
+            r#"OpenAiEmbedder { client: "for_embedding(timeout=60s)", feature: Embed, endpoint: "http://192.168.0.28:8083/v1/embeddings", model: "bge-m3", dim: 1024, query_prefix: "", document_prefix: "" }"#
+        );
+    }
+
+    /// nomic-модель: task-префиксы `search_query:`/`search_document:` применены (default_prefixes).
+    #[tokio::test]
+    async fn boot_embedder_nomic_prefixes() {
+        let e = build_embedder_current_way(BOOT_CFG_NO_FAST)
+            .await
+            .expect("ai.embedding+dim → эмбеддер");
+        assert_eq!(
+            e.debug_params(),
+            r#"OpenAiEmbedder { client: "for_embedding(timeout=60s)", feature: Embed, endpoint: "http://127.0.0.1:9103/v1/embeddings", model: "nomic-embed-text", dim: 768, query_prefix: "search_query: ", document_prefix: "search_document: " }"#
+        );
+    }
+
+    /// Кастомный embedding-таймаут + дефолт-модель "embedding" доезжают до эмбеддера.
+    #[tokio::test]
+    async fn boot_embedder_custom_timeout() {
+        let e = build_embedder_current_way(BOOT_CFG_CUSTOM)
+            .await
+            .expect("ai.embedding+dim → эмбеддер");
+        assert_eq!(
+            e.debug_params(),
+            r#"OpenAiEmbedder { client: "for_embedding(timeout=120s)", feature: Embed, endpoint: "http://127.0.0.1:9203/v1/embeddings", model: "embedding", dim: 512, query_prefix: "", document_prefix: "" }"#
+        );
+    }
+
+    /// Без `ai.embedding` эмбеддера нет (RAG off) — chat-провайдеры при этом живут (см. фикстуру).
+    #[tokio::test]
+    async fn boot_no_embedding_no_embedder() {
+        assert!(
+            build_embedder_current_way(BOOT_CFG_NO_EMBEDDING)
+                .await
+                .is_none(),
+            "нет ai.embedding → нет эмбеддера"
         );
     }
 }
