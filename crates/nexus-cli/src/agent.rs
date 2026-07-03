@@ -3,9 +3,10 @@
 //! (токены/вызовы инструментов/результаты/финал) в stdout.
 //!
 //! Это ТРЕТИЙ потребитель транспорт-агностичного ядра [`run_agent_session`] рядом с desktop
-//! (`drive_run`) и agentd — со своими реализациями вывода ([`StdoutForwarder`]). Сборка зависимостей
-//! зеркалит `nexus-agentd --sandbox-run` (egress-политика + audit + общий
-//! [`build_agent_tool_provider`]), но БЕЗ песочницы и БЕЗ актуатора.
+//! (`drive_run`) и agentd — со своими реализациями вывода ([`StdoutForwarder`]). Зависимости
+//! собирает канон `nexus_core::bootstrap` (R-3c: `ProviderSet::from_config` с cli-профилем
+//! `{agent_tools: true, embedding: false}` + онбординг-проекция `read_local_config`), как agentd
+//! `--sandbox-run`, но БЕЗ песочницы и БЕЗ актуатора.
 //!
 //! **SAFE BY DEFAULT (срез 1):** `actuator_enabled=false` → агент работает БЕЗ инструментов записи
 //! (пустой реестр, B7), vault не
@@ -124,24 +125,43 @@ struct TurnOutcome {
     done: bool,
 }
 
-/// Собирает зависимости из vault: БД + egress-граница + общий tool-провайдер (зеркало `--sandbox-run`).
-/// `None`-провайдер (нет ai.chat) → внятная ошибка. `pub(crate)`: shared с `acp.rs` (ACP-2 сервер).
+/// Собирает зависимости из vault: БД + egress-граница + канонный tool-провайдер (как agentd
+/// `--sandbox-run`). `None`-провайдер (нет ai.chat) → внятная ошибка. `pub(crate)`: shared с
+/// `acp.rs` (ACP-2 сервер).
 pub(crate) async fn build_deps(root: PathBuf) -> Result<Deps, String> {
-    use nexus_core::ai::tools::build_agent_tool_provider;
+    use nexus_core::bootstrap::{ProviderSet, ProviderSetOptions};
     use nexus_core::db::Database;
     use nexus_core::net::{EgressAudit, EgressPolicy};
 
     let db = Database::open(root.join(".nexus").join("nexus.db"))
         .await
         .map_err(|e| format!("открытие БД {}: {e}", root.display()))?;
-    let cfg = load_local_config(&root)?;
+    let cfg = load_local_config(&root).await?;
 
     let egress_policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
     let egress_audit = Arc::new(EgressAudit::default());
     egress_audit.set_writer(db.writer().clone());
     egress_policy.set_allowlist(cfg.egress_hosts());
 
-    let provider = build_agent_tool_provider(&cfg, &egress_policy, &egress_audit).ok_or(
+    // Сборка провайдеров — КАНОН `bootstrap::ProviderSet` (R-3c) с cli-профилем R-3a-таблицы
+    // `{agent_tools: true, embedding: false}`: агенту нечем думать без tool-провайдера; RAG-фундамент
+    // cli не строит (и в сетевую пробу dim не ходит). Tool-провайдер внутри канона — ТОТ ЖЕ
+    // `ai::tools::build_agent_tool_provider`, что cli звал напрямую до R-3c (байт-идентичность
+    // запинена характеризацией `tests::boot_*`). Chat-каналы канона (chat/chat_fast/chat_util) cli
+    // НЕ использует: их конструкция локальна и дешева (без сети/БД; tracing-подписчика у cli нет —
+    // логи сборки не печатаются); отдельная опция гейтинга не заводилась — различие «не использует»
+    // остаётся на вызывателе.
+    let set = ProviderSet::from_config(
+        &cfg,
+        &egress_policy,
+        &egress_audit,
+        ProviderSetOptions {
+            agent_tools: true,
+            embedding: false,
+        },
+    )
+    .await;
+    let provider = set.agent_tools.ok_or(
         "нет ai.chat в .nexus/local.json (url/model) — агенту нечем думать; задай эндпоинт LLM",
     )?;
     let chat = cfg.ai.chat.as_ref(); // build_* уже проверил, что Some
@@ -450,19 +470,20 @@ fn print_repl_help() {
     );
 }
 
-/// Читает/парсит `.nexus/local.json` (зеркало desktop/agentd `load_local_config`, но СИНХРОННО —
-/// один разовый read на старте CLI, без tokio-fs-фичи). Нет файла / битый JSON → внятная ошибка
-/// (агенту нужен ai.chat, иначе нечем думать).
-pub(crate) fn load_local_config(root: &Path) -> Result<nexus_core::ai::LocalConfig, String> {
+/// Онбординг-проекция канона №2 `bootstrap::read_local_config` (R-3c): cli требует конфиг
+/// (Result, не Option — агенту нужен ai.chat, иначе нечем думать), тексты ошибок — ПРЕЖНИЕ,
+/// с различением «нет файла» / «битый JSON» и полным путём (запинены характеризацией
+/// `tests::boot_*`). Warn в лог не пишет (ошибка уходит владельцу целиком).
+pub(crate) async fn load_local_config(root: &Path) -> Result<nexus_core::ai::LocalConfig, String> {
+    use nexus_core::bootstrap::{read_local_config, LocalConfigError};
     let path = root.join(".nexus").join("local.json");
-    let raw = std::fs::read_to_string(&path).map_err(|_| {
-        format!(
+    read_local_config(root).await.map_err(|e| match e {
+        LocalConfigError::Unreadable => format!(
             "нет {} — задай LLM-эндпоинт (онбординг приложения или вручную ai.chat.url/model)",
             path.display()
-        )
-    })?;
-    nexus_core::ai::LocalConfig::parse(&raw)
-        .map_err(|e| format!("{}: битый JSON ({e})", path.display()))
+        ),
+        LocalConfigError::Parse(e) => format!("{}: битый JSON ({e})", path.display()),
+    })
 }
 
 // ── TTY-аппрув (W-29) ───────────────────────────────────────────────────────────────────────────
@@ -941,7 +962,7 @@ mod tests {
             "нет {} — задай LLM-эндпоинт (онбординг приложения или вручную ai.chat.url/model)",
             dir.path().join(".nexus").join("local.json").display()
         );
-        assert_eq!(load_local_config(dir.path()).unwrap_err(), want);
+        assert_eq!(load_local_config(dir.path()).await.unwrap_err(), want);
         assert_eq!(build_deps_err(dir.path()).await, want);
     }
 
@@ -950,7 +971,7 @@ mod tests {
     #[tokio::test]
     async fn boot_broken_local_json_error_text() {
         let dir = cli_vault(Some("{ битый"));
-        let err = load_local_config(dir.path()).unwrap_err();
+        let err = load_local_config(dir.path()).await.unwrap_err();
         assert_eq!(
             err,
             format!(
