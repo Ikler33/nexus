@@ -468,9 +468,9 @@ fn parse_tool_sse_line(line: &str) -> ToolSseEvent {
 ///
 /// ЖИВЁТ ЗДЕСЬ (дом типа, whitelisted `check-tooluse`), чтобы tool-провайдер конструировался ВНУТРИ
 /// границы I-5: вызыватели (desktop `commands/agent.rs` — где `OpenAiToolProvider` запрещён линтом)
-/// получают уже-собранный `Arc<dyn ToolCapableProvider>`, не упоминая концретный тип. Зеркало
-/// `nexus-agentd::build_agent_tools_min` (там копия — agentd намеренно self-contained); desktop же
-/// зовёт ЭТОТ общий строитель (reuse, не дубль).
+/// получают уже-собранный `Arc<dyn ToolCapableProvider>`, не упоминая концретный тип. С R-3a это
+/// ЕДИНСТВЕННЫЙ construction-site вне тестов: agentd-копия `build_agent_tools_min` удалена,
+/// `bootstrap::ProviderSet` делегирует сюда (политика «PREFER copy over expose» отменена, §8.8).
 pub fn build_agent_tool_provider(
     cfg: &super::LocalConfig,
     policy: &Arc<crate::net::EgressPolicy>,

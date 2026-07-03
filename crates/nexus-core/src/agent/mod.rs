@@ -12,6 +12,8 @@
 //! - [`stubs`] — стаб-инструменты ([`EchoTool`]/[`NoopTool`]) ТОЛЬКО для тестов/smoke (B7: в
 //!   прод-реестр не регистрируются).
 //! - [`run_store`] — async-CRUD над `agent_runs` (миграция 021): статус-машина прогона (AGENT-2).
+//! - [`finish`] — КАНОН маппинга [`LoopOutcome`] → терминал run_store ([`outcome_to_finish`] +
+//!   [`PausePolicy`]/[`CancelWording`]) — единственный источник статусов/текстов финализации (R-2).
 //! - [`job`] — [`AgentRunHandler`] ([`crate::scheduler::JobHandler`]) — прогон цикла как ДОЛГОВЕЧНАЯ
 //!   запланированная джоба + корреляция эгресса на run_id + идемпотентный replay (AGENT-2).
 //! - [`memory`] — [`AgentMemory`] трейт + [`VaultAgentMemory`] адаптер: мост к 3 слоям памяти Nexus
@@ -30,6 +32,7 @@ pub mod connect;
 pub mod control;
 pub mod delegate;
 pub mod event;
+pub mod finish;
 pub mod job;
 pub mod memory;
 pub mod registry;
@@ -50,6 +53,7 @@ pub use connect::{
 pub use control::{load_control_state, save_control_state, AgentControlState};
 pub use delegate::{BudgetError, DelegationBudget};
 pub use event::{AgentEvent, FileStatus, ProposedFile};
+pub use finish::{outcome_to_finish, CancelWording, PausePolicy, RunFinish};
 pub use job::{
     enqueue_agent_run, AgentRunHandler, AGENT_PREAMBLE, KIND_AGENT_RUN, RECALL_BUDGET_TOKENS,
 };
