@@ -16,6 +16,9 @@ pub mod actuator;
 pub mod agent;
 /// AI-слой: раздельные Chat/Embedding провайдеры (ADR-005).
 pub mod ai;
+/// Канон сборки LLM-провайдеров из конфига (R-3a): `ProviderSet::from_config` — единый строитель
+/// chat/fast/embedding/agent-tools для всех бинарей (сервер-паритет §8.3, без tauri-типов).
+pub mod bootstrap;
 /// Markdown-чанкер для RAG (§6.1).
 pub mod chunker;
 /// БД-слой: rusqlite + write-actor + read-pool (WAL) + миграции схемы (ADR-003).
