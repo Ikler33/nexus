@@ -124,10 +124,17 @@ export async function runPaletteCommand(page: Page, command: string): Promise<vo
   const dialog = page.getByRole('dialog', { name: 'Палитра команд' });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('combobox', { name: 'Палитра команд' }).fill(command);
-  await dialog
-    .getByRole('option', { name: new RegExp(escapeRegExp(command)) })
-    .first()
-    .click();
+  // Клик по пункту флейкал на CI: выдача пере-рендеривается под кликом («not stable», таймаут).
+  // Клавиатурный коммит устойчив: доводим АКТИВНЫЙ пункт (aria-selected) до целевого стрелкой
+  // (ограниченно) и жмём Enter — финальный web-first ассерт гарантирует детерминизм.
+  const target = dialog.getByRole('option', { name: new RegExp(escapeRegExp(command)) }).first();
+  await expect(target).toBeVisible();
+  for (let i = 0; i < 12; i++) {
+    if ((await target.getAttribute('aria-selected')) === 'true') break;
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(target).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Enter');
 }
 
 /** Открывает пункт меню «AI-инсайты» титлбара (Дайджест/Цели/Противоречия). */
