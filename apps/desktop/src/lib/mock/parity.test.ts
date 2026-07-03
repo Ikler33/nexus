@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -126,16 +126,28 @@ describe('P0-2 гейт (б): мок чата эмитит каждый вари
   });
 });
 
-describe('P0-2 гейт (в): литеральные инлайн-моки в tauri-api.ts не прибавляются', () => {
+describe('P0-2 гейт (в): литеральные инлайн-моки в API-слое не прибавляются', () => {
   it('число `Promise.resolve(`-веток не больше baseline', () => {
-    // Baseline на 2026-07-02 (срез P0-2): 23 литеральных инлайн-мока (`: Promise.resolve(...)` в
-    // не-Tauri ветках + пара return'ов). Полная миграция их в `mock/*` — стадия F-2 (bridge-распил);
-    // до неё этот тест держит планку «не хуже»: новый инлайн-мок в tauri-api.ts — красный тест
-    // (новые моки обязаны жить в mock/* и зеркалить контракт). Мигрировали часть — ПОНИЗЬТЕ baseline.
-    const INLINE_MOCK_BASELINE = 23;
+    // Baseline-история ratchet'а ВНИЗ: 23 (P0-2, 2026-07-02) → 19 (F-2a, 2026-07-03: vault-домен
+    // вынесен в lib/api/vault/, его 4 инлайн-мока — vault.rescan/notesCount/fileMtime +
+    // attachments.write — переехали в mock/vault.ts). Скоуп подсчёта с F-2a — баррел tauri-api.ts
+    // ПЛЮС весь новый слой lib/api/** (иначе инлайн-моки могли бы тихо копиться в доменных
+    // модулях мимо храповика). Полная миграция остатка — срезы F-2b+; до них тест держит планку
+    // «не хуже»: новый инлайн-мок — красный тест (новые моки обязаны жить в mock/* и зеркалить
+    // контракт). Мигрировали часть — ПОНИЗЬТЕ baseline.
+    const INLINE_MOCK_BASELINE = 19;
     // cwd vitest = apps/desktop (vitest.config там) — import.meta.url в jsdom не file-схема.
-    const src = readFileSync(join(process.cwd(), 'src/lib/tauri-api.ts'), 'utf8');
-    const count = (src.match(/Promise\.resolve\(/g) ?? []).length;
+    const files = [join(process.cwd(), 'src/lib/tauri-api.ts'), ...tsFilesUnder(join(process.cwd(), 'src/lib/api'))];
+    const count = files
+      .map((f) => (readFileSync(f, 'utf8').match(/Promise\.resolve\(/g) ?? []).length)
+      .reduce((a, b) => a + b, 0);
     expect(count).toBeLessThanOrEqual(INLINE_MOCK_BASELINE);
   });
 });
+
+/** Все .ts/.tsx под каталогом (рекурсивно), без тестов — скоуп подсчёта инлайн-моков API-слоя. */
+function tsFilesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true, recursive: true })
+    .filter((e) => e.isFile() && /\.tsx?$/.test(e.name) && !/\.(test|spec)\.tsx?$/.test(e.name))
+    .map((e) => join(e.parentPath, e.name));
+}

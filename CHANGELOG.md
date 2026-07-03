@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Изменено · F-2a — распил tauri-api: инфраструктура bridge + домен vault
+
+Первый срез стадии F-2 фронт-волны REFACTOR-PLAN §4 (толстейший смелл фронта: `tauri-api.ts` ~2000 строк, ~150 копий тернарника `isTauri()`, инлайн-моки мимо `mock/*`). **Behavior-preserving**: 140+ потребителей НЕ правились — `lib/tauri-api.ts` стал баррелом и реэкспортирует вынесенное; Rust не тронут.
+
+- **Инфраструктура `lib/api/bridge.ts`:** хелпер `bridge(cmd, args, mockImpl)` — единственная развилка «Tauri `invoke` vs мок `lib/mock/*`» (типобезопасный, `InvokeArgs` из `@tauri-apps/api`); `subscribe(event, cb)` — то же для событийных подписок (`listen` vs no-op); `isTauri()` переехал сюда (реэкспорт из баррела). Контракт §4.1 уточнён: прямой Tauri IPC разрешён только в слое `lib/api/*` и (до конца F-2) в барреле — зафиксировано в шапках обоих файлов и в ARCHITECTURE. **Честные bridge-исключения** (задокументированы в шапке bridge.ts, НЕ пропихнуты магией): стрим-команды с `Channel` (`chat_rag`/`inline_complete`/`agent_run` — канал+onmessage+cancel, не request/response) и пути с OS-диалогами (`backup.*`/`news.exportLogs`/`vault.pickDirectory`) остаются прямыми у себя в домене.
+- **Домен 1: vault → `lib/api/vault/`** (`types.ts` — DTO `FileEntry`/`VaultInfo`/`NoteRef`/`TagCount`; `index.ts` — вызовы через bridge). Состав (из фактической структуры файла): `vault` — 19 методов (open/дерево/чтение-запись+хеши/frontmatter/корзина/переименование/версии-снапшоты/заметки+резолв wikilink/теги/реиндекс/счётчик/mtime/выбор папки), `attachments` — 3 (файловые операции вложений IMG-1/IMG-EMBED), `vaultEvents` — 3 watcher-подписки (`vault:changed`/`vault:file-changed`/`vault:index-progress`). В барреле — реэкспорт (`vault`, `attachments`, `events.on*` — ссылки на `vaultEvents`); vault-секция из tauri-api.ts удалена (2031 → 1867 строк).
+- **Ratchet инлайн-моков ВНИЗ:** 4 инлайн-заглушки vault-домена (`vault.rescan`/`notesCount`/`fileMtime` + `attachments.write`) переехали в `mock/vault.ts` (зеркалят контракт команд); baseline parity-гейта (в) ПОНИЖЕН 23 → 19, скоуп подсчёта расширен на весь `lib/api/**` (инлайн-моки не могут тихо копиться в доменных модулях). Семантика `mock/vault.ts` не тронута — только приём переезжающих заглушек.
+- Остальные домены (chat/agent/news/…) — следующие срезы F-2b+ (в tauri-api.ts не тронуты).
+- Гейт: `tsc --noEmit` ✅, `eslint --max-warnings 0` ✅ (ratchet-линт границ F-1 зелёный), vitest полный + coverage-храповик ✅, **Playwright e2e-смоук 28/28** ✅.
+
 ### Изменено · R-3b — desktop `open_vault` переключён на канон `bootstrap::ProviderSet`
 
 Второй срез R-3 (REFACTOR-PLAN §3, thermo-смелл №3), строитель-за-строителем × бинарь-за-бинарём: после agentd (R-3a) на канон переведён desktop. **Behavior-preserving**: параметры собранных провайдеров байт-идентичны прежним — доказано характеризацией (двухкоммитный приём R-2/R-3a), а не задекларировано.
