@@ -8,20 +8,21 @@
 //! app-специфики — параметрами ([`ProviderSetOptions`], прецедент `IndexerHooks`).
 //!
 //! **Байт-идентичность старым строителям доказана характеризацией** (nexus-agentd
-//! `tests::boot_*`): снимки всех конфиг-наблюдаемых параметров сняты со СТАРОГО кода (коммит 1)
-//! и не менялись при переключении на канон (коммит 2). Не «пере-снимать» их при рефакторе — они
-//! и есть контракт.
+//! `tests::boot_*` — R-3a; nexus-desktop `commands::vault::tests::boot_*` — R-3b): снимки всех
+//! конфиг-наблюдаемых параметров сняты со СТАРОГО кода (коммит 1) и не менялись при переключении
+//! на канон (коммит 2). Не «пере-снимать» их при рефакторе — они и есть контракт.
 //!
-//! Внедрение — строитель-за-строителем × бинарь-за-бинарём: R-3a переключает ТОЛЬКО agentd;
-//! desktop (R-3b) и cli (R-3c) — следующие срезы.
+//! Внедрение — строитель-за-строителем × бинарь-за-бинарём: R-3a переключил agentd, R-3b —
+//! desktop `open_vault`; cli (R-3c) — следующий срез.
 //!
 //! ЗА КАДРОМ канона (намеренно, границы среза):
 //! - `reconcile_embedding_model` + открытие usearch-индексов — у вызывающего (reconcile — отдельный
 //!   декларируемый срез: у desktop/agentd он совпадает, но это семантика vault-состояния, не сборки);
-//! - `LocalConfig::load` (чтение `.nexus/local.json`) — канону не нужен (принимает `&LocalConfig`),
-//!   реплики ×3-4 с разными сигнатурами остаются кандидатом отдельного среза;
 //! - hot-apply провайдеров desktop (`set_ai_config`) — НАМЕРЕННО особый путь (EndpointDto из UI не
-//!   несёт таймаутов → единый `saved_chat`-профиль); кандидат унификации в R-3b.
+//!   несёт таймаутов → единый `saved_chat`-профиль + URL-fallback fast→chat). Решение R-3b: НЕ
+//!   переключён — байт-в-байт с каноном невозможен (канон дал бы fast'у собственный профиль из
+//!   `ai.fast` и fallback ТЕМ ЖЕ Arc); дельта запинена фикстурной таблицей
+//!   nexus-desktop `commands::settings::tests::hot_*`, унификация — отдельным декларируемым срезом.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,11 +63,25 @@ pub struct ProviderSetOptions {
 }
 
 impl ProviderSetOptions {
-    /// Полный набор (agentd; desktop в R-3b возьмёт `agent_tools: false`).
+    /// Полный набор (agentd; desktop с R-3b строит с `agent_tools: false` — I-5).
     pub const FULL: Self = Self {
         agent_tools: true,
         embedding: true,
     };
+}
+
+/// КАНОН №2 (R-3b): чтение+разбор `.nexus/local.json` — ОДИН раз на открытие (кросс-план #8).
+/// `None` — файла нет / битый JSON (AI отключается, vault живёт без AI — local-first). Бывшие
+/// desktop-реплики `commands/vault.rs::load_local_config` и `commands/agent.rs::load_local_config`
+/// переключены в R-3b (у второй дрейфовал текст warn-лога — «agent_run: local.json не распарсен —
+/// дефолты»; канон говорит единым текстом ниже). Реплики agentd `main.rs` и cli — кандидаты R-3c.
+pub async fn load_local_config(root: &std::path::Path) -> Option<LocalConfig> {
+    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
+        .await
+        .ok()?;
+    LocalConfig::parse(&raw)
+        .map_err(|e| tracing::warn!(error = %e, "local.json: разбор не удался — AI отключён"))
+        .ok()
 }
 
 /// Канонический набор LLM-провайдеров vault'а — то, что композиционный корень кладёт в
@@ -343,6 +358,25 @@ mod tests {
         let fast = s.chat_fast.expect("chat → пара");
         let util = s.chat_util.expect("fallback");
         assert!(Arc::ptr_eq(&fast, &util));
+    }
+
+    /// КАНОН №2 (R-3b): `load_local_config` — нет файла → None, битый JSON → None (warn, AI off),
+    /// валидный → Some (распарсенные секции живы).
+    #[tokio::test]
+    async fn load_local_config_reads_parses_and_degrades() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        assert!(load_local_config(root).await.is_none(), "нет файла → None");
+        std::fs::create_dir_all(root.join(".nexus")).unwrap();
+        std::fs::write(root.join(".nexus").join("local.json"), "{ битый").unwrap();
+        assert!(load_local_config(root).await.is_none(), "битый JSON → None");
+        std::fs::write(
+            root.join(".nexus").join("local.json"),
+            r#"{ "ai": { "chat": { "url": "http://127.0.0.1:9101" } } }"#,
+        )
+        .unwrap();
+        let cfg = load_local_config(root).await.expect("валидный → Some");
+        assert!(cfg.ai.chat.is_some());
     }
 
     /// Пустой конфиг → пустой набор (local-first: vault живёт без AI); Default — то же самое
