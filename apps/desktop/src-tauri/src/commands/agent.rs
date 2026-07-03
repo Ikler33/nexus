@@ -288,9 +288,9 @@ pub(crate) async fn run_impl(
             ctx.episode_vectors.clone(),
         )
     };
-    // Конфиг агента из local.json (тот же источник, что open_vault/agentd): дефолт-OFF актуатора живёт
-    // здесь. Нет/битый → AiConfig-дефолты (actuator OFF). Читаем ПОСЛЕ освобождения read-гарда.
-    let cfg = load_local_config(&root).await;
+    // Конфиг агента из local.json (тот же источник, что open_vault/agentd — канон R-3b): дефолт-OFF
+    // актуатора живёт здесь. Нет/битый → AiConfig-дефолты (actuator OFF). ПОСЛЕ освобождения read-гарда.
+    let cfg = crate::bootstrap::load_local_config(&root).await;
 
     // AGENT-1: tool-провайдер цикла. Десктоп держит `ai.agent_tools=None` (он строится только тут /
     // в agentd — I-5). Строим через ОБЩИЙ ядровой строитель (whitelisted дом типа): тот же
@@ -872,17 +872,8 @@ async fn finish_in_store(
 }
 
 // ── Вспомогательное ───────────────────────────────────────────────────────────────────────────────
-
-/// Читает/парсит `.nexus/local.json` (зеркало `vault::load_local_config`/`agentd::load_local_config`).
-/// `None` — нет/битый (агент стартует на AiConfig-дефолтах: actuator OFF).
-async fn load_local_config(root: &std::path::Path) -> Option<nexus_core::ai::LocalConfig> {
-    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
-        .await
-        .ok()?;
-    nexus_core::ai::LocalConfig::parse(&raw)
-        .map_err(|e| tracing::warn!(error = %e, "agent_run: local.json не распарсен — дефолты"))
-        .ok()
-}
+// Чтение/разбор `.nexus/local.json` — КАНОН `crate::bootstrap::load_local_config` (R-3b; бывшая
+// локальная реплика с дрейфовавшим текстом warn-лога удалена, колл-сайты зовут канон напрямую).
 
 // ── W-10: SL-панель (просмотр авто-навыков агента) ─────────────────────────────────────────────────
 
@@ -925,7 +916,7 @@ pub async fn agent_list_skills(state: State<'_, AppState>) -> AppResult<SkillLis
         let ctx = state.vault().await?;
         (ctx.root.clone(), ctx.db.reader().clone())
     };
-    let cfg = load_local_config(&root).await;
+    let cfg = crate::bootstrap::load_local_config(&root).await;
     let learning_enabled = cfg
         .as_ref()
         .map(|c| c.ai.skills.learning_enabled)

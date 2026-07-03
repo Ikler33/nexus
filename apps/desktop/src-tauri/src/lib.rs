@@ -17,9 +17,9 @@
 // starting_questions) тоже в ядре — ре-экспортим, чтобы `crate::memory::…`/`crate::eval::…`/… по
 // приложению (commands::memory/episode/contradictions, …) резолвились без правки call-site.
 pub use nexus_core::{
-    ai, backup, chat_log, chunker, contradictions, db, episode, eval, graph, indexer, memory, net,
-    parser, plugin, redact, relation_reasons, search, starting_questions, suggest, tagger, tags,
-    vault, vector, watcher,
+    ai, backup, bootstrap, chat_log, chunker, contradictions, db, episode, eval, graph, indexer,
+    memory, net, parser, plugin, redact, relation_reasons, search, starting_questions, suggest,
+    tagger, tags, vault, vector, watcher,
 };
 
 /// CONN-1: абстракция агент-бэкенда (Embedded по умолчанию; Connected/ACP — CONN-2+).
