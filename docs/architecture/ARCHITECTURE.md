@@ -330,7 +330,7 @@ interface PluginStore {
 **Tauri IPC — все команды типизированы:**
 
 ```typescript
-// lib/tauri-api.ts — единственное место где вызываем invoke
+// lib/api/* (bridge + доменные модули) + баррел lib/tauri-api.ts — единственный слой, где вызываем invoke (F-2)
 export const tauriApi = {
   vault: {
     readFile: (path: string) => invoke<string>('read_file', { path }),

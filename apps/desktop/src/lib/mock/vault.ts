@@ -917,3 +917,26 @@ export async function readAttachment(path: string): Promise<string> {
     `text-anchor="middle">${label}</text></svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
+
+// ── F-2a: инлайн-заглушки vault-домена переехали из tauri-api.ts (ratchet parity-гейта (в)) ──────
+
+/** Зеркало `write_attachment` (IMG-1): мок ФС не пишет — возвращает относительный путь `![](…)`,
+ *  как настоящая команда. */
+export async function writeAttachment(name: string): Promise<string> {
+  return `attachments/${name}`;
+}
+
+/** Зеркало `rescan_vault`: в браузере индексатора нет — no-op (завершение не эмитится, как и
+ *  остальные события мок-бэкенда). */
+export async function rescan(): Promise<void> {}
+
+/** Зеркало `notes_count` — статусбар «Проиндексировано · N» (DP-14): 847, как в демо-данных Home
+ *  (`lib/mock/home.ts`). */
+export async function notesCount(): Promise<number> {
+  return 847;
+}
+
+/** Зеркало `file_mtime` — clock-чип doc-meta превью (DP-15): «3 ч назад». */
+export async function fileMtime(): Promise<number> {
+  return Math.floor(Date.now() / 1000) - 3 * 3600;
+}
