@@ -1642,4 +1642,223 @@ mod tests {
             Some("1024")
         );
     }
+
+    // ── R-3b: ХАРАКТЕРИЗАЦИЯ сборки провайдеров open_vault (REFACTOR-PLAN §3, thermo-смелл №3) ─────
+    //
+    // Фикстура «до»: снимки ВСЕХ конфиг-наблюдаемых параметров провайдеров (`debug_params`) сняты со
+    // СТАРЫХ desktop-строителей (`build_chat`/`build_util_chat` + embedder-часть `build_rag` +
+    // композиция `open_vault`) в КОММИТЕ 1 этого среза (двухкоммитный приём R-2/R-3a) — и НЕ меняются
+    // при переключении сборки на канон `nexus_core::bootstrap::ProviderSet` (коммит 2).
+    // Строки-снимки НЕ «пере-снимать» при рефакторе — они и есть контракт.
+
+    /// «Полный» конфиг: chat+fast+embedding, модели заданы, dim задан (без сетевой пробы),
+    /// таймауты/температуры дефолтные.
+    const BOOT_CFG_FULL: &str = r#"{
+      "ai": {
+        "chat":      { "url": "http://192.168.0.28:8080", "model": "qwen3-30b", "context_window": 32768 },
+        "fast":      { "url": "http://192.168.0.28:8084", "model": "gemma-4b" },
+        "embedding": { "url": "http://192.168.0.28:8083", "model": "bge-m3", "dim": 1024 }
+      }
+    }"#;
+
+    /// Без `ai.fast`: chat_util обязан упасть в fallback на chat_fast (композиция `open_vault`);
+    /// embedding — nomic (характеризует task-префиксы).
+    const BOOT_CFG_NO_FAST: &str = r#"{
+      "ai": {
+        "chat":      { "url": "http://127.0.0.1:9101", "model": "qwen3-30b" },
+        "embedding": { "url": "http://127.0.0.1:9103", "model": "nomic-embed-text", "dim": 768 }
+      }
+    }"#;
+
+    /// Без `ai.embedding`: RAG off, chat+fast живут.
+    const BOOT_CFG_NO_EMBEDDING: &str = r#"{
+      "ai": {
+        "chat": { "url": "http://127.0.0.1:9101", "model": "qwen3-30b" },
+        "fast": { "url": "http://127.0.0.1:9104", "model": "gemma-4b" }
+      }
+    }"#;
+
+    /// Кастомные таймауты/температуры/ретраи ВЕЗДЕ; модели НЕ заданы (дефолты "chat"/"fast"/
+    /// "embedding"); chat-url с хвостом `/v1` (характеризует нормализацию `api_base`).
+    const BOOT_CFG_CUSTOM: &str = r#"{
+      "ai": {
+        "chat": {
+          "url": "http://127.0.0.1:9201/v1",
+          "connect_timeout_secs": 5,
+          "first_token_timeout_secs": 45,
+          "idle_timeout_secs": 10,
+          "retry_attempts": 7,
+          "temperature": 0.9
+        },
+        "fast": {
+          "url": "http://127.0.0.1:9202",
+          "connect_timeout_secs": 2,
+          "first_token_timeout_secs": 20,
+          "idle_timeout_secs": 4,
+          "retry_attempts": 1,
+          "temperature": 0.05
+        },
+        "embedding": { "url": "http://127.0.0.1:9203", "dim": 512, "timeout_secs": 120 }
+      }
+    }"#;
+
+    /// Пустой конфиг: ни одного провайдера.
+    const BOOT_CFG_EMPTY: &str = r#"{}"#;
+
+    fn boot_cfg(json: &str) -> LocalConfig {
+        LocalConfig::parse(json).expect("фикстурный конфиг валиден")
+    }
+
+    fn boot_edges() -> (Arc<EgressPolicy>, Arc<EgressAudit>) {
+        use std::sync::atomic::AtomicBool;
+        let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
+        (policy, Arc::new(EgressAudit::default()))
+    }
+
+    /// Chat-каналы ТЕКУЩИМ путём desktop — РЕПЛИКА композиции `open_vault` на старых строителях
+    /// (`build_chat` → `build_util_chat` + fallback на chat_fast); коммит 1 характеризации —
+    /// в коммите 2 переключается на канон `bootstrap::ProviderSet` (опции desktop), ассерты
+    /// НЕ меняются.
+    struct BootProviders {
+        chat: Option<Arc<dyn ChatProvider>>,
+        chat_fast: Option<Arc<dyn ChatProvider>>,
+        chat_util: Option<Arc<dyn ChatProvider>>,
+    }
+
+    async fn build_current_way(cfg_json: &str) -> BootProviders {
+        let cfg = boot_cfg(cfg_json);
+        let (policy, audit) = boot_edges();
+        let (chat, chat_fast) = match build_chat(&cfg, &policy, &audit).await {
+            Some((normal, fast)) => (Some(normal), Some(fast)),
+            None => (None, None),
+        };
+        let chat_util = build_util_chat(&cfg, &policy, &audit).or_else(|| chat_fast.clone());
+        BootProviders {
+            chat,
+            chat_fast,
+            chat_util,
+        }
+    }
+
+    /// Эмбеддер ТЕКУЩИМ путём desktop: СКВОЗЬ `build_rag` (reconcile+usearch на временном vault —
+    /// живой RAG-путь `open_vault`; dim задан в фикстурах → сетевой пробы нет).
+    async fn build_embedder_current_way(cfg_json: &str) -> Option<Arc<dyn EmbeddingProvider>> {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let db = open_db(&root).await;
+        let cfg = boot_cfg(cfg_json);
+        let (policy, audit) = boot_edges();
+        build_rag(&root, &db, &cfg, &policy, &audit)
+            .await
+            .map(|r| r.0)
+    }
+
+    /// Полный конфиг: пара chat-провайдеров — один сервер/модель/температура/таймауты/ретрай,
+    /// различие ТОЛЬКО в reasoning (normal ON, fast OFF).
+    #[tokio::test]
+    async fn boot_chat_pair_full_config() {
+        let p = build_current_way(BOOT_CFG_FULL).await;
+        assert_eq!(
+            p.chat.expect("ai.chat → провайдер").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: true }"#
+        );
+        assert_eq!(
+            p.chat_fast.expect("ai.chat → быстрый").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: false }"#
+        );
+    }
+
+    /// Полный конфиг: утилитарная модель из `ai.fast` — свой сервер/модель, ВСЕГДА без reasoning.
+    #[tokio::test]
+    async fn boot_util_chat_full_config() {
+        let p = build_current_way(BOOT_CFG_FULL).await;
+        assert_eq!(
+            p.chat_util.expect("ai.fast → утилитарная").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8084/v1/chat/completions", model: "gemma-4b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: false }"#
+        );
+    }
+
+    /// Кастомные таймауты: ВСЕ INFER-CFG параметры конфига доезжают до провайдеров (connect/
+    /// first_token/idle/retry/temperature), дефолт-модели "chat"/"fast", `/v1`-хвост не удваивается.
+    #[tokio::test]
+    async fn boot_custom_timeouts_reach_providers() {
+        let p = build_current_way(BOOT_CFG_CUSTOM).await;
+        assert_eq!(
+            p.chat.expect("ai.chat → провайдер").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=5s)", feature: Chat, endpoint: "http://127.0.0.1:9201/v1/chat/completions", model: "chat", temperature: 0.9, first_token_timeout: 45s, idle_timeout: 10s, retry: RetryPolicy { max_attempts: 7, base: 300ms, cap: 2s }, enable_thinking: true }"#
+        );
+        assert_eq!(
+            p.chat_util.expect("ai.fast → утилитарная").debug_params(),
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=2s)", feature: Chat, endpoint: "http://127.0.0.1:9202/v1/chat/completions", model: "fast", temperature: 0.05, first_token_timeout: 20s, idle_timeout: 4s, retry: RetryPolicy { max_attempts: 1, base: 300ms, cap: 2s }, enable_thinking: false }"#
+        );
+    }
+
+    /// Без `ai.fast`: утилитарный канал = ТОТ ЖЕ Arc, что chat_fast (fallback композиции — дайджест/
+    /// примитивы не дохнут без отдельной мелкой модели).
+    #[tokio::test]
+    async fn boot_util_falls_back_to_chat_fast() {
+        let p = build_current_way(BOOT_CFG_NO_FAST).await;
+        let fast = p.chat_fast.expect("ai.chat → быстрый");
+        let util = p.chat_util.expect("fallback → chat_fast");
+        assert!(
+            Arc::ptr_eq(&fast, &util),
+            "без ai.fast chat_util обязан быть ТЕМ ЖЕ провайдером, что chat_fast"
+        );
+    }
+
+    /// Пустой конфиг: ни одного chat-канала (vault работает без AI — local-first).
+    #[tokio::test]
+    async fn boot_empty_config_builds_nothing() {
+        let p = build_current_way(BOOT_CFG_EMPTY).await;
+        assert!(p.chat.is_none(), "нет ai.chat → нет chat");
+        assert!(p.chat_fast.is_none(), "нет ai.chat → нет chat_fast");
+        assert!(p.chat_util.is_none(), "нет ai.fast И нет chat_fast → None");
+    }
+
+    /// Полный конфиг: эмбеддер — url/model/dim/таймаут guarded-клиента; bge → БЕЗ task-префиксов.
+    #[tokio::test]
+    async fn boot_embedder_full_config() {
+        let e = build_embedder_current_way(BOOT_CFG_FULL)
+            .await
+            .expect("ai.embedding+dim → эмбеддер без пробы");
+        assert_eq!(
+            e.debug_params(),
+            r#"OpenAiEmbedder { client: "for_embedding(timeout=60s)", feature: Embed, endpoint: "http://192.168.0.28:8083/v1/embeddings", model: "bge-m3", dim: 1024, query_prefix: "", document_prefix: "" }"#
+        );
+    }
+
+    /// nomic-модель: task-префиксы `search_query:`/`search_document:` применены (default_prefixes).
+    #[tokio::test]
+    async fn boot_embedder_nomic_prefixes() {
+        let e = build_embedder_current_way(BOOT_CFG_NO_FAST)
+            .await
+            .expect("ai.embedding+dim → эмбеддер");
+        assert_eq!(
+            e.debug_params(),
+            r#"OpenAiEmbedder { client: "for_embedding(timeout=60s)", feature: Embed, endpoint: "http://127.0.0.1:9103/v1/embeddings", model: "nomic-embed-text", dim: 768, query_prefix: "search_query: ", document_prefix: "search_document: " }"#
+        );
+    }
+
+    /// Кастомный embedding-таймаут + дефолт-модель "embedding" доезжают до эмбеддера.
+    #[tokio::test]
+    async fn boot_embedder_custom_timeout() {
+        let e = build_embedder_current_way(BOOT_CFG_CUSTOM)
+            .await
+            .expect("ai.embedding+dim → эмбеддер");
+        assert_eq!(
+            e.debug_params(),
+            r#"OpenAiEmbedder { client: "for_embedding(timeout=120s)", feature: Embed, endpoint: "http://127.0.0.1:9203/v1/embeddings", model: "embedding", dim: 512, query_prefix: "", document_prefix: "" }"#
+        );
+    }
+
+    /// Без `ai.embedding` эмбеддера нет (RAG off) — chat-провайдеры при этом живут (см. фикстуру).
+    #[tokio::test]
+    async fn boot_no_embedding_no_embedder() {
+        assert!(
+            build_embedder_current_way(BOOT_CFG_NO_EMBEDDING)
+                .await
+                .is_none(),
+            "нет ai.embedding → нет эмбеддера"
+        );
+    }
 }
