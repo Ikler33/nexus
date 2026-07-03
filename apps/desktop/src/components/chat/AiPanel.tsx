@@ -10,7 +10,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { logUi } from '../../lib/debug-log';

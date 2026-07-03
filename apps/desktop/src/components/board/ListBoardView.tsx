@@ -14,7 +14,7 @@ import {
   type SortKey,
   sortTasks,
   type TaskFilter,
-} from './board-model';
+} from '../../lib/board/board-model';
 import styles from './ListBoardView.module.css';
 
 /** Распределённые из присутствующих карточек значения для фильтр-селектов (стейл-опций нет — только живые). */

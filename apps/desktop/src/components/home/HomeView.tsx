@@ -21,7 +21,7 @@ import {
   Target,
   Trophy,
 } from 'lucide-react';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { openOrCreateDaily, openOrCreateInbox } from '../../lib/daily';
@@ -35,7 +35,7 @@ import { usePrefsStore } from '../../stores/prefs';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './HomeView.module.css';
 
 const HEAT_WEEKS = 17;

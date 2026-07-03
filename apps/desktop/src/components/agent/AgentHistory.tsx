@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import { useAgentStore, sessionStatus } from '../../stores/agent';
 import { tauriApi, type AgentSessionInfo } from '../../lib/tauri-api';
 import styles from './AgentHistory.module.css';

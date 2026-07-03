@@ -1,7 +1,7 @@
 import { create } from 'zustand';
+import { VAULT_SWITCHED_EVENT } from '../lib/app-events';
 import { tauriApi, type FileEntry, type VaultInfo } from '../lib/tauri-api';
 import { compareEntries } from '../i18n/format';
-import { clearStartingQuestionsCache } from '../components/chat/startingQuestionsCache';
 
 /** Узел плоского (развёрнутого) представления дерева для виртуализации. */
 export interface FlatNode {
@@ -86,7 +86,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   async openVault(path) {
     const token = ++openSeq; // ловим устаревшую continuation при быстром переключении vault
     const info = await tauriApi.vault.openVault(path);
-    clearStartingQuestionsCache(); // новый vault → старые вопросы по чужим путям недействительны
+    // Новый vault → кэши, ключованные путями заметок, недействительны (стартовые вопросы чата и т.п.).
+    // Window-событие вместо прямого импорта components/chat (F-1: stores не знают компоненты) —
+    // заинтересованная сторона подписывается сама; dispatchEvent синхронен, порядок прежний.
+    window.dispatchEvent(new Event(VAULT_SWITCHED_EVENT));
     // Сбрасываем отклонённые предложения связей: ключ — относительный путь, в новом vault он чужой
     // (иначе dismiss «Notes/A.md» в vault A прячет связь в vault B с тем же путём — находка аудита).
     const { useSuggestStore } = await import('./suggest');

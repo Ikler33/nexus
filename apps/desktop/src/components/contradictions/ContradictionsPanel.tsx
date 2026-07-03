@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { RefreshCw, Scale, X } from 'lucide-react';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -8,7 +8,7 @@ import { useAiFeaturesStore } from '../../stores/aiFeatures';
 import { useContradictionsStore } from '../../stores/contradictions';
 import { useUIStore } from '../../stores/ui';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './ContradictionsPanel.module.css';
 
 /** Имя файла из пути (последний сегмент без .md). */

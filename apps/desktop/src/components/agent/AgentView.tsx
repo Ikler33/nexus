@@ -16,10 +16,10 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { OrbitIcon } from '../chrome/BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import { AgentHistory } from './AgentHistory';
 import { describeStep } from './describeStep';
 import { ExecGraph } from './ExecGraph';

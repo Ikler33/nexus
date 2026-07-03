@@ -11,7 +11,7 @@ import {
   Settings,
   Share2,
 } from 'lucide-react';
-import { CometIcon } from './BrandGlyphs';
+import { CometIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/ui';
 import styles from './ActivityBar.module.css';

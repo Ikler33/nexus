@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { MarkdownPreview } from '../editor/MarkdownPreview';
 import { tauriApi, type TaskCard } from '../../lib/tauri-api';
-import { basename, stripFrontmatter } from './board-model';
+import { basename, stripFrontmatter } from '../../lib/board/board-model';
 import { PropertiesEditor } from './PropertiesEditor';
 import styles from './TaskPeek.module.css';
 

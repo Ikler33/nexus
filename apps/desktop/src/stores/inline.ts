@@ -7,7 +7,7 @@ import {
   endGhostStream,
   setGhost,
   setGhostError,
-} from '../components/editor/inlineGhost';
+} from '../lib/editor/inlineGhost';
 import i18n from '../i18n/setup';
 import type { InlineMode } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';

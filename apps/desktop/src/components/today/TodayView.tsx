@@ -28,7 +28,7 @@ import {
   sortTasks,
   stripFrontmatter,
   todayIsoLocal,
-} from '../board/board-model';
+} from '../../lib/board/board-model';
 import styles from './TodayView.module.css';
 
 interface BoardBuckets {

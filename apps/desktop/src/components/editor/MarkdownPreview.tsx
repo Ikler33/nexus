@@ -37,7 +37,7 @@ import { relTime } from '../../lib/time';
 import { usePrefsStore } from '../../stores/prefs';
 import { AppendLine } from './AppendLine';
 import { Callout, CalloutTitle } from './Callout';
-import { MermaidDiagram } from './MermaidDiagram';
+import { MermaidDiagram } from '../common/MermaidDiagram';
 import { NoteEmbed } from './NoteEmbed';
 import { Popcard, type PopcardContent } from './Popcard';
 import { PropertiesTable } from './PropertiesTable';

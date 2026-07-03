@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { renderMermaid, type MermaidTheme } from '../../lib/markdown/mermaid';
 import { isDarkTheme, useThemeStore } from '../../stores/theme';
-import styles from './MarkdownPreview.module.css';
+import styles from '../editor/MarkdownPreview.module.css';
 
 /**
  * Mermaid-диаграмма в режиме чтения (Live-Preview). Лениво рендерит mermaid → CSP-безопасный SVG

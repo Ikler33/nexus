@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { tauriApi } from '../../lib/tauri-api';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './InlineAIBar.module.css';
 
 type Phase = 'ask' | 'thinking' | 'streaming' | 'done';

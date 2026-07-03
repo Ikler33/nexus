@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 
-import { ghostField, setGhost } from './inlineGhost';
+import { ghostField, setGhost } from '../../lib/editor/inlineGhost';
 import { selectionTooltips } from './inlineToolbar';
 
 const stateWith = (doc: string, anchor: number, head: number) =>

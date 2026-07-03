@@ -2,7 +2,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ghostActive, ghostField, ghostTextOf } from '../components/editor/inlineGhost';
+import { ghostActive, ghostField, ghostTextOf } from '../lib/editor/inlineGhost';
 import { useInlineStore } from './inline';
 
 // Вне Tauri `tauriApi.inline.complete` проксируется в мок `mock/vault.streamInline` (токены → done).

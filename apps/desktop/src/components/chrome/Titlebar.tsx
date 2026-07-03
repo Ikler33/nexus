@@ -13,13 +13,13 @@ import {
   Sun,
   Target,
 } from 'lucide-react';
-import { OrbitIcon } from './BrandGlyphs';
+import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
 import { changeLocale } from '../../i18n/setup';
 import { useThemeStore, type Theme } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import { formatCombo } from '../../lib/commands';
-import { BrandMark } from './BrandMark';
+import { BrandMark } from '../common/BrandMark';
 import styles from './Titlebar.module.css';
 
 /**

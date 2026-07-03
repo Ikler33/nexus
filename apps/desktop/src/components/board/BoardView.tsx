@@ -28,7 +28,7 @@ import {
   type PlanBucket,
   planDay,
   todayIsoLocal,
-} from './board-model';
+} from '../../lib/board/board-model';
 import styles from './BoardView.module.css';
 
 /** MIME-тип DnD-карточки (изолирует от перетаскивания вкладок редактора). */

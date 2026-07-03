@@ -2,12 +2,14 @@
  * AIP-SQ: session-кэш контекстных стартовых вопросов чата по пути активной заметки. Вопросы дёшевы и
  * не обязаны переживать рестарт (решение design-анализа: без персиста/миграции). Намеренно НЕ
  * инвалидируется при правке заметки в той же сессии (стартовые вопросы — лёгкий прайминг, деградируют
- * на статику). Сбрасывается при смене vault (`clearStartingQuestionsCache` из `vault.openVault`) —
- * иначе одноимённая заметка в другом хранилище отдала бы вопросы по чужому содержимому.
+ * на статику). Сбрасывается при смене vault (window-событие `vault:switched` от `vault.openVault`,
+ * подписка внизу файла) — иначе одноимённая заметка в другом хранилище отдала бы вопросы по чужому
+ * содержимому.
  *
  * Вынесен из компонента отдельным модулем: синглтон-стейт не должен жить в файле React-компонента
  * (иначе ломается fast-refresh, react-refresh/only-export-components).
  */
+import { VAULT_SWITCHED_EVENT } from '../../lib/app-events';
 const cache = new Map<string, string[]>();
 // Кап на размер кэша (audit B11): за длинную сессию с сотнями открытых заметок Map рос бы
 // неограниченно. Map хранит порядок вставки → удаляем самую старую запись (FIFO/≈LRU) при переполнении.
@@ -31,4 +33,11 @@ export function setCachedQuestions(center: string, questions: string[]): void {
 /** Сбрасывает кэш (смена vault; в тестах — изоляция кейсов). */
 export function clearStartingQuestionsCache(): void {
   cache.clear();
+}
+
+// Смена vault → сброс. Раньше `stores/vault` импортировал этот модуль напрямую (инверсия
+// stores→components); теперь vault эмитит window-событие, а кэш чистит себя сам (F-1).
+// Паттерн — существующие window-подписки на уровне модуля (ср. `resize` в stores/theme.ts).
+if (typeof window !== 'undefined') {
+  window.addEventListener(VAULT_SWITCHED_EVENT, clearStartingQuestionsCache);
 }

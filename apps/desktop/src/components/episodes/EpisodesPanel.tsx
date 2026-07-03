@@ -7,7 +7,7 @@ import { useEpisodeStore } from '../../stores/episode';
 import { useChatStore } from '../../stores/chat';
 import { useToastStore } from '../../stores/toast';
 import { useUIStore } from '../../stores/ui';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './EpisodesPanel.module.css';
 
 /**

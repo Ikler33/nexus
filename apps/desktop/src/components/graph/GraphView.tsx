@@ -23,7 +23,7 @@ import { tauriApi } from '../../lib/tauri-api';
 import type { FullGraph, LinkSuggestion } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { activePath, useWorkspaceStore } from '../../stores/workspace';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import {
   CHARGE_DISTANCE_MAX,
   CHARGE_DISTANCE_MIN,

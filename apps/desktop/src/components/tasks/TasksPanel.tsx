@@ -12,7 +12,7 @@ import type { TaskItem } from '../../lib/tauri-api';
 import { useUIStore } from '../../stores/ui';
 import { noteName, useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './TasksPanel.module.css';
 
 type Filter = 'open' | 'all';

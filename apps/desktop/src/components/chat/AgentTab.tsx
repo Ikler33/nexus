@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { ArrowUp, Hash, Inbox, Link2, Maximize2 } from 'lucide-react';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import { useUIStore } from '../../stores/ui';
 import styles from './AiPanel.module.css';
 

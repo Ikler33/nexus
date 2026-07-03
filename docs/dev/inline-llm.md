@@ -48,7 +48,7 @@ inline_complete(channel: Channel<InlineStreamEvent>, mode: String,
 
 ## Фронтенд (IL-2)
 
-### CM6 ghost (`components/editor/inlineGhost.ts`)
+### CM6 ghost (`lib/editor/inlineGhost.ts`)
 - **`ghostField`** (StateField): хранит `{pos, from, to, text, streaming}`; даёт декорацию-виджет
   (`.cm-inline-ghost`, серый курсив) у `pos`. Эффекты `setGhost`/`appendGhost`/`endGhostStream`/
   `clearGhost`. Позиции маппятся через правки; **dismiss-on-type** — любая правка пользователя снимает

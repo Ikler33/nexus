@@ -7,7 +7,7 @@ import { discard, loadInbox, toNote, toTask } from '../../lib/inbox/actions';
 import type { InboxItem } from '../../lib/inbox/parse';
 import { useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
-import { BrandThinking } from '../chrome/BrandThinking';
+import { BrandThinking } from '../common/BrandThinking';
 import styles from './InboxPanel.module.css';
 
 /**

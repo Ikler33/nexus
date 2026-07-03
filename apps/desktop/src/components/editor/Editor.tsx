@@ -12,7 +12,7 @@ import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { nexusExtensions, wikilinkLivePreview } from './extensions';
 import { imagePaste } from '../../lib/editor/imagePaste';
-import { ghostField, inlineKeymap } from './inlineGhost';
+import { ghostField, inlineKeymap } from '../../lib/editor/inlineGhost';
 import { inlineToolbar } from './inlineToolbar';
 import styles from './Editor.module.css';
 
