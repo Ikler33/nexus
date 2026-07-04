@@ -256,7 +256,19 @@ pub async fn reconcile_embedding_model(
         // (следующий запуск повторит чистку, идемпотентно); крах ПОСЛЕ записи settings безопасен
         // из-за durable-маркера size_bytes=-1 (файлы остаются помеченными → скан доиндексирует).
         for f in VECTOR_INDEX_FILES {
-            let _ = std::fs::remove_file(root.join(".nexus").join(f));
+            let path = root.join(".nexus").join(f);
+            // NotFound — норма (индекс мог не существовать). Прочий Err (напр. открытый Windows-
+            // хендл) значим: выживший usearch несёт ВЕКТОРЫ СТАРОЙ МОДЕЛИ — при другом dim это
+            // перманентный RAG-off. Не глушим молча (MINOR-1 ревью): warn для диагностики; durable
+            // size_bytes=-1 ниже всё равно форсирует переиндексацию → orphan-ключи вытеснятся.
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(
+                    "reconcile: не удалить старый usearch {}: {e} — переиндексация форсируется маркером, но проверь файл",
+                    path.display()
+                ),
+            }
         }
         db.writer()
             .transaction(|tx| {
