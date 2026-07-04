@@ -9,7 +9,7 @@ import { useContradictionsStore } from './stores/contradictions';
 import { useDigestStore } from './stores/digest';
 import { useGoalsStore } from './stores/goals';
 import { usePrefsStore } from './stores/prefs';
-import { useUIStore } from './stores/ui';
+import { selectMainView, selectReadingEscBlocked, useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
 import { useWorkspaceStore } from './stores/workspace';
 import { ActivityBar } from './components/chrome/ActivityBar';
@@ -81,11 +81,8 @@ export function App() {
   const inboxOpen = useUIStore((s) => s.inboxOpen);
   const digestOpen = useUIStore((s) => s.digestOpen);
   const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
-  const newsOpen = useUIStore((s) => s.newsOpen);
-  const homeOpen = useUIStore((s) => s.homeOpen);
-  const boardOpen = useUIStore((s) => s.boardOpen);
-  const todayOpen = useUIStore((s) => s.todayOpen);
-  const agentOpen = useUIStore((s) => s.agentOpen);
+  // F-4 (семейство 1): единый derived-селектор активной main-вью вместо 5 отдельных `*Open`-булей.
+  const mainView = useUIStore(selectMainView);
   const onboardingActive = useUIStore((s) => s.onboardingActive);
   const tweaksOpen = useUIStore((s) => s.tweaksOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -214,27 +211,9 @@ export function App() {
       // Любой оверлей поверх reading имеет приоритет на Esc (у него свой close) — иначе Esc закрыл бы
       // весь режим чтения «сквозь» открытую модалку (находки аудита reading-esc-precedence +
       // conflictresolver-esc). Модальные панели без собственного focus-trap (digest/contradictions/
-      // settings/conflict) особенно зависят от этого гейта.
-      if (
-        s.paletteOpen ||
-        s.graphOpen ||
-        s.pluginsOpen ||
-        s.syncOpen ||
-        s.captureOpen ||
-        s.templatesOpen ||
-        s.versionsOpen ||
-        s.cheatsheetOpen ||
-        s.conflictOpen ||
-        s.goalsOpen ||
-        s.memoryOpen ||
-        s.episodesOpen ||
-        s.tasksOpen ||
-        s.inboxOpen ||
-        s.digestOpen ||
-        s.contradictionsOpen ||
-        s.tweaksOpen
-      )
-        return;
+      // settings/conflict) особенно зависят от этого гейта. F-4: набор кодифицирован в
+      // selectReadingEscBlocked (union trap+floats+safe-flow) КАК ЕСТЬ — без изменения поведения.
+      if (selectReadingEscBlocked(s)) return;
       s.closeReading();
     };
     window.addEventListener('keydown', onEsc);
@@ -247,8 +226,7 @@ export function App() {
 
   // DP-12 (макет): расположение AI-панели — side / bottom / overlay; панель живёт только
   // в workspace-вью (Home/News — без неё, как `view === "workspace"` макета).
-  const aiVisible =
-    chatOpen && !reading && !homeOpen && !newsOpen && !boardOpen && !todayOpen && !agentOpen;
+  const aiVisible = chatOpen && !reading && mainView === 'editor';
   const aiSide = aiVisible && aiLayout === 'side';
   const aiBottom = aiVisible && aiLayout === 'bottom';
   const aiOverlay = aiVisible && aiLayout === 'overlay';
@@ -276,17 +254,17 @@ export function App() {
             </aside>
           )}
           <main className={styles.main}>
-            {agentOpen ? (
+            {mainView === 'agent' ? (
               <Suspense fallback={null}>
                 <AgentView />
               </Suspense>
-            ) : todayOpen ? (
+            ) : mainView === 'today' ? (
               <TodayView />
-            ) : homeOpen ? (
+            ) : mainView === 'home' ? (
               <HomeView />
-            ) : newsOpen ? (
+            ) : mainView === 'news' ? (
               <NewsView />
-            ) : boardOpen ? (
+            ) : mainView === 'board' ? (
               <BoardView />
             ) : (
               <EditorArea />
