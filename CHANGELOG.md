@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Изменено · R-5b — распил orchestrate.rs, шаг 2: вынос TokenBucket + events (byte-identical)
+
+Второй из 3 PR стадии R-5 REFACTOR-PLAN. **Behavior-preserving чистый перенос** двух самодостаточных единиц из прод-части `actuator/orchestrate.rs` в подмодули — БЕЗ изменения логики/сигнатур (только пути модулей + видимости + `use`); оракул НЕ меняется (тот же счётчик тестов 35, `#[ignore]`-паритет 0/0). `run_proposal_round` (тройной клон) НЕ тронут — это R-5c.
+
+- **Токен-бакет + Clock** → `actuator/orchestrate/token_bucket.rs`: rate-limiting-примитив анти-усталости (`TokenBucket` — claim-before-apply, ленивый рефилл, refund) + тестируемый источник времени (`Clock`-трейт, `MonotonicClock` прод, `ManualClock` для детерминированных тестов времени, `DEFAULT_REFILL_PER`/`DEFAULT_REFILL_TOKENS`). Clock-инъекция цела — тесты рефилла остаются детерминированными (ManualClock, без `Instant::now()`/`sleep`).
+- **EventSink + синки** → `actuator/orchestrate/events.rs`: абстракция эмиссии событий хода (`EventSink`) + `CollectingSink` (тест/диагностика) и `TracingEventSink` (headless agentd — `tracing`-логирует Proposal/Diff/Exec). Замечание: `TracingEventSink` концептуально «к agentd», но это межкрейтовый перенос — в R-5b только вынос в подмодуль (не двигаем крейты); реэкспорт `orchestrate::TracingEventSink` сохранён, `actuator/tools.rs` не тронут.
+- **Публичность/пути сохранены:** оба подмодуля приватны (`mod token_bucket;`/`mod events;`), публичные имена реэкспортируются `pub use` из `orchestrate` → внешние пути `orchestrate::TokenBucket`/`EventSink`/… неизменны (реэкспорты `actuator/mod.rs` не правились). Тесты (`orchestrate/tests.rs`, R-5a) видят вынесенное через `use super::*` без правки ассертов; единственная правка тестов — добавлена `use std::time::Duration;` (раньше `Duration` приходил в `super::*` из удалённого теперь `use std::time::…` прод-модуля).
+- **Размер `orchestrate.rs`: 1435 → 1092 строки** (−343; вынесено 112 строк events + 241 строка token_bucket; путь к цели <1000 закроет R-5c выносом `run_proposal_round`). Гейт зелёный: `cargo fmt --check` + `clippy --workspace --all-targets -D warnings` + `test --workspace` (тот же счётчик тестов).
+
 ### Изменено · R-5a — распил orchestrate.rs, шаг 1: вынос тестов (byte-identical)
 
 Первый из 3 PR стадии R-5 REFACTOR-PLAN (thermo-смелл №5 + критик: `actuator/orchestrate.rs` 2518 строк — самый большой файл репо, ~1082 строки из них — тесты). **ЧИСТЫЙ механический перенос, оракул НЕ меняется** (правило неизменного оракула R-5: вынос тестов и рефакторинг НИКОГДА в одном PR — это только вынос; подготовка к R-5b/R-5c).
