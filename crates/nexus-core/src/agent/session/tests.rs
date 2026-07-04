@@ -127,19 +127,22 @@ async fn actuator_off_empty_registry_forwards_toolcall_result_final_in_order() {
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = run_agent_session(
         &spec,
-        &provider,
-        None,
-        None,
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        None,
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        },
     )
     .await;
 
@@ -197,25 +200,24 @@ async fn subagent_filtered_tool_is_unknown() {
     let cancel = Arc::new(AtomicBool::new(false));
     let allowed: std::collections::BTreeSet<String> =
         [ACTIVATE_SKILL_TOOL.to_string()].into_iter().collect();
-    let sa = SubagentSpawn {
-        allowed: &allowed,
-        dispatcher: None,
-    };
     run_agent_session(
         &spec,
-        &provider,
-        None,
-        Some(&skills),
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        Some(&sa),
-        None,
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: Some(&skills),
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::Subagent {
+            allowed: &allowed,
+            dispatcher: None,
+        },
     )
     .await;
     // Сужение видно и МОДЕЛИ: в спеках ребёнка только allowed-имя (read_skill_resource удалён).
@@ -272,25 +274,24 @@ async fn subagent_allowed_tool_works() {
     ]
     .into_iter()
     .collect();
-    let sa = SubagentSpawn {
-        allowed: &allowed,
-        dispatcher: None,
-    };
     run_agent_session(
         &spec,
-        &provider,
-        None,
-        Some(&skills),
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        Some(&sa),
-        None,
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: Some(&skills),
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::Subagent {
+            allowed: &allowed,
+            dispatcher: None,
+        },
     )
     .await;
     let evs = fwd.events.lock().unwrap();
@@ -335,19 +336,22 @@ async fn delegation_disabled_means_no_delegate_tool() {
     let cancel = Arc::new(AtomicBool::new(false));
     run_agent_session(
         &spec,
-        &provider,
-        None,
-        None,
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        None, // delegation выкл
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None, // delegation выкл
+            research: None,   // research (RES-4): default-OFF; прод-проводка в RES-5
+        },
     )
     .await;
     let evs = fwd.events.lock().unwrap();
@@ -401,19 +405,22 @@ async fn delegation_enabled_registers_delegate_tool() {
     let cancel = Arc::new(AtomicBool::new(false));
     run_agent_session(
         &spec,
-        provider.as_ref(),
-        None,
-        None,
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        Some(&deps),
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: provider.as_ref(),
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: Some(&deps),
+            research: None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        },
     )
     .await;
     // Извлекаем ToolResult в блоке → guard дропается ДО await ниже (clippy await_holding_lock).
@@ -473,19 +480,22 @@ async fn immediate_final_still_forwards_context_usage() {
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = run_agent_session(
         &spec,
-        &provider,
-        None,
-        None,
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        None,
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        },
     )
     .await;
     assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -563,19 +573,22 @@ async fn skills_inject_menu_and_register_tier2_3_tools() {
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = run_agent_session(
         &spec,
-        &provider,
-        None,
-        Some(&skills),
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        None,
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: Some(&skills),
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        },
     )
     .await;
     assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -627,19 +640,22 @@ async fn history_threaded_into_context_before_task() {
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = run_agent_session(
         &spec,
-        &provider,
-        None,
-        None,
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        None,
-        None,
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None,
+        },
     )
     .await;
     assert!(matches!(outcome, LoopOutcome::Final(_)));
@@ -736,19 +752,22 @@ async fn live_actuator_create_and_undo_on_rig() {
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = run_agent_session(
         &spec,
-        provider.as_ref(),
-        None,
-        None,
-        None,
-        policy_default(),
-        db.writer(),
-        db.reader(),
-        &paused,
-        &cancel,
-        fwd.clone(),
-        None,
-        None,
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: provider.as_ref(),
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        },
     )
     .await;
     eprintln!("LIVE outcome: {outcome:?}");

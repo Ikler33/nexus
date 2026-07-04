@@ -1,6 +1,6 @@
 //! `spawn_subagent` (SUB-3b-1) — примитив порождения ОДНОГО субагента: второй (вложенный) вызов
 //! [`run_agent_session`] с изоляцией контекста (`memory=None`), СУЖЕННЫМ реестром (child ⊆ parent через
-//! [`super::build_child_registry`] + [`SubagentSpawn`]), ОБЩИМ kill-switch (`paused` тот же Arc) и
+//! [`super::build_child_registry`] + [`SessionRole::Subagent`]), ОБЩИМ kill-switch (`paused` тот же Arc) и
 //! fail-closed списанием [`DelegationBudget`]. НЕ инструмент и НЕ fan-out — это строительный блок, который
 //! `DelegateTool` (SUB-3b-2) гоняет конкурентно через `JoinSet`.
 //!
@@ -18,7 +18,9 @@ use crate::actuator::{ActionDispatcher, DecisionSource};
 use crate::agent::event::{AgentEvent, SubagentState};
 use crate::agent::run_store::{self, STATUS_DONE, STATUS_ERROR};
 use crate::agent::runner::{BudgetKind, LoopOutcome};
-use crate::agent::session::{run_agent_session, AgentEventForwarder, SessionSpec, SubagentSpawn};
+use crate::agent::session::{
+    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+};
 use crate::agent::skill_tools::SkillContext;
 use crate::agent::web_tools::WebToolsConfig;
 use crate::ai::tools::ToolCapableProvider;
@@ -135,7 +137,7 @@ fn collapse(outcome: LoopOutcome) -> (SubagentState, String) {
 /// Порядок (fail-closed): (1) **списать спавн из общего бюджета** — исчерпан (depth/spawns/deadline) →
 /// `Failed` БЕЗ создания строки/прогона; (2) `create_child_run(parent_run_id)` (дерево) + `Spawned`-событие;
 /// (3) реестр ребёнка = `build_child_registry(parent ∩ requested минус блок-лист)`; (4) cancel-снимок
-/// родителя; (5) `run_agent_session` с `memory=None` + [`SubagentSpawn`] (сужение/общий gate); (6) свернуть
+/// родителя; (5) `run_agent_session` с `memory=None` + [`SessionRole::Subagent`] (сужение/общий gate); (6) свернуть
 /// исход → саммари, финализировать строку ребёнка, эмитнуть терминальный `SubagentStatus`. Возвращает
 /// [`SubagentResult`] (родитель видит ТОЛЬКО саммари).
 pub async fn spawn_subagent(
@@ -182,7 +184,7 @@ pub async fn spawn_subagent(
     let _ = run_store::mark_running(&ctx.writer, child_run_id).await;
 
     // (3) Сужаем реестр ребёнка (child ⊆ parent минус блок-лист). build_child_registry → Vec; в набор
-    // для SubagentSpawn.allowed (retain принимает BTreeSet).
+    // для SessionRole::Subagent.allowed (retain принимает BTreeSet).
     let allowed: BTreeSet<String> = build_child_registry(&ctx.parent_tool_names, requested)
         .into_iter()
         .collect();
@@ -202,30 +204,30 @@ pub async fn spawn_subagent(
         history: Vec::new(), // дети — свежий one-shot подзадачи (без истории родителя)
         skills_learning_enabled: false, // дети навыки не авторствуют
     };
-    let sa = SubagentSpawn {
-        allowed: &allowed,
-        dispatcher: ctx.dispatcher.clone(),
-    };
-
     // (5) Вложенный прогон с ИЗОЛЯЦИЕЙ (memory=None) + ОБЩИМ paused. Форвардер РЕБЁНКА обёрнут
     //     SubagentForwarder'ом: анонимные ходы ребёнка НЕ протекают в родительский поток (ревью MAJOR).
+    //     Роль Subagent: сужение реестра/общий gate; каналы delegation/research у ребёнка непредставимы
+    //     типом (рекурсия-стоп: delegate.run/research.run не регистрируются ребёнку по построению).
     let child_forwarder: Arc<dyn AgentEventForwarder> =
         Arc::new(SubagentForwarder(ctx.forwarder.clone()));
     let outcome = run_agent_session(
         &child_spec,
-        ctx.provider.as_ref(),
-        None, // memory=None: ни recall фактов, ни история родителя не протекают
-        ctx.skills.as_ref(),
-        ctx.web.as_ref(),
-        ctx.decision_source.clone(),
-        &ctx.writer,
-        &ctx.reader,
-        &ctx.paused,
-        &child_cancel,
-        child_forwarder,
-        Some(&sa),
-        None, // дети НЕ делегируют (рекурсия-стоп: delegate.run не регистрируется ребёнку)
-        None, // research (RES-4): default-OFF; прод-проводка в RES-5
+        &SessionDeps {
+            provider: ctx.provider.as_ref(),
+            memory: None, // изоляция: ни recall фактов, ни история родителя не протекают
+            skills: ctx.skills.as_ref(),
+            web: ctx.web.as_ref(),
+            decision_source: ctx.decision_source.clone(),
+            writer: &ctx.writer,
+            reader: &ctx.reader,
+            paused: &ctx.paused,
+            cancel: &child_cancel,
+            forwarder: child_forwarder,
+        },
+        SessionRole::Subagent {
+            allowed: &allowed,
+            dispatcher: ctx.dispatcher.clone(),
+        },
     )
     .await;
 
