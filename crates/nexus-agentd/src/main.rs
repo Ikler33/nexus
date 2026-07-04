@@ -16,7 +16,7 @@
 //! - `rag` — vault-состояние RAG/памяти (`build_rag_min`, `RagBundle`).
 //! - `connect` (unix) — AF_UNIX-хостинг коннектора (`maybe_spawn_connect_server`).
 //! - `sandbox` (unix) — песочные CLI-входы (`--sandbox-child` / `--sandbox-run` / `--sandbox-undo`).
-//! - `smoke` — headless smoke-харнесс (`NEXUS_AGENTD_SMOKE=1`).
+//! - `smoke` — headless smoke-харнесс (`NEXUS_AGENTD_SMOKE=1` ИЛИ cargo-feature `smoke`).
 //! - `health` — тривиальный health-kind (пульс воркер-лупа).
 //!
 //! Запуск: `nexus-agentd <vault>` или `NEXUS_VAULT=<vault> nexus-agentd`.
@@ -624,9 +624,20 @@ async fn run() -> Result<(), String> {
         "nexus-agentd started"
     );
 
-    // Smoke-режим (`NEXUS_AGENTD_SMOKE=1`): офлайн-проверки + долговечный agent_run до терминала,
-    // затем graceful-останов воркера и выход 0 (см. модуль `smoke`).
-    let smoke = std::env::var("NEXUS_AGENTD_SMOKE").is_ok_and(|v| v == "1");
+    // Smoke-режим (`NEXUS_AGENTD_SMOKE=1` ИЛИ cargo-feature `smoke`): офлайн-проверки + долговечный
+    // agent_run до терминала, затем graceful-останов воркера и выход 0 (см. модуль `smoke`). Feature
+    // форсит smoke на компиляции (self-testing бинарь); default-профиль — env-gated (поведение
+    // сохранено). B8: smoke возвращает `Err` с диагностикой вместо `panic!` → `main` логирует и exit-1.
+    let smoke = {
+        #[cfg(feature = "smoke")]
+        {
+            true
+        }
+        #[cfg(not(feature = "smoke"))]
+        {
+            std::env::var("NEXUS_AGENTD_SMOKE").is_ok_and(|v| v == "1")
+        }
+    };
     if smoke {
         return smoke::run_smoke(&db, &ai_client, worker, shutdown_tx).await;
     }

@@ -10,6 +10,12 @@ license.workspace = true
 name = "nexus-agentd"
 path = "src/main.rs"
 
+[features]
+# `smoke` (R-11): форсит headless smoke-прогон на КОМПИЛЯЦИИ (self-testing бинарь — альтернатива
+# рантайм-триггеру `NEXUS_AGENTD_SMOKE=1`). Default-профиль (без фичи) собирается и ведёт себя как
+# прежде: smoke только по env. Аддитивна, без новых зависимостей. Docker/CI собирают БЕЗ фичи.
+smoke = []
+
 [dependencies]
 # Переиспользуемое ядро — единственная Nexus-зависимость (никаких apps/desktop/Tauri-связей).
 nexus-core = { path = "../nexus-core" }

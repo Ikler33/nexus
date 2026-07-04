@@ -1,7 +1,11 @@
-//! Headless smoke-харнесс agentd (`NEXUS_AGENTD_SMOKE=1`), отделён от wiring `main.rs` (R-11). Гоняет
-//! офлайн (без сети/модели) три проверки — actuator-gate apply, цикл агента, долговечный agent_run до
-//! терминала — и выходит 0. Движок [`drive_actuator_gate_run`] совместно используется smoke-путём и
-//! CI-тестом `live_actuator_gate_applies_via_gate`.
+//! Headless smoke-харнесс agentd (`NEXUS_AGENTD_SMOKE=1` в default-профиле ИЛИ cargo-feature `smoke`,
+//! которая форсит smoke на компиляции), отделён от wiring `main.rs` (R-11). Гоняет офлайн (без сети/
+//! модели) три проверки — actuator-gate apply, цикл агента, долговечный agent_run до терминала — и
+//! выходит 0. Движок [`drive_actuator_gate_run`] совместно используется smoke-путём и CI-тестом
+//! `live_actuator_gate_applies_via_gate`.
+//!
+//! B8 (R-11): smoke-функции НЕ паникуют в release — при провале возвращают `Err` с диагностикой,
+//! которую `run()`→`main()` логируют и выходят с кодом 1 (вместо `panic!`/`assert!`-падения).
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -29,10 +33,10 @@ pub(crate) async fn run_smoke(
     // флаг + autonomy=auto + Auto-тир note.create реально пишет в vault ИМЕННО через
     // dispatch_action (ledger Executed), а PolicyDefault не препятствует Auto-тиру. Использует
     // СВОЙ временный vault (не трогает целевой root) и фейк-провайдер (без модели/сети).
-    actuator_gate_smoke().await;
+    actuator_gate_smoke().await?;
     // AGENT-1 smoke: цикл агента крутится end-to-end против СТАБ-провайдера (offline, без сети) и
     // безопасного реестра (echo) — доказывает execute→feed-back→Final без живой модели/актуатора.
-    agent_loop_smoke().await;
+    agent_loop_smoke().await?;
     // Smoke: ставим одну health-джобу — пульс воркера. Выход 0.
     nexus_core::scheduler::enqueue(
         db.writer(),
@@ -137,8 +141,9 @@ async fn count_egress_for_run(db: &Database, run_id: i64) -> i64 {
 
 /// AGENT-1 offline smoke: гоняет цикл агента против ФЕЙКОВОГО провайдера (без сети) и безопасного
 /// реестра (echo) — ToolCalls на ходу 1, Final на ходу 2. Доказывает, что headless умеет крутить цикл
-/// execute→feed-back→Final. Сети не касается (стаб-провайдер). Логирует исход; падение паникует smoke.
-async fn agent_loop_smoke() {
+/// execute→feed-back→Final. Сети не касается (стаб-провайдер). Логирует исход; при провале — `Err` с
+/// диагностикой (B8: smoke НЕ паникует в release-бинаре — `run()`→`main` логирует и exit-1).
+async fn agent_loop_smoke() -> Result<(), String> {
     use nexus_core::agent::tool::{ToolCall, ToolSpec};
     use nexus_core::agent::{
         run_agent_loop, AgentEvent, EchoTool, LoopBounds, LoopOutcome, ToolRegistry,
@@ -212,13 +217,15 @@ async fn agent_loop_smoke() {
         },
     )
     .await;
-    assert!(
-        matches!(outcome, LoopOutcome::Final(ref s) if s == "ok") && tool_results == 1,
-        "AGENT-1 smoke: цикл должен исполнить инструмент и финализировать (получено: {outcome:?}, tool_results={tool_results})"
-    );
+    if !(matches!(outcome, LoopOutcome::Final(ref s) if s == "ok") && tool_results == 1) {
+        return Err(format!(
+            "AGENT-1 smoke: цикл должен исполнить инструмент и финализировать (получено: {outcome:?}, tool_results={tool_results})"
+        ));
+    }
     tracing::info!(
         "nexus-agentd: AGENT-1 smoke цикла агента пройден (execute→feed-back→Final, offline)"
     );
+    Ok(())
 }
 
 /// AGENT-3e ФЕЙК-провайдер: ход 1 — ToolCalls([note.create]); ход 2 — Final. Без сети/модели —
@@ -295,7 +302,7 @@ async fn drive_actuator_gate_run(
     db: &Database,
     rel: &str,
     content: &str,
-) -> ActuatorGateResult {
+) -> Result<ActuatorGateResult, String> {
     use nexus_core::agent::{enqueue_agent_run, run_store, AgentRunHandler, KIND_AGENT_RUN};
     use nexus_core::net::EgressPolicy;
     use nexus_core::scheduler::{Job, JobHandler};
@@ -343,7 +350,7 @@ async fn drive_actuator_gate_run(
         Some("auto"),
     )
     .await
-    .expect("enqueue_agent_run");
+    .map_err(|e| format!("drive: enqueue_agent_run: {e}"))?;
     let job = Job {
         id: 1,
         kind: KIND_AGENT_RUN.into(),
@@ -354,7 +361,10 @@ async fn drive_actuator_gate_run(
         max_attempts: 3,
         last_error: None,
     };
-    handler.handle(&job).await.expect("actuator run");
+    handler
+        .handle(&job)
+        .await
+        .map_err(|e| format!("drive: actuator run: {e}"))?;
 
     let written = std::fs::read_to_string(canon_root.join(rel)).ok();
     let executed: i64 = db
@@ -373,42 +383,49 @@ async fn drive_actuator_gate_run(
         .ok()
         .flatten()
         .map(|r| r.status);
-    ActuatorGateResult {
+    Ok(ActuatorGateResult {
         written,
         executed,
         status,
-    }
+    })
 }
 
 /// AGENT-3e offline smoke: actuator GO-LIVE ЧЕРЕЗ ГЕЙТ. Открывает СВОЙ временный vault и гоняет
 /// [`drive_actuator_gate_run`] (флаг ВКЛ + autonomy=auto + `note.create`). Доказывает живую проводку
-/// tool→dispatch_action→apply БЕЗ модели/сети. Падение — паника (валит smoke): это акцептанс go-live.
-/// Целевой root НЕ трогаем (свой temp vault). CI-эквивалент — [`tests::live_actuator_gate_applies_via_gate`].
-async fn actuator_gate_smoke() {
+/// tool→dispatch_action→apply БЕЗ модели/сети. Провал → `Err` с диагностикой (B8: smoke НЕ паникует в
+/// release — валит `run()` честным exit-1, не panic): это акцептанс go-live. Целевой root НЕ трогаем
+/// (свой temp vault). CI-эквивалент — [`tests::live_actuator_gate_applies_via_gate`].
+async fn actuator_gate_smoke() -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("nexus-actuator-smoke-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("smoke: temp vault");
-    let canon_root = dir.canonicalize().expect("smoke: canonicalize vault");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("smoke: temp vault: {e}"))?;
+    let canon_root = dir
+        .canonicalize()
+        .map_err(|e| format!("smoke: canonicalize vault: {e}"))?;
     let db = Database::open(canon_root.join(".nexus").join("nexus.db"))
         .await
-        .expect("smoke: open db");
+        .map_err(|e| format!("smoke: open db: {e}"))?;
 
-    let res = drive_actuator_gate_run(&canon_root, &db, "Notes/Smoke.md", "создано гейтом").await;
+    let res = drive_actuator_gate_run(&canon_root, &db, "Notes/Smoke.md", "создано гейтом").await?;
     let _ = std::fs::remove_dir_all(&dir);
 
-    assert_eq!(
-        res.written.as_deref(),
-        Some("создано гейтом"),
-        "AGENT-3e smoke: note.create ДОЛЖНА быть записана ЧЕРЕЗ ГЕЙТ (флаг ВКЛ, autonomy=auto)"
-    );
-    assert_eq!(
-        res.executed, 1,
-        "AGENT-3e smoke: ровно одна executed apply-строка ledger (apply через dispatch_action)"
-    );
+    if res.written.as_deref() != Some("создано гейтом") {
+        return Err(format!(
+            "AGENT-3e smoke: note.create ДОЛЖНА быть записана ЧЕРЕЗ ГЕЙТ (флаг ВКЛ, autonomy=auto); получено: {:?}",
+            res.written
+        ));
+    }
+    if res.executed != 1 {
+        return Err(format!(
+            "AGENT-3e smoke: ожидалась ровно одна executed apply-строка ledger (apply через dispatch_action), получено {}",
+            res.executed
+        ));
+    }
     tracing::info!(
         status = res.status.as_deref().unwrap_or("?"),
         "nexus-agentd: AGENT-3e actuator smoke пройден (tool→dispatch_action→apply, ledger executed, offline)"
     );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -435,8 +452,9 @@ mod tests {
             .await
             .unwrap();
 
-        let res =
-            drive_actuator_gate_run(&canon_root, &db, "Notes/Gate.md", "создано гейтом (CI)").await;
+        let res = drive_actuator_gate_run(&canon_root, &db, "Notes/Gate.md", "создано гейтом (CI)")
+            .await
+            .expect("drive_actuator_gate_run (CI): движок не должен падать инфраструктурно");
 
         assert_eq!(
             res.written.as_deref(),
