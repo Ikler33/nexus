@@ -17,9 +17,25 @@ usearch — отдельный файл, НЕ часть SQLite-транзакц
 write-actor сразу после SQLite-транзакции (сериализовано); полная атомарность с SQLite невозможна →
 reconcile после краха (§5.1) подчистит рассинхрон. Подключение в индексатор — Ф1-5.
 
+## Reconcile embedding-модели (§6.5, R-3d)
+`reconcile_embedding_model` — КАНОН гарда совместимости производных vault с активной моделью/dim
+(решение владельца §8.5, «полная чистка»; единственная реализация — реплики desktop/agentd удалены):
+- смена модели/dim → `DELETE FROM chunks` (+FTS триггерами) + снос ВСЕХ `VECTOR_INDEX_FILES`
+  (4 индекса, вкл. `chat_vectors`) + `chat_episodes.embed_model=NULL` + durable-маркер
+  `files.size_bytes=-1` (ломает mtime+size-шорткат скана: chunks пересоздадутся, даже если
+  `true`-возврат потребил процесс без индексатора заметок — agentd реконсилил первым, desktop
+  открылся позже как no-op) + запись новых `settings`, возврат `true` (desktop передаёт его
+  как `force` в `Indexer::with_rag`);
+- та же модель/dim → СТРОГИЙ no-op, `false` (пользовательские индексы не пересобираются);
+- первое включение → только запись `settings`, `true` (сноса нет — производных ещё нет).
+
+Вызыватели: desktop `open_vault`/`build_rag`, agentd `build_rag_min` — оба ДО открытия индексов.
+
 ## Тесты
 upsert+search+no-dup-growth (Б4-2), отказ при иной размерности (Б5-1), remove чистит выдачу (Б8-2),
-персистентность (save → повторный open).
+персистентность (save → повторный open); reconcile-канон R-3d (first-run без сноса / строгий no-op /
+полная чистка при смене модели и dim + durable-маркер; сценарий «agentd first → desktop no-op →
+скан всё равно пересоздаёт chunks» — `indexer::tests::scan_after_foreign_reconcile_rebuilds_chunks_without_force`).
 
 ## Дальше
 - Ф1-5: индексатор эмбеддит чанки (batch+семафор) и пишет `chunks`(+FTS)+usearch; переэмбеддизация

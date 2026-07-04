@@ -18,8 +18,10 @@
 //! `{agent_tools: true, embedding: false}` — chat-каналы канона cli не использует).
 //!
 //! ЗА КАДРОМ канона (намеренно, границы среза):
-//! - `reconcile_embedding_model` + открытие usearch-индексов — у вызывающего (reconcile — отдельный
-//!   декларируемый срез: у desktop/agentd он совпадает, но это семантика vault-состояния, не сборки);
+//! - `reconcile_embedding_model` + открытие usearch-индексов — у вызывающего: это семантика
+//!   vault-состояния, не сборки. Сам reconcile с R-3d канонизирован в
+//!   [`crate::vector::reconcile_embedding_model`] («полная чистка», решение владельца §8.5) —
+//!   desktop/agentd зовут его между сборкой эмбеддера и открытием индексов;
 //! - hot-apply провайдеров desktop (`set_ai_config`) — НАМЕРЕННО особый путь (EndpointDto из UI не
 //!   несёт таймаутов → единый `saved_chat`-профиль + URL-fallback fast→chat). Решение R-3b: НЕ
 //!   переключён — байт-в-байт с каноном невозможен (канон дал бы fast'у собственный профиль из

@@ -658,10 +658,11 @@ async fn run() -> Result<(), String> {
     };
 
     // RAG-фундамент + ПАМЯТЬ агента (AGENT-MEM-1): note-RAG индекс + ТРИ индекса памяти (переписка/
-    // факты/эпизоды) поверх канонного эмбеддера. build_rag_min ГОНИТ reconcile_embedding_model
-    // (CORE-2a #2): stale on-disk индекс под другой моделью/dim сбрасывается ДО открытия → нет
-    // DimMismatch на первом search/upsert. Эмбеддер попадает в AIClient ТОЛЬКО из собранного бандла
-    // (reconcile/usearch не удались → RAG off ЦЕЛИКОМ, эмбеддер без индексов не отдаём — как раньше).
+    // факты/эпизоды) поверх канонного эмбеддера. build_rag_min ГОНИТ канонный
+    // reconcile_embedding_model (CORE-2a #2, R-3d «полная чистка»): stale-производные под другой
+    // моделью/dim (chunks + все индексы) сбрасываются ДО открытия → нет DimMismatch на первом
+    // search/upsert. Эмбеддер попадает в AIClient ТОЛЬКО из собранного бандла (reconcile/usearch
+    // не удались → RAG off ЦЕЛИКОМ, эмбеддер без индексов не отдаём — как раньше).
     let rag = match providers.embedding {
         Some(eb) => build_rag_min(&db, &root, eb).await,
         None => None,
@@ -1345,10 +1346,11 @@ fn maybe_spawn_connect_server(
 
 /// RAG + ПАМЯТЬ агента headless (AGENT-MEM-1): note-RAG индекс + ТРИ индекса памяти (переписка/факты/
 /// эпизоды) поверх КАНОННОГО эмбеддера ([`nexus_core::bootstrap::EmbeddingBootstrap`], R-3a). Здесь
-/// остаётся vault-состояние (вне канона): (1) `reconcile_embedding_model` (CORE-2a #2) ДО открытия
-/// индексов — stale on-disk индекс под другой моделью/dim сбрасывается, иначе запрос новой моделью
-/// против старого индекса → `DimMismatch`/семантический мусор; (2) открытие всех четырёх индексов
-/// (десктоп держит их в VaultContext, agentd читает память тем же эмбеддером).
+/// остаётся vault-состояние: (1) канонный `reconcile_embedding_model` (CORE-2a #2, R-3d «полная
+/// чистка») ДО открытия индексов — stale-производные под другой моделью/dim (chunks + все индексы)
+/// сбрасываются, иначе запрос новой моделью против старого индекса → `DimMismatch`/семантический
+/// мусор; (2) открытие всех четырёх индексов (десктоп держит их в VaultContext, agentd читает
+/// память тем же эмбеддером).
 struct RagBundle {
     embedder: Arc<dyn EmbeddingProvider>,
     vectors: Arc<VectorIndex>,
@@ -1362,9 +1364,9 @@ async fn build_rag_min(
     root: &Path,
     eb: nexus_core::bootstrap::EmbeddingBootstrap,
 ) -> Option<RagBundle> {
-    // CORE-2a #2: сверяем on-disk индексы с активной моделью/dim ДО открытия. Смена → сброс файлов
-    // (перезаполнятся индексатором/бэкфиллом). Ошибка БД → RAG off (не открываем потенциально
-    // несовместимые индексы).
+    // CORE-2a #2 (R-3d): сверяем производные с активной моделью/dim ДО открытия. Смена → полная
+    // чистка (chunks + все индекс-файлы; перезаполнятся индексатором/бэкфиллом); та же модель —
+    // строгий no-op. Ошибка БД → RAG off (не открываем потенциально несовместимые индексы).
     let reindex = nexus_core::vector::reconcile_embedding_model(db, root, &eb.model, eb.dim)
         .await
         .map_err(|e| tracing::warn!(error = %e, "reconcile embedding-модели не удался — RAG off"))
