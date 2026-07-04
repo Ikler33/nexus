@@ -41,7 +41,9 @@ use super::event::AgentEvent;
 use super::finish::{outcome_to_finish, CancelWording, PausePolicy, RunFinish};
 use super::memory::AgentMemory;
 use super::run_store::{self, STATUS_ERROR};
-use super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
+use super::session::{
+    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+};
 use super::skill_tools::SkillContext;
 use super::web_tools::WebToolsConfig;
 
@@ -296,19 +298,23 @@ impl AgentRunHandler {
                 });
         let outcome = run_agent_session(
             &spec,
-            provider.as_ref(),
-            self.memory.as_deref(),
-            self.skills.as_ref(),
-            self.web.as_ref(), // EGR-AGENT-2: веб-инструменты (Some ⇔ ai.web.enabled)
-            self.decision_source.clone(),
-            &self.writer,
-            &self.reader,
-            &self.agent_paused,
-            &cancel,
-            forwarder,
-            None, // top-level прогон (не субагент)
-            delegation_deps.as_ref(),
-            Some(&self.research), // RES-5: research.run (default-OFF; регистрируется лишь при всех условиях)
+            &SessionDeps {
+                provider: provider.as_ref(),
+                memory: self.memory.as_deref(),
+                skills: self.skills.as_ref(),
+                web: self.web.as_ref(), // EGR-AGENT-2: веб-инструменты (Some ⇔ ai.web.enabled)
+                decision_source: self.decision_source.clone(),
+                writer: &self.writer,
+                reader: &self.reader,
+                paused: &self.agent_paused,
+                cancel: &cancel,
+                forwarder,
+            },
+            SessionRole::TopLevel {
+                delegation: delegation_deps.as_ref(),
+                // RES-5: research.run (default-OFF; регистрируется лишь при всех условиях).
+                research: Some(&self.research),
+            },
         )
         .await;
 

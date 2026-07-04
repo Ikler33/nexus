@@ -220,7 +220,7 @@ async fn run_turn(
     decision: Arc<dyn nexus_core::actuator::DecisionSource>,
 ) -> Result<TurnOutcome, String> {
     use nexus_core::actuator::OVERWRITE_THRESHOLD;
-    use nexus_core::agent::{run_agent_session, run_store, SessionSpec};
+    use nexus_core::agent::{run_agent_session, run_store, SessionDeps, SessionRole, SessionSpec};
     use nexus_core::ai::AiConfig;
 
     // NB: создаём строку `agent_runs` БЕЗ джобы `KIND_AGENT_RUN` → осиротевшая `queued`-строка (Ctrl-C
@@ -248,19 +248,22 @@ async fn run_turn(
 
     let outcome = run_agent_session(
         &spec,
-        deps.provider.as_ref(),
-        None, // memory
-        None, // skills
-        None, // web
-        decision,
-        deps.db.writer(),
-        deps.db.reader(),
-        &paused,
-        &cancel,
-        forwarder,
-        None, // subagent
-        None, // delegation
-        None, // research
+        &SessionDeps {
+            provider: deps.provider.as_ref(),
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: decision,
+            writer: deps.db.writer(),
+            reader: deps.db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder,
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None,
+        },
     )
     .await;
 

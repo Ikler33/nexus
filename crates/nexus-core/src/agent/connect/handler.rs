@@ -38,7 +38,9 @@ use super::super::event::AgentEvent;
 use super::super::finish::{outcome_to_finish, CancelWording, PausePolicy};
 use super::super::memory::AgentMemory;
 use super::super::run_store;
-use super::super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
+use super::super::session::{
+    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+};
 use super::super::skill_tools::SkillContext;
 use super::super::web_tools::WebToolsConfig;
 use super::{
@@ -254,19 +256,24 @@ impl ConnectHandler for ConnectAgentHandler {
                     });
             let outcome = run_agent_session(
                 &spec,
-                deps.provider.as_ref(),
-                deps.memory.as_deref(),
-                deps.skills.as_ref(),
-                deps.web.as_ref(), // EGR-AGENT-2: веб-инструменты (Some ⇔ ai.web.enabled)
-                decision_source,
-                &deps.writer,
-                &deps.reader,
-                &deps.agent_paused, // ГЛОБАЛЬНЫЙ kill-switch (SIGUSR1/agent.json/agent.control)
-                &cancel,
-                forwarder,
-                None, // top-level прогон коннектора (не субагент)
-                delegation_deps.as_ref(),
-                Some(&deps.research), // RES-5: research.run (default-OFF; регистрируется при всех условиях)
+                &SessionDeps {
+                    provider: deps.provider.as_ref(),
+                    memory: deps.memory.as_deref(),
+                    skills: deps.skills.as_ref(),
+                    web: deps.web.as_ref(), // EGR-AGENT-2: веб-инструменты (Some ⇔ ai.web.enabled)
+                    decision_source,
+                    writer: &deps.writer,
+                    reader: &deps.reader,
+                    // ГЛОБАЛЬНЫЙ kill-switch (SIGUSR1/agent.json/agent.control).
+                    paused: &deps.agent_paused,
+                    cancel: &cancel,
+                    forwarder,
+                },
+                SessionRole::TopLevel {
+                    delegation: delegation_deps.as_ref(),
+                    // RES-5: research.run (default-OFF; регистрируется при всех условиях).
+                    research: Some(&deps.research),
+                },
             )
             .await;
             // Терминал по канону R-2 (как desktop `finish_in_store`: single-spawn, пауза → error,

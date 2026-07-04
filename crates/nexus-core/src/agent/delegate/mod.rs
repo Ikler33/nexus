@@ -7,7 +7,7 @@
 //! `agent_runs.parent_run_id` (миграция 024, см. [`crate::agent::run_store::create_child_run`]), конфиг
 //! [`crate::ai::config::DelegationConfig`] (default-OFF). SUB-1 — [`build_child_registry`] (child ⊆ parent,
 //! set-intersection) + [`build_child_task`] (фокус-обрамление). SUB-2 — события плана/субагента
-//! (`crate::agent::event`). SUB-3a — шов субагента в `run_agent_session` ([`crate::agent::session::SubagentSpawn`]:
+//! (`crate::agent::event`). SUB-3a — шов субагента в `run_agent_session` ([`crate::agent::session::SessionRole::Subagent`]:
 //! сужение реестра до allowed + опц. общий dispatcher + skip skill.save). ДАЛЬШЕ: SUB-3b (`spawn_subagent` +
 //! `DelegateTool` fan-out поверх run_agent_session + JoinSet).
 

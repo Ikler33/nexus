@@ -539,7 +539,9 @@ mod tests {
     #[ignore = "live web (нужны SearXNG :8888 + tool-capable модель :8080: NEXUS_LIVE_CHAT=1, NEXUS_LIVE_SEARX_URL default http://89.127.211.153:8888)"]
     async fn live_agent_web_search_on_rig() {
         use crate::agent::event::AgentEvent;
-        use crate::agent::session::{run_agent_session, AgentEventForwarder, SessionSpec};
+        use crate::agent::session::{
+            run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+        };
         use crate::ai::tools::OpenAiToolProvider;
         use crate::db::Database;
         use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient};
@@ -609,19 +611,22 @@ mod tests {
             Arc::new(crate::actuator::PolicyDefault);
         let outcome = run_agent_session(
             &spec,
-            provider.as_ref(),
-            None,
-            None,
-            Some(&web),
-            decision,
-            db.writer(),
-            db.reader(),
-            &paused,
-            &cancel,
-            fwd.clone(),
-            None,
-            None,
-            None, // research (RES-4): default-OFF; прод-проводка в RES-5
+            &SessionDeps {
+                provider: provider.as_ref(),
+                memory: None,
+                skills: None,
+                web: Some(&web),
+                decision_source: decision,
+                writer: db.writer(),
+                reader: db.reader(),
+                paused: &paused,
+                cancel: &cancel,
+                forwarder: fwd.clone(),
+            },
+            SessionRole::TopLevel {
+                delegation: None,
+                research: None, // research (RES-4): default-OFF; прод-проводка в RES-5
+            },
         )
         .await;
         eprintln!("LIVE web outcome: {outcome:?}");
