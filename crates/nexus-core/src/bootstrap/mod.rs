@@ -22,11 +22,11 @@
 //!   vault-состояния, не сборки. Сам reconcile с R-3d канонизирован в
 //!   [`crate::vector::reconcile_embedding_model`] («полная чистка», решение владельца §8.5) —
 //!   desktop/agentd зовут его между сборкой эмбеддера и открытием индексов;
-//! - hot-apply провайдеров desktop (`set_ai_config`) — НАМЕРЕННО особый путь (EndpointDto из UI не
-//!   несёт таймаутов → единый `saved_chat`-профиль + URL-fallback fast→chat). Решение R-3b: НЕ
-//!   переключён — байт-в-байт с каноном невозможен (канон дал бы fast'у собственный профиль из
-//!   `ai.fast` и fallback ТЕМ ЖЕ Arc); дельта запинена фикстурной таблицей
-//!   nexus-desktop `commands::settings::tests::hot_*`, унификация — отдельным декларируемым срезом.
+//! - hot-apply провайдеров desktop (`set_ai_config`) — R-3e УНИФИЦИРОВАН на этот канон (`from_config` с
+//!   `{agent_tools: false, embedding: false}` — эмбеддер хот-путём не пересобирается): ДЕКЛАРИРУЕМОЕ
+//!   поведенческое изменение (решение владельца), прежний особый путь снят — fast теперь получает
+//!   собственный профиль `ai.fast` (дефолт-модель "fast") и fallback ТЕМ ЖЕ Arc, что chat_fast; дельта
+//!   задекларирована в CHANGELOG и перепинена nexus-desktop `commands::settings::tests::hot_*`.
 
 use std::sync::Arc;
 use std::time::Duration;
