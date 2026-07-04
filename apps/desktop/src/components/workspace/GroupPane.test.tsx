@@ -158,26 +158,42 @@ describe('GroupPane jumpToHeading expand-then-scroll (S6-FIX2)', () => {
 
   it('цель в свёрнутой секции → scrollIntoView ОТЛОЖЕН до transitionend(grid-template-rows)', async () => {
     await setup();
-    const scrollSpy = vi.fn();
-    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
-    // Свернём секцию кликом по h2.
-    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
-    // Прыжок к вложенному h3 «Под» (строка 3, скрыта в свёрнутом теле).
-    clickOutline(/Под/);
-    // В пределах первого кадра scrollIntoView ещё НЕ вызван (ждём анимацию раскрытия).
-    await act(async () => {
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-    });
-    expect(scrollSpy).not.toHaveBeenCalled();
-    // Эмулируем завершение grid-анимации → теперь скроллит.
-    const secBody = document.querySelector('section[data-sec-id="раздел"] .sec-body') as HTMLElement;
-    expect(secBody).not.toBeNull();
-    act(() => {
-      const ev = new Event('transitionend') as TransitionEvent;
-      Object.defineProperty(ev, 'propertyName', { value: 'grid-template-rows' });
-      secBody.dispatchEvent(ev);
-    });
-    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    // FLAKE-ФИКС (CI 2026-07-04): с реальными таймерами 350мс-фолбэк revealLine мог выстрелить на
+    // медленном раннере ДО ассерта «ещё не вызван» (окно между кликом и expect не ограничено).
+    // Fake timers дают детерминизм: rAF в jsdom реализован через setTimeout(16) и тоже фейковый —
+    // кадры и фолбэк двигаем ЯВНО. useRealTimers — в finally (иначе утечёт в соседние тесты).
+    vi.useFakeTimers();
+    try {
+      const scrollSpy = vi.fn();
+      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
+      // Свернём секцию кликом по h2.
+      fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+      // Прыжок к вложенному h3 «Под» (строка 3, скрыта в свёрнутом теле).
+      clickOutline(/Под/);
+      // Первый кадр (rAF ≈ setTimeout(16)): scrollIntoView ещё НЕ вызван (ждём анимацию раскрытия).
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(scrollSpy).not.toHaveBeenCalled();
+      // Эмулируем завершение grid-анимации → теперь скроллит.
+      const secBody = document.querySelector(
+        'section[data-sec-id="раздел"] .sec-body',
+      ) as HTMLElement;
+      expect(secBody).not.toBeNull();
+      act(() => {
+        const ev = new Event('transitionend') as TransitionEvent;
+        Object.defineProperty(ev, 'propertyName', { value: 'grid-template-rows' });
+        secBody.dispatchEvent(ev);
+      });
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+      // 350мс-фолбэк после состоявшегося transitionend НЕ даёт второго скролла.
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('цель в РАЗВЁРНУТОЙ секции → scrollIntoView немедленный (в rAF, без ожидания transitionend)', async () => {
