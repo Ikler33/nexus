@@ -9,7 +9,7 @@ beforeEach(() => {
   useVaultStore.setState({ info: null, childrenByPath: {}, expanded: {}, loading: {} });
   useWorkspaceStore.getState().reset();
   // onboardingDone: welcome ведёт сразу к «Открыть vault» (4-шаговый flow — отдельный тест).
-  useUIStore.setState({ homeOpen: true, newsOpen: false, onboardingDone: true, onboardingActive: false });
+  useUIStore.setState({ mainView: 'home', onboardingDone: true, onboardingActive: false });
 });
 
 describe('App (Ф0-3 / Ф4-11 / DP-1)', () => {
@@ -32,7 +32,7 @@ describe('App (Ф0-3 / Ф4-11 / DP-1)', () => {
     // Открытие файла из дерева закрывает Home и показывает редактор.
     fireEvent.click(screen.getByText('README'));
     expect(await screen.findByRole('tab', { name: /README/ })).toBeInTheDocument();
-    expect(useUIStore.getState().homeOpen).toBe(false);
+    expect(useUIStore.getState().mainView).toBe('editor');
   });
 
   // DP-7: первый запуск — 4-шаговый онбординг (welcome → vault → AI → индексация → вход).

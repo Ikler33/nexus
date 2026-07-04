@@ -15,14 +15,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   // P0-2: openFile дёргает useUIStore (closeHome/News/Board/Today/Agent) — возвращаем main-вью к дефолту,
-  // чтобы флаги не текли между тестами/файлами.
-  useUIStore.setState({
-    homeOpen: true,
-    newsOpen: false,
-    boardOpen: false,
-    todayOpen: false,
-    agentOpen: false,
-  });
+  // чтобы флаг не тёк между тестами/файлами. F-4: единое поле mainView.
+  useUIStore.setState({ mainView: 'home' });
 });
 
 describe('workspace store (Ф0-9, Б12)', () => {
@@ -38,12 +32,10 @@ describe('workspace store (Ф0-9, Б12)', () => {
   // P0-2: открытие файла гасит ВСЕ полноэкранные main-вьюхи (Home/News/Board/Today/Agent), иначе
   // редактор откроется ЗА Today/Agent = «мёртвый клик» из дерева/палитры/⌘O (раньше гасили только
   // Home/News/Board — Today/Agent забыли).
-  it('openFile гасит todayOpen и agentOpen (anti-dead-click)', async () => {
-    useUIStore.setState({ todayOpen: true, agentOpen: true, homeOpen: false });
+  it('openFile уводит из main-вью в редактор (anti-dead-click)', async () => {
+    useUIStore.setState({ mainView: 'agent' });
     await useWorkspaceStore.getState().openFile('Inbox.md');
-    expect(useUIStore.getState().todayOpen).toBe(false);
-    expect(useUIStore.getState().agentOpen).toBe(false);
-    expect(useUIStore.getState().homeOpen).toBe(false);
+    expect(useUIStore.getState().mainView).toBe('editor');
     // Файл реально стал активным (редактор впереди).
     expect(activePath(useWorkspaceStore.getState())).toBe('Inbox.md');
   });

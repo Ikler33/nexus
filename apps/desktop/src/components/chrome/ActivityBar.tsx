@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { CometIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
-import { useUIStore } from '../../stores/ui';
+import { selectMainView, useUIStore } from '../../stores/ui';
 import styles from './ActivityBar.module.css';
 
 /**
@@ -23,11 +23,8 @@ import styles from './ActivityBar.module.css';
  */
 export function ActivityBar() {
   const { t } = useTranslation();
-  const homeOpen = useUIStore((s) => s.homeOpen);
-  const newsOpen = useUIStore((s) => s.newsOpen);
-  const boardOpen = useUIStore((s) => s.boardOpen);
-  const todayOpen = useUIStore((s) => s.todayOpen);
-  const agentOpen = useUIStore((s) => s.agentOpen);
+  // F-4 (семейство 1): активная main-вью одним derived-селектором вместо 5 `*Open`-булей.
+  const mainView = useUIStore(selectMainView);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const graphOpen = useUIStore((s) => s.graphOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
@@ -60,24 +57,24 @@ export function ActivityBar() {
   return (
     <nav className={styles.activityBar} aria-label={t('chrome.nav')}>
       <div className={styles.group}>
-        {btn(<Home size={19} aria-hidden />, t('commands.view.home'), openHome, homeOpen)}
+        {btn(<Home size={19} aria-hidden />, t('commands.view.home'), openHome, mainView === 'home')}
         {btn(
           <CalendarCheck size={19} aria-hidden />,
           t('commands.view.today'),
           openToday,
-          todayOpen,
+          mainView === 'today',
         )}
         {btn(
           <Newspaper size={19} aria-hidden />,
           t('commands.view.news'),
           openNews,
-          newsOpen,
+          mainView === 'news',
         )}
         {btn(
           <LayoutGrid size={19} aria-hidden />,
           t('commands.view.board'),
           openBoard,
-          boardOpen,
+          mainView === 'board',
         )}
         {/* P0-3-смоук: НЕ передавать openAgent голой ссылкой — onClick подставит MouseEvent в
             optional `seed`, и `seed.trim()` бросит TypeError (кнопка Castor «мертвела»). */}
@@ -85,13 +82,13 @@ export function ActivityBar() {
           <CometIcon size={19} aria-hidden />,
           t('commands.view.agent'),
           () => openAgent(),
-          agentOpen,
+          mainView === 'agent',
         )}
         {btn(
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),
           toggleSidebar,
-          !homeOpen && !newsOpen && !boardOpen && !todayOpen && !agentOpen && sidebarOpen,
+          mainView === 'editor' && sidebarOpen,
         )}
         {btn(
           <Share2 size={19} aria-hidden />,
