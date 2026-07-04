@@ -388,13 +388,8 @@ pub async fn context_facts(
     // top-k не-пинов по близости.
     let mut topk: Vec<MemoryFact> = Vec::new();
     if k > 0 && !query.trim().is_empty() && !vectors.is_empty() {
-        let qvec = embedder
-            .embed_query(query)
-            .await
-            .map_err(|e| DbError::External(e.to_string()))?;
-        let hits = vectors
-            .search(&qvec, (k * 4).max(8))
-            .map_err(|e| DbError::External(e.to_string()))?;
+        let hits =
+            crate::vector::embed_and_search(vectors, embedder, query, (k * 4).max(8)).await?;
         let pinned_ids: std::collections::HashSet<i64> = pinned.iter().map(|f| f.id).collect();
         // MEM-6: отсекаем хиты ниже порога близости (раньше брали top-k любыми) — нерелевантные факты
         // больше не лезут в контекст. Пины фильтруем отдельно (они инжектятся безусловно).

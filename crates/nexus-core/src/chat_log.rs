@@ -417,22 +417,12 @@ pub async fn search_memory(
     if query.trim().is_empty() || k == 0 || vectors.is_empty() {
         return Ok(Vec::new());
     }
-    let qvec = embedder
-        .embed_query(query)
-        .await
-        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
     // Берём с запасом — дедуп по сессии и исключение текущей/эпизодных могут отсеять часть.
-    let hits = vectors
-        .search(&qvec, (k * 4).max(8))
-        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
+    let hits = crate::vector::embed_and_search(vectors, embedder, query, (k * 4).max(8)).await?;
     // N4b-порог релевантности: ниже [`CHAT_MEM_SIM_THRESHOLD`] — шум (нерелевантные чужие диалоги),
-    // в контекст не подмешиваем (real-test 2026-06-18). Берём `(k*4).max(8)` с запасом ДО фильтра —
-    // дедуп по сессии/исключения отсеют часть уже после порога.
-    let ranked: Vec<(i64, f32)> = hits
-        .into_iter()
-        .filter(|h| h.score >= CHAT_MEM_SIM_THRESHOLD)
-        .map(|h| (h.chunk_id as i64, h.score))
-        .collect();
+    // в контекст не подмешиваем (real-test 2026-06-18). Запас `(k*4).max(8)` ДО фильтра — дедуп по
+    // сессии/исключения отсеют часть уже после порога.
+    let ranked = crate::vector::hits_above_threshold(hits, CHAT_MEM_SIM_THRESHOLD);
     let mut out = resolve_memory_hits(
         reader,
         ranked,
