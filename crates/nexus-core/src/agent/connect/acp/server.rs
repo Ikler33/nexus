@@ -20,21 +20,21 @@
 //! order keystone). События цикла мостятся sync-форвардером → ограниченный mpsc → drain-таск →
 //! [`map_event_to_acp`] → `session/update`. Весь outbound — через `serde_json::json!`.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::{BufReader, Stdin, Stdout};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 
 use crate::actuator::{BatchDecision, DecisionSource, ItemDecision, ProposalBatch};
 use crate::ai::tools::ToolCapableProvider;
 use crate::ai::ChatMessage;
 use crate::db::{ReadPool, WriteActor};
+use crate::rpc::RpcCorrelator;
 
 use super::super::super::event::AgentEvent;
 use super::super::super::finish::{outcome_to_finish, CancelWording, PausePolicy};
@@ -98,18 +98,20 @@ struct AcpSession {
     active: bool,
 }
 
-/// Разделяемое состояние сервера. `session` — `Option` (одна сессия/коннект). `perm_pending` — карта
-/// наших исходящих permission-id → oneshot (read-loop фаеррит при client-`Response`; decide() ждёт).
+/// Значение, доставляемое ждущему permission-запросу: разобранный client-`Response.result`
+/// (Ok/Err), Cancelled при отмене или provaл при закрытии транспорта.
+type PermReply = Result<Value, RpcError>;
+
+/// Разделяемое состояние сервера. `session` — `Option` (одна сессия/коннект). `perm_pending` — канон
+/// [`RpcCorrelator`] наших исходящих permission-id (read-loop резолвит при client-`Response`; decide()
+/// ждёт; id-счётчик perm инкапсулирован в корреляторе, стартует с `PERM_ID_BASE`).
 struct AcpServerState {
     cfg: Arc<AcpServerConfig>,
     transport: Arc<dyn Transport>,
     session: Mutex<Option<AcpSession>>,
-    perm_pending: PermPending,
+    perm_pending: Arc<RpcCorrelator<PermReply>>,
     next_session: AtomicU64,
-    next_perm_id: Arc<AtomicI64>,
 }
-
-type PermPending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcError>>>>>;
 
 /// Поднимает read-loop ACP-сервера над `transport`, обслуживает ОДНУ сессию до EOF. На закрытие
 /// транспорта (родитель закрыл stdin): проваливает все ждущие permission (decide() → reject_all),
@@ -119,9 +121,9 @@ pub async fn serve_acp(transport: Arc<dyn Transport>, cfg: Arc<AcpServerConfig>)
         cfg,
         transport: transport.clone(),
         session: Mutex::new(None),
-        perm_pending: Arc::new(Mutex::new(HashMap::new())),
+        // perm-id стартует с большого оффсета PERM_ID_BASE (никогда не пересечься с id клиента).
+        perm_pending: Arc::new(RpcCorrelator::new(PERM_ID_BASE)),
         next_session: AtomicU64::new(1),
-        next_perm_id: Arc::new(AtomicI64::new(PERM_ID_BASE)),
     });
 
     while let Some(msg) = transport.recv().await {
@@ -129,12 +131,10 @@ pub async fn serve_acp(transport: Arc<dyn Transport>, cfg: Arc<AcpServerConfig>)
     }
 
     // EOF: провалить все ждущие permission → decide() резолвится reject_all (fail-closed), взвести cancel.
-    {
-        let mut p = state.perm_pending.lock().await;
-        for (_, tx) in p.drain() {
-            let _ = tx.send(Err(RpcError::internal("acp-server transport closed")));
-        }
-    }
+    state
+        .perm_pending
+        .fail_all(Err(RpcError::internal("acp-server transport closed")))
+        .await;
     if let Some(s) = state.session.lock().await.as_ref() {
         s.cancel.store(true, Ordering::Relaxed);
     }
@@ -331,7 +331,6 @@ async fn drive_prompt(
         session_id: session_id.clone(),
         run_id,
         perm_pending: state.perm_pending.clone(),
-        next_perm_id: state.next_perm_id.clone(),
         cancel: cancel.clone(),
         timeout: PERMISSION_TIMEOUT,
     });
@@ -433,20 +432,19 @@ async fn cancel_session(state: &Arc<AcpServerState>, params: Value) {
     };
     if matched {
         // Проваливаем ждущие permission → decide() резолвится reject_all (отмена не одобряет запись).
-        let mut pend = state.perm_pending.lock().await;
-        for (_, tx) in pend.drain() {
-            let _ = tx.send(Ok(json!({ "outcome": { "outcome": "cancelled" } })));
-        }
+        // Cancelled — валидное значение доставки: outcome_to_batch_decision → reject_all (fail-closed).
+        state
+            .perm_pending
+            .fail_all(Ok(json!({ "outcome": { "outcome": "cancelled" } })))
+            .await;
     }
 }
 
 /// Роутинг client-`Response` (ответ на НАШ session/request_permission) в ждущий oneshot по i64-id.
-/// Неизвестный id (поздний/дубль) — тихо отбрасываем.
+/// Неизвестный id (поздний/дубль) — тихо отбрасываем (внутри [`RpcCorrelator::resolve`]).
 async fn route_response(state: &Arc<AcpServerState>, id: Value, result: Result<Value, RpcError>) {
     let Some(i) = id.as_i64() else { return };
-    if let Some(tx) = state.perm_pending.lock().await.remove(&i) {
-        let _ = tx.send(result);
-    }
+    state.perm_pending.resolve(i, result).await;
 }
 
 /// Собирает текст задачи из `Text`-блоков (join `\n`); Other/image/audio игнорирует.
@@ -587,8 +585,7 @@ struct AcpServerDecisionSource {
     transport: Arc<dyn Transport>,
     session_id: String,
     run_id: i64,
-    perm_pending: PermPending,
-    next_perm_id: Arc<AtomicI64>,
+    perm_pending: Arc<RpcCorrelator<PermReply>>,
     cancel: Arc<AtomicBool>,
     timeout: Duration,
 }
@@ -600,11 +597,8 @@ impl DecisionSource for AcpServerDecisionSource {
         if self.cancel.load(Ordering::Relaxed) {
             return BatchDecision::reject_all();
         }
-        let perm_id = self.next_perm_id.fetch_add(1, Ordering::Relaxed);
+        let (perm_id, rx) = self.perm_pending.begin().await;
         let params = proposal_to_permission_params(&self.session_id, self.run_id, perm_id, batch);
-
-        let (tx, rx) = oneshot::channel();
-        self.perm_pending.lock().await.insert(perm_id, tx);
 
         if self
             .transport
@@ -616,19 +610,22 @@ impl DecisionSource for AcpServerDecisionSource {
             .await
             .is_err()
         {
-            self.perm_pending.lock().await.remove(&perm_id);
+            self.perm_pending.cancel(perm_id).await;
             return BatchDecision::reject_all(); // транспорт закрыт
         }
 
-        // Ждём ответ клиента, гоня таймаут (cancel дополнительно проваливается через cancel_session).
-        let result: Result<Value, RpcError> = match tokio::time::timeout(self.timeout, rx).await {
-            Ok(Ok(r)) => r, // client-Response (Ok/Err) или Cancelled
-            Ok(Err(_)) => Err(RpcError::internal("perm oneshot closed")), // EOF дренировал карту
-            Err(_) => {
-                self.perm_pending.lock().await.remove(&perm_id);
-                Err(RpcError::internal("perm timeout"))
-            }
-        };
+        // Ждём ответ клиента с СОБСТВЕННЫМ таймаутом (5 мин — параметр self.timeout, инвариант R-9; cancel
+        // дополнительно проваливается через cancel_session). Снятие записи на fallback — в корреляторе.
+        let result = self
+            .perm_pending
+            .await_reply(
+                perm_id,
+                rx,
+                Some(self.timeout),
+                || Err(RpcError::internal("perm oneshot closed")),
+                || Err(RpcError::internal("perm timeout")),
+            )
+            .await;
         outcome_to_batch_decision(batch, &result)
     }
 }

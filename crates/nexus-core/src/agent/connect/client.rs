@@ -8,13 +8,13 @@
 //! таймаутом (мёртвый сервер не вешает UI); закрытие транспорта → все ждущие получают ошибку, events-канал
 //! закрывается (потребитель видит конец стрима).
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::mpsc;
+
+use crate::rpc::RpcCorrelator;
 
 use super::{
     InitializeResult, RpcError, RpcMessage, Transport, TransportError, EVENT_CHANNEL_CAP,
@@ -49,14 +49,15 @@ impl std::fmt::Display for ConnectError {
 }
 impl std::error::Error for ConnectError {}
 
-type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcError>>>>>;
+/// Значение, доставляемое ждущему запросу: разобранный `Response.result` (Ok/Err протокола).
+type Reply = Result<Value, RpcError>;
 
 /// Клиент протокола AGENT-CONNECT поверх [`Transport`]. Один read-loop демультиплексирует ответы
-/// (по `id`) и `agent/event`-нотификации (в events-канал). Дропается → read-loop прерывается.
+/// (по `id` через [`RpcCorrelator`]) и `agent/event`-нотификации (в events-канал). Дропается → read-loop
+/// прерывается.
 pub struct ConnectClient {
     transport: Arc<dyn Transport>,
-    next_id: AtomicI64,
-    pending: Pending,
+    correlator: Arc<RpcCorrelator<Reply>>,
     read_task: tokio::task::JoinHandle<()>,
 }
 
@@ -74,13 +75,13 @@ impl ConnectClient {
     pub async fn connect(
         transport: Arc<dyn Transport>,
     ) -> Result<(Self, mpsc::Receiver<Value>), ConnectError> {
-        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        // Клиентское направление: id стартует с 1 (см. [`RpcCorrelator::new`]).
+        let correlator: Arc<RpcCorrelator<Reply>> = Arc::new(RpcCorrelator::new(1));
         let (events_tx, events_rx) = mpsc::channel::<Value>(EVENT_CHANNEL_CAP);
-        let read_task = tokio::spawn(read_loop(transport.clone(), pending.clone(), events_tx));
+        let read_task = tokio::spawn(read_loop(transport.clone(), correlator.clone(), events_tx));
         let client = Self {
             transport,
-            next_id: AtomicI64::new(1),
-            pending,
+            correlator,
             read_task,
         };
         let res = client
@@ -99,33 +100,28 @@ impl ConnectClient {
     }
 
     /// Шлёт запрос и ждёт ответ (коррелируется по `id`). Таймаут/закрытый транспорт → `Err`
-    /// (не виснет). Снимает ожидание из `pending` при таймауте.
+    /// (не виснет). Снятие ожидания из карты при send-fail/таймауте/закрытии — внутри [`RpcCorrelator`].
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        let (id, rx) = self.correlator.begin().await;
         if self
             .transport
             .send(RpcMessage::request(id, method, params))
             .await
             .is_err()
         {
-            self.pending.lock().await.remove(&id);
+            self.correlator.cancel(id).await;
             return Err(RpcError::internal("transport send failed"));
         }
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(result)) => result,
-            // read-loop провалил ожидание (транспорт закрыт) ИЛИ oneshot дропнут. Снимаем запись и тут
-            // (ревью CONN-2 NIT: симметрия с timeout-веткой; обычно read-loop уже снял, но без footgun'а).
-            Ok(Err(_)) => {
-                self.pending.lock().await.remove(&id);
-                Err(RpcError::internal("response channel closed"))
-            }
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                Err(RpcError::internal("request timeout"))
-            }
-        }
+        // Управляющие RPC клиента: фиксированный таймаут REQUEST_TIMEOUT (параметром — см. инвариант R-9).
+        self.correlator
+            .await_reply(
+                id,
+                rx,
+                Some(REQUEST_TIMEOUT),
+                || Err(RpcError::internal("response channel closed")),
+                || Err(RpcError::internal("request timeout")),
+            )
+            .await
     }
 
     /// Шлёт уведомление (без ответа): `agent/approve`, `agent/control`.
@@ -140,16 +136,14 @@ impl ConnectClient {
 /// drop при переполнении — зеркало серверного forwarder'а). Закрытие транспорта → провал всех ждущих.
 async fn read_loop(
     transport: Arc<dyn Transport>,
-    pending: Pending,
+    correlator: Arc<RpcCorrelator<Reply>>,
     events_tx: mpsc::Sender<Value>,
 ) {
     while let Some(msg) = transport.recv().await {
         match msg {
             RpcMessage::Response { id, result } => {
                 if let Some(i) = id.as_i64() {
-                    if let Some(tx) = pending.lock().await.remove(&i) {
-                        let _ = tx.send(result);
-                    }
+                    correlator.resolve(i, result).await; // роутинг по id
                 }
             }
             RpcMessage::Notification { method, params } if method == "agent/event" => {
@@ -160,10 +154,9 @@ async fn read_loop(
         }
     }
     // Транспорт закрыт (сервер ушёл) → провалить все висящие запросы, чтобы `request` не вис.
-    let mut p = pending.lock().await;
-    for (_, tx) in p.drain() {
-        let _ = tx.send(Err(RpcError::internal("transport closed")));
-    }
+    correlator
+        .fail_all(Err(RpcError::internal("transport closed")))
+        .await;
     // `events_tx` дропается здесь → приёмник events видит `None` (конец стрима).
 }
 
