@@ -28,6 +28,8 @@ use std::time::Duration;
 
 use nexus_core::ai::tools::ToolCapableProvider;
 use nexus_core::ai::{self, AIClient, EmbeddingProvider, LocalConfig};
+// Канон №2 (R-3c): бывшая локальная реплика была байт-идентична канону (включая warn-текст) — удалена.
+use nexus_core::bootstrap::load_local_config;
 use nexus_core::db::{Database, WriteActor};
 use nexus_core::net::{EgressAudit, EgressFeature, EgressPolicy};
 use nexus_core::vector::VectorIndex;
@@ -1219,16 +1221,6 @@ async fn count_egress_for_run(db: &Database, run_id: i64) -> i64 {
         })
         .await
         .unwrap_or(0)
-}
-
-/// Реплика `vault::load_local_config`: читает/парсит `.nexus/local.json` один раз. `None` — нет/битый.
-async fn load_local_config(root: &Path) -> Option<LocalConfig> {
-    let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
-        .await
-        .ok()?;
-    LocalConfig::parse(&raw)
-        .map_err(|e| tracing::warn!(error = %e, "local.json: разбор не удался — AI отключён"))
-        .ok()
 }
 
 /// SKILL-2: строит [`SkillContext`] прогона из `ai.agent_skills_dir`. Не задан → `None` (агент без
