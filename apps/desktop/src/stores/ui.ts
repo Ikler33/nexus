@@ -14,6 +14,34 @@ function readOnboarded(): boolean {
 }
 
 type AiTab = 'chat' | 'agent';
+
+/**
+ * F-4 — ЧЕТЫРЕ семейства UI-состояния этого стора (thermo-смелл №1: булев-взрыв ~25 флагов).
+ * Границы реестров зафиксированы, чтобы новые вью/оверлеи не «слипались»:
+ *
+ *  1) mainView    — полноэкранные ВЗАИМОИСКЛЮЧАЕМЫЕ вьюхи (home/today/news/board/agent, редактор —
+ *     когда все закрыты). Приоритет — тернарник App.tsx (agent > today > home > news > board > editor).
+ *     Единый источник ЧТЕНИЯ активной вью — `selectMainView`.
+ *  2) trapOverlay — focus-trap top-оверлеи (палитра/шпаргалка/Цели/Задачи/Входящие/Память/Эпизоды/
+ *     Настройки): открытие одного гасит остальные (TRAP_OVERLAYS_CLOSED, урок P9-ревью #5). В DOM
+ *     рендерятся НЕЗАВИСИМО (не через один слот) — `selectTrapOverlay` только ЧИТАЕТ «какой сверху».
+ *     Схлопывание булей в один стейт отложено (F-4b): tweaks-дрейф + независимый рендер.
+ *  3) floats      — независимые плавающие слои (граф/плагины/sync/дайджест/противоречия/чат/сайдбар/
+ *     reading/aiTab): НЕ взаимоисключаемы, живут отдельными булями (F-4b, если вообще).
+ *  4) safe-flow   — модальные потоки редактора (conflict/versions/capture/templates): закрываются
+ *     ЯВНО, при nav-переходе (SWITCH_MAIN) НЕ гасятся. Отдельный реестр — НЕ folded в trap.
+ */
+export type MainView = 'home' | 'today' | 'news' | 'board' | 'agent' | 'editor';
+export type TrapOverlay =
+  | 'palette'
+  | 'cheatsheet'
+  | 'goals'
+  | 'tasks'
+  | 'inbox'
+  | 'memory'
+  | 'episodes'
+  | 'settings';
+
 /** Активная секция раздела настроек (Obsidian-style: левый нав → контент). Кросс-план #11. */
 export type SettingsSection =
   | 'general'
@@ -235,6 +263,65 @@ const SWITCH_MAIN = {
   digestOpen: false,
   contradictionsOpen: false,
 } as const;
+
+/**
+ * F-4 — DERIVED-селектор активной main-вью (семейство 1). Читает текущие `*Open`-були В ПРИОРИТЕТЕ
+ * тернарника App.tsx (agent > today > home > news > board > editor). Единственный правильный способ
+ * спросить «какая вью сейчас»: потребители подписываются `useUIStore(selectMainView)` (примитив →
+ * React бэйлит ре-рендер). Коннектор F-8 строит реестр вью поверх этого enum.
+ */
+export const selectMainView = (s: UIState): MainView => {
+  if (s.agentOpen) return 'agent';
+  if (s.todayOpen) return 'today';
+  if (s.homeOpen) return 'home';
+  if (s.newsOpen) return 'news';
+  if (s.boardOpen) return 'board';
+  return 'editor';
+};
+
+/**
+ * F-4 — DERIVED-селектор верхнего trap-оверлея (семейство 2): какой focus-trap-оверлей активен, или
+ * null. Реестр взаимоисключаем по построению (TRAP_OVERLAYS_CLOSED), но tweaks-дрейф (toggleTweaks/
+ * openSettings НЕ спредят реестр) допускает Настройки поверх другого — приоритет детерминирует «кто
+ * сверху». Только для ЧТЕНИЯ: рендер оверлеев в App.tsx остаётся независимым (поведение то же).
+ */
+export const selectTrapOverlay = (s: UIState): TrapOverlay | null => {
+  if (s.paletteOpen) return 'palette';
+  if (s.cheatsheetOpen) return 'cheatsheet';
+  if (s.goalsOpen) return 'goals';
+  if (s.tasksOpen) return 'tasks';
+  if (s.inboxOpen) return 'inbox';
+  if (s.memoryOpen) return 'memory';
+  if (s.episodesOpen) return 'episodes';
+  if (s.tweaksOpen) return 'settings';
+  return null;
+};
+
+/**
+ * F-4 — Esc-прецедент reading-режима (семейства 2+3+4), кодифицирован КАК ЕСТЬ (App.tsx reading-Esc-
+ * гейт). Любой оверлей ПОВЕРХ reading перехватывает Esc (у него свой close) → глобальный Esc App.tsx
+ * НЕ выходит из чтения «сквозь» модалку (аудит reading-esc-precedence + conflictresolver-esc). Union
+ * ВСЕХ трёх реестров-модалок (trap + блокирующие floats + safe-flow); НЕ включает main-вью/chat/
+ * reading/sidebar. P0-3-смоук (overlays.spec «Режим чтения…») пинит это поведение.
+ */
+export const selectReadingEscBlocked = (s: UIState): boolean =>
+  s.paletteOpen ||
+  s.graphOpen ||
+  s.pluginsOpen ||
+  s.syncOpen ||
+  s.captureOpen ||
+  s.templatesOpen ||
+  s.versionsOpen ||
+  s.cheatsheetOpen ||
+  s.conflictOpen ||
+  s.goalsOpen ||
+  s.memoryOpen ||
+  s.episodesOpen ||
+  s.tasksOpen ||
+  s.inboxOpen ||
+  s.digestOpen ||
+  s.contradictionsOpen ||
+  s.tweaksOpen;
 
 /** Глобальное UI-состояние оболочки (Command Palette, граф, RAG-чат и пр.). */
 export const useUIStore = create<UIState>((set) => ({
