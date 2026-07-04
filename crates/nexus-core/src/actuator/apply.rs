@@ -169,333 +169,36 @@ pub(in crate::actuator) async fn apply_action(
     ledger: &AuditSink,
     classify_hash: Option<&str>,
 ) -> ApplyOutcome {
-    // ── РУБЕЖ 0 (Фаза-3, ЕДИНЫЙ CHOKEPOINT): exec-таргет НЕ ПИШЕТСЯ vault-путём ──────────────────
-    // apply_action — единственный путь к диску. exec-таргеты (ShellRun/ProcessSpawn/GitOp) не vault-записи:
-    // их исполняет host/exec ВНУТРИ песочницы (Фаза-3 6c), НЕ apply. Здесь — top-guard fail-closed: даже
-    // если exec прошёл classify→Confirm→approve, apply его НЕ применяет (Failed). Это делает exec-армы в
-    // WRITE/success_summary ниже ПРОВАБЛИ-МЁРТВЫМИ (unreachable), а не per-arm fail-closed-кодом. Loud
-    // Failed > молчаливая псевдо-запись. Тест `exec_apply_is_fail_closed` пинит этот guard.
+    // ── РУБЕЖ 0 (CHOKEPOINT): exec-таргет НЕ пишется vault-путём (host/exec — Фаза-3 6c); fail-closed.
     if action.target.is_exec() {
         return ApplyOutcome::Failed(
             "exec-таргет не применяется vault-путём apply (host/exec — Фаза-3 6c)".into(),
         );
     }
-    // ── РУБЕЖ 0-bis (SL-7): SkillSave НЕ пишется vault-путём apply ────────────────────────────────
-    // SkillSave конфайнится в skills_root и идёт ОТДЕЛЬНЫМ путём `apply_skill_save` (SL-7c), НЕ через
-    // apply_action (тот rooted в `canon_root` → писал бы навык в vault как заметку, потеряв snapshot →
-    // тихая необратимая перезапись). top-guard fail-closed: дошёл сюда SkillSave — Failed, БЕЗ записи
-    // (армы SkillSave в WRITE/success_summary/change_kind ниже становятся unreachable). Loud > молчаливо.
+    // ── РУБЕЖ 0-bis (SL-7): SkillSave — ОТДЕЛЬНЫЙ путь apply_skill_save (skills_root); fail-closed.
     if matches!(action.target, ActionTarget::SkillSave { .. }) {
         return ApplyOutcome::Failed(
             "SkillSave не применяется vault-путём apply (skills_root — отдельный путь apply_skill_save)"
                 .into(),
         );
     }
+    // РУБЕЖ 1 — конфайнмент; рубежи 2-7 (строгий порядок) — ядро apply_confined_write (NOTE_SPEC).
     let rel = action.target.rel().to_string();
-
-    // ── РУБЕЖ 1: canonicalize/symlink RAMPART (2-й рубеж к лексическому classify) ──────────────
-    // resolve_vault_path_for_write канонизирует РОДИТЕЛЯ и проверяет starts_with(canon_root): следует
-    // по симлинку-КАТАЛОГУ и ловит побег НАРУЖУ (`vault/dirlink/x` → dirlink канонизируется наружу →
-    // PathEscape), который classify (лексический) не видит. Пишем ТОЛЬКО по `abs`.
-    //
-    // ВАЖНО (закрытие реального остаточного отверстия): resolve канонизирует РОДИТЕЛЯ, но НЕ сам leaf.
-    // Симлинк-ЛИСТ `vault/evil.md -> /outside/secret.md` имеет родителя = vault-корень (ВНУТРИ), поэтому
-    // resolve вернул бы путь leaf-симлинка как «in-vault». Чтение по нему утекло бы внешним содержимым в
-    // снапшот, а на не-rename писателе запись прошла бы СКВОЗЬ симлинк наружу. Поэтому ДОПОЛНИТЕЛЬНО:
-    // если leaf — симлинк, это PathEscape (у vault-заметок нет легитимных симлинков-листов; fail-closed).
     let is_create = matches!(action.target, ActionTarget::NoteCreate { .. });
-    let abs = {
-        let canon_root = canon_root.to_path_buf();
-        let rel_path = PathBuf::from(&rel);
-        let resolved = tokio::task::spawn_blocking(move || {
-            // resolve_vault_path_for_write канонизирует НЕПОСРЕДСТВЕННОГО родителя цели — он ОБЯЗАН
-            // существовать. Для create в НОВУЮ подпапку (`Notes/N.md`, `Notes/` ещё нет) родитель надо
-            // создать ДО резолва. Создаём ТОЛЬКО для create и ТОЛЬКО лексический parent под canon_root;
-            // классификатор уже отсёк `..`/абсолют/reserved (tools.rs), а резолв НИЖЕ всё равно отвергнет
-            // побег через предсуществующий симлинк-каталог (канонизирует созданный parent и сверит с root).
-            if is_create {
-                if let Some(parent) = canon_root.join(&rel_path).parent() {
-                    if !parent.exists() {
-                        // СИМЛИНК-БЕЗОПАСНЫЙ create_dir_all (Fix 1): обычный create_dir_all СЛЕДУЕТ по
-                        // симлинку в ПРЕДСУЩЕСТВУЮЩЕМ компоненте. Для нового глубокого пути `sub/a/b/n.md`,
-                        // где `sub` — симлинк НАРУЖУ vault, create_dir_all создал бы `/outside/a/b` (пустые
-                        // каталоги ВНЕ vault) ДО того, как resolve_vault_path_for_write отвергнет запись.
-                        // Поэтому СНАЧАЛА проходим rel-компоненты родителя от canon_root вниз: любой уже
-                        // СУЩЕСТВУЮЩИЙ компонент, который — симлинк (symlink_metadata без следования), ⇒
-                        // PathEscape (у vault-заметок нет легитимных симлинков-каталогов; fail-closed).
-                        // Только после этого create_dir_all создаёт СВЕЖИЕ каталоги (они не могут быть
-                        // симлинками). ЕДИНСТВЕННЫЙ до-ledger дисковый эффект — пустые каталоги ВНУТРИ vault
-                        // (review-принятый nit): симлинк-побег исключён этой проверкой ещё до записи.
-                        reject_symlinked_components(&canon_root, &rel_path)?;
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    // Для create leaf'а ещё нет: достаточно рубежа 1 (resolve) + проверки leaf-симлинка
-                    // (на случай, если кто-то подложил симлинк-пустышку с тем же именем).
-                    let abs = crate::vault::resolve_vault_path_for_write(&canon_root, &rel_path)?;
-                    if let Ok(meta) = std::fs::symlink_metadata(&abs) {
-                        if meta.file_type().is_symlink() {
-                            return Err(crate::vault::VaultError::PathEscape);
-                        }
-                    }
-                    return Ok::<_, crate::vault::VaultError>(abs);
-                }
-            }
-            // OVERWRITE (edit/frontmatter): полный конфайнмент (resolve + leaf-симлинк + хардлинк) —
-            // ЕДИНЫЙ helper, который переиспользует и AGENT-4 restore-снапшота (тот же рубеж на записи).
-            confine_for_overwrite(&canon_root, &rel_path)
-        })
-        .await;
-        match resolved {
-            Ok(Ok(abs)) => abs,
-            // Err от резолва (PathEscape: каталог-симлинк наружу ИЛИ leaf-симлинк / IO канонизации
-            // родителя) ⇒ НИ ОДНОГО write, ни одного чтения по симлинку.
-            Ok(Err(_)) => return ApplyOutcome::PathEscape,
-            Err(join_err) => return ApplyOutcome::Failed(format!("apply join: {join_err}")),
-        }
+    let abs = match resolve_note_path(canon_root, &rel, is_create).await {
+        Ok(abs) => abs,
+        Err(outcome) => return outcome,
     };
-
-    // ── РУБЕЖ 2: read-current (для hash/снапшота). Existence-ВЕРДИКТ выносим ПОСЛЕ ledger-фенса:
-    // replay того же действия (create, файл уже создан 1-м прогоном) должен дать AlreadyDone, а не
-    // «уже существует» — идемпотентность сильнее существования. Поэтому existence-gate (для Fresh) —
-    // ниже, после record_before. read — это просто чтение (не вердикт), его делаем сейчас.
-    let current_content: Option<String> = read_to_string_opt(&abs).await;
-    let on_disk_hash: Option<String> = current_content
-        .as_ref()
-        .map(|c| crate::vault::content_hash(c.as_bytes()));
-
-    // Идемпотентность-ключ: target_hash — отпечаток цели НА МОМЕНТ classify (часть тождества действия,
-    // СТАБИЛЕН в окне краш→retry — иначе replay не сматчился бы). Если `classify_hash` задан (3d-путь
-    // через changeset) — берём ЕГО (at-classify view). Если None (3c-инструмент без changeset) —
-    // fallback: для create отпечаток ПЛАНИРУЕМОГО содержимого (стабилен между прогонами даже после того,
-    // как 1-й прогон создал файл), для edit/frontmatter — on-disk hash сейчас. `content_hash` (колонка
-    // ledger) — ОТДЕЛЬНЫЙ токен оптимистичной конкуренции (on-disk-at-attempt) для CrashedMidExecute
-    // re-check; он НЕ часть ключа, поэтому дрейф диска не «уводит» ключ — даёт CrashedMidExecute.
-    let payload = action_payload(action);
-    let target_hash = match classify_hash {
-        Some(h) => h.to_string(),
-        None => match &action.target {
-            ActionTarget::NoteCreate { .. } => {
-                crate::vault::content_hash(payload.unwrap_or("").as_bytes())
-            }
-            _ => on_disk_hash
-                .clone()
-                .unwrap_or_else(|| crate::vault::content_hash(payload.unwrap_or("").as_bytes())),
-        },
-    };
-    let args = canonical_args(Some(&rel), payload);
-    let key = idempotency_key(run_id, action.target.tool_name(), &args, &target_hash);
-
-    // ── РУБЕЖ 3: optimistic concurrency (classify_hash drift) — ДО фенса (stale view → не клобберим).
-    // on-disk hash СЕЙЧАС vs classify_hash. None on_disk (create) → "" (цели нет).
-    if let Some(expected) = classify_hash {
-        let now = on_disk_hash.as_deref().unwrap_or("");
-        if now != expected {
-            return ApplyOutcome::Failed(drift_msg(&rel));
-        }
-    }
-
-    // ── РУБЕЖ 4: ledger WRITE-BEFORE-ACT (ДО любого write) ────────────────────────────────────
-    // INSERT строки-якоря (outcome=NULL) — это ФЕНС. Успех ⇒ Fresh (мы первые). Дубль (UNIQUE) ⇒ это
-    // replay того же действия в прогоне → ветвимся по присутствию outcome.
-    // ПРИВАТНОСТЬ (AGENT-6): долговечное резюме диффа — СТРУКТУРНОЕ, свободное от содержимого
-    // (`"+N -M (new|edit)"`). Строим ТОЛЬКО редакция-гвардом [`super::orchestrate::diff_summary_for`]
-    // → [`audit::DiffSummary`] (счётчики строк + статус-токен). База диффа — `current_content`,
-    // прочитанный в Рубеже 2 (для overwrite); для create база пуста (файла ещё нет) → счётчики от тела.
-    // НИ тело, ни значения frontmatter, ни хунки в журнал не попадают (нет канала для текста).
-    let diff_summary =
-        super::orchestrate::diff_summary_for(action, current_content.as_deref().unwrap_or(""))
-            .render();
-    let entry = ActionEntry {
+    apply_confined_write(
+        action,
         run_id,
-        idempotency_key: key.clone(),
-        tool_name: action.target.tool_name().to_string(),
-        target_rel: Some(rel.clone()),
-        risk_tier: audit::TIER_AUTO.to_string(),
-        state: STATE_EXECUTING.to_string(),
-        content_hash: on_disk_hash.clone(),
-        diff_summary: Some(diff_summary),
-    };
-    let is_fresh = match ledger.record_before(entry).await {
-        Ok(_) => true, // Fresh: строка-якорь записана ДО касания диска.
-        Err(_) => {
-            // INSERT отбит (вероятно UNIQUE-дубль ключа) → ветвимся по replay_decision (по outcome).
-            match ledger.replay_decision(&key).await {
-                Ok(ReplayDecision::AlreadyDone(outcome)) => {
-                    // Уже исполнено ранее — НЕ переписываем диск, отдаём прежний исход (идемпотентно).
-                    return ApplyOutcome::AlreadyDone(outcome);
-                }
-                Ok(ReplayDecision::CrashedMidExecute(row)) => {
-                    // Краш между write-before и finish: re-check on-disk hash vs строка.
-                    // Дрейф (диск изменился) ⇒ Failed (не клобберим); совпадение ⇒ complete-forward.
-                    if row.content_hash.as_deref() != on_disk_hash.as_deref() {
-                        let _ = ledger
-                            .finish(&key, STATE_FAILED, &drift_msg(&rel), None)
-                            .await;
-                        return ApplyOutcome::Failed(drift_msg(&rel));
-                    }
-                    // hash совпал — состояние то же, что при старте крашнутой попытки → доводим write.
-                    false
-                }
-                Ok(ReplayDecision::Fresh) => {
-                    // INSERT упал, но ключа нет — не UNIQUE-дубль, а реальный сбой записи ledger.
-                    return ApplyOutcome::Failed(
-                        "ledger record_before: запись строки действия не удалась".to_string(),
-                    );
-                }
-                Err(e) => return ApplyOutcome::Failed(format!("ledger replay: {e}")),
-            }
-        }
-    };
-
-    // ── РУБЕЖ 2 (вердикт existence) — ТОЛЬКО для Fresh (replay уже отбит выше). После фенса: если
-    // create поверх существующего / edit по несуществующему — fail-closed + finish(Failed) (строка-якорь
-    // уже есть). complete-forward (is_fresh=false) этот гейт ПРОПУСКАЕТ: для create файл уже создан
-    // нами в крашнутой попытке — это и есть «довести», а не «уже существует».
-    if is_fresh {
-        if is_create && current_content.is_some() {
-            let m = format!(
-                "note.create: цель {rel} уже существует — создание отменено (используйте edit для правки)"
-            );
-            let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
-            return ApplyOutcome::Failed(m);
-        }
-        if !is_create && current_content.is_none() {
-            let m = format!(
-                "{}: цель {rel} не существует — править нечего",
-                action.target.tool_name()
-            );
-            let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
-            return ApplyOutcome::Failed(m);
-        }
-    }
-
-    // С этой точки строка-якорь в ledger существует. Любой ранний выход ОБЯЗАН finish(Failed) — иначе
-    // строка останется CrashedMidExecute (корректно для replay, но для синхронного пути мы фиксируем).
-
-    // ── РУБЕЖ 5: snapshot-before-act (manual=true → байпас 90с-троттла) ────────────────────────
-    // Для overwrite (edit/frontmatter) фиксируем ПРЕД-правочное содержимое снапшотом ДО записи —
-    // обратимость. manual=true критичен: иначе быстрые правки подряд молча схлопнулись бы троттлом и
-    // часть undo-точек пропала бы. Для create undo = Trash (откат = move_to_trash записанного файла).
-    let undo: UndoHandle = if is_create {
-        // trash_rel — путь в vault-корзине. Реальный trash возникнет при undo (move_to_trash); здесь
-        // фиксируем НАМЕРЕНИЕ: откат create = перенос созданного файла `rel` в корзину.
-        UndoHandle::Trash {
-            trash_rel: rel.clone(),
-        }
-    } else {
-        let current = current_content.clone().unwrap_or_default();
-        let snap = {
-            let canon_root = canon_root.to_path_buf();
-            let rel_s = rel.clone();
-            tokio::task::spawn_blocking(move || {
-                // manual=true — байпас троттла: снапшот на КАЖДУЮ правку, даже rapid-fire.
-                crate::vault::history::snapshot(&canon_root, &rel_s, &current, true)?;
-                // Новейший ts — отметка только что записанного снапшота.
-                let snaps = crate::vault::history::list_snapshots(&canon_root, &rel_s)?;
-                Ok::<_, crate::vault::VaultError>(snaps.first().map(|s| s.ts))
-            })
-            .await
-        };
-        match snap {
-            Ok(Ok(Some(ts))) => UndoHandle::Snapshot {
-                rel: rel.clone(),
-                // history ts — unix-МС (u64); UndoHandle::ts — i64. Сужение безопасно (< 2^63).
-                ts: ts as i64,
-            },
-            // Снапшот не записался (дедуп пустой правки/ошибка) → НЕ отдаём undo, который не восстановит.
-            // Fail-closed: без корректного undo не пишем сам файл — finish(Failed), диск не трогаем.
-            Ok(Ok(None)) => {
-                let m = format!(
-                    "snapshot-before {rel}: точка восстановления не создана — запись отменена \
-                     (обратимость не гарантирована)"
-                );
-                let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
-                return ApplyOutcome::Failed(m);
-            }
-            Ok(Err(e)) => {
-                let m = format!("snapshot-before {rel}: {e}");
-                let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
-                return ApplyOutcome::Failed(m);
-            }
-            Err(join_err) => {
-                let m = format!("snapshot join: {join_err}");
-                let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
-                return ApplyOutcome::Failed(m);
-            }
-        }
-    };
-
-    // ── Fix 2: RE-READ-BEFORE-WRITE drift-фенс (БЕЗУСЛОВНЫЙ, не зависит от classify_hash) ──────
-    // `current_content` прочитан ОДИН раз в Рубеже 2 и переиспользован под снапшот + базу frontmatter +
-    // edit. Drift-проверка Рубежа 3 срабатывает ТОЛЬКО при classify_hash=Some, а 3c-инструмент передаёт
-    // None → конкурентная внешняя правка в окне read→write молча затёрлась бы (стейл-снапшот + клоббер).
-    // Поэтому для OVERWRITE (edit/frontmatter, файл существовал) НЕПОСРЕДСТВЕННО перед atomic_write
-    // ПЕРЕЧИТЫВАЕМ диск и сверяем хеш с хешем `current_content`, снятым ранее; рассинхрон ⇒ Failed(drift),
-    // НЕ клобберим. Это зеркалит прод-гарду команды set_frontmatter_field (vault.rs). Снапшот Рубежа 5 уже
-    // зафиксировал пред-правочное содержимое; этот ре-рид — именно фенс «прямо перед записью».
-    let is_overwrite = !is_create && current_content.is_some();
-    if is_overwrite && reread_drift_detected(&abs, on_disk_hash.as_deref()).await {
-        // on_disk_hash = хеш content, снятого в Рубеже 2 (база этой правки). Любой рассинхрон (внешняя
-        // правка ИЛИ внешнее удаление файла → fresh=None) ⇒ дрейф: отменяем, не затирая чужие правки.
-        let m = drift_msg(&rel);
-        let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
-        return ApplyOutcome::Failed(m);
-    }
-
-    // ── РУБЕЖ 6: WRITE (atomic_write по `abs` — НИКОГДА по canon_root.join(rel)) ────────────────
-    let write_result: Result<(), String> = match &action.target {
-        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => {
-            let bytes = action.content.clone().unwrap_or_default().into_bytes();
-            let abs_w = abs.clone();
-            spawn_atomic_write(abs_w, bytes).await
-        }
-        ActionTarget::Frontmatter { key: fm_key, .. } => {
-            // read → set_frontmatter_field → atomic_write. Читаем СВЕЖИЙ on-disk (current_content),
-            // round-trip-reject set_frontmatter_field — единственный санкционированный fm-писатель.
-            let base = current_content.clone().unwrap_or_default();
-            let value = action.value.clone().unwrap_or_default();
-            match crate::parser::set_frontmatter_field(&base, fm_key, &value) {
-                Ok(new_content) => {
-                    let abs_w = abs.clone();
-                    spawn_atomic_write(abs_w, new_content.into_bytes()).await
-                }
-                // AGENT-6 privacy-инвариант: `parser::FmWriteError` — enum ТОЛЬКО из unit-вариантов
-                // (Malformed/Unrepresentable/NonScalarTarget), поэтому `{e:?}` печатает лишь ИМЯ варианта,
-                // не контент. Если когда-нибудь добавят вариант с полем (значение/тело) — ОБЯЗАТЕЛЬНО
-                // маппить его в имя-варианта ДО попадания в `outcome` (durable ledger остаётся content-free).
-                Err(e) => Err(format!("set_frontmatter_field: {e:?}")),
-            }
-        }
-        // ПРОВАБЛИ-МЁРТВО: exec-таргеты отсечены top-guard'ом РУБЕЖА 0 (return Failed до сюда). Арм есть
-        // только ради exhaustive-match (компилятор требует). Если top-guard когда-то уберут — это
-        // unreachable! ГРОМКО упадёт (loud > молчаливая запись); тест exec_apply_is_fail_closed пинит guard.
-        ActionTarget::ShellRun { .. }
-        | ActionTarget::ProcessSpawn { .. }
-        | ActionTarget::GitOp { .. } => {
-            unreachable!("exec-таргет отсечён top-guard РУБЕЖА 0 в apply_action")
-        }
-        // SL-7: SkillSave отсечён top-guard'ом РУБЕЖА 0-bis (return Failed до сюда) — provably dead.
-        ActionTarget::SkillSave { .. } => {
-            unreachable!("SkillSave отсечён top-guard РУБЕЖА 0-bis в apply_action")
-        }
-    };
-
-    // ── РУБЕЖ 7: ledger FINISH (поглощающий) ──────────────────────────────────────────────────
-    match write_result {
-        Ok(()) => {
-            let summary = success_summary(action, &rel);
-            let _ = ledger
-                .finish(&key, audit::STATE_EXECUTED, &summary, Some(undo.to_cols()))
-                .await;
-            ApplyOutcome::Executed { summary, undo }
-        }
-        Err(e) => {
-            // Write упал ПОСЛЕ снапшота/ledger-строки: фиксируем Failed без undo (нечего откатывать —
-            // atomic_write либо записал целиком, либо ничего; снапшот для create не делали).
-            let _ = ledger.finish(&key, STATE_FAILED, &e, None).await;
-            ApplyOutcome::Failed(e)
-        }
-    }
+        canon_root,
+        abs,
+        ledger,
+        classify_hash,
+        NOTE_SPEC,
+    )
+    .await
 }
 
 /// SELF-LEARNING SL-7c: применить `SkillSave` — атомарная ОБРАТИМАЯ запись `<name>/SKILL.md` под
@@ -516,86 +219,342 @@ pub(in crate::actuator) async fn apply_skill_save(
     classify_hash: Option<&str>,
     agent_paused: &Arc<AtomicBool>,
 ) -> ApplyOutcome {
-    // Только SkillSave (defense-in-depth: dispatch_skill_save зовёт только с ним).
-    if !matches!(action.target, ActionTarget::SkillSave { .. }) {
-        return ApplyOutcome::Failed("apply_skill_save вызван не для SkillSave".into());
-    }
-    // KILL-SWITCH last-moment guard (AGENT-5, зеркало apply_now): пауза могла взвестись между
-    // re-check'ом dispatch_skill_save (после decide) и этой записью. Читаем В САМОМ НАЧАЛЕ, ДО любого
-    // ledger/disk-эффекта → под паузой НИ ОДНОЙ записи навыка (Failed, строки-якоря нет, retry-safe).
-    if agent_paused.load(Ordering::Relaxed) {
-        return ApplyOutcome::Failed(
-            "агент на паузе (kill-switch) — запись навыка подавлена".into(),
-        );
-    }
+    // Пред-фенсовые defense-in-depth guard'ы (SkillSave/kill-switch/лексический конфайн/round-trip) — ДО
+    // рубежа 1 (kill-switch ДО любого ledger/disk-эффекта). rel/content — чистые вычисления, побочек нет.
     let rel = action.target.rel().to_string();
     let content = action.content.clone().unwrap_or_default();
-
-    // ── ЛЕКСИЧЕСКИЙ КОНФАЙН (defense-in-depth): apply_skill_save может зваться вне dispatch_skill_save,
-    // а РУБЕЖ 1 делает create_dir_all(parent) — для `../x` это создало бы каталог ВНЕ skills_root ДО
-    // canonical-реджекта. Поэтому ЛЕКСИЧЕСКИ режем abs/`..`/dot/backslash ЗДЕСЬ (тот же надмножество-
-    // фильтр, что classify) ДО любого касания ФС. В проде classify уже отсёк — это второй рубеж. ──────
-    if super::classify::path_confinement(&rel).is_err() {
-        return ApplyOutcome::PathEscape;
+    if let Err(outcome) = skill_pre_checks(action, agent_paused, &rel, &content) {
+        return outcome;
     }
+    // РУБЕЖ 1 — конфайнмент в skills_root; рубежи 2-7 — ядро apply_confined_write (SKILL_SPEC).
+    let abs = match resolve_skill_path(skills_root, &rel).await {
+        Ok(abs) => abs,
+        Err(outcome) => return outcome,
+    };
+    apply_confined_write(
+        action,
+        run_id,
+        skills_root,
+        abs,
+        ledger,
+        classify_hash,
+        SKILL_SPEC,
+    )
+    .await
+}
 
-    // ── ВАЛИДАЦИЯ СОДЕРЖИМОГО (до диска и до ledger): навык обязан round-trip'иться через parse_skill
-    // (валидный frontmatter name+description). Битый → Failed, НИЧЕГО не пишем (как BadArgs). ──────────
-    if let Err(e) = crate::skills::parse_skill(&content, &rel) {
-        return ApplyOutcome::Failed(format!(
-            "SkillSave: SKILL.md не парсится ({e}) — не записан"
+/// Пред-фенсовые defense-in-depth-проверки навыка (ДО рубежей ядра), в исходном порядке: (1) таргет —
+/// SkillSave (dispatch_skill_save зовёт только с ним); (2) KILL-SWITCH (AGENT-5) — читаем ДО любого
+/// ledger/disk-эффекта, под паузой НИ ОДНОЙ записи (Failed, строки-якоря нет, retry-safe); (3) ЛЕКСИЧЕСКИЙ
+/// конфайн пути (надмножество-фильтр classify, ДО create_dir_all рубежа 1 — иначе `../x` создал бы каталог
+/// ВНЕ skills_root); (4) round-trip навыка через `parse_skill` (битый frontmatter → Failed, БЕЗ записи —
+/// навык обязан быть перезагружаемым). `Err` ⇒ готовый [`ApplyOutcome`] для немедленного return.
+fn skill_pre_checks(
+    action: &Action,
+    agent_paused: &Arc<AtomicBool>,
+    rel: &str,
+    content: &str,
+) -> Result<(), ApplyOutcome> {
+    if !matches!(action.target, ActionTarget::SkillSave { .. }) {
+        return Err(ApplyOutcome::Failed(
+            "apply_skill_save вызван не для SkillSave".into(),
         ));
     }
+    if agent_paused.load(Ordering::Relaxed) {
+        return Err(ApplyOutcome::Failed(
+            "агент на паузе (kill-switch) — запись навыка подавлена".into(),
+        ));
+    }
+    if super::classify::path_confinement(rel).is_err() {
+        return Err(ApplyOutcome::PathEscape);
+    }
+    if let Err(e) = crate::skills::parse_skill(content, rel) {
+        return Err(ApplyOutcome::Failed(format!(
+            "SkillSave: SKILL.md не парсится ({e}) — не записан"
+        )));
+    }
+    Ok(())
+}
 
-    // ── РУБЕЖ 1: конфайнмент в skills_root (симлинк-компоненты → create_dir_all parent → resolve+leaf+
-    // hardlink). reject_symlinked_components ДО create_dir_all (не создаём каталоги сквозь симлинк наружу).
-    let abs = {
-        let root = skills_root.to_path_buf();
-        let rel_path = PathBuf::from(&rel);
-        let resolved = tokio::task::spawn_blocking(move || {
-            if let Some(parent) = root.join(&rel_path).parent() {
+/// РУБЕЖ 1 для vault-заметки (canonicalize/symlink RAMPART — 2-й рубеж к лексическому classify). Пишем
+/// ТОЛЬКО по возвращённому `abs` (НИКОГДА по `canon_root.join(rel)`). create-путь: symlink-безопасный
+/// create_dir_all (Fix 1 — [`reject_symlinked_components`] ДО create_dir_all, иначе создались бы каталоги
+/// ВНЕ vault сквозь предсуществующий симлинк-каталог) + [`resolve_vault_path_for_write`] + leaf-симлинк
+/// reject; overwrite-путь: [`confine_for_overwrite`] (resolve + leaf-симлинк + хардлинк). `Err` ⇒ готовый
+/// [`ApplyOutcome`] (PathEscape / Failed(join)) для немедленного `return` — НИ ОДНОГО write/чтения.
+async fn resolve_note_path(
+    canon_root: &Path,
+    rel: &str,
+    is_create: bool,
+) -> Result<PathBuf, ApplyOutcome> {
+    let canon_root = canon_root.to_path_buf();
+    let rel_path = PathBuf::from(rel);
+    let resolved = tokio::task::spawn_blocking(move || {
+        if is_create {
+            // resolve канонизирует НЕПОСРЕДСТВЕННОГО родителя — он ОБЯЗАН существовать. Для create в новую
+            // подпапку создаём parent ДО резолва: СНАЧАЛА reject_symlinked_components (симлинк-компонент
+            // наружу ⇒ PathEscape ДО create_dir_all), потом create_dir_all свежих (не-симлинк) каталогов.
+            if let Some(parent) = canon_root.join(&rel_path).parent() {
                 if !parent.exists() {
-                    reject_symlinked_components(&root, &rel_path)?;
+                    reject_symlinked_components(&canon_root, &rel_path)?;
                     std::fs::create_dir_all(parent)?;
                 }
+                let abs = crate::vault::resolve_vault_path_for_write(&canon_root, &rel_path)?;
+                // leaf-симлинк-пустышка с тем же именем (родитель внутри, leaf наружу) ⇒ PathEscape.
+                if let Ok(meta) = std::fs::symlink_metadata(&abs) {
+                    if meta.file_type().is_symlink() {
+                        return Err(crate::vault::VaultError::PathEscape);
+                    }
+                }
+                return Ok::<_, crate::vault::VaultError>(abs);
             }
-            // confine_for_overwrite: resolve(parent canonicalize+starts_with) + leaf-симлинк + хардлинк.
-            // Для НОВОГО leaf'а (create) симлинк/хардлинк-проверки просто проходят (файла нет).
-            confine_for_overwrite(&root, &rel_path)
-        })
-        .await;
-        match resolved {
-            Ok(Ok(abs)) => abs,
-            Ok(Err(_)) => return ApplyOutcome::PathEscape,
-            Err(join_err) => return ApplyOutcome::Failed(format!("skill apply join: {join_err}")),
         }
-    };
+        confine_for_overwrite(&canon_root, &rel_path)
+    })
+    .await;
+    match resolved {
+        Ok(Ok(abs)) => Ok(abs),
+        Ok(Err(_)) => Err(ApplyOutcome::PathEscape),
+        Err(join_err) => Err(ApplyOutcome::Failed(format!("apply join: {join_err}"))),
+    }
+}
 
-    // ── РУБЕЖ 2: read-current → create-vs-overwrite (данно). ──────────────────────────────────────
+/// РУБЕЖ 1 для навыка (конфайнмент в **skills_root**): symlink-безопасный create_dir_all(parent) +
+/// [`confine_for_overwrite`] (resolve + leaf-симлинк + хардлинк; для нового leaf'а симлинк/хардлинк-проверки
+/// просто проходят — файла нет). `Err` ⇒ готовый [`ApplyOutcome`] (PathEscape / Failed(join)) для `return`.
+async fn resolve_skill_path(skills_root: &Path, rel: &str) -> Result<PathBuf, ApplyOutcome> {
+    let root = skills_root.to_path_buf();
+    let rel_path = PathBuf::from(rel);
+    let resolved = tokio::task::spawn_blocking(move || {
+        if let Some(parent) = root.join(&rel_path).parent() {
+            if !parent.exists() {
+                reject_symlinked_components(&root, &rel_path)?;
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        confine_for_overwrite(&root, &rel_path)
+    })
+    .await;
+    match resolved {
+        Ok(Ok(abs)) => Ok(abs),
+        Ok(Err(_)) => Err(ApplyOutcome::PathEscape),
+        Err(join_err) => Err(ApplyOutcome::Failed(format!(
+            "skill apply join: {join_err}"
+        ))),
+    }
+}
+
+/// Провал снапшота Рубежа 5 (для различного у заметки/навыка текста): точка не записалась / ошибка
+/// snapshot / join-ошибка блокирующей задачи. Несёт заимствования, чтобы hook форматировал сообщение.
+enum SnapFail<'e> {
+    NotWritten,
+    Failed(&'e crate::vault::VaultError),
+    Join(&'e tokio::task::JoinError),
+}
+
+/// Спека, ЧЕМ различаются два вызывателя [`apply_confined_write`] (vault-заметка vs навык). ВСЁ, что
+/// отличается между двумя путями записи, — здесь; рубежи 2-7 (их ПОРЯДОК — единственный источник истины)
+/// остаются единым телом ядра. Хуки — свободные `fn` (без захвата), поэтому [`NOTE_SPEC`]/[`SKILL_SPEC`]
+/// — `const`; `Copy` (все поля — `fn`-указатели/`&'static str`), передаётся в ядро по значению.
+/// Различия НЕ размазаны обратно по телу: ядро видит только `spec`.
+#[derive(Clone, Copy)]
+struct ConfinedWriteSpec {
+    /// create-vs-overwrite: заметка — по типу таргета (NoteCreate); навык — по отсутствию файла на диске
+    /// (перезапись СВОЕГО навыка легитимна). Аргумент bool — `current_content.is_none()`.
+    is_create: fn(&Action, bool) -> bool,
+    /// Existence-вердикт Рубежа 2 (только для Fresh): заметка ловит create-над-существующим /
+    /// edit-над-отсутствующим (`Some(msg)`); навык — всегда `None` (create-vs-overwrite данно-определён).
+    /// Аргументы: action, is_create, current_content.is_some(), rel.
+    existence_verdict: fn(&Action, bool, bool, &str) -> Option<String>,
+    /// Сообщение, когда INSERT строки-якоря ledger (Рубеж 4) упал НЕ по UNIQUE-дублю (ветка Fresh).
+    ledger_write_fail: &'static str,
+    /// Сообщение провала снапшота (Рубеж 5) — тексты у заметки и навыка различны.
+    snapshot_fail_msg: fn(&str, SnapFail<'_>) -> String,
+    /// WRITE (Рубеж 6): байты записи (или строка-ошибка) из action + прочитанного содержимого. Ядро само
+    /// делает [`spawn_atomic_write`] по `abs` — единственная точка касания диска в конвейере.
+    build_write: fn(&Action, &str) -> Result<Vec<u8>, String>,
+    /// Резюме успеха (Рубеж 7) для tool-результата/ledger-outcome. Аргументы: action, rel, is_create.
+    success_summary: fn(&Action, &str, bool) -> String,
+}
+
+fn note_is_create(action: &Action, _current_none: bool) -> bool {
+    matches!(action.target, ActionTarget::NoteCreate { .. })
+}
+
+fn skill_is_create(_action: &Action, current_none: bool) -> bool {
+    current_none
+}
+
+fn note_existence_verdict(
+    action: &Action,
+    is_create: bool,
+    current_is_some: bool,
+    rel: &str,
+) -> Option<String> {
+    if is_create && current_is_some {
+        Some(format!(
+            "note.create: цель {rel} уже существует — создание отменено (используйте edit для правки)"
+        ))
+    } else if !is_create && !current_is_some {
+        Some(format!(
+            "{}: цель {rel} не существует — править нечего",
+            action.target.tool_name()
+        ))
+    } else {
+        None
+    }
+}
+
+fn no_existence_verdict(_a: &Action, _is_create: bool, _some: bool, _rel: &str) -> Option<String> {
+    None
+}
+
+fn note_snapshot_fail(rel: &str, fail: SnapFail<'_>) -> String {
+    match fail {
+        SnapFail::NotWritten => format!(
+            "snapshot-before {rel}: точка восстановления не создана — запись отменена \
+             (обратимость не гарантирована)"
+        ),
+        SnapFail::Failed(e) => format!("snapshot-before {rel}: {e}"),
+        SnapFail::Join(e) => format!("snapshot join: {e}"),
+    }
+}
+
+fn skill_snapshot_fail(rel: &str, fail: SnapFail<'_>) -> String {
+    match fail {
+        SnapFail::NotWritten => {
+            format!("SkillSave: снапшот пред-правки {rel} не записан — перезапись отменена")
+        }
+        SnapFail::Failed(e) => {
+            format!("SkillSave: снапшот пред-правки {rel} провалился ({e}) — отмена")
+        }
+        SnapFail::Join(e) => format!("SkillSave snapshot join: {e}"),
+    }
+}
+
+fn note_build_write(action: &Action, current_content: &str) -> Result<Vec<u8>, String> {
+    match &action.target {
+        ActionTarget::NoteCreate { .. } | ActionTarget::NoteEdit { .. } => {
+            Ok(action.content.clone().unwrap_or_default().into_bytes())
+        }
+        ActionTarget::Frontmatter { key: fm_key, .. } => {
+            // read → set_frontmatter_field → atomic_write. База — СВЕЖИЙ on-disk (current_content);
+            // round-trip-reject set_frontmatter_field — единственный санкционированный fm-писатель.
+            let value = action.value.clone().unwrap_or_default();
+            match crate::parser::set_frontmatter_field(current_content, fm_key, &value) {
+                Ok(new_content) => Ok(new_content.into_bytes()),
+                // AGENT-6 privacy: `FmWriteError` — только unit-варианты, `{e:?}` печатает лишь ИМЯ варианта.
+                Err(e) => Err(format!("set_frontmatter_field: {e:?}")),
+            }
+        }
+        // ПРОВАБЛИ-МЁРТВО: exec отсечён top-guard'ом РУБЕЖА 0 в apply_action (сюда не доходит).
+        ActionTarget::ShellRun { .. }
+        | ActionTarget::ProcessSpawn { .. }
+        | ActionTarget::GitOp { .. } => {
+            unreachable!("exec-таргет отсечён top-guard РУБЕЖА 0 в apply_action")
+        }
+        // SL-7: SkillSave отсечён top-guard'ом РУБЕЖА 0-bis (идёт через apply_skill_save).
+        ActionTarget::SkillSave { .. } => {
+            unreachable!("SkillSave отсечён top-guard РУБЕЖА 0-bis в apply_action")
+        }
+    }
+}
+
+fn skill_build_write(action: &Action, _current_content: &str) -> Result<Vec<u8>, String> {
+    Ok(action.content.clone().unwrap_or_default().into_bytes())
+}
+
+fn note_success_summary(action: &Action, rel: &str, _is_create: bool) -> String {
+    success_summary(action, rel)
+}
+
+fn skill_success_summary(_action: &Action, rel: &str, is_create: bool) -> String {
+    let verb = if is_create {
+        "создан"
+    } else {
+        "обновлён"
+    };
+    format!("навык {verb}: {rel}")
+}
+
+/// Спека vault-заметки: canon_root; create-vs-overwrite по типу таргета; existence-вердикт активен.
+const NOTE_SPEC: ConfinedWriteSpec = ConfinedWriteSpec {
+    is_create: note_is_create,
+    existence_verdict: note_existence_verdict,
+    ledger_write_fail: "ledger record_before: запись строки действия не удалась",
+    snapshot_fail_msg: note_snapshot_fail,
+    build_write: note_build_write,
+    success_summary: note_success_summary,
+};
+
+/// Спека навыка: skills_root; create-vs-overwrite по наличию файла; existence-вердикта НЕТ.
+const SKILL_SPEC: ConfinedWriteSpec = ConfinedWriteSpec {
+    is_create: skill_is_create,
+    existence_verdict: no_existence_verdict,
+    ledger_write_fail: "ledger record_before: запись строки SkillSave не удалась",
+    snapshot_fail_msg: skill_snapshot_fail,
+    build_write: skill_build_write,
+    success_summary: skill_success_summary,
+};
+
+/// ЯДРО безопасной записи в конфайнед-корень: рубежи 2-7 в СТРОГОМ, ЕДИНСТВЕННОМ порядке (нарушить
+/// порядок — потерять безопасность). Общее тело для [`apply_action`] (vault) и [`apply_skill_save`]
+/// (навык); вызыватель уже прошёл рубежи 0/0-bis/1 и передаёт резолвнутый `abs` (Рубеж 1) + `spec`
+/// различий (`root` для снапшота, create-политика, existence-вердикт, тексты, WRITE, резюме). Порядок:
+/// ```text
+///   2.   read-current → target_hash / idempotency_key
+///   3.   optimistic-concurrency drift (classify_hash) — ДО фенса
+///   4.   ledger WRITE-BEFORE-ACT (+ replay: AlreadyDone / Crashed re-check / Fresh)
+///   [2.] existence-вердикт (ТОЛЬКО Fresh; spec-зависим)
+///   5.   snapshot-before-act (undo: Trash | Snapshot) — fail-closed
+///   F2.  безусловный re-read fence (overwrite) — не клобберим внешнюю правку
+///   6.   atomic WRITE по `abs` (НИКОГДА по root.join(rel))
+///   7.   ledger FINISH (поглощающий)
+/// ```
+/// Любой исход, кроме [`ApplyOutcome::Executed`], гарантирует «диск не изменён» (либо записан с корректным
+/// undo). Атомарность (atomic_write rename) и порядок рубежей — инвариант; менять их НЕЛЬЗЯ.
+async fn apply_confined_write(
+    action: &Action,
+    run_id: i64,
+    root: &Path,
+    abs: PathBuf,
+    ledger: &AuditSink,
+    classify_hash: Option<&str>,
+    spec: ConfinedWriteSpec,
+) -> ApplyOutcome {
+    let rel = action.target.rel().to_string();
+
+    // ── РУБЕЖ 2: read-current (для hash/снапшота). Existence-ВЕРДИКТ выносим ПОСЛЕ ledger-фенса: replay
+    // того же create (файл уже создан 1-м прогоном) должен дать AlreadyDone, а не «уже существует» —
+    // идемпотентность сильнее существования. read — это просто чтение (не вердикт), его делаем сейчас.
     let current_content: Option<String> = read_to_string_opt(&abs).await;
     let on_disk_hash: Option<String> = current_content
         .as_ref()
         .map(|c| crate::vault::content_hash(c.as_bytes()));
-    let is_create = current_content.is_none();
+    let is_create = (spec.is_create)(action, current_content.is_none());
 
-    // Идемпотентность-ключ (как apply_action): classify_hash (at-classify) либо on-disk/планируемый.
+    // Идемпотентность-ключ: target_hash — отпечаток цели НА МОМЕНТ classify (часть тождества действия,
+    // СТАБИЛЕН краш→retry). classify_hash задан ⇒ берём его (at-classify view); None ⇒ create: отпечаток
+    // ПЛАНИРУЕМОГО содержимого, overwrite: on-disk сейчас. content_hash-колонка ledger — ОТДЕЛЬНЫЙ токен
+    // оптимистичной конкуренции (on-disk-at-attempt для Crashed re-check); он НЕ часть ключа.
     let payload = action_payload(action);
     let target_hash = match classify_hash {
         Some(h) => h.to_string(),
         None => {
             if is_create {
-                crate::vault::content_hash(content.as_bytes())
+                crate::vault::content_hash(payload.unwrap_or("").as_bytes())
             } else {
                 on_disk_hash
                     .clone()
-                    .unwrap_or_else(|| crate::vault::content_hash(content.as_bytes()))
+                    .unwrap_or_else(|| crate::vault::content_hash(payload.unwrap_or("").as_bytes()))
             }
         }
     };
     let args = canonical_args(Some(&rel), payload);
     let key = idempotency_key(run_id, action.target.tool_name(), &args, &target_hash);
 
-    // ── РУБЕЖ 3: optimistic concurrency (classify_hash drift) — ДО фенса. ─────────────────────────
+    // ── РУБЕЖ 3: optimistic concurrency (classify_hash drift) — ДО фенса (stale view → не клобберим).
+    // on-disk hash СЕЙЧАС vs classify_hash. None on_disk (create) → "" (цели нет).
     if let Some(expected) = classify_hash {
         let now = on_disk_hash.as_deref().unwrap_or("");
         if now != expected {
@@ -603,7 +562,10 @@ pub(in crate::actuator) async fn apply_skill_save(
         }
     }
 
-    // ── РУБЕЖ 4: ledger WRITE-BEFORE-ACT (ДО записи). Приватность: diff_summary — счётчики+ChangeKind. ─
+    // ── РУБЕЖ 4: ledger WRITE-BEFORE-ACT (ДО любого write). INSERT строки-якоря (outcome=NULL) — ФЕНС.
+    // Успех ⇒ Fresh. Дубль (UNIQUE) ⇒ replay того же действия → ветвимся по присутствию outcome.
+    // ПРИВАТНОСТЬ (AGENT-6): долговечное diff_summary — СТРУКТУРНОЕ (счётчики строк + статус-токен),
+    // свободное от содержимого; строит его редакция-гвард diff_summary_for. Ни тело, ни значения — не в журнал.
     let diff_summary =
         super::orchestrate::diff_summary_for(action, current_content.as_deref().unwrap_or(""))
             .render();
@@ -617,29 +579,53 @@ pub(in crate::actuator) async fn apply_skill_save(
         content_hash: on_disk_hash.clone(),
         diff_summary: Some(diff_summary),
     };
-    match ledger.record_before(entry).await {
-        Ok(_) => {} // Fresh: строка-якорь записана ДО касания диска.
-        Err(_) => match ledger.replay_decision(&key).await {
-            Ok(ReplayDecision::AlreadyDone(outcome)) => return ApplyOutcome::AlreadyDone(outcome),
-            Ok(ReplayDecision::CrashedMidExecute(row)) => {
-                if row.content_hash.as_deref() != on_disk_hash.as_deref() {
-                    let _ = ledger
-                        .finish(&key, STATE_FAILED, &drift_msg(&rel), None)
-                        .await;
-                    return ApplyOutcome::Failed(drift_msg(&rel));
+    let is_fresh = match ledger.record_before(entry).await {
+        Ok(_) => true, // Fresh: строка-якорь записана ДО касания диска.
+        Err(_) => {
+            // INSERT отбит (вероятно UNIQUE-дубль ключа) → ветвимся по replay_decision (по outcome).
+            match ledger.replay_decision(&key).await {
+                Ok(ReplayDecision::AlreadyDone(outcome)) => {
+                    // Уже исполнено ранее — диск НЕ трогаем, отдаём прежний исход (идемпотентно).
+                    return ApplyOutcome::AlreadyDone(outcome);
                 }
-                // hash совпал — доводим запись (complete-forward).
+                Ok(ReplayDecision::CrashedMidExecute(row)) => {
+                    // Краш между write-before и finish: re-check on-disk hash vs строка. Дрейф ⇒ Failed
+                    // (не клобберим); совпадение ⇒ complete-forward (доводим ту же запись).
+                    if row.content_hash.as_deref() != on_disk_hash.as_deref() {
+                        let _ = ledger
+                            .finish(&key, STATE_FAILED, &drift_msg(&rel), None)
+                            .await;
+                        return ApplyOutcome::Failed(drift_msg(&rel));
+                    }
+                    false
+                }
+                Ok(ReplayDecision::Fresh) => {
+                    // INSERT упал, но ключа нет — не UNIQUE-дубль, а реальный сбой записи ledger.
+                    return ApplyOutcome::Failed(spec.ledger_write_fail.to_string());
+                }
+                Err(e) => return ApplyOutcome::Failed(format!("ledger replay: {e}")),
             }
-            Ok(ReplayDecision::Fresh) => {
-                return ApplyOutcome::Failed(
-                    "ledger record_before: запись строки SkillSave не удалась".into(),
-                )
-            }
-            Err(e) => return ApplyOutcome::Failed(format!("ledger replay: {e}")),
-        },
+        }
+    };
+
+    // ── РУБЕЖ 2 (вердикт existence) — ТОЛЬКО для Fresh (replay уже отбит). Заметка: create-над-сущ. /
+    // edit-над-отсутств. ⇒ finish(Failed) (строка-якорь уже есть). Навык: вердикта нет (data-determined).
+    // complete-forward (is_fresh=false) этот гейт ПРОПУСКАЕТ (create-файл уже наш → «довести», не «есть»).
+    if is_fresh {
+        if let Some(m) =
+            (spec.existence_verdict)(action, is_create, current_content.is_some(), &rel)
+        {
+            let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
+            return ApplyOutcome::Failed(m);
+        }
     }
 
-    // ── РУБЕЖ 5: snapshot-before-act для overwrite (обратимость); create → Trash-намерение. ───────
+    // С этой точки строка-якорь в ledger существует. Любой ранний выход ОБЯЗАН finish(Failed).
+
+    // ── РУБЕЖ 5: snapshot-before-act (manual=true → байпас 90с-троттла: снапшот на КАЖДУЮ правку, даже
+    // rapid-fire). overwrite ⇒ фиксируем ПРЕД-правочное содержимое (обратимость); create ⇒ undo = Trash
+    // (откат create = move_to_trash записанного файла). Снапшот не записался/ошибка ⇒ БЕЗ корректного undo
+    // НЕ пишем файл (fail-closed): finish(Failed), диск не трогаем.
     let undo: UndoHandle = if is_create {
         UndoHandle::Trash {
             trash_rel: rel.clone(),
@@ -647,10 +633,11 @@ pub(in crate::actuator) async fn apply_skill_save(
     } else {
         let current = current_content.clone().unwrap_or_default();
         let snap = {
-            let root = skills_root.to_path_buf();
+            let root = root.to_path_buf();
             let rel_s = rel.clone();
             tokio::task::spawn_blocking(move || {
                 crate::vault::history::snapshot(&root, &rel_s, &current, true)?;
+                // Новейший ts — отметка только что записанного снапшота.
                 let snaps = crate::vault::history::list_snapshots(&root, &rel_s)?;
                 Ok::<_, crate::vault::VaultError>(snaps.first().map(|s| s.ts))
             })
@@ -659,35 +646,31 @@ pub(in crate::actuator) async fn apply_skill_save(
         match snap {
             Ok(Ok(Some(ts))) => UndoHandle::Snapshot {
                 rel: rel.clone(),
+                // history ts — unix-МС (u64); UndoHandle::ts — i64. Сужение безопасно (< 2^63).
                 ts: ts as i64,
             },
-            // Снапшот не записался → без корректного undo НЕ пишем (fail-closed): обратимость обязательна.
             Ok(Ok(None)) => {
-                let m = format!(
-                    "SkillSave: снапшот пред-правки {rel} не записан — перезапись отменена"
-                );
+                let m = (spec.snapshot_fail_msg)(&rel, SnapFail::NotWritten);
                 let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
                 return ApplyOutcome::Failed(m);
             }
             Ok(Err(e)) => {
-                let m = format!("SkillSave: снапшот пред-правки {rel} провалился ({e}) — отмена");
+                let m = (spec.snapshot_fail_msg)(&rel, SnapFail::Failed(&e));
                 let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
                 return ApplyOutcome::Failed(m);
             }
             Err(join_err) => {
-                let m = format!("SkillSave snapshot join: {join_err}");
+                let m = (spec.snapshot_fail_msg)(&rel, SnapFail::Join(&join_err));
                 let _ = ledger.finish(&key, STATE_FAILED, &m, None).await;
                 return ApplyOutcome::Failed(m);
             }
         }
     };
 
-    // ── РУБЕЖ 5-bis: БЕЗУСЛОВНЫЙ re-read fence ПЕРЕД записью (зеркало apply_action Fix 2) ──────────
-    // РУБЕЖ 3 (drift по classify_hash) срабатывает ТОЛЬКО при Some; при None (3c-style вызыватель /
-    // overwrite пустого файла) окно read(РУБЕЖ2)→write остаётся незакрытым: внешняя правка в нём была бы
-    // молча затёрта, а снапшот РУБЕЖА 5 — СТЕЙЛ (undo восстановил бы не то). Поэтому для overwrite
-    // НЕПОСРЕДСТВЕННО перед записью ПЕРЕЧИТЫВАЕМ диск и сверяем с on_disk_hash (снятым в РУБЕЖЕ 2):
-    // рассинхрон ⇒ Failed, НЕ клобберим (data-loss-rampart как у заметок).
+    // ── Fix 2: RE-READ-BEFORE-WRITE drift-фенс (БЕЗУСЛОВНЫЙ, не зависит от classify_hash). РУБЕЖ 3
+    // срабатывает ТОЛЬКО при classify_hash=Some; 3c-путь передаёт None → внешняя правка в окне read→write
+    // молча затёрлась бы (стейл-снапшот + клоббер). Для OVERWRITE НЕПОСРЕДСТВЕННО перед atomic_write
+    // перечитываем диск и сверяем с on_disk_hash (Рубеж 2); рассинхрон ⇒ Failed(drift), НЕ клобберим.
     let is_overwrite = !is_create && current_content.is_some();
     if is_overwrite && reread_drift_detected(&abs, on_disk_hash.as_deref()).await {
         let m = drift_msg(&rel);
@@ -695,24 +678,24 @@ pub(in crate::actuator) async fn apply_skill_save(
         return ApplyOutcome::Failed(m);
     }
 
-    // ── РУБЕЖ 6: WRITE (atomic_write по `abs`). ───────────────────────────────────────────────────
-    let write_result = spawn_atomic_write(abs.clone(), content.into_bytes()).await;
+    // ── РУБЕЖ 6: WRITE (atomic_write по `abs` — НИКОГДА по root.join(rel)). Байты/ошибку даёт spec.
+    let write_result: Result<(), String> =
+        match (spec.build_write)(action, current_content.as_deref().unwrap_or("")) {
+            Ok(bytes) => spawn_atomic_write(abs, bytes).await,
+            Err(e) => Err(e),
+        };
 
-    // ── РУБЕЖ 7: ledger FINISH (поглощающий). ─────────────────────────────────────────────────────
+    // ── РУБЕЖ 7: ledger FINISH (поглощающий).
     match write_result {
         Ok(()) => {
-            let verb = if is_create {
-                "создан"
-            } else {
-                "обновлён"
-            };
-            let summary = format!("навык {verb}: {rel}");
+            let summary = (spec.success_summary)(action, &rel, is_create);
             let _ = ledger
                 .finish(&key, audit::STATE_EXECUTED, &summary, Some(undo.to_cols()))
                 .await;
             ApplyOutcome::Executed { summary, undo }
         }
         Err(e) => {
+            // Write упал ПОСЛЕ снапшота/ledger-строки: Failed без undo (atomic_write — всё-или-ничего).
             let _ = ledger.finish(&key, STATE_FAILED, &e, None).await;
             ApplyOutcome::Failed(e)
         }

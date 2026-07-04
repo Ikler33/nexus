@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### Изменено · R-6b — apply.rs: apply_confined_write ×2→1 (дедуп рубежей 2-7 безопасной записи в vault/skills)
+
+Стадия R-6 REFACTOR-PLAN (thermo-смелл №6). **Behavior-preserving; SECURITY-чувствительно** (рубежи безопасной записи: target_hash/drift/record_before/snapshot/re-read fence/atomic_write). Оракул `apply/tests.rs` — ассерты БАЙТ-в-байт, 22 apply-теста + undo round-trip зелёные; `#[ignore]`-паритет 31/31.
+
+- **Единое ядро `apply_confined_write(action, run_id, root, abs, ledger, classify_hash, spec)`**: рубежи 2-7 (read-current→target_hash → optimistic-drift(classify_hash) → ledger write-before-act(+replay: AlreadyDone/Crashed/Fresh) → [existence-вердикт для Fresh] → snapshot-before-act → безусловный re-read fence → atomic WRITE по `abs` → ledger FINISH) — в ОДНОМ месте (порядок рубежей = единственный источник истины, ни один не потерян/переставлен). Два байт-идентичных клона (`apply_action` vault vs `apply_skill_save` skills_root) свёрнуты в ядро.
+- **`apply_action`/`apply_skill_save` — тонкие врапперы** (<40 строк: 38 и 31): рубежи 0/0-bis (exec/SkillSave top-guards) у заметки, defense-in-depth-пред-проверки навыка (SkillSave/kill-switch/лексический конфайн/round-trip) вынесены в `skill_pre_checks`; РУБЕЖ 1 (конфайнмент) — в `resolve_note_path`/`resolve_skill_path`; затем зовут ядро с `NOTE_SPEC`/`SKILL_SPEC`.
+- **Различия — `ConfinedWriteSpec` (свободные `fn`-хуки, `Copy`; `const NOTE_SPEC`/`SKILL_SPEC`)**: `root` снапшота, create-политика (заметка по типу таргета vs навык по наличию файла), existence-вердикт (заметка активна / навык `None`), тексты (ledger-fail, snapshot-fail через `SnapFail`), WRITE (заметка: create/edit/frontmatter round-trip; навык: content), резюме успеха. Различия НЕ размазаны обратно по телу — ядро видит только `spec`.
+- **Инвариант цел:** порядок рубежей идентичен, re-read fence (пост-снапшот верификация перед записью) и atomic_write (rename) сохранены; undo round-trip (snapshot→apply→undo восстанавливает пред-контент) зелён.
+- **Размер `apply.rs`: 933 → 916 строк** (−17; дубль рубежей 2-7 схлопнут в ядро — ценность в едином источнике рубежей, не в числе строк). Гейт зелёный: `cargo fmt --check` + `clippy --workspace --all-targets -D warnings` + `test --workspace` (1425 passed, 0 failed) + traceability/ignored(31/31)/tooluse.
+
+### Изменено · R-6a — вынос `mod tests` apply.rs → `apply/tests.rs` (byte-identical)
+
+Первый PR двухкоммитного паттерна стадии R-6 (как R-2/R-4/R-5a). **ЧИСТЫЙ механический перенос, оракул НЕ меняется** (dedent + fmt-reflow, ассерты байт-в-байт): инлайн-`mod tests` (922 строки) вынесен в подмодуль `actuator/apply/tests.rs`, объявлен `#[cfg(test)] mod tests;` (зеркалит `orchestrate/tests.rs`). 22 apply-теста зелёные; `#[ignore]`-паритет. Готовит дедуп `apply_confined_write` (R-6b).
+
 ### Изменено · R-5c — orchestrate.rs: 3 копии propose→decide → канон `run_proposal_round` + вынос конвейера (byte-identical)
 
 Финальный (3-й) PR стадии R-5 REFACTOR-PLAN (thermo-смелл №5), закрывает цель `<1000` строк `orchestrate.rs`. **Behavior-preserving; SECURITY-чувствительно** (актуатор-гейт, kill-switch, transition-инварианты). Оракул `orchestrate/tests.rs` — ассерты БАЙТ-в-байт, счётчик тестов 35 (паритет), `#[ignore]`-паритет.
