@@ -130,12 +130,13 @@ describe('P0-2 гейт (в): литеральные инлайн-моки в AP
   it('число `Promise.resolve(`-веток не больше baseline', () => {
     // Baseline-история ratchet'а ВНИЗ: 23 (P0-2, 2026-07-02) → 19 (F-2a, 2026-07-03: vault-домен
     // вынесен в lib/api/vault/, его 4 инлайн-мока — vault.rescan/notesCount/fileMtime +
-    // attachments.write — переехали в mock/vault.ts). Скоуп подсчёта с F-2a — баррел tauri-api.ts
-    // ПЛЮС весь новый слой lib/api/** (иначе инлайн-моки могли бы тихо копиться в доменных
-    // модулях мимо храповика). Полная миграция остатка — срезы F-2b+; до них тест держит планку
-    // «не хуже»: новый инлайн-мок — красный тест (новые моки обязаны жить в mock/* и зеркалить
-    // контракт). Мигрировали часть — ПОНИЗЬТЕ baseline.
-    const INLINE_MOCK_BASELINE = 19;
+    // attachments.write — переехали в mock/vault.ts) → 18 (F-2b, 2026-07-04: chat-домен вынесен
+    // в lib/api/chat/, его 1 инлайн-мок — chat.sessions.toNote — переехал в mock/sessions.ts).
+    // Скоуп подсчёта с F-2a — баррел tauri-api.ts ПЛЮС весь новый слой lib/api/** (иначе
+    // инлайн-моки могли бы тихо копиться в доменных модулях мимо храповика). Полная миграция
+    // остатка — срезы F-2c+; до них тест держит планку «не хуже»: новый инлайн-мок — красный тест
+    // (новые моки обязаны жить в mock/* и зеркалить контракт). Мигрировали часть — ПОНИЗЬТЕ baseline.
+    const INLINE_MOCK_BASELINE = 18;
     // cwd vitest = apps/desktop (vitest.config там) — import.meta.url в jsdom не file-схема.
     const files = [join(process.cwd(), 'src/lib/tauri-api.ts'), ...tsFilesUnder(join(process.cwd(), 'src/lib/api'))];
     const count = files
