@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::ai::{AiError, ChatConfig, ChatProvider, LocalConfig, OpenAiChatProvider};
+use crate::ai::{AiError, ChatProvider, LocalConfig};
 use crate::error::{AppError, AppResult};
 use crate::net::{EgressAudit, EgressFeature, EgressPolicy, GuardedClient, NetError, RunCtx};
 use crate::state::AppState;
@@ -594,22 +594,19 @@ pub async fn set_ai_config(
         .await
         .map_err(|e| AppError::Msg(e.to_string()))??;
 
-    // Allowlist эгресса пересобирается из ИТОГОВОГО local.json (E4: явные `ai.*`-хосты; consent на
-    // pull-changed URL — срез 2 с персистом политики). Один policy на приложение (AC-EGR-13).
-    if let Ok(cfg) = LocalConfig::parse(&pretty) {
-        state.egress_policy.set_allowlist(cfg.egress_hosts());
-    }
-    // Хот-пересборка провайдеров — ОСОБЫЙ путь UI (`build_hot_providers`, НЕ канон
-    // `bootstrap::ProviderSet` — см. док хелпера): профиль таймаутов/температуры из ИТОГОВОГО
-    // сохранённого конфига.
-    let saved_cfg = LocalConfig::parse(&pretty).ok();
-    let (chat_provider, chat_fast_provider, fast_provider) = build_hot_providers(
-        chat.as_ref(),
-        fast.as_ref(),
-        saved_cfg.as_ref(),
-        &state.egress_policy,
-        &state.egress_audit,
-    )?;
+    // Allowlist эгресса + хот-пересборка провайдеров — из ИТОГОВОГО local.json (E4: явные `ai.*`-хосты;
+    // consent на pull-changed URL — срез 2 с персистом политики). Один policy на приложение (AC-EGR-13).
+    // Провайдеры — R-3e: КАНОН `bootstrap::ProviderSet` (унификация hot-apply, решение владельца;
+    // ДЕКЛАРИРУЕМОЕ поведенческое изменение — CHANGELOG/`tests::hot_*`). Эмбеддер хот-путём НЕ
+    // пересобирается (`embedding: false`): на нём висит фоновый индексатор — cold/рестарт (см.
+    // `embedding_changed` выше). Один разбор `pretty` на оба потребителя (был двойной).
+    let (chat_provider, chat_fast_provider, fast_provider) = match LocalConfig::parse(&pretty) {
+        Ok(cfg) => {
+            state.egress_policy.set_allowlist(cfg.egress_hosts());
+            build_hot_providers(&cfg, &state.egress_policy, &state.egress_audit).await
+        }
+        Err(_) => (None, None, None),
+    };
     if let Some(ctx) = state.vault.write().await.as_mut() {
         ctx.ai.chat = chat_provider;
         ctx.ai.chat_fast = chat_fast_provider;
@@ -628,120 +625,38 @@ type HotProviders = (
     Option<Arc<dyn ChatProvider>>,
 );
 
-/// Хот-пересборка chat-провайдеров ПОСЛЕ записи local.json — НАМЕРЕННО особый путь UI, НЕ канон
-/// `bootstrap::ProviderSet` (R-3b: кандидат унификации — это ПОВЕДЕНЧЕСКОЕ изменение, решение
-/// отдельным срезом): (1) EndpointDto из UI не несёт таймаутов → ВСЕ ТРИ провайдера получают ЕДИНЫЙ
-/// профиль таймаутов/температуры из СОХРАНЁННОГО `ai.chat` — включая утилитарный fast-провайдер
-/// (канон дал бы ему СОБСТВЕННЫЙ профиль секции `ai.fast`); (2) пустой/отсутствующий fast-URL строит
-/// утилитарный провайдер НА chat-URL ОТДЕЛЬНЫМ Arc с цепочкой модели fast.model → chat.model →
-/// "chat" (канон: fallback ТЕМ ЖЕ Arc, что chat_fast; дефолт-модель "fast"). Дельта запинена
-/// фикстурной таблицей `tests::hot_*` — она и есть база решения об унификации.
+/// Хот-пересборка chat-провайдеров ПОСЛЕ записи local.json — R-3e: УНИФИЦИРОВАНА на канон
+/// [`crate::bootstrap::ProviderSet::from_config`] (решение владельца; ДЕКЛАРИРУЕМОЕ поведенческое
+/// изменение — прежний особый путь UI снят, дельта задекларирована в CHANGELOG и перепинена
+/// `tests::hot_*`). Строим ИЗ ИТОГОВОГО сохранённого конфига (`apply_ai` уже записал секции
+/// `ai.chat`/`ai.fast` формой url+model): chat-пара (reasoning + fast без reasoning) из `ai.chat` +
+/// утилитарная `ai.fast` (СОБСТВЕННЫЙ профиль секции, дефолт-модель "fast"; нет секции → chat_util =
+/// ТОТ ЖЕ Arc, что chat_fast). Так смена сервера/очистка fast в UI сразу чинит новости/дайджест/
+/// противоречия (баг 2026-06-11: `ai.fast` оставался на мёртвом хосте).
 ///
-/// Горячее применение безопасно (chat stateless per-request): пересобираем УЖЕ-guarded клиент от
-/// тех же policy/audit приложения (AC-EGR-13). Embedding — через перезапуск (cold, на нём индексатор).
-fn build_hot_providers(
-    chat: Option<&EndpointDto>,
-    fast: Option<&EndpointDto>,
-    saved_cfg: Option<&LocalConfig>,
+/// Опции как у desktop `open_vault`, КРОМЕ:
+/// - `embedding: false` — эмбеддер хот-путём НЕ пересобирается (на нём висит фоновый индексатор: смена
+///   embedding → `embedding_changed=true` → cold/рестарт; сохраняем прежний контракт);
+/// - `agent_tools: false` — per-run провайдер агента desktop строит сам (I-5, как open_vault).
+///
+/// Горячее применение безопасно (chat stateless per-request): канон пересобирает УЖЕ-guarded клиент от
+/// тех же policy/audit приложения (AC-EGR-13).
+async fn build_hot_providers(
+    saved_cfg: &LocalConfig,
     policy: &Arc<EgressPolicy>,
     audit: &Arc<EgressAudit>,
-) -> Result<HotProviders, AiError> {
-    // INFER-CFG: connect-таймаут хот-пересобранных клиентов берём из СОХРАНЁННОГО конфига (EndpointDto
-    // из UI не несёт таймаутов). Дефолт 30с; кастомный `ai.chat.connect_timeout_secs` применится сразу,
-    // не дожидаясь переоткрытия vault.
-    let saved_chat = saved_cfg.as_ref().and_then(|cf| cf.ai.chat.clone());
-    let chat_connect_timeout = saved_chat
-        .as_ref()
-        .map(ChatConfig::connect_timeout)
-        .unwrap_or_else(|| Duration::from_secs(ChatConfig::DEFAULT_CONNECT_TIMEOUT_SECS));
-    // Температура и таймауты стрима/retry хот-провайдеров — из сохранённого `ai.chat` (или дефолты).
-    // Все хот-провайдеры бьют по chat-серверу, поэтому единый профиль `saved_chat` корректен.
-    let chat_temperature = saved_chat.as_ref().map(ChatConfig::temperature);
-    let apply_chat_cfg = |p: OpenAiChatProvider| -> OpenAiChatProvider {
-        match saved_chat.as_ref() {
-            Some(c) => p
-                .with_first_token_timeout(c.first_token_timeout())
-                .with_idle_timeout(c.idle_timeout())
-                .with_retry_attempts(c.retry_attempts()),
-            None => p,
-        }
-    };
-
-    // Горячее применение chat (stateless per-request → безопасно): пересобираем УЖЕ-guarded клиент
-    // от того же policy/audit (AC-EGR-13).
-    let chat_provider: Option<Arc<dyn ChatProvider>> = match chat {
-        Some(c) => {
-            let model = c.model.clone().unwrap_or_else(|| "chat".to_string());
-            let guarded =
-                GuardedClient::for_chat(policy.clone(), audit.clone(), chat_connect_timeout)
-                    .map_err(AiError::from)?;
-            Some(Arc::new(apply_chat_cfg(OpenAiChatProvider::new(
-                &guarded,
-                EgressFeature::Chat,
-                &c.url,
-                &model,
-                chat_temperature,
-            ))))
-        }
-        None => None,
-    };
-    // Горячее применение `n` (утилитарная мелкая модель `ai.fast`): задан непустой URL → строим
-    // провайдер; иначе fallback на chat-URL (chat_fast-модель). Так смена сервера/очистка fast в UI
-    // сразу чинит новости/дайджест/противоречия/сводку-reasoning (баг 2026-06-11: `ai.fast` оставался
-    // на старом мёртвом хосте, эти фичи дохли).
-    let fast_url = fast
-        .map(|f| f.url.trim())
-        .filter(|u| !u.is_empty())
-        // Пустой fast → утилитарная = chat-модель (chat_fast).
-        .or_else(|| chat.map(|c| c.url.as_str()));
-    let fast_provider: Option<Arc<dyn ChatProvider>> = match fast_url {
-        Some(url) => {
-            let model = fast
-                .and_then(|f| f.model.clone())
-                .or_else(|| chat.and_then(|c| c.model.clone()))
-                .unwrap_or_else(|| "chat".to_string());
-            let guarded =
-                GuardedClient::for_chat(policy.clone(), audit.clone(), chat_connect_timeout)
-                    .map_err(AiError::from)?;
-            // R2 как в open_vault (канонный `build_util_chat`): примитивам CoT не нужен, а на ai.fast
-            // может жить reasoning-модель (баг 2026-06-11: gemma12 думала ~40 с над 6-словной сводкой R1).
-            Some(Arc::new(
-                apply_chat_cfg(OpenAiChatProvider::new(
-                    &guarded,
-                    EgressFeature::Chat,
-                    url,
-                    &model,
-                    chat_temperature,
-                ))
-                .without_reasoning(),
-            ))
-        }
-        None => None,
-    };
-    // chat_fast (R2 без reasoning на ОСНОВНОЙ модели) пересобираем вместе с chat —
-    // иначе после смены chat-URL дайджест бил бы по старому хосту.
-    let chat_fast_provider: Option<Arc<dyn ChatProvider>> = match chat {
-        Some(c) => {
-            let model = c.model.clone().unwrap_or_else(|| "chat".to_string());
-            let guarded =
-                GuardedClient::for_chat(policy.clone(), audit.clone(), chat_connect_timeout)
-                    .map_err(AiError::from)?;
-            // Хот-апплай #153 забыл R2: после сохранения настроек дайджест становился «думающим»
-            // до переоткрытия vault. Теперь зеркалит канонную chat-пару.
-            Some(Arc::new(
-                apply_chat_cfg(OpenAiChatProvider::new(
-                    &guarded,
-                    EgressFeature::Chat,
-                    &c.url,
-                    &model,
-                    chat_temperature,
-                ))
-                .without_reasoning(),
-            ))
-        }
-        None => None,
-    };
-    Ok((chat_provider, chat_fast_provider, fast_provider))
+) -> HotProviders {
+    let set = crate::bootstrap::ProviderSet::from_config(
+        saved_cfg,
+        policy,
+        audit,
+        crate::bootstrap::ProviderSetOptions {
+            agent_tools: false,
+            embedding: false,
+        },
+    )
+    .await;
+    (set.chat, set.chat_fast, set.chat_util)
 }
 
 /// Персистит agent-флаги (агентд-only) в `.nexus/local.json`, СОХРАНЯЯ прочие ключи. В ОТЛИЧИЕ от
@@ -1576,31 +1491,29 @@ mod tests {
         server.join().unwrap();
     }
 
-    // ── R-3b: ХАРАКТЕРИЗАЦИЯ hot-apply провайдеров `set_ai_config` (фикстурная таблица) ────────────
+    // ── R-3e: hot-apply провайдеров `set_ai_config` УНИФИЦИРОВАН на канон (фикстурная таблица) ───────
     //
-    // Особый путь UI — НЕ канон `bootstrap::ProviderSet` (задокументированное расхождение R-3a):
-    // (1) ВСЕ три хот-провайдера получают ЕДИНЫЙ профиль таймаутов/температуры из СОХРАНЁННОГО
-    //     `ai.chat` (EndpointDto из UI не несёт таймаутов) — включая утилитарный fast-провайдер;
-    //     канон дал бы fast'у его СОБСТВЕННЫЙ профиль из `ai.fast`;
-    // (2) URL-fallback fast→chat строит ОТДЕЛЬНЫЙ провайдер на chat-URL (канон: chat_util = ТОТ ЖЕ
-    //     Arc, что chat_fast) с цепочкой модели fast.model → chat.model → "chat" (канон: дефолт "fast").
-    // Путь в R-3b НЕ переключён (байт-в-байт с каноном невозможен — п.1/п.2 поведенческие); таблица —
-    // база решения об унификации отдельным срезом. Снимки сняты с ЖИВОГО кода команды.
+    // Прежний особый путь UI СНЯТ (решение владельца): `build_hot_providers` теперь строит каноном
+    // `bootstrap::ProviderSet::from_config` из ИТОГОВОГО сохранённого `local.json`. Таблица пинит уже
+    // КАНОНИЧЕСКУЮ семантику; ДЕКЛАРИРУЕМАЯ дельта против прежнего пути (задекларирована в CHANGELOG):
+    // (1) утилитарный fast получает СОБСТВЕННЫЙ профиль таймаутов/температуры секции `ai.fast` (прежде —
+    //     единый профиль сохранённого `ai.chat`);
+    // (2) дефолт-модель fast → "fast" (прежде — цепочка fast.model → chat.model → "chat");
+    // (3) пустой/отсутствующий fast → chat_util = ТОТ ЖЕ Arc, что chat_fast (прежде — ОТДЕЛЬНЫЙ Arc на
+    //     chat-URL).
+    // Смягчение: в реальном UI-потоке `apply_ai` замещает секции формой url+model → кастомные таймауты
+    // стёрты ДО hot-apply → оба пути дают дефолтный профиль; расхождение видно лишь на рукописном
+    // `local.json` (ряд `hot_custom_*`). Снимки — с КАНОНИЧЕСКОГО кода команды.
 
-    /// Хот-провайдеры ТЕКУЩИМ путём `set_ai_config` → `(chat, chat_fast, chat_util)` — теперь это
-    /// извлечённый [`build_hot_providers`] (в коммите 1 характеризации здесь была байт-реплика
-    /// inline-конструкции команды; при извлечении хелпера ассерты тестов НЕ менялись).
-    fn hot_build_current_way(
-        chat: Option<&EndpointDto>,
-        fast: Option<&EndpointDto>,
-        saved_json: &str,
-    ) -> HotProviders {
+    /// Хот-провайдеры путём `set_ai_config` → `(chat, chat_fast, chat_util)`: канонный
+    /// [`build_hot_providers`] из ИТОГОВОГО сохранённого `local.json` (как в реальной команде —
+    /// `saved_cfg` уже содержит записанные `apply_ai` секции `ai.chat`/`ai.fast`).
+    async fn hot_build(saved_json: &str) -> HotProviders {
         use std::sync::atomic::AtomicBool;
         let policy = Arc::new(EgressPolicy::new(Arc::new(AtomicBool::new(false))));
         let audit = Arc::new(EgressAudit::default());
-        let saved_cfg = LocalConfig::parse(saved_json).ok();
-        build_hot_providers(chat, fast, saved_cfg.as_ref(), &policy, &audit)
-            .expect("guarded chat-клиент строится офлайн")
+        let saved_cfg = LocalConfig::parse(saved_json).expect("итоговый local.json парсится");
+        build_hot_providers(&saved_cfg, &policy, &audit).await
     }
 
     fn dto(url: &str, model: Option<&str>) -> EndpointDto {
@@ -1619,14 +1532,14 @@ mod tests {
     }
 
     /// UI-сейв chat+fast (обе модели заданы): chat-пара — reasoning ON/OFF на chat-URL; утилитарный —
-    /// на fast-URL/model, БЕЗ reasoning; профиль ВЕЗДЕ дефолтный (свежезаписанный `ai.chat` из
-    /// EndpointDto таймаутов не содержит).
-    #[test]
-    fn hot_full_ui_save_snapshots() {
+    /// на fast-URL/model, БЕЗ reasoning; профиль ВЕЗДЕ дефолтный (свежезаписанные `ai.chat`/`ai.fast` из
+    /// EndpointDto таймаутов не содержат → канон и прежний путь совпадают — снимки не менялись).
+    #[tokio::test]
+    async fn hot_full_ui_save_snapshots() {
         let chat = dto("http://192.168.0.28:8080", Some("qwen3-30b"));
         let fast = dto("http://192.168.0.28:8084", Some("gemma-4b"));
         let saved = saved_after_apply_ai(Some(&chat), Some(&fast));
-        let (c, cf, util) = hot_build_current_way(Some(&chat), Some(&fast), &saved);
+        let (c, cf, util) = hot_build(&saved).await;
         assert_eq!(
             c.expect("chat задан → провайдер").debug_params(),
             r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8080/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: true }"#
@@ -1641,48 +1554,47 @@ mod tests {
         );
     }
 
-    /// URL-fallback fast→chat: без fast-DTO утилитарный строится НА chat-URL/model — параметры
-    /// байт-в-байт chat_fast, но ОТДЕЛЬНЫЙ Arc (канон отдал бы ТОТ ЖЕ Arc, что chat_fast).
-    #[test]
-    fn hot_empty_fast_falls_back_to_chat_url_separate_arc() {
+    /// R-3e: унификация на канон, решение владельца (дельта №3 — Arc-идентичность fallback). Нет
+    /// секции `ai.fast` → chat_util = ТОТ ЖЕ Arc, что chat_fast (канон-fallback `build_util_chat` →
+    /// `chat_fast.clone()`). Прежний особый путь строил ОТДЕЛЬНЫЙ Arc на chat-URL.
+    #[tokio::test]
+    async fn hot_empty_fast_falls_back_to_chat_fast_same_arc() {
         let chat = dto("http://192.168.0.28:8080", Some("qwen3-30b"));
         let saved = saved_after_apply_ai(Some(&chat), None);
-        let (_, cf, util) = hot_build_current_way(Some(&chat), None, &saved);
+        let (_, cf, util) = hot_build(&saved).await;
         let cf = cf.expect("chat задан → быстрый");
-        let util = util.expect("fallback на chat-URL");
-        assert_eq!(
-            util.debug_params(),
-            cf.debug_params(),
-            "URL-fallback: параметры утилитарного = chat_fast"
-        );
+        let util = util.expect("fallback на chat_fast");
         assert!(
-            !Arc::ptr_eq(&cf, &util),
-            "ОТДЕЛЬНЫЙ Arc (не канон-fallback chat_util=chat_fast)"
+            Arc::ptr_eq(&cf, &util),
+            "канон-fallback: chat_util = ТОТ ЖЕ Arc, что chat_fast"
         );
     }
 
-    /// Цепочка модели fast.model → chat.model → "chat": fast-URL задан БЕЗ модели → берётся
-    /// chat.model (канон взял бы дефолт "fast").
-    #[test]
-    fn hot_fast_without_model_takes_chat_model() {
+    /// R-3e: унификация на канон, решение владельца (дельта №2 — дефолт-модель fast). fast-URL задан
+    /// БЕЗ модели → канон `build_util_chat` берёт дефолт "fast" (прежний путь брал chat.model
+    /// "qwen3-30b" по цепочке fast.model → chat.model → "chat"). Профиль — дефолтный (свежезаписанный
+    /// `ai.fast` таймаутов не несёт).
+    #[tokio::test]
+    async fn hot_fast_without_model_takes_fast_default() {
         let chat = dto("http://192.168.0.28:8080", Some("qwen3-30b"));
         let fast = dto("http://192.168.0.28:8084", None);
         let saved = saved_after_apply_ai(Some(&chat), Some(&fast));
-        let (_, _, util) = hot_build_current_way(Some(&chat), Some(&fast), &saved);
+        let (_, _, util) = hot_build(&saved).await;
         assert_eq!(
             util.expect("fast задан → утилитарный").debug_params(),
-            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8084/v1/chat/completions", model: "qwen3-30b", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: false }"#
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=30s)", feature: Chat, endpoint: "http://192.168.0.28:8084/v1/chat/completions", model: "fast", temperature: 0.3, first_token_timeout: 300s, idle_timeout: 90s, retry: RetryPolicy { max_attempts: 3, base: 300ms, cap: 2s }, enable_thinking: false }"#
         );
     }
 
-    /// ГЛАВНЫЙ ряд дельты с каноном: рукописный local.json с КАСТОМНЫМИ профилями chat И fast →
-    /// hot-apply вешает chat-профиль (connect 5s / ft 45s / idle 10s / retry 7 / temp 0.9) на ВСЕ ТРИ
-    /// провайдера, СОБСТВЕННЫЙ профиль `ai.fast` (2s/20s/4s/1/0.05) ИГНОРИРУЕТСЯ; модель утилитарного —
-    /// "chat" (цепочка fallback), не "fast". Канон дал бы fast'у его секцию. NB: в реальном UI-потоке
+    /// R-3e: унификация на канон, решение владельца (ГЛАВНЫЙ ряд дельты №1 — собственный профиль fast).
+    /// Рукописный local.json с КАСТОМНЫМИ профилями chat И fast: канон вешает chat-профиль (connect 5s /
+    /// ft 45s / idle 10s / retry 7 / temp 0.9) на chat-ПАРУ, а утилитарный получает СОБСТВЕННЫЙ профиль
+    /// `ai.fast` (connect 2s / ft 20s / idle 4s / retry 1 / temp 0.05) и дефолт-модель "fast" (дельта
+    /// №2). Прежний особый путь вешал chat-профиль ВЕЗДЕ и брал модель "chat". NB: в реальном UI-потоке
     /// `apply_ai` замещает секции формой url+model (кастомы стираются ДО hot-apply) — ряд фиксирует
-    /// контракт кода на рукописном конфиге и величину поведенческого изменения при унификации.
-    #[test]
-    fn hot_custom_saved_profile_chat_wins_for_all_three() {
+    /// величину поведенческого изменения на рукописном конфиге (в UI-потоке дельта не видна).
+    #[tokio::test]
+    async fn hot_custom_saved_profiles_own_sections() {
         let saved = r#"{
           "ai": {
             "chat": {
@@ -1703,9 +1615,7 @@ mod tests {
             }
           }
         }"#;
-        let chat = dto("http://127.0.0.1:9201/v1", None);
-        let fast = dto("http://127.0.0.1:9202", None);
-        let (c, cf, util) = hot_build_current_way(Some(&chat), Some(&fast), saved);
+        let (c, cf, util) = hot_build(saved).await;
         assert_eq!(
             c.expect("chat задан → провайдер").debug_params(),
             r#"OpenAiChatProvider { client: "for_chat(connect_timeout=5s)", feature: Chat, endpoint: "http://127.0.0.1:9201/v1/chat/completions", model: "chat", temperature: 0.9, first_token_timeout: 45s, idle_timeout: 10s, retry: RetryPolicy { max_attempts: 7, base: 300ms, cap: 2s }, enable_thinking: true }"#
@@ -1716,18 +1626,18 @@ mod tests {
         );
         assert_eq!(
             util.expect("fast задан → утилитарный").debug_params(),
-            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=5s)", feature: Chat, endpoint: "http://127.0.0.1:9202/v1/chat/completions", model: "chat", temperature: 0.9, first_token_timeout: 45s, idle_timeout: 10s, retry: RetryPolicy { max_attempts: 7, base: 300ms, cap: 2s }, enable_thinking: false }"#
+            r#"OpenAiChatProvider { client: "for_chat(connect_timeout=2s)", feature: Chat, endpoint: "http://127.0.0.1:9202/v1/chat/completions", model: "fast", temperature: 0.05, first_token_timeout: 20s, idle_timeout: 4s, retry: RetryPolicy { max_attempts: 1, base: 300ms, cap: 2s }, enable_thinking: false }"#
         );
     }
 
     /// chat=None (секция удалена), fast задан: chat-пары нет; утилитарный живёт на fast-URL с
-    /// ПРОВАЙДЕР-дефолтами (сохранённого `ai.chat` нет → apply_chat_cfg — identity, температура —
-    /// дефолт конструктора 0.3, connect — дефолт 30s).
-    #[test]
-    fn hot_chat_none_fast_on_provider_defaults() {
+    /// ПРОВАЙДЕР-дефолтами (секция `ai.fast` без таймаутов → дефолты конструктора: температура 0.3,
+    /// connect 30s, модель из `ai.fast` "gemma-4b"). Канон и прежний путь совпадают — снимок не менялся.
+    #[tokio::test]
+    async fn hot_chat_none_fast_on_provider_defaults() {
         let fast = dto("http://192.168.0.28:8084", Some("gemma-4b"));
         let saved = saved_after_apply_ai(None, Some(&fast));
-        let (c, cf, util) = hot_build_current_way(None, Some(&fast), &saved);
+        let (c, cf, util) = hot_build(&saved).await;
         assert!(c.is_none(), "chat=None → провайдера нет");
         assert!(cf.is_none(), "chat=None → быстрого нет");
         assert_eq!(
@@ -1737,10 +1647,10 @@ mod tests {
     }
 
     /// Оба DTO пусты → ни одного хот-провайдера (AI выключается до переоткрытия vault).
-    #[test]
-    fn hot_nothing_configured_builds_nothing() {
+    #[tokio::test]
+    async fn hot_nothing_configured_builds_nothing() {
         let saved = saved_after_apply_ai(None, None);
-        let (c, cf, util) = hot_build_current_way(None, None, &saved);
+        let (c, cf, util) = hot_build(&saved).await;
         assert!(c.is_none() && cf.is_none() && util.is_none());
     }
 }
