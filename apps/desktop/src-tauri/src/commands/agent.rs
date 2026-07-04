@@ -704,21 +704,54 @@ pub struct AgentSessionDataDto {
     pub turns: Vec<PersistedTurnDto>,
 }
 
-/// W-38: список агент-сессий (история переписок) для левого сайдбара — свежие сверху.
-#[tauri::command]
-pub async fn agent_sessions_list(state: State<'_, AppState>) -> AppResult<Vec<AgentSessionDto>> {
-    let reader = state.vault().await?.db.reader().clone();
-    let rows = run_store::list_agent_sessions(&reader).await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| AgentSessionDto {
+// R-12 п.4: канон row→wire-DTO как `From`-импл (вместо инлайн-`.map`-пассивов в командах). Форма/serde
+// DTO не меняются — контракт фронта тот же JSON; это лишь свод дублирующегося поле-в-поле копирования.
+impl From<run_store::AgentSessionRow> for AgentSessionDto {
+    fn from(r: run_store::AgentSessionRow) -> Self {
+        Self {
             session_id: r.session_id,
             title: r.title,
             status: r.status,
             turn_count: r.turn_count,
             updated_at: r.updated_at,
-        })
-        .collect())
+        }
+    }
+}
+
+impl From<run_store::PersistStep> for PersistedStepDto {
+    fn from(s: run_store::PersistStep) -> Self {
+        // `ord` (порядок в ходе) — служебное поле реконструкции ленты, в wire-DTO не выносится.
+        Self {
+            kind: s.kind,
+            args: s.args,
+            title: s.title,
+            result: s.result,
+            is_error: s.is_error,
+        }
+    }
+}
+
+impl From<run_store::PersistedTurnRow> for PersistedTurnDto {
+    fn from(t: run_store::PersistedTurnRow) -> Self {
+        Self {
+            run_id: t.run_id,
+            task: t.task,
+            assistant_text: t.assistant_text,
+            report: t.report,
+            error: t.error,
+            status: t.status,
+            created_at: t.created_at,
+            steps: t.steps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// W-38: список агент-сессий (история переписок) для левого сайдбара — свежие сверху.
+#[tauri::command]
+pub async fn agent_sessions_list(state: State<'_, AppState>) -> AppResult<Vec<AgentSessionDto>> {
+    let reader = state.vault().await?.db.reader().clone();
+    let rows = run_store::list_agent_sessions(&reader).await?;
+    Ok(rows.into_iter().map(AgentSessionDto::from).collect())
 }
 
 /// W-38: загружает все ходы одной переписки (для переоткрытия в UI).
@@ -729,29 +762,7 @@ pub async fn agent_session_load(
 ) -> AppResult<AgentSessionDataDto> {
     let reader = state.vault().await?.db.reader().clone();
     let rows = run_store::load_agent_session(&reader, &session_id).await?;
-    let turns = rows
-        .into_iter()
-        .map(|t| PersistedTurnDto {
-            run_id: t.run_id,
-            task: t.task,
-            assistant_text: t.assistant_text,
-            report: t.report,
-            error: t.error,
-            status: t.status,
-            created_at: t.created_at,
-            steps: t
-                .steps
-                .into_iter()
-                .map(|s| PersistedStepDto {
-                    kind: s.kind,
-                    args: s.args,
-                    title: s.title,
-                    result: s.result,
-                    is_error: s.is_error,
-                })
-                .collect(),
-        })
-        .collect();
+    let turns = rows.into_iter().map(PersistedTurnDto::from).collect();
     Ok(AgentSessionDataDto { turns })
 }
 
