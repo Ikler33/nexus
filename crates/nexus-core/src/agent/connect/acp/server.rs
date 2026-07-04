@@ -40,7 +40,9 @@ use super::super::super::event::AgentEvent;
 use super::super::super::finish::{outcome_to_finish, CancelWording, PausePolicy};
 use super::super::super::run_store;
 use super::super::super::runner::{BudgetKind, LoopOutcome};
-use super::super::super::session::{run_agent_session, AgentEventForwarder, SessionSpec};
+use super::super::super::session::{
+    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+};
 use super::super::{
     acp_tool_kind, framing, RpcError, RpcMessage, Transport, TransportError, EVENT_CHANNEL_CAP,
 };
@@ -351,19 +353,22 @@ async fn drive_prompt(
 
     let outcome = run_agent_session(
         &spec,
-        cfg.provider.as_ref(),
-        None, // memory (slice-1)
-        None, // skills (slice-1)
-        None, // web (slice-1)
-        decision,
-        &cfg.writer,
-        &cfg.reader,
-        &paused,
-        &cancel,
-        forwarder,
-        None, // subagent
-        None, // delegation (slice-1)
-        None, // research (slice-1)
+        &SessionDeps {
+            provider: cfg.provider.as_ref(),
+            memory: None, // slice-1
+            skills: None, // slice-1
+            web: None,    // slice-1
+            decision_source: decision,
+            writer: &cfg.writer,
+            reader: &cfg.reader,
+            paused: &paused,
+            cancel: &cancel,
+            forwarder,
+        },
+        SessionRole::TopLevel {
+            delegation: None, // slice-1
+            research: None,   // slice-1
+        },
     )
     .await;
 

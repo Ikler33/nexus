@@ -48,7 +48,7 @@ use nexus_core::actuator::{
 use nexus_core::agent::run_store::PersistStep;
 use nexus_core::agent::{
     run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, DelegationDeps,
-    LoopOutcome, SessionSpec, VaultAgentMemory,
+    LoopOutcome, SessionDeps, SessionRole, SessionSpec, VaultAgentMemory,
 };
 use nexus_core::ai::ChatMessage;
 
@@ -829,19 +829,27 @@ async fn drive_run(
     };
     run_agent_session(
         &spec,
-        provider.as_ref(),
-        Some(memory.as_ref()),
-        skills.as_ref(), // AGENT-0.2: навыки из ai.agent_skills_dir (None если не задан/пуст)
-        web.as_ref(),    // AGENT-0.2: web.search/web.fetch при ai.web.enabled (None если выкл)
-        decision_source,
-        writer,
-        reader,
-        &paused,
-        &cancel,
-        forwarder,
-        None,                // top-level desktop-прогон (не субагент)
-        delegation.as_ref(), // W-24: owner-gated делегирование (ai.delegation, default-OFF)
-        research.as_ref(),   // W-25: owner-gated deep-research (ai.research, default-OFF)
+        &SessionDeps {
+            provider: provider.as_ref(),
+            memory: Some(memory.as_ref()),
+            // AGENT-0.2: навыки из ai.agent_skills_dir (None если не задан/пуст).
+            skills: skills.as_ref(),
+            // AGENT-0.2: web.search/web.fetch при ai.web.enabled (None если выкл).
+            web: web.as_ref(),
+            decision_source,
+            writer,
+            reader,
+            paused: &paused,
+            cancel: &cancel,
+            forwarder,
+        },
+        // Top-level desktop-прогон.
+        SessionRole::TopLevel {
+            // W-24: owner-gated делегирование (ai.delegation, default-OFF).
+            delegation: delegation.as_ref(),
+            // W-25: owner-gated deep-research (ai.research, default-OFF).
+            research: research.as_ref(),
+        },
     )
     .await
 }
