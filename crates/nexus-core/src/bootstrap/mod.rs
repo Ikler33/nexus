@@ -8,12 +8,14 @@
 //! app-специфики — параметрами ([`ProviderSetOptions`], прецедент `IndexerHooks`).
 //!
 //! **Байт-идентичность старым строителям доказана характеризацией** (nexus-agentd
-//! `tests::boot_*` — R-3a; nexus-desktop `commands::vault::tests::boot_*` — R-3b): снимки всех
-//! конфиг-наблюдаемых параметров сняты со СТАРОГО кода (коммит 1) и не менялись при переключении
-//! на канон (коммит 2). Не «пере-снимать» их при рефакторе — они и есть контракт.
+//! `tests::boot_*` — R-3a; nexus-desktop `commands::vault::tests::boot_*` — R-3b; nexus-cli
+//! `agent::tests::boot_*` — R-3c): снимки всех конфиг-наблюдаемых параметров сняты со СТАРОГО
+//! кода (коммит 1) и не менялись при переключении на канон (коммит 2). Не «пере-снимать» их при
+//! рефакторе — они и есть контракт.
 //!
 //! Внедрение — строитель-за-строителем × бинарь-за-бинарём: R-3a переключил agentd, R-3b —
-//! desktop `open_vault`; cli (R-3c) — следующий срез.
+//! desktop `open_vault`, R-3c — cli `build_deps` (`nexus agent`/`nexus acp`; профиль
+//! `{agent_tools: true, embedding: false}` — chat-каналы канона cli не использует).
 //!
 //! ЗА КАДРОМ канона (намеренно, границы среза):
 //! - `reconcile_embedding_model` + открытие usearch-индексов — у вызывающего (reconcile — отдельный
@@ -70,18 +72,43 @@ impl ProviderSetOptions {
     };
 }
 
-/// КАНОН №2 (R-3b): чтение+разбор `.nexus/local.json` — ОДИН раз на открытие (кросс-план #8).
-/// `None` — файла нет / битый JSON (AI отключается, vault живёт без AI — local-first). Бывшие
-/// desktop-реплики `commands/vault.rs::load_local_config` и `commands/agent.rs::load_local_config`
-/// переключены в R-3b (у второй дрейфовал текст warn-лога — «agent_run: local.json не распарсен —
-/// дефолты»; канон говорит единым текстом ниже). Реплики agentd `main.rs` и cli — кандидаты R-3c.
-pub async fn load_local_config(root: &std::path::Path) -> Option<LocalConfig> {
+/// Причина, почему `.nexus/local.json` НЕ дал конфига, — структурная основа канона №2 для
+/// проекций вызывателей с РАЗНОЙ эргономикой ошибок: Option-канон [`load_local_config`]
+/// (desktop/agentd: нет конфига → AI off, vault живёт — local-first) и онбординг-Result cli
+/// (`nexus agent`: конфиг ОБЯЗАТЕЛЕН, тексты различают «нет файла» и «битый JSON» — прежние,
+/// запинены характеризацией cli `boot_*`).
+#[derive(Debug)]
+pub enum LocalConfigError {
+    /// Файл не прочитался (обычно его просто нет — онбординг ещё не создал `.nexus/local.json`).
+    Unreadable,
+    /// Файл есть, но JSON не разобрался (ошибка парсера — в Display через `AiError::Config`).
+    Parse(ai::AiError),
+}
+
+/// КАНОН №2, структурная форма (R-3c): чтение+разбор `.nexus/local.json` — ОДИН раз на открытие
+/// (кросс-план #8), с различением причин отказа для проекций (см. [`LocalConfigError`]).
+pub async fn read_local_config(root: &std::path::Path) -> Result<LocalConfig, LocalConfigError> {
     let raw = tokio::fs::read_to_string(root.join(".nexus").join("local.json"))
         .await
-        .ok()?;
-    LocalConfig::parse(&raw)
-        .map_err(|e| tracing::warn!(error = %e, "local.json: разбор не удался — AI отключён"))
-        .ok()
+        .map_err(|_| LocalConfigError::Unreadable)?;
+    LocalConfig::parse(&raw).map_err(LocalConfigError::Parse)
+}
+
+/// КАНОН №2 (R-3b), Option-проекция: `None` — файла нет / битый JSON (AI отключается, vault живёт
+/// без AI — local-first). Бывшие desktop-реплики `commands/vault.rs::load_local_config` и
+/// `commands/agent.rs::load_local_config` переключены в R-3b (у второй дрейфовал текст warn-лога —
+/// «agent_run: local.json не распарсен — дефолты»; канон говорит единым текстом ниже); реплика
+/// agentd `main.rs` (тело было байт-идентично канону) переключена в R-3c; cli — онбординг-проекция
+/// над [`read_local_config`] (Result с прежними текстами, warn не пишет — ошибка уходит владельцу).
+pub async fn load_local_config(root: &std::path::Path) -> Option<LocalConfig> {
+    match read_local_config(root).await {
+        Ok(cfg) => Some(cfg),
+        Err(LocalConfigError::Unreadable) => None,
+        Err(LocalConfigError::Parse(e)) => {
+            tracing::warn!(error = %e, "local.json: разбор не удался — AI отключён");
+            None
+        }
+    }
 }
 
 /// Канонический набор LLM-провайдеров vault'а — то, что композиционный корень кладёт в
@@ -358,6 +385,27 @@ mod tests {
         let fast = s.chat_fast.expect("chat → пара");
         let util = s.chat_util.expect("fallback");
         assert!(Arc::ptr_eq(&fast, &util));
+    }
+
+    /// Структурная форма канона №2 (R-3c): `read_local_config` различает «нет файла» и «битый
+    /// JSON» — онбординг-проекция cli строит по ним РАЗНЫЕ тексты (сами тексты запинены
+    /// характеризацией nexus-cli `agent::tests::boot_*`).
+    #[tokio::test]
+    async fn read_local_config_distinguishes_unreadable_and_parse() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        assert!(matches!(
+            read_local_config(root).await,
+            Err(LocalConfigError::Unreadable)
+        ));
+        std::fs::create_dir_all(root.join(".nexus")).unwrap();
+        std::fs::write(root.join(".nexus").join("local.json"), "{ битый").unwrap();
+        assert!(matches!(
+            read_local_config(root).await,
+            Err(LocalConfigError::Parse(_))
+        ));
+        std::fs::write(root.join(".nexus").join("local.json"), "{}").unwrap();
+        assert!(read_local_config(root).await.is_ok());
     }
 
     /// КАНОН №2 (R-3b): `load_local_config` — нет файла → None, битый JSON → None (warn, AI off),
