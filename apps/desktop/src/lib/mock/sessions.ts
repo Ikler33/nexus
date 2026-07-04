@@ -84,6 +84,13 @@ export async function logExchange(
   return id;
 }
 
+/** «Сохранить в заметки» (зеркало `chat_session_to_note`): бэкенд создаёт заметку из сессии и
+ *  возвращает её относительный путь — мок отдаёт фиксированный (переехал из инлайн-заглушки
+ *  баррела, F-2b; семантика прежняя). */
+export async function toNote(): Promise<string> {
+  return 'Chats/mock.md';
+}
+
 /** P6-RGN: удалить последний обмен сессии (user+assistant) — для регенерации ответа. */
 export async function deleteLastExchange(sessionId: number | null): Promise<void> {
   if (sessionId == null) return;

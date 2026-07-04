@@ -10,13 +10,13 @@ import * as mockEpisode from './mock/episode';
 import * as mockGit from './mock/git';
 import * as mockHome from './mock/home';
 import * as mockNews from './mock/news';
-import * as mockSessions from './mock/sessions';
 import * as mockBackup from './mock/backup';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
 import * as mockTags from './mock/tags';
 import * as mockVault from './mock/vault';
 import { isTauri } from './api/bridge';
+import { chat } from './api/chat';
 import { attachments, vault, vaultEvents } from './api/vault';
 import type { NoteRef } from './api/vault/types';
 
@@ -25,9 +25,9 @@ import type { NoteRef } from './api/vault/types';
  *
  * Прямой Tauri IPC (`invoke` / `Channel`) разрешён только в слое `lib/api/*` (bridge +
  * доменные модули) и — до конца распила F-2 — в этом файле (контракт §4.1 ARCHITECTURE).
- * Вынесенные домены (F-2a: vault) реэкспортируются отсюда — 140+ потребителей продолжают
- * импортировать из `lib/tauri-api` без правок; остальные домены мигрируют в
- * `lib/api/<домен>/` следующими срезами (F-2b+).
+ * Вынесенные домены (F-2a: vault; F-2b: chat) реэкспортируются отсюда — 140+ потребителей
+ * продолжают импортировать из `lib/tauri-api` без правок; остальные домены мигрируют в
+ * `lib/api/<домен>/` следующими срезами (F-2c+).
  *
  * Вне Tauri (браузерное превью, vitest) методы прозрачно проксируются в мок-бэкенд
  * (`./mock/*`) — это позволяет вести фронт/дизайн на тех же контрактах параллельно
@@ -37,6 +37,16 @@ import type { NoteRef } from './api/vault/types';
 // F-2a: DTO-типы vault-домена живут в `lib/api/vault/types.ts` (реэкспорт — контракт баррела).
 export { isTauri };
 export type { FileEntry, NoteRef, TagCount, VaultInfo } from './api/vault/types';
+// F-2b: DTO-типы chat-домена живут в `lib/api/chat/types.ts` (реэкспорт — контракт баррела).
+export type {
+  ChatSearchHit,
+  ChatSessionInfo,
+  ChatStreamEvent,
+  EgressDeniedKind,
+  MemoryHit,
+  StoredChatMessage,
+  WebSource,
+} from './api/chat/types';
 
 /** Git-версия сборки (W-20, зеркалит Rust `BuildInfo`). */
 export interface BuildInfo {
@@ -320,14 +330,6 @@ export interface Digest {
   noteCount: number;
 }
 
-/** Сессия чата (зеркалит Rust `chat_log::ChatSession`) — история-дропдаун AI-панели. */
-export interface ChatSessionInfo {
-  id: number;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
 /** Отчёт импорта бэкапа (#59, зеркалит Rust `backup::ImportReport`). */
 export interface BackupImportReport {
   factsAdded: number;
@@ -343,27 +345,6 @@ export interface BackupImportReport {
   messagesOrphaned: number;
   episodesOrphaned: number;
   schemaVersionMismatch: boolean;
-}
-
-/** Совпадение поиска по переписке (#58, зеркалит Rust `chat_log::ChatSearchHit`). */
-export interface ChatSearchHit {
-  sessionId: number;
-  title: string;
-  role: 'user' | 'assistant';
-  /** Фрагмент с подсветкой совпадений (FTS5 snippet, `[...]`). */
-  snippet: string;
-  createdAt: number;
-  /** Саммари эпизода сессии (EP), если есть. */
-  summary: string | null;
-}
-
-/** Сообщение сессии из БД (зеркалит `chat_log::StoredMessage`). */
-export interface StoredChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  /** JSON-снапшот источников ({sources, webSources}) — как было показано. */
-  sourcesJson: string | null;
-  createdAt: number;
 }
 
 /** Сводка очереди планировщика для StatusBar (зеркалит Rust `scheduler::JobCounts`, ADR-007 срез 5). */
@@ -446,35 +427,10 @@ export interface FullGraph {
   truncated: boolean;
 }
 
-/**
- * Событие RAG-чат-стрима (зеркалит Rust `commands::chat::ChatStreamEvent`, тег `type`, camelCase).
- * Порядок: `sources` → (для reasoning-модели — живые `reasoningSummary`/`reasoning`) → много `token`
- * → `done` (или `error`). `reasoning` — сырой chain-of-thought (спойлер), `reasoningSummary` —
- * короткая живая сводка CoT («💭 …», R1); оба могут не приходить (non-reasoning модель).
- */
-/** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host; web — secret (W4). */
-export type EgressDeniedKind = 'offline' | 'feature' | 'host' | 'secret' | 'notConfigured';
-
-/** Web-источник (W-2): результат SearXNG-поиска — цитата web-ответа (зеркалит Rust `SearchResult`). */
-export interface WebSource {
-  title: string;
-  url: string;
-  snippet: string;
-}
-
 /** Конфиг web-агента (W-3, зеркалит Rust `WebSearchConfig`): URL SearXNG = consent на эгресс к нему. */
 export interface WebSearchConfig {
   enabled: boolean;
   url: string;
-}
-
-/** Фрагмент памяти переписки (N4b, зеркалит Rust `chat_log::MemoryHit`) — «из прошлых разговоров». */
-export interface MemoryHit {
-  sessionId: number;
-  sessionTitle: string;
-  role: string;
-  snippet: string;
-  score: number;
 }
 
 /** Эпизод памяти (EP-2, зеркалит Rust `episode::EpisodeHit`) — саммари прошлой сессии. По клику грузит
@@ -561,17 +517,6 @@ export type ConsolidationOutcome =
       opGroup: number;
     }
   | { op: 'noop' };
-
-export type ChatStreamEvent =
-  | { type: 'sources'; sources: SearchHit[] }
-  | { type: 'webSources'; sources: WebSource[] }
-  | { type: 'memorySources'; sources: MemoryHit[] }
-  | { type: 'episodeSources'; sources: EpisodeHit[] }
-  | { type: 'token'; text: string }
-  | { type: 'reasoning'; text: string }
-  | { type: 'reasoningSummary'; text: string }
-  | { type: 'done'; full: string }
-  | { type: 'error'; message: string; deniedKind?: EgressDeniedKind };
 
 // ── Агент (UI-1) — зеркало Rust `commands::agent` ─────────────────────────────────────────────────
 
@@ -1306,105 +1251,8 @@ export const tauriApi = {
     },
   },
 
-  chat: {
-    /**
-     * RAG-чат со стримингом (Ф1-7): события приходят в `onEvent` (`sources` → `token`… → `done`).
-     * Возвращает функцию отмены текущего стрима. Вне Tauri — мок.
-     */
-    streamRag: (
-      question: string,
-      onEvent: (event: ChatStreamEvent) => void,
-      opts?: {
-        k?: number;
-        center?: string;
-        grounded?: boolean;
-        web?: boolean;
-        rerank?: boolean;
-        memory?: boolean;
-        /** MEM (AC-MEM-5): подмешивать сохранённые явные факты (память агента). ВЫКЛ по умолчанию. */
-        agentMemory?: boolean;
-        /** EP-2: подмешивать саммари прошлых сессий (эпизодическая память). ВЫКЛ по умолчанию. */
-        episodic?: boolean;
-        /** Reasoning-режим: «Глубокий» (CoT gemma, медленнее) vs «Быстрый». ВЫКЛ по умолчанию = Быстрый. */
-        deep?: boolean;
-        sessionId?: number | null;
-        /** P6-PIN: пути закреплённых заметок — их полное содержимое в гарантированный контекст. */
-        pinned?: string[];
-      },
-    ): (() => void) => {
-      // P0-2 (mock-must-match-backend): мок получает ВСЕ опции команды `chat_rag` — раньше
-      // rerank/memory/agentMemory/episodic/deep/pinned/sessionId/center молча выбрасывались,
-      // и превью/тесты «зеленели» на усечённом контракте.
-      if (!isTauri())
-        return mockVault.streamChat(question, onEvent, {
-          k: opts?.k,
-          center: opts?.center,
-          grounded: opts?.grounded,
-          web: opts?.web,
-          rerank: opts?.rerank,
-          memory: opts?.memory,
-          agentMemory: opts?.agentMemory,
-          episodic: opts?.episodic,
-          deep: opts?.deep,
-          sessionId: opts?.sessionId,
-          pinned: opts?.pinned,
-        });
-      const channel = new Channel<ChatStreamEvent>();
-      channel.onmessage = onEvent;
-      invoke<void>('chat_rag', {
-        question,
-        k: opts?.k,
-        center: opts?.center,
-        grounded: opts?.grounded,
-        web: opts?.web,
-        rerank: opts?.rerank,
-        memory: opts?.memory,
-        agentMemory: opts?.agentMemory,
-        episodic: opts?.episodic,
-        deep: opts?.deep,
-        sessionId: opts?.sessionId,
-        pinned: opts?.pinned,
-        channel,
-      }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
-      return () => {
-        void invoke<void>('chat_cancel');
-      };
-    },
-
-    /** Сессии чата («второй мозг» переписки): история, загрузка, запись обмена, экспорт. */
-    sessions: {
-      list: (): Promise<ChatSessionInfo[]> =>
-        isTauri() ? invoke<ChatSessionInfo[]>('chat_sessions_list') : mockSessions.list(),
-      /** #58 session-search: полнотекстовый поиск по переписке (snippet-подсветка + заголовок/саммари). */
-      search: (query: string, limit?: number): Promise<ChatSearchHit[]> =>
-        isTauri()
-          ? invoke<ChatSearchHit[]>('chat_search', { query, limit })
-          : mockSessions.search(query, limit),
-      messages: (id: number): Promise<StoredChatMessage[]> =>
-        isTauri()
-          ? invoke<StoredChatMessage[]>('chat_session_messages', { id })
-          : mockSessions.messages(id),
-      logExchange: (
-        sessionId: number | null,
-        question: string,
-        answer: string,
-        sourcesJson: string | null,
-      ): Promise<number> =>
-        isTauri()
-          ? invoke<number>('chat_log_exchange', { sessionId, question, answer, sourcesJson })
-          : mockSessions.logExchange(sessionId, question, answer, sourcesJson),
-      /** P6-RGN: удалить последний обмен сессии (перед регенерацией ответа) — чтобы не двоить историю. */
-      deleteLastExchange: (sessionId: number | null): Promise<void> =>
-        isTauri()
-          ? invoke<void>('chat_delete_last_exchange', { sessionId })
-          : mockSessions.deleteLastExchange(sessionId),
-      /** «Сохранить в заметки» → относительный путь созданной заметки. */
-      toNote: (id: number): Promise<string> =>
-        isTauri()
-          ? invoke<string>('chat_session_to_note', { id })
-          : Promise.resolve('Chats/mock.md'),
-    },
-  },
+  // F-2b: chat-домен (RAG-стрим + сессии переписки) вынесен в `lib/api/chat/` — здесь реэкспорт.
+  chat,
 
   inline: {
     /**

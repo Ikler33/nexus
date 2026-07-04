@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Изменено · F-2b — распил tauri-api: домен chat
+
+Второй срез стадии F-2 фронт-волны REFACTOR-PLAN §4 (по образцу F-2a). **Behavior-preserving**: потребители НЕ правились — баррел `lib/tauri-api.ts` реэкспортирует вынесенное; Rust не тронут.
+
+- **Домен 2: chat → `lib/api/chat/`** (`types.ts` — DTO-зеркала `chat_log`/`commands::chat`: `ChatSessionInfo`/`ChatSearchHit`/`StoredChatMessage`/`MemoryHit` (память переписки N4b)/`WebSource`/`EgressDeniedKind`/`ChatStreamEvent`; `index.ts` — вызовы). Состав (из фактической структуры файла): `chat.streamRag` (RAG-стрим Ф1-7) + `chat.sessions` — 6 методов (list/search #58/messages/logExchange/deleteLastExchange P6-RGN/toNote). Memory-домен (`tauriApi.memory`, факты MEM/консолидация MEM-8) и episode-домен НЕ тронуты — отдельные секции, свои срезы. В барреле — реэкспорт (`chat`, типы); chat-секция из tauri-api.ts удалена (1867 → 1715 строк).
+- **`chat.streamRag` — честное bridge-исключение** (по списку в шапке `bridge.ts`): стрим-команда с `Channel` (канал + `onmessage` + отдельная `chat_cancel`) — не request/response-форма `bridge`, перенесена ПРЯМЫМ `invoke` с комментом в домене. Мок-ветка стрима — как была: вызов `mock/vault.streamChat` со ВСЕМИ опциями `chat_rag` (семантика P0-2 mock-must-match-backend НЕ менялась).
+- **Кросс-доменные payload'ы стрима** (`SearchHit` — search, `EpisodeHit` — episode) остались в барреле до своих срезов F-2c+; `chat/types.ts` берёт их type-only импортом (в рантайме стирается — цикла нет, тот же паттерн, что у `lib/mock/*`).
+- **Ratchet инлайн-моков ВНИЗ:** единственная инлайн-заглушка chat-домена (`chat.sessions.toNote` → `'Chats/mock.md'`) переехала в `mock/sessions.ts` (зеркалит контракт `chat_session_to_note`, семантика прежняя); baseline parity-гейта (в) ПОНИЖЕН 19 → 18. Семантика остального `mock/sessions.ts` не тронута.
+- Остальные домены (agent/news/memory/…) — следующие срезы F-2c+ (в tauri-api.ts не тронуты).
+- Гейт: `tsc --noEmit` ✅, `eslint --max-warnings 0` ✅, vitest полный 1341/1341 + coverage-храповик ✅, **Playwright e2e-смоук 28/28** (вкл. чат-сценарии: sources → стрим → done; «демо-ошибка» → error) ✅.
+
 ### Изменено · R-3c — cli (`nexus agent`/`nexus acp`) на канон `bootstrap::ProviderSet` + хвосты `load_local_config`
 
 Третий срез R-3 (REFACTOR-PLAN §3, thermo-смелл №3), строитель-за-строителем × бинарь-за-бинарём: после agentd (R-3a) и desktop (R-3b) на канон переведён cli — все три бинаря собирают провайдеров одним кодом. **Behavior-preserving**: параметры tool-провайдера и тексты ошибок онбординга байт-идентичны прежним — доказано характеризацией (двухкоммитный приём R-2), а не задекларировано.
