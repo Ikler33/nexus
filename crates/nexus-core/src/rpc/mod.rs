@@ -8,8 +8,11 @@
 //! exec-цепочки), и внешние крейты (agentd/cli/desktop). Старые пути
 //! `agent::connect::{RpcMessage, RpcError, Transport, …}` сохранены реэкспортами — потребители не
 //! правятся. Протокол-специфика коннектора (методы `agent/run|undo|…`, params/result-типы,
-//! `dispatch`, version-negotiate, event-стрим) остаётся в `agent::connect`. Копии correlator-логики
-//! (`connect::client` / `acp::client` / sandbox) здесь НЕ дедуплицируются — это стадия R-9.
+//! `dispatch`, version-negotiate, event-стрим) остаётся в `agent::connect`. Утроенная логика корреляции
+//! запрос→ответ по `id` (Pending-map + счётчик + drain-on-close + timeout) сведена в канон
+//! [`correlator::RpcCorrelator`] (R-9): её тянут `connect::client` / `acp::client` / `acp::server`.
+//! Sandbox-эгресс (`ProxyGuardedClient`) НЕ коррелятор — синхронный single-in-flight send→recv без
+//! Pending-map, вне R-9.
 //!
 //! NB: `target:` трейсинга оставлен `"agent::connect"` НАМЕРЕННО (R-1 строго behavior-preserving):
 //! существующие RUST_LOG-фильтры/наблюдаемость не ломаем; переименование target'ов — отдельное решение.
@@ -19,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
 
+pub(crate) mod correlator;
 pub(crate) mod framing;
+
+pub(crate) use correlator::RpcCorrelator;
 
 // ───────────────────────── JSON-RPC 2.0 framing ─────────────────────────
 

@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Изменено · R-9 — RpcCorrelator: дедуп rpc-correlator ×3→1 (канон корреляции запрос→ответ по id)
+
+Стадия R-9 REFACTOR-PLAN (thermo-смелл №16 + выполненный TODO ACP-1). **Behavior-preserving; wire-байты неизменны** (транспорт корреляции, не протокол — id-схема на проводе та же). Оракул `connect::client`/`acp::client`/`acp::server` + интеграционные `acp_e2e`/`acp_server_e2e` (наш `AcpClient` против мок-агента и реального подпроцесса `nexus acp`) — зелёные БЕЗ правок ожиданий; `#[ignore]`-паритет 31/31.
+
+- **Канон `RpcCorrelator<T>`** (`crates/nexus-core/src/rpc/correlator.rs`, рядом с R-1-нейтральными типами): `begin()->(id, oneshot)` · `resolve(id, value)` · `cancel(id)` · `fail_all(value)` [drain-on-close] · `await_reply(id, rx, timeout, on_closed, on_timeout)` [timeout-обёртка]. Инкапсулирует `HashMap<i64, oneshot::Sender<T>>` + `AtomicI64`-счётчик id (старт с параметра `id_base`). **Generic по payload — прямой (не trait-магия):** три потребителя после R-1 шлют один `Result<Value, RpcError>`, но канон о протоколе не знает и честно параметризован.
+- **Три копии Pending-map схлопнуты в канон:** `ConnectClient` (CONN-2), `AcpClient` (ACP-1 — выполнен задокументированный TODO «rpc-core продублирован») и `AcpServerDecisionSource`/`AcpServerState` perm_pending (ACP-2, третья копия). read-loop'ам остался ТОЛЬКО роутинг (`id → correlator.resolve`); отдельные `next_id`/`next_perm_id`-атомики и inline-drain-циклы удалены.
+- **Инвариант «таймауты РАЗНЫЕ — параметром, не унифицированы» цел:** 30с управляющих RPC клиента (`Some(REQUEST_TIMEOUT)`) / `Option<Duration>` у ACP-клиента (`None`=`session/prompt` без лимита, `Some(d)` управляющие) / 300с ожидания permission у ACP-сервера (`Some(self.timeout)`). Значение таймаута приходит аргументом в `await_reply`, а НЕ зашито в канон.
+- **drain-on-close (R1-R4 CONN-2) цел:** закрытие транспорта → `fail_all(Err(internal("…transport closed")))` во всех трёх read-loop'ах (client/acp-client) и `serve_acp` EOF; `cancel_session` использует тот же `fail_all(Ok(cancelled))` (Cancelled → `outcome_to_batch_decision` → reject_all). Карта дренируется РОВНО раз (не теряет/не двоит).
+- **fail-closed на терминале цел:** `AcpServerDecisionSource::decide` — cancel-precheck перед `begin()` (id не тратится под отменой), send-fail/таймаут/oneshot-closed → reject_all; ложная Error после Final очищается. Гонка timeout↔resolve безопасна (oneshot доставляет ровно раз; `await_reply` снимает id на fallback идемпотентно).
+- Гейт зелёный: `cargo fmt --all --check` ✅, `cargo clippy --workspace --all-targets -D warnings` ✅, `cargo test --workspace` (вкл. `acp_e2e`/`acp_server_e2e`) ✅, `check-ignored` (31/31) / `check-traceability` ✅. Новых юнитов канона — 8 (`rpc::correlator::tests`).
+
 ### Изменено · R-6b — apply.rs: apply_confined_write ×2→1 (дедуп рубежей 2-7 безопасной записи в vault/skills)
 
 Стадия R-6 REFACTOR-PLAN (thermo-смелл №6). **Behavior-preserving; SECURITY-чувствительно** (рубежи безопасной записи: target_hash/drift/record_before/snapshot/re-read fence/atomic_write). Оракул `apply/tests.rs` — ассерты БАЙТ-в-байт, 22 apply-теста + undo round-trip зелёные; `#[ignore]`-паритет 31/31.

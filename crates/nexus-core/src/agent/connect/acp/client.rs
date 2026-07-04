@@ -3,22 +3,23 @@
 //! (`session/request_permission`, `fs/*`, `terminal/*`), на которые НАДО ответить. Поэтому свой read-loop
 //! с рукавом `Request`. Корреляция исходящих запросов по `id` — как у `ConnectClient`.
 //!
-//! TODO(de-dup ACP/Connect rpc-core): pending-map + next_id + request-with-timeout продублированы из
-//! `client.rs` НАМЕРЕННО — чтобы НЕ трогать горячий путь CONN-2 (zero-regression приоритетнее DRY). После
-//! стабилизации ACP-1 вынести общий `rpc_core`.
+//! R-9: pending-map + next_id + request-with-timeout сведены в канон [`crate::rpc::RpcCorrelator`]
+//! (был задокументированный TODO(de-dup ACP/Connect rpc-core) — выполнен после стабилизации ACP-1). Здесь
+//! остаётся ТОЛЬКО специфика ACP: bidirectional read-loop (рукав входящих `Request`) + роутинг ответов.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::mpsc;
+
+use crate::rpc::RpcCorrelator;
 
 use super::super::{RpcError, RpcMessage, Transport, TransportError, EVENT_CHANNEL_CAP};
 use super::schema::{RequestPermissionParams, SessionNotification};
 
-type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcError>>>>>;
+/// Значение, доставляемое ждущему исходящему запросу: разобранный `Response.result` (Ok/Err протокола).
+type Reply = Result<Value, RpcError>;
 
 /// Входящий от агента `session/request_permission` (нужен наш Response). `id` — для ответа.
 pub struct InboundPermission {
@@ -30,8 +31,7 @@ pub struct InboundPermission {
 /// демультиплекс входящих (session/update → канал; request_permission → канал; fs/terminal → auto-deny).
 pub struct AcpClient {
     transport: Arc<dyn Transport>,
-    next_id: AtomicI64,
-    pending: Pending,
+    correlator: Arc<RpcCorrelator<Reply>>,
     read_task: tokio::task::JoinHandle<()>,
 }
 
@@ -52,20 +52,20 @@ impl AcpClient {
         mpsc::Receiver<SessionNotification>,
         mpsc::Receiver<InboundPermission>,
     ) {
-        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        // Клиентское направление ACP: id стартует с 1 (см. [`RpcCorrelator::new`]).
+        let correlator: Arc<RpcCorrelator<Reply>> = Arc::new(RpcCorrelator::new(1));
         let (updates_tx, updates_rx) = mpsc::channel::<SessionNotification>(EVENT_CHANNEL_CAP);
         let (perms_tx, perms_rx) = mpsc::channel::<InboundPermission>(16);
         let read_task = tokio::spawn(acp_read_loop(
             transport.clone(),
-            pending.clone(),
+            correlator.clone(),
             updates_tx,
             perms_tx,
         ));
         (
             Self {
                 transport,
-                next_id: AtomicI64::new(1),
-                pending,
+                correlator,
                 read_task,
             },
             updates_rx,
@@ -86,45 +86,27 @@ impl AcpClient {
         params: Value,
         timeout: Option<Duration>,
     ) -> Result<Value, RpcError> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        let (id, rx) = self.correlator.begin().await;
         if self
             .transport
             .send(RpcMessage::request(id, method, params))
             .await
             .is_err()
         {
-            self.pending.lock().await.remove(&id);
+            self.correlator.cancel(id).await;
             return Err(RpcError::internal("acp transport send failed"));
         }
-        let wait = async {
-            match rx.await {
-                Ok(result) => result,
-                Err(_) => Err(RpcError::internal("acp response channel closed")),
-            }
-        };
-        match timeout {
-            Some(d) => match tokio::time::timeout(d, wait).await {
-                Ok(r) => {
-                    if r.is_err() {
-                        self.pending.lock().await.remove(&id);
-                    }
-                    r
-                }
-                Err(_) => {
-                    self.pending.lock().await.remove(&id);
-                    Err(RpcError::internal("acp request timeout"))
-                }
-            },
-            None => {
-                let r = wait.await;
-                if r.is_err() {
-                    self.pending.lock().await.remove(&id);
-                }
-                r
-            }
-        }
+        // Таймаут приходит ПАРАМЕТРОМ (инвариант R-9): `None` — `session/prompt` без лимита (целый ход +
+        // cold-start); `Some(d)` — управляющие RPC. Снятие ожидания из карты на fallback — в корреляторе.
+        self.correlator
+            .await_reply(
+                id,
+                rx,
+                timeout,
+                || Err(RpcError::internal("acp response channel closed")),
+                || Err(RpcError::internal("acp request timeout")),
+            )
+            .await
     }
 
     /// Исходящее уведомление (без ответа): `session/cancel`.
@@ -151,7 +133,7 @@ impl AcpClient {
 /// `method_not_found` (мы не объявляли caps). Закрытие транспорта → провал всех ждущих, закрытие каналов.
 async fn acp_read_loop(
     transport: Arc<dyn Transport>,
-    pending: Pending,
+    correlator: Arc<RpcCorrelator<Reply>>,
     updates_tx: mpsc::Sender<SessionNotification>,
     perms_tx: mpsc::Sender<InboundPermission>,
 ) {
@@ -159,9 +141,7 @@ async fn acp_read_loop(
         match msg {
             RpcMessage::Response { id, result } => {
                 if let Some(i) = id.as_i64() {
-                    if let Some(tx) = pending.lock().await.remove(&i) {
-                        let _ = tx.send(result);
-                    }
+                    correlator.resolve(i, result).await; // роутинг исходящего ответа по id
                 }
             }
             RpcMessage::Notification { method, params } if method == "session/update" => {
@@ -220,10 +200,9 @@ async fn acp_read_loop(
     }
     // Транспорт закрыт → провалить все ждущие исходящие запросы. updates_tx/perms_tx дропаются здесь
     // (consumer видит конец стрима → мост аппрува разрешит висящие permission в Cancelled).
-    let mut p = pending.lock().await;
-    for (_, tx) in p.drain() {
-        let _ = tx.send(Err(RpcError::internal("acp transport closed")));
-    }
+    correlator
+        .fail_all(Err(RpcError::internal("acp transport closed")))
+        .await;
 }
 
 #[cfg(test)]
