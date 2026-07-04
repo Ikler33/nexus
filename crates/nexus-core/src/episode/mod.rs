@@ -50,15 +50,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// Тоггл эпизодической памяти включён? Persisted в `settings` (фоновая джоба не получает per-call
 /// флаг, в отличие от `aiAgentMemory`). Дефолт OFF (значения нет → ничего не генерируем).
 pub async fn is_enabled(reader: &ReadPool) -> bool {
-    reader
-        .query(move |c| {
-            c.query_row(
-                "SELECT value FROM settings WHERE key=?1",
-                [SETTING_ENABLED],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-        })
+    crate::db::settings::get(reader, SETTING_ENABLED)
         .await
         .ok()
         .flatten()
@@ -319,17 +311,7 @@ pub async fn purge(writer: &WriteActor, id: i64) -> DbResult<()> {
 
 /// EP-3: persist тоггла `episodic.enabled` (читается фоновой джобой через [`is_enabled`]). "1"/"0".
 pub async fn set_enabled(writer: &WriteActor, on: bool) -> DbResult<()> {
-    let v = if on { "1" } else { "0" };
-    writer
-        .call(move |c| {
-            c.execute(
-                "INSERT INTO settings(key,value) VALUES('episodic.enabled', ?1) \
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                [v],
-            )
-            .map(|_| ())
-        })
-        .await
+    crate::db::settings::set(writer, SETTING_ENABLED, if on { "1" } else { "0" }).await
 }
 
 /// Промпт суммаризации: транскрипт сессии в анти-инъекц-маркерах (контент сообщений — НЕДОВЕРЕННЫЕ

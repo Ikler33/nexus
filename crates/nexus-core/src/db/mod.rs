@@ -13,6 +13,9 @@
 mod error;
 mod migrations;
 mod read_pool;
+/// Канон доступа к key/value таблице `settings` (R-12 п.2): `get`/`set`/`delete` — единственная точка
+/// raw-SQL по ней (ранее копировалась в contradictions/episode/plugin).
+pub(crate) mod settings;
 mod write_actor;
 
 pub use error::{DbError, DbResult};

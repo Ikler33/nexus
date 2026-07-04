@@ -5,8 +5,6 @@
 
 use std::collections::HashSet;
 
-use rusqlite::OptionalExtension;
-
 use crate::db::{DbResult, ReadPool, WriteActor};
 
 /// Ключ настройки «включён» для плагина в каталоге `dir`.
@@ -16,18 +14,7 @@ fn enabled_key(dir: &str) -> String {
 
 /// Персист тоггла «включён» плагина. "1"/"0", upsert (как `episode::set_enabled`).
 pub async fn set_enabled(writer: &WriteActor, dir: &str, on: bool) -> DbResult<()> {
-    let key = enabled_key(dir);
-    let v = if on { "1" } else { "0" };
-    writer
-        .call(move |c| {
-            c.execute(
-                "INSERT INTO settings(key,value) VALUES(?1,?2) \
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                rusqlite::params![key, v],
-            )
-            .map(|_| ())
-        })
-        .await
+    crate::db::settings::set(writer, &enabled_key(dir), if on { "1" } else { "0" }).await
 }
 
 /// Множество ВЫКЛЮЧЕННЫХ плагинов (каталоги, у которых `plugins.<dir>.enabled='0'`). Дефолт —
@@ -56,27 +43,13 @@ pub async fn disabled_dirs(reader: &ReadPool) -> DbResult<HashSet<String>> {
 
 /// Включён ли плагин `dir` (дефолт да — ключа нет / значение не "0"). Гард для `plugin_open_session`.
 pub async fn is_enabled(reader: &ReadPool, dir: &str) -> DbResult<bool> {
-    let key = enabled_key(dir);
-    let v: Option<String> = reader
-        .query(move |c| {
-            c.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()
-        })
-        .await?;
+    let v = crate::db::settings::get(reader, &enabled_key(dir)).await?;
     Ok(v.as_deref() != Some("0"))
 }
 
 /// Удаляет настройки плагина (при remove): переустановка стартует «чистой» (включена по дефолту).
 pub async fn clear_settings(writer: &WriteActor, dir: &str) -> DbResult<()> {
-    let key = enabled_key(dir);
-    writer
-        .call(move |c| {
-            c.execute("DELETE FROM settings WHERE key=?1", [key])
-                .map(|_| ())
-        })
-        .await
+    crate::db::settings::delete(writer, &enabled_key(dir)).await
 }
 
 #[cfg(test)]
