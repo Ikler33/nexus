@@ -16,26 +16,27 @@ import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
 import * as mockTags from './mock/tags';
 import * as mockVault from './mock/vault';
+import { isTauri } from './api/bridge';
+import { attachments, vault, vaultEvents } from './api/vault';
+import type { NoteRef } from './api/vault/types';
 
 /**
- * Единственное место в кодовой базе, где разрешён прямой вызов Tauri IPC
- * (`invoke` / `Channel`) — контракт §4.1 ARCHITECTURE. Весь фронт ходит к нативному
- * слою только через `tauriApi`.
+ * Barrel фронтового API: весь фронт ходит к нативному слою только через `tauriApi`.
+ *
+ * Прямой Tauri IPC (`invoke` / `Channel`) разрешён только в слое `lib/api/*` (bridge +
+ * доменные модули) и — до конца распила F-2 — в этом файле (контракт §4.1 ARCHITECTURE).
+ * Вынесенные домены (F-2a: vault) реэкспортируются отсюда — 140+ потребителей продолжают
+ * импортировать из `lib/tauri-api` без правок; остальные домены мигрируют в
+ * `lib/api/<домен>/` следующими срезами (F-2b+).
  *
  * Вне Tauri (браузерное превью, vitest) методы прозрачно проксируются в мок-бэкенд
  * (`./mock/*`) — это позволяет вести фронт/дизайн на тех же контрактах параллельно
  * бэкенду (DESIGN §0).
  */
 
-/** Запись файлового дерева (зеркалит Rust `vault::FileEntry`). */
-export interface FileEntry {
-  name: string;
-  /** Путь относительно корня vault, разделитель `/`. */
-  path: string;
-  isDir: boolean;
-  hasChildren: boolean;
-  sizeBytes: number;
-}
+// F-2a: DTO-типы vault-домена живут в `lib/api/vault/types.ts` (реэкспорт — контракт баррела).
+export { isTauri };
+export type { FileEntry, NoteRef, TagCount, VaultInfo } from './api/vault/types';
 
 /** Git-версия сборки (W-20, зеркалит Rust `BuildInfo`). */
 export interface BuildInfo {
@@ -43,18 +44,6 @@ export interface BuildInfo {
   branch: string;
   hash: string;
   dirty: boolean;
-}
-
-/** Сведения об открытом vault (зеркалит Rust `vault::VaultInfo`). */
-export interface VaultInfo {
-  root: string;
-  name: string;
-}
-
-/** Лёгкая ссылка на заметку (зеркалит Rust `vault::NoteRef`) — для автокомплита/поиска. */
-export interface NoteRef {
-  path: string;
-  title: string | null;
 }
 
 /** Задача из заметки (TASK-1, дашборд) — зеркало Rust `commands::tasks::TaskItem`. */
@@ -65,12 +54,6 @@ export interface TaskItem {
   checked: boolean;
   text: string;
   title: string | null;
-}
-
-/** Тег с количеством заметок (зеркалит Rust `tags::TagCount`, DP-2 — панель «Теги»). */
-export interface TagCount {
-  name: string;
-  count: number;
 }
 
 /** Предложение авто-тега (AI-2c, зеркалит Rust `tagger::TagSuggestion`). `tags` УЖЕ отфильтрованы по
@@ -948,11 +931,6 @@ export type NewsArticle =
   | { status: 'ready'; paras: string[]; translated: boolean; truncated: boolean }
   | { status: 'denied'; message: string };
 
-/** Запущены ли мы внутри Tauri-webview (а не в обычном браузере / тесте). */
-export function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
-
 /** Мок web-конфига для браузер-превью W-3 (in-memory). */
 let mockWebSearch: WebSearchConfig = { enabled: false, url: '' };
 
@@ -1016,133 +994,16 @@ export const tauriApi = {
     },
   },
 
-  vault: {
-    /** Открывает vault по абсолютному пути; в браузере — мок. */
-    openVault: (path: string) =>
-      isTauri() ? invoke<VaultInfo>('open_vault', { path }) : mockVault.openVault(path),
-
-    /** Ленивый листинг каталога (`dirPath` относительный; '' = корень). */
-    listDir: (dirPath: string) =>
-      isTauri() ? invoke<FileEntry[]>('list_dir', { dirPath }) : mockVault.listDir(dirPath),
-
-    /** Читает содержимое файла vault. */
-    readFile: (path: string) =>
-      isTauri() ? invoke<string>('read_file', { path }) : mockVault.readFile(path),
-
-    /** Читает контент + хеш (`baseHash` буфера для детекта внешних изменений, SAFE-3). */
-    readFileMeta: (path: string) =>
-      isTauri()
-        ? invoke<{ content: string; hash: string }>('read_file_meta', { path })
-        : mockVault.readFileMeta(path),
-
-    /** Хеш файла на диске без чтения содержимого (дешёвая сверка `baseHash`); `null`, если файла нет. */
-    fileHash: (path: string) =>
-      isTauri()
-        ? invoke<string | null>('file_hash', { path })
-        : mockVault.fileHash(path),
-
-    /** Пишет содержимое файла vault. Возвращает хеш записанного (фронт обновляет `baseHash`).
-     *  `manual` (Ctrl-S/палитра vs автосейв) управляет троттлом снапшота истории (SAFE-5). */
-    writeFile: (path: string, content: string, manual = false) =>
-      isTauri()
-        ? invoke<string>('write_file', { path, content, manual })
-        : mockVault.writeFile(path, content),
-
-    /** BOARD-1: правит ОДИН плоский frontmatter-ключ заметки (статус задачи/project/priority/Properties),
-     *  сохраняя остальной YAML/тело. Возвращает новый контент+хеш — фронт кладёт хеш в `baseHash`
-     *  (анти-эхо SAFE-3) и обновляет буфер, если заметка открыта. Незакрытый `---` → ошибка. */
-    setFrontmatterField: (path: string, key: string, value: string) =>
-      isTauri()
-        ? invoke<{ content: string; hash: string }>('set_frontmatter_field', { path, key, value })
-        : mockVault.setFrontmatterField(path, key, value),
-
-    /** Удаляет заметку/каталог в корзину `.nexus/.trash/` (CURATE-1) — обратимо. */
-    deletePath: (path: string) =>
-      isTauri() ? invoke<void>('delete_path', { path }) : mockVault.deletePath(path),
-
-    /** Переименовывает/перемещает путь `from`→`to` (CURATE-2); беклинки сохраняются по id. */
-    renamePath: (from: string, to: string) =>
-      isTauri() ? invoke<void>('rename_path', { from, to }) : mockVault.renamePath(from, to),
-
-    /** Версии-снапшоты заметки (SAFE-5/6): время + размер, новейший первым. */
-    listVersions: (path: string) =>
-      isTauri()
-        ? invoke<{ ts: number; size: number }[]>('list_versions', { path })
-        : mockVault.listVersions(path),
-
-    /** Содержимое версии-снапшота по `ts` (diff/восстановление, SAFE-6). */
-    readVersion: (path: string, ts: number) =>
-      isTauri()
-        ? invoke<string>('read_version', { path, ts })
-        : mockVault.readVersion(path, ts),
-
-    /** Заметки vault (path + title) для автокомплита `[[wikilink]]`. #22: опциональный
-     * подстрочный `query`-фильтр + `limit` — топ-N вместо всего vault (префиксы ранжируются выше). */
-    listNotes: (query?: string, limit?: number) =>
-      isTauri()
-        ? invoke<NoteRef[]>('list_notes', { query, limit })
-        : mockVault.listNotes(query, limit),
-
-    /** Резолвит цель `[[wikilink]]` в путь файла — бэкенд-семантика индексатора (путь / +`.md` /
-     * basename, затем алиас V4.1); #22: клик по ссылке без полного списка заметок на фронте. */
-    resolveNote: (target: string) =>
-      isTauri()
-        ? invoke<string | null>('resolve_note', { target })
-        : mockVault.resolveNote(target),
-
-    /** Теги vault с количеством заметок — панель «Теги» сайдбара (DP-2). */
-    listTags: (): Promise<TagCount[]> =>
-      isTauri() ? invoke<TagCount[]>('list_tags') : mockTags.listTags(),
-
-    /** Заметки с ТОЧНЫМ тегом (клик по тегу → exact-фильтр, не зашумлённый substring-поиск). */
-    notesByTag: (tag: string): Promise<NoteRef[]> =>
-      isTauri() ? invoke<NoteRef[]>('notes_by_tag', { tag }) : mockTags.notesByTag(tag),
-
-    /** Ручной реиндекс vault (quick action «Переиндексировать», макет home.jsx): фоновый
-     * полный обход; по завершении бэкенд шлёт `vault:changed`. В браузере — no-op. */
-    rescan: (): Promise<void> => (isTauri() ? invoke<void>('rescan_vault') : Promise.resolve()),
-
-    /** Число живых заметок индекса — статусбар «Проиндексировано · N» (DP-14). Мок — 847,
-     * как в демо-данных Home (`lib/mock/home.ts`). */
-    notesCount: (): Promise<number> =>
-      isTauri() ? invoke<number>('notes_count') : Promise.resolve(847),
-
-    /** Unix-mtime файла (сек) — clock-чип doc-meta превью (DP-15). Мок — «3 ч назад». */
-    fileMtime: (path: string): Promise<number> =>
-      isTauri()
-        ? invoke<number>('file_mtime', { path })
-        : Promise.resolve(Math.floor(Date.now() / 1000) - 3 * 3600),
-
-    /** Системный выбор папки vault (нативный диалог Tauri). Вне Tauri — `null`. */
-    pickDirectory: async (): Promise<string | null> => {
-      if (!isTauri()) return null;
-      const picked = await openDialog({ directory: true, multiple: false });
-      return typeof picked === 'string' ? picked : null;
-    },
-  },
+  // F-2a: vault-домен вынесен в `lib/api/vault/` (вызовы через bridge) — здесь только реэкспорт.
+  vault,
 
   tasks: {
     /** Все markdown-задачи vault (TASK-1, дашборд) — скан на лету. Вне Tauri — пусто. */
     listTasks: () => (isTauri() ? invoke<TaskItem[]>('list_tasks') : Promise.resolve([] as TaskItem[])),
   },
 
-  attachments: {
-    /** Пишет картинку в `attachments/<name>` из base64 (IMG-1). Возвращает относительный путь `![](…)`. */
-    write: (name: string, dataBase64: string) =>
-      isTauri()
-        ? invoke<string>('write_attachment', { name, dataBase64 })
-        : Promise.resolve(`attachments/${name}`),
-
-    /** Читает вложение-картинку как `data:`-URL для превью (IMG-1). */
-    read: (path: string) =>
-      isTauri() ? invoke<string>('read_attachment', { path }) : mockVault.readAttachment(path),
-
-    /** Резолвит цель `![[pic.png]]` → относительный путь vault (basename-обход) или null (IMG-EMBED). */
-    resolve: (name: string) =>
-      isTauri()
-        ? invoke<string | null>('resolve_attachment', { name })
-        : mockVault.resolveAttachment(name),
-  },
+  // F-2a: вложения — файловые операции vault-домена, живут в `lib/api/vault/`.
+  attachments,
 
   graph: {
     /** Беклинки файла (источник истины — SQLite, ADR-004). */
@@ -1409,10 +1270,6 @@ export const tauriApi = {
   },
 
   events: {
-    /**
-     * Подписка на событие «индекс vault обновлён» (backend `emit("vault:changed")` после реиндекса —
-     * ADR-007 S8 event-канал). Возвращает функцию отписки. Вне Tauri — no-op (мок-бэкенд не индексирует).
-     */
     /** Этапный прогресс прогона ленты (`news:progress`): sources → llm → digest → save. */
     onNewsProgress: async (
       cb: (p: { stage: string; done: number; total: number }) => void,
@@ -1423,32 +1280,11 @@ export const tauriApi = {
       );
     },
 
-    onVaultChanged: async (cb: () => void): Promise<() => void> => {
-      if (!isTauri()) return () => {};
-      return listen('vault:changed', () => cb());
-    },
-
-    /**
-     * Подписка на «конкретный файл на диске изменился» (`vault:file-changed {path, hash}`, SAFE-3).
-     * Фронт сверяет hash с `Buffer.baseHash`: эхо своего сейва → игнор; чистый буфер → тихий reload;
-     * грязный → баннер guard'а. Вне Tauri — no-op (мок-бэкенд не вотчит ФС).
-     */
-    onFileChanged: async (
-      cb: (p: { path: string; hash: string }) => void,
-    ): Promise<() => void> => {
-      if (!isTauri()) return () => {};
-      return listen<{ path: string; hash: string }>('vault:file-changed', (e) => cb(e.payload));
-    },
-
-    /**
-     * Подписка на прогресс полного скана индексатора (`vault:index-progress`, {done,total}) —
-     * статусбар «Индексация N/M» (макет app.jsx). Старт (0,total) → шаги → финиш (total,total).
-     * Вне Tauri — no-op (мок не сканирует).
-     */
-    onIndexProgress: async (cb: (p: { done: number; total: number }) => void): Promise<() => void> => {
-      if (!isTauri()) return () => {};
-      return listen<{ done: number; total: number }>('vault:index-progress', (e) => cb(e.payload));
-    },
+    // F-2a: watcher-подписки vault-домена (`vault:changed` / `vault:file-changed` /
+    // `vault:index-progress`) живут в `lib/api/vault/` — здесь реэкспорт для потребителей.
+    onVaultChanged: vaultEvents.onVaultChanged,
+    onFileChanged: vaultEvents.onFileChanged,
+    onIndexProgress: vaultEvents.onIndexProgress,
 
     /**
      * Подписка на «очередь задач изменилась» (backend `emit("jobs:changed")` после продуктивного тика
