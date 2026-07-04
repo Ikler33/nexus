@@ -687,6 +687,65 @@ async fn force_reindex_rebuilds_unchanged_file() {
     assert_eq!(vectors2.len(), n as usize);
 }
 
+/// R-3d (MAJOR-фикс adversarial-ревью): маркер переиндексации durable. Сценарий «agentd first»:
+/// смену модели реконсилит процесс БЕЗ индексатора заметок (true-маркер потреблён и потерян),
+/// desktop открывает vault ПОЗЖЕ — settings уже новые → reconcile = no-op → `force=false`.
+/// Скан обязан ВСЁ РАВНО пересоздать chunks/FTS/векторы: полная чистка ломает mtime+size-шорткат
+/// (`files.size_bytes=-1`). До фикса заметочный поиск тихо оставался пустым навсегда.
+#[tokio::test]
+async fn scan_after_foreign_reconcile_rebuilds_chunks_without_force() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+    fs::write(
+        root.join("Note.md"),
+        "# H\n\nalpha vector beta gamma delta\n",
+    )
+    .unwrap();
+
+    let db = open(&root).await;
+    // Первичная индексация «старой моделью».
+    assert!(
+        crate::vector::reconcile_embedding_model(&db, &root, "old-model", 16)
+            .await
+            .unwrap()
+    );
+    let (idx, _v1) = rag_indexer(&db, &root, 16, false);
+    idx.index_file("Note.md").await.unwrap();
+    let n = chunk_count(&db).await;
+    assert!(n >= 1);
+    drop(idx); // старый контекст закрыт до реконсиляции (никто не пере-save'ит снесённые файлы)
+
+    // «agentd first»: канон чистит производные и пишет новые settings; true-маркер уходит
+    // в процесс, который заметки не индексирует.
+    assert!(
+        crate::vector::reconcile_embedding_model(&db, &root, "new-model", 16)
+            .await
+            .unwrap()
+    );
+    assert_eq!(chunk_count(&db).await, 0, "чистка канона");
+
+    // «desktop later»: модель уже совпадает → строгий no-op → force=false.
+    assert!(
+        !crate::vector::reconcile_embedding_model(&db, &root, "new-model", 16)
+            .await
+            .unwrap()
+    );
+    let (idx2, vectors2) = rag_indexer(&db, &root, 16, false);
+    idx2.index_file("Note.md").await.unwrap(); // файл на диске НЕ менялся
+
+    assert_eq!(
+        chunk_count(&db).await,
+        n,
+        "durable-маркер: скан без force пересоздал chunks (иначе поиск пуст навсегда)"
+    );
+    assert_eq!(vectors2.len(), n as usize, "векторы новой моделью долиты");
+    assert_eq!(
+        fts_hits(&db, "vector").await,
+        1,
+        "FTS снова находит заметку"
+    );
+}
+
 /// §5.1 crash-reconcile: потерянный вектор (chunks в БД есть, вектора в usearch нет) дочиняется.
 #[tokio::test]
 async fn reconcile_restores_lost_vectors() {

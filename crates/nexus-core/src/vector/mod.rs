@@ -205,16 +205,23 @@ pub const VECTOR_INDEX_FILES: &[&str] = &[
 /// - **первое включение** (settings пусты) → только запись `settings`, `Ok(true)` (индексация
 ///   с нуля; производных ещё нет — существующие файлы НЕ трогаем, сноса нет);
 /// - **смена модели/dim** → ПОЛНАЯ чистка производных: `DELETE FROM chunks` (+FTS триггерами;
-///   перезаполнит принудительная переиндексация), снос ВСЕХ файлов [`VECTOR_INDEX_FILES`]
-///   (перезаполнят индексатор/бэкфиллы новой моделью), `chat_episodes.embed_model = NULL`
-///   (эпизоды на переэмбеддинг, summary-текст цел), запись новых `settings`, `Ok(true)`.
+///   перезаполнит переиндексация), снос ВСЕХ файлов [`VECTOR_INDEX_FILES`] (перезаполнят
+///   индексатор/бэкфиллы новой моделью), `chat_episodes.embed_model = NULL` (эпизоды на
+///   переэмбеддинг, summary-текст цел), `files.size_bytes = -1` (durable-маркер, ниже),
+///   запись новых `settings`, `Ok(true)`.
 ///
 /// Иначе запрос НОВОЙ моделью против СТАРЫХ векторов/чанков даёт `DimMismatch` или семантический
 /// мусор (ложная память) — класс «старые хвосты в поиске/памяти после смены эмбеддера» закрыт.
 ///
 /// Возвращает `Ok(reindex_needed)` — маркер принудительной (пере)индексации: desktop передаёт его
 /// в `Indexer::with_rag(force)` (начальный скан игнорирует mtime-шорткат), agentd логирует.
-/// Ошибки БД — `Err` (вызывающий деградирует: RAG/память off).
+/// **Durable-маркер** (adversarial-ревью R-3d): bool-возврат живёт только в процессе вызвавшего,
+/// а реконсилить может процесс БЕЗ индексатора заметок (agentd) — desktop потом откроет vault уже
+/// под новой моделью (no-op, `force=false`), и mtime+size-шорткат скана пропустил бы нетронутые
+/// файлы НАВСЕГДА (chunks/FTS пусты). Поэтому чистка дополнительно ломает шорткат
+/// (`files.size_bytes = -1`; настоящий размер неотрицателен): ЛЮБОЙ следующий скан перечанкует
+/// всё независимо от force — переиндексация доедет, какой бы вызыватель ни реконсилил и в каком
+/// бы месте ни случился крах. Ошибки БД — `Err` (вызывающий деградирует: RAG/память off).
 pub async fn reconcile_embedding_model(
     db: &crate::db::Database,
     root: &Path,
@@ -245,8 +252,9 @@ pub async fn reconcile_embedding_model(
 
     if prev_model.is_some() {
         // Модель/dim сменились → ВСЕ производные несовместимы (R-3d, §8.5: «полная чистка»).
-        // Файлы сносим ДО записи settings: крах между шагами оставит prev-настройки — следующий
-        // запуск повторит чистку (идемпотентно), полусостояний не бывает.
+        // Крах-безопасность: чистка идёт ДО записи settings — крах до неё оставит prev-настройки
+        // (следующий запуск повторит чистку, идемпотентно); крах ПОСЛЕ записи settings безопасен
+        // из-за durable-маркера size_bytes=-1 (файлы остаются помеченными → скан доиндексирует).
         for f in VECTOR_INDEX_FILES {
             let _ = std::fs::remove_file(root.join(".nexus").join(f));
         }
@@ -256,6 +264,10 @@ pub async fn reconcile_embedding_model(
                 // эпизоды — на переэмбеддинг бэкфиллом (summary-текст цел).
                 tx.execute("DELETE FROM chunks", [])?;
                 tx.execute("UPDATE chat_episodes SET embed_model=NULL", [])?;
+                // Durable-маркер переиндексации (см. док выше): ломаем mtime+size-шорткат скана,
+                // чтобы chunks гарантированно пересоздались, даже если true-маркер потребил
+                // процесс без индексатора (agentd) и desktop откроется уже как no-op.
+                tx.execute("UPDATE files SET size_bytes=-1", [])?;
                 Ok(())
             })
             .await?;
@@ -361,15 +373,17 @@ mod tests {
     // помечает эпизоды. Путь «та же модель» закреплён отдельным тестом как СТРОГИЙ no-op —
     // пользовательские индексы не пересобираются на ровном месте.
 
-    /// Сеет производные vault, зависящие от embedding-модели: chunk (files+chunks), эпизод
-    /// с `embed_model='old-model'` (chat_sessions+chat_episodes) и stale-файлы всех четырёх
-    /// usearch-индексов. Идемпотентен (повторный сев после чистки — для табличного теста).
+    /// Сеет производные vault, зависящие от embedding-модели: chunk (files+chunks, size_bytes=1),
+    /// эпизод с `embed_model='old-model'` (chat_sessions+chat_episodes) и stale-файлы всех четырёх
+    /// usearch-индексов. Идемпотентен (повторный сев после чистки — для табличного теста; upsert
+    /// files возвращает size_bytes=1, чтобы durable-маркер -1 проверялся в каждом раунде заново).
     async fn seed_derived(db: &crate::db::Database, root: &Path) {
         db.writer()
             .call(|c| {
                 c.execute_batch(
-                    "INSERT OR IGNORE INTO files(path,hash,created_at,updated_at,indexed_at,size_bytes) \
-                       VALUES('A.md','h',0,0,0,1); \
+                    "INSERT INTO files(path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                       VALUES('A.md','h',0,0,0,1) \
+                       ON CONFLICT(path) DO UPDATE SET size_bytes=1; \
                      INSERT INTO chunks(file_id,chunk_index,content,char_start,char_end,token_count) \
                        SELECT id,0,'text',0,4,1 FROM files WHERE path='A.md'; \
                      INSERT OR IGNORE INTO chat_sessions(id,title,created_at,updated_at) VALUES(1,'s',0,0); \
@@ -383,6 +397,18 @@ mod tests {
         for f in VECTOR_INDEX_FILES {
             std::fs::write(root.join(".nexus").join(f), b"stale").unwrap();
         }
+    }
+
+    /// `files.size_bytes` посеянного A.md (durable-маркер переиндексации: -1 после чистки).
+    async fn seeded_file_size(db: &crate::db::Database) -> i64 {
+        db.reader()
+            .query(|c| {
+                c.query_row("SELECT size_bytes FROM files WHERE path='A.md'", [], |r| {
+                    r.get(0)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     async fn count_chunks(db: &crate::db::Database) -> i64 {
@@ -463,6 +489,11 @@ mod tests {
         );
         assert_eq!(count_chunks(&db).await, 1, "no-op: chunks не тронуты");
         assert_eq!(
+            seeded_file_size(&db).await,
+            1,
+            "no-op: mtime+size-шорткат НЕ сломан (индексы не пересобираются на ровном месте)"
+        );
+        assert_eq!(
             episode_embed_model(&db).await.as_deref(),
             Some("old-model"),
             "no-op: эпизоды не помечены на переэмбеддинг"
@@ -478,7 +509,8 @@ mod tests {
 
     /// R-3d: решение владельца §8.5 — смена модели И смена dim делают ПОЛНУЮ чистку производных:
     /// chunks пусты (+FTS триггерами), ВСЕ 4 usearch-файла снесены (вкл. chat_vectors — прежний
-    /// desktop-путь его НЕ трогал), эпизоды помечены на переэмбеддинг, маркер reindex=true.
+    /// desktop-путь его НЕ трогал), эпизоды помечены на переэмбеддинг, durable-маркер
+    /// (size_bytes=-1) взведён, возврат reindex=true.
     #[tokio::test]
     async fn reconcile_model_or_dim_change_full_cleanup() {
         let dir = TempDir::new().unwrap();
@@ -501,6 +533,11 @@ mod tests {
                 "{case}: требует переиндексации"
             );
             assert_eq!(count_chunks(&db).await, 0, "{case}: chunks вычищены");
+            assert_eq!(
+                seeded_file_size(&db).await,
+                -1,
+                "{case}: durable-маркер — mtime+size-шорткат сломан, следующий скан перечанкует"
+            );
             assert_eq!(
                 episode_embed_model(&db).await,
                 None,
