@@ -8,6 +8,9 @@
 mod chat;
 mod config;
 mod embedder;
+/// Chat-транспорт (`ChatProvider`/`OpenAiChatProvider`): SSE-насос, retry инициации, cold-start-aware
+/// таймауты. Отделён от `chat` (промпт-билдеры + wire-типы сообщений) — R-10 распил (thermo-смелл).
+mod provider;
 mod tokenizer;
 /// Tool-capable chat-провайдер (AGENT-1, I-5): ОТДЕЛЬНЫЙ от `chat` тип — tools не протекают в chat-путь.
 pub mod tools;
@@ -19,8 +22,7 @@ pub use chat::{
     build_inline_prompt_messages, build_memory_block, build_note_summary_messages,
     build_pinned_block, build_rag_messages, build_web_answer_messages, build_web_query_messages,
     fence_observation, injection_marker, parse_web_query_plan, prepend_memory_block, ChatMessage,
-    ChatProvider, InlineMode, OpenAiChatProvider, ToolCallFn, ToolCallMsg, WebQueryPlan,
-    FENCE_MAX_BYTES,
+    InlineMode, ToolCallFn, ToolCallMsg, WebQueryPlan, FENCE_MAX_BYTES,
 };
 pub use config::{
     AiConfig, ChatConfig, ConnectionConfig, ConnectionMode, DelegationConfig, EmbeddingConfig,
@@ -29,6 +31,7 @@ pub use config::{
 #[cfg(any(test, feature = "test-util"))]
 pub use embedder::MockEmbedder;
 pub use embedder::{default_prefixes, l2_normalize, EmbeddingProvider, OpenAiEmbedder};
+pub use provider::{ChatProvider, OpenAiChatProvider};
 pub use tokenizer::{ContextBudget, HeuristicTokenizer, QwenTokenizer};
 
 use thiserror::Error;

@@ -29,7 +29,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{injection_marker, ChatMessage, ChatProvider, EmbeddingProvider};
-use crate::db::{DbError, DbResult, ReadPool, WriteActor};
+use crate::db::{DbResult, ReadPool, WriteActor};
 use crate::scheduler::now_secs;
 use crate::vector::VectorIndex;
 
@@ -319,13 +319,8 @@ pub async fn plan(
     if vectors.is_empty() {
         return Ok(make(PlanOp::Add));
     }
-    let cvec = embedder
-        .embed_query(&candidate)
-        .await
-        .map_err(|e| DbError::External(e.to_string()))?;
-    let hits = vectors
-        .search(&cvec, CONSOLIDATE_S)
-        .map_err(|e| DbError::External(e.to_string()))?;
+    let hits =
+        crate::vector::embed_and_search(vectors, embedder, &candidate, CONSOLIDATE_S).await?;
     let ids = super::ids_above_threshold(hits, MEM_CONSOLIDATE_THRESHOLD);
     if ids.is_empty() {
         return Ok(make(PlanOp::Add)); // близких выше порога нет → ADD, LLM не зовём

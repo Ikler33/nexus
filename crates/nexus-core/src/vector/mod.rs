@@ -30,6 +30,42 @@ pub struct VectorHit {
     pub score: f32,
 }
 
+/// Общий каркас векторного ретривала для ОДНОРОДНЫХ вызывателей (факты MEM `context_facts`,
+/// эпизоды EP-2 `search_episodes`, память переписки N4 `search_memory`, консолидация MEM
+/// `plan_consolidation`): эмбеддит текстовый запрос и берёт top-`overfetch` из индекса, унифицируя
+/// повторяющуюся связку `embed_query → map_err(External) → search → map_err(External)`.
+///
+/// `overfetch` и порог отсева — ПАРАМЕТРЫ вызывающего, НЕ унифицированы: overfetch у трёх поисков
+/// `(k*4).max(8)` (запас на пост-фильтр порогом/дедупом/исключением сессии), у консолидации —
+/// фиксированный `CONSOLIDATE_S`; порог свой у каждого (MEM/EPISODE/CHAT_MEM/CONSOLIDATE). Отсев по
+/// порогу — отдельными [`ids_above_threshold`](crate::memory::ids_above_threshold) (только id) /
+/// [`hits_above_threshold`] (id+score). web/pinned — НЕ сюда (негомогенны: web=abort+замещение,
+/// pinned=не поиск).
+pub(crate) async fn embed_and_search(
+    vectors: &VectorIndex,
+    embedder: &dyn crate::ai::EmbeddingProvider,
+    query: &str,
+    overfetch: usize,
+) -> crate::db::DbResult<Vec<VectorHit>> {
+    let qvec = embedder
+        .embed_query(query)
+        .await
+        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
+    vectors
+        .search(&qvec, overfetch)
+        .map_err(|e| crate::db::DbError::External(e.to_string()))
+}
+
+/// Пары `(chunk_id, score)` хитов с `score ≥ threshold`, в порядке ранга (хиты уже отсортированы по
+/// убыванию score). Вариант с сохранением score для вызывателей, резолвящих с рангом (эпизоды/память
+/// переписки); id-only вариант — [`ids_above_threshold`](crate::memory::ids_above_threshold).
+pub(crate) fn hits_above_threshold(hits: Vec<VectorHit>, threshold: f32) -> Vec<(i64, f32)> {
+    hits.into_iter()
+        .filter(|h| h.score >= threshold)
+        .map(|h| (h.chunk_id as i64, h.score))
+        .collect()
+}
+
 /// ANN-индекс поверх usearch.
 pub struct VectorIndex {
     index: Index,

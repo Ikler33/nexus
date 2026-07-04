@@ -1,4 +1,4 @@
-//! Tool-capable chat-провайдер (AGENT-1) — ОТДЕЛЬНЫЙ от [`super::chat::OpenAiChatProvider`] тип.
+//! Tool-capable chat-провайдер (AGENT-1) — ОТДЕЛЬНЫЙ от [`super::provider::OpenAiChatProvider`] тип.
 //!
 //! # Почему отдельный тип (I-5 / ADR-005, ADR-009)
 //! Tools НЕ добавляются полем в `OpenAiChatProvider` (это был бы отвергнутый вариант I-5/ADR-005):
@@ -44,7 +44,7 @@ pub enum ToolTurn {
     Final(String),
 }
 
-/// Провайдер, СПОСОБНЫЙ к tool-calling (AGENT-1). РАЗДЕЛЬНЫЙ трейт от [`super::chat::ChatProvider`]
+/// Провайдер, СПОСОБНЫЙ к tool-calling (AGENT-1). РАЗДЕЛЬНЫЙ трейт от [`super::provider::ChatProvider`]
 /// (chat-путь tool-free). Реализуется [`OpenAiToolProvider`]; мокается в тестах цикла.
 #[async_trait]
 pub trait ToolCapableProvider: Send + Sync {

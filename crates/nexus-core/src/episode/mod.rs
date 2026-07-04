@@ -235,19 +235,9 @@ pub async fn search_episodes(
     if query.trim().is_empty() || k == 0 || vectors.is_empty() {
         return Ok(Vec::new());
     }
-    let qvec = embedder
-        .embed_query(query)
-        .await
-        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
     // Запас на отсев порогом/исключением текущей сессии.
-    let hits = vectors
-        .search(&qvec, (k * 4).max(8))
-        .map_err(|e| crate::db::DbError::External(e.to_string()))?;
-    let ranked: Vec<(i64, f32)> = hits
-        .into_iter()
-        .filter(|h| h.score >= EPISODE_SIM_THRESHOLD)
-        .map(|h| (h.chunk_id as i64, h.score))
-        .collect();
+    let hits = crate::vector::embed_and_search(vectors, embedder, query, (k * 4).max(8)).await?;
+    let ranked = crate::vector::hits_above_threshold(hits, EPISODE_SIM_THRESHOLD);
     resolve_episode_hits(reader, ranked, exclude_session, snippet_chars, k).await
 }
 
