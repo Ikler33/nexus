@@ -1,7 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import * as mockAgent from './mock/agent';
 import * as mockBoard from './mock/board';
 import * as mockProps from './mock/properties';
 import * as mockEgress from './mock/egress';
@@ -9,14 +8,16 @@ import * as mockMemory from './mock/memory';
 import * as mockEpisode from './mock/episode';
 import * as mockGit from './mock/git';
 import * as mockHome from './mock/home';
-import * as mockNews from './mock/news';
 import * as mockBackup from './mock/backup';
 import * as mockPlugins from './mock/plugins';
 import * as mockSettings from './mock/settings';
 import * as mockTags from './mock/tags';
 import * as mockVault from './mock/vault';
+import { agent, agentConnection } from './api/agent';
+import type { AgentConnectionDto } from './api/agent/types';
 import { isTauri } from './api/bridge';
 import { chat } from './api/chat';
+import { news, newsEvents } from './api/news';
 import { attachments, vault, vaultEvents } from './api/vault';
 import type { NoteRef } from './api/vault/types';
 
@@ -25,9 +26,9 @@ import type { NoteRef } from './api/vault/types';
  *
  * Прямой Tauri IPC (`invoke` / `Channel`) разрешён только в слое `lib/api/*` (bridge +
  * доменные модули) и — до конца распила F-2 — в этом файле (контракт §4.1 ARCHITECTURE).
- * Вынесенные домены (F-2a: vault; F-2b: chat) реэкспортируются отсюда — 140+ потребителей
- * продолжают импортировать из `lib/tauri-api` без правок; остальные домены мигрируют в
- * `lib/api/<домен>/` следующими срезами (F-2c+).
+ * Вынесенные домены (F-2a: vault; F-2b: chat; F-2c: agent + news) реэкспортируются отсюда —
+ * 140+ потребителей продолжают импортировать из `lib/tauri-api` без правок; остальные домены
+ * мигрируют в `lib/api/<домен>/` следующими срезами (F-2d+).
  *
  * Вне Tauri (браузерное превью, vitest) методы прозрачно проксируются в мок-бэкенд
  * (`./mock/*`) — это позволяет вести фронт/дизайн на тех же контрактах параллельно
@@ -47,6 +48,37 @@ export type {
   StoredChatMessage,
   WebSource,
 } from './api/chat/types';
+// F-2c: DTO-типы agent-домена живут в `lib/api/agent/types.ts` (реэкспорт — контракт баррела).
+export type {
+  AgentApprovalDecision,
+  AgentAutonomy,
+  AgentConnectionDto,
+  AgentFileStatus,
+  AgentHistoryMsg,
+  AgentPlanStep,
+  AgentPlanStepState,
+  AgentProposedFile,
+  AgentProposedKind,
+  AgentSessionData,
+  AgentSessionInfo,
+  AgentStreamEvent,
+  AgentSubagentState,
+  PersistedStep,
+  PersistedTurn,
+  SkillList,
+  SkillRow,
+} from './api/agent/types';
+// F-2c: DTO-типы news-домена живут в `lib/api/news/types.ts` (реэкспорт — контракт баррела).
+export type {
+  LlmDownInfo,
+  NewsArticle,
+  NewsConfig,
+  NewsEndpointHealth,
+  NewsItem,
+  NewsPage,
+  NewsRun,
+  NewsSource,
+} from './api/news/types';
 
 /** Git-версия сборки (W-20, зеркалит Rust `BuildInfo`). */
 export interface BuildInfo {
@@ -518,144 +550,8 @@ export type ConsolidationOutcome =
     }
   | { op: 'noop' };
 
-// ── Агент (UI-1) — зеркало Rust `commands::agent` ─────────────────────────────────────────────────
-
-/** Уровень автономии прогона (вход `agent_run`, зеркало Rust `normalize_autonomy`): `confirm` — Confirm-тир
- *  ждёт аппрува человека; `auto` — Auto-тир применяется под blast-radius-кэпом без аппрува. */
-export type AgentAutonomy = 'confirm' | 'auto';
-
-/** W-4: элемент истории переписки агента (мультитёрн), зеркалит Rust `HistoryMsg`. */
-export interface AgentHistoryMsg {
-  role: 'user' | 'assistant';
-  text: string;
-}
-
-/** Статус файла changeset'а (зеркало Rust `AgentFileStatus`): `new` — новая заметка; `edit` — правка. */
-export type AgentFileStatus = 'new' | 'edit';
-
-/** Род предложенного действия (зеркало Rust `AgentProposedKind`, serde snake_case): `file` — правка/
- *  создание заметки (путь + ±строки + раскрываемый дифф); `exec` — команда/процесс (рисуется как `$ cmd`
- *  exec-стилем, без ±строк/диффа). ACP-EXEC: exec-permission внешнего ACP-агента (напр. Hermes). */
-export type AgentProposedKind = 'file' | 'exec';
-
-/** Один предложенный файл (поверхность аппрува; зеркало Rust `AgentProposedFile`). `actionId` —
- *  адрес решения Approve/Reject (id строки `agent_actions`, передаётся в `agent_approve`). */
-export interface AgentProposedFile {
-  /** vault-rel путь цели (для `kind:'exec'` — командная строка). */
-  path: string;
-  /** Добавлено строк (line-diff current → proposed). Для exec — 0. */
-  add: number;
-  /** Удалено строк. Для exec — 0. */
-  del: number;
-  status: AgentFileStatus;
-  /** file | exec — род действия (ACP-EXEC). Отсутствие на старом проводе → бэкенд дефолтит в `file`. */
-  kind: AgentProposedKind;
-  /** id строки ledger (state=proposed) — адрес решения в `agent_approve`. */
-  actionId: number;
-}
-
-/** Статус шага плана (зеркало Rust `AgentPlanStepState`) — для дока «План/Граф» (SUB-2/RES). */
-export type AgentPlanStepState = 'pending' | 'running' | 'done' | 'failed';
-
-/** Статус субагента в дереве делегирования (зеркало Rust `AgentSubagentState`). */
-export type AgentSubagentState = 'spawned' | 'running' | 'done' | 'failed' | 'paused';
-
-/** Один шаг плана прогона (зеркало Rust `AgentPlanStep`) — узел дока плана. */
-export interface AgentPlanStep {
-  /** Стабильный id шага (адрес обновления статуса `planStepStatus`). */
-  id: string;
-  /** Человекочитаемая подпись шага. */
-  label: string;
-  status: AgentPlanStepState;
-}
-
-/**
- * Событие агент-стрима (зеркалит Rust `agent::connect::wire::AgentStreamEvent`, тег `type`, camelCase) —
- * СТАБИЛЬНЫЙ контракт. Реалтайм-поток: `assistantToken` (дельты модели), `toolCall`/`toolResult`
- * (вызов инструмента ДО/ПОСЛЕ, корреляция по `id`), `contextUsage` (загрузка окна → %-бар),
- * `proposal` (changeset, ждёт решения — каждый файл уже `proposed` в ledger) + `diff` (по файлу),
- * `final` (итог хода), `error` (терминальная ошибка хода).
- *
- * W-23 — паритет с бэкендом: `planProposed`/`planStepStatus` (план/граф SUB-2), `subagentStatus`
- * (дерево делегирования SUB-2), `execProposal`/`execResult` (exec-песочница SANDBOX-6c — силуэт+exit-код,
- * БЕЗ сырого stdout: приватность §5.6), `report` (отчёт deep-research RES-5). Рендерятся в W-24/25/26;
- * здесь — приём в контракт + аккумуляция в сторе (иначе события молча терялись).
- */
-export type AgentStreamEvent =
-  | { type: 'assistantToken'; text: string }
-  | { type: 'toolCall'; id: string; kind: string; args: string; title?: string | null }
-  | { type: 'toolResult'; id: string; content: string; isError: boolean }
-  | { type: 'contextUsage'; used: number; window: number }
-  | { type: 'proposal'; runId: number; files: AgentProposedFile[] }
-  | { type: 'diff'; path: string; add: number; del: number; status: AgentFileStatus }
-  | { type: 'final'; text: string }
-  | { type: 'error'; message: string }
-  | { type: 'execProposal'; runId: number; actionId: number; summary: string }
-  | { type: 'execResult'; runId: number; actionId: number; exitCode: number; finalized: boolean }
-  | { type: 'planProposed'; runId: number; steps: AgentPlanStep[] }
-  | { type: 'planStepStatus'; id: string; status: AgentPlanStepState }
-  | {
-      type: 'subagentStatus';
-      parentRunId: number;
-      childRunId: number;
-      goal: string;
-      status: AgentSubagentState;
-      summary?: string;
-    }
-  | {
-      type: 'report';
-      runId: number;
-      title: string;
-      path: string;
-      sourcesCount: number;
-      rounds: number;
-    };
-
-/** Решение по одному предложенному действию (вход `agent_approve`, зеркало Rust `ApprovalDecision`). */
-export interface AgentApprovalDecision {
-  /** id строки ledger (из `AgentStreamEvent.proposal.files[].actionId`). */
-  actionId: number;
-  /** Одобрить (apply) или отклонить (диск не трогаем). */
-  approve: boolean;
-}
-
-// ── W-38: история переписок агента (левый сайдбар) ──────────────────────────────────────────────────
-
-/** Сводка одной агент-сессии для списка истории (зеркало Rust `AgentSessionDto`). `title` — задача
- *  первого хода; `status` — статус последнего; `turnCount`/`updatedAt` — агрегаты. */
-export interface AgentSessionInfo {
-  sessionId: string;
-  title: string;
-  status: string;
-  turnCount: number;
-  updatedAt: number;
-}
-
-/** Один персистированный шаг хода (зеркало Rust `PersistedStepDto`). */
-export interface PersistedStep {
-  kind: string;
-  args: string;
-  title: string | null;
-  result: string | null;
-  isError: boolean;
-}
-
-/** Один персистированный ход переписки (зеркало Rust `PersistedTurnDto`). */
-export interface PersistedTurn {
-  runId: number;
-  task: string;
-  assistantText: string;
-  report: string | null;
-  error: string | null;
-  status: string;
-  createdAt: number;
-  steps: PersistedStep[];
-}
-
-/** Данные переоткрываемой переписки (зеркало Rust `AgentSessionDataDto`) — ходы в хронологии ASC. */
-export interface AgentSessionData {
-  turns: PersistedTurn[];
-}
+// F-2c: wire-типы агента (AgentStreamEvent и спутники, W-38 история, W-10 навыки, CONN/ACP
+// подключение) живут в `lib/api/agent/types.ts` (реэкспорт выше — контракт баррела).
 
 /** Событие inline-стрима редактора (зеркалит Rust `commands::inline::InlineStreamEvent`). Без `sources`
  * — inline не делает RAG-ретрив (D2). Порядок: много `token` → `done` (или `error`). */
@@ -672,27 +568,8 @@ export interface AiEndpoint {
   url: string;
   model: string | null;
 }
-/** Текущая AI-конфигурация для формы настроек (зеркалит Rust `settings::AiConfigDto`). */
-/** CONN-4: подключение агента (`ai.connection`) для UI-селектора. `mode` нормализован; `socket` — путь
- *  AF_UNIX для local (`null` → дефолт `<vault>/.nexus/agentd.sock`). `url`/`auth_ref` (CONN-3) не сюда. */
-export interface AgentConnectionDto {
-  mode: 'embedded' | 'local' | 'remote' | 'acp';
-  socket: string | null;
-  /** ACP-1b `ai.connection.acpCommand`: командная строка ACP-агента (split по пробелам). `null` → не задан. */
-  acpCommand: string | null;
-  /** ACP-1b `ai.connection.acpCwd`: рабочая папка спавна ACP-агента. `null` → корень vault. */
-  acpCwd: string | null;
-  /** ACP-REMOTE-SSH `ai.connection.acpTransport`: `"local"` (спавн команды) | `"ssh"` (сборка ssh-команды).
-   *  `null`/пусто → как `"local"`. */
-  acpTransport: string | null;
-  /** ACP-REMOTE-SSH `ai.connection.acpSshHost` (ssh): `"user@host"`. */
-  acpSshHost: string | null;
-  /** ACP-REMOTE-SSH `ai.connection.acpSshKey` (ssh): путь к приватному ключу; `null`/пусто → ключ по умолчанию. */
-  acpSshKey: string | null;
-  /** ACP-REMOTE-SSH `ai.connection.acpRemoteCommand` (ssh): команда запуска ACP-агента НА ХОСТЕ (split по пробелам). */
-  acpRemoteCommand: string | null;
-}
-
+/** Текущая AI-конфигурация для формы настроек (зеркалит Rust `settings::AiConfigDto`).
+ *  `AgentConnectionDto` (CONN-4 `ai.connection`) — F-2c: живёт в `lib/api/agent/types.ts`. */
 export interface AiConfigDto {
   chat: AiEndpoint | null;
   embedding: AiEndpoint | null;
@@ -744,31 +621,6 @@ export interface AgentFlagsDto {
   researchEnabled: boolean;
 }
 
-/** W-10 строка навыка для SL-панели (зеркалит Rust `commands::agent::SkillRowDto`). */
-export interface SkillRow {
-  name: string;
-  description: string;
-  /** `'vendor'` (hash-pinned bundle) | `'local'` (TrustedLocal). */
-  tier: 'vendor' | 'local';
-  relPath: string;
-  isVendor: boolean;
-  useCount: number;
-  lastUsedAt: number | null;
-  createdBy: string | null;
-  isAgentCreated: boolean;
-  pinned: boolean;
-  /** `'active'|'stale'|'archived'` (advisory lifecycle) | null. */
-  state: 'active' | 'stale' | 'archived' | null;
-  license: string | null;
-}
-/** W-10 снимок SL-панели (зеркалит Rust `commands::agent::SkillListDto`). */
-export interface SkillList {
-  learningEnabled: boolean;
-  skillsDir: string | null;
-  skills: SkillRow[];
-  parseErrors: number;
-}
-
 /** Снимок политики эгресса ядра (зеркалит Rust `net::EgressState`; срез 2 net.md). */
 export interface EgressState {
   /** Kill-switch «офлайн» (E2): публичные хосты отрезаны, LAN/loopback живут. */
@@ -787,94 +639,8 @@ export interface SetAiResult {
   embeddingChanged: boolean;
 }
 
-/** Запись ленты новостей (зеркалит Rust `news::NewsItem`, NF-3). Время — Unix-секунды. */
-export interface NewsItem {
-  id: number;
-  sourceId: string;
-  url: string;
-  titleRu: string;
-  summaryRu: string;
-  topic: string;
-  /** Источник русскоязычный (резюме без пометки «перевод»). */
-  langRu: boolean;
-  publishedAt: number;
-  read: boolean;
-  /** Ссылка на обсуждение на HN (если `url` — внешняя, напр. github у Show HN); иначе `null`. */
-  commentsUrl: string | null;
-}
-
-/** B12: структурный сигнал «LLM-анализатор недоступен» (зеркалит Rust `news::LlmDownInfo`) —
- *  замена RU-префикс-протокола в `errors[]`, который FE сниффил регексом. */
-export interface LlmDownInfo {
-  /** URL эндпоинта оценки, который был недоступен; `null` — эндпоинт ИИ не задан. */
-  endpoint: string | null;
-  /** `true` — часть батчей прошла (лента обновлена частично, баннер не нужен);
-   *  `false` — недоступен весь прогон (тотально → баннер). */
-  partial: boolean;
-}
-
-/** Итог последнего прогона ленты (зеркалит Rust `news::NewsRun`): шапка-сводка дня. */
-export interface NewsRun {
-  runAt: number;
-  digestRu: string;
-  itemsNew: number;
-  sourcesOk: number;
-  sourcesTotal: number;
-  llmFailed: number;
-  /** Видимые ошибки источников («источник: причина») — no silent caps (AC-NF-1). */
-  errors: string[];
-  /** B12: сбой ВЫЗОВА LLM-оценки в прогоне; `null`/отсутствует — вызовы живы (или запись сделана
-   *  версией до миграции 027 — тогда действует legacy-сниффер строки в `errors`). */
-  llmDown?: LlmDownInfo | null;
-}
-
-/** Здоровье эндпоинта анализатора новостей (W-39, зеркалит Rust `commands::news::NewsEndpointHealth`):
- *  результат кнопки «Проверить связь» в панели «Диагностика». */
-export interface NewsEndpointHealth {
-  /** Эндпоинт ответил (любой HTTP-статус) — провайдер достижим. */
-  ok: boolean;
-  /** Человеко-читаемое сообщение (RU): «доступен» / причина недоступности. */
-  message: string;
-  /** Базовый URL пингованного эндпоинта (тот, что реально использует пайплайн новостей). */
-  endpoint: string;
-  /** Латентность пинга в миллисекундах. */
-  latencyMs: number;
-}
-
-/** Страница ленты (зеркалит Rust `commands::news::NewsPageDto`). */
-export interface NewsPage {
-  items: NewsItem[];
-  topics: string[];
-  run: NewsRun | null;
-}
-
-/** Конфиг ленты `news.json` (зеркалит Rust `news::NewsConfig`); `enabled` = consent (AC-NF-7). */
-export interface NewsConfig {
-  enabled: boolean;
-  /** Переопределения вкл/выкл источников реестра: id → bool. */
-  sources: Record<string, boolean>;
-  /** Ключевые слова фильтра; `null` — пресет по умолчанию. */
-  keywords: string[] | null;
-  /** Доп. хосты статей, разрешённые по клику из ридера (per-host consent, ревизия NF-6). */
-  extraHosts: string[];
-  /** W-40: модель пайплайна новостей — `'fast'` (`ai.fast`, дефолт) | `'main'` (`ai.chat`);
-   *  `null`/неизвестное → как `'fast'` (0 регрессии). */
-  modelPref: 'fast' | 'main' | null;
-}
-
-/** Источник реестра v1 (зеркалит Rust `commands::news::NewsSourceDto`) — для consent-строки. */
-export interface NewsSource {
-  id: string;
-  title: string;
-  enabled: boolean;
-  langRu: boolean;
-}
-
-/** Статья reader'а (зеркалит Rust `commands::news::NewsArticleDto`, NF-6). `denied` — хост вне
- * политики эгресса (HN-домены/офлайн): fail-closed, UI отдаёт резюме + ссылку на оригинал. */
-export type NewsArticle =
-  | { status: 'ready'; paras: string[]; translated: boolean; truncated: boolean }
-  | { status: 'denied'; message: string };
+// F-2c: DTO-типы news-домена (NewsItem/NewsRun/NewsConfig/… W-39/40) живут в
+// `lib/api/news/types.ts` (реэкспорт выше — контракт баррела).
 
 /** Мок web-конфига для браузер-превью W-3 (in-memory). */
 let mockWebSearch: WebSearchConfig = { enabled: false, url: '' };
@@ -1215,15 +981,8 @@ export const tauriApi = {
   },
 
   events: {
-    /** Этапный прогресс прогона ленты (`news:progress`): sources → llm → digest → save. */
-    onNewsProgress: async (
-      cb: (p: { stage: string; done: number; total: number }) => void,
-    ): Promise<() => void> => {
-      if (!isTauri()) return () => {};
-      return listen('news:progress', (e) =>
-        cb(e.payload as { stage: string; done: number; total: number }),
-      );
-    },
+    // F-2c: подписка news-домена (`news:progress`) живёт в `lib/api/news/` — здесь реэкспорт.
+    onNewsProgress: newsEvents.onNewsProgress,
 
     // F-2a: watcher-подписки vault-домена (`vault:changed` / `vault:file-changed` /
     // `vault:index-progress`) живут в `lib/api/vault/` — здесь реэкспорт для потребителей.
@@ -1368,87 +1127,9 @@ export const tauriApi = {
         : mockGit.resolveConflicts(theirs, resolutions),
   },
 
-  /** Лента AI-новостей (NF-3/NF-5, спека `docs/specs/news-feed.md`). Прогон гоняет планировщик
-   * (kind `newsfeed`); готовность — событие `jobs:changed`. Вне Tauri — стейтфул-мок. */
-  news: {
-    /** Страница ленты: записи (свежие сверху) + чипы тем + последний прогон. */
-    page: (opts?: { topic?: string; unreadOnly?: boolean; page?: number }): Promise<NewsPage> =>
-      isTauri()
-        ? invoke<NewsPage>('get_news', {
-            topic: opts?.topic,
-            unreadOnly: opts?.unreadOnly,
-            page: opts?.page,
-          })
-        : mockNews.page(opts),
-
-    /** Отметка прочитано/непрочитано (AC-NF-9). */
-    markRead: (id: number, read: boolean): Promise<void> =>
-      isTauri() ? invoke<void>('news_mark_read', { id, read }) : mockNews.markRead(id, read),
-
-    /** «В заметку» (AC-NF-11): создаёт `News/<дата> <заголовок>.md`, возвращает путь заметки. */
-    toNote: (id: number): Promise<string> =>
-      isTauri() ? invoke<string>('news_to_note', { id }) : mockNews.toNote(id),
-
-    /** Ручной прогон «Обновить» (AC-NF-6): ставит джобу с дедупом; `false` — уже в очереди. */
-    refresh: (): Promise<boolean> =>
-      isTauri() ? invoke<boolean>('refresh_news') : mockNews.refresh(),
-
-    /** Конфиг `news.json` (consent + источники + ключи). */
-    getConfig: (): Promise<NewsConfig> =>
-      isTauri() ? invoke<NewsConfig>('get_news_config') : mockNews.getConfig(),
-
-    /** Разрешить хост статьи (per-host consent из Denied-баннера ридера). Возвращает конфиг. */
-    allowHost: (host: string): Promise<NewsConfig> =>
-      isTauri() ? invoke<NewsConfig>('news_allow_host', { host }) : mockNews.allowHost(host),
-
-    /** Снять разрешение с хоста (gear-меню ленты). Возвращает конфиг. */
-    disallowHost: (host: string): Promise<NewsConfig> =>
-      isTauri() ? invoke<NewsConfig>('news_disallow_host', { host }) : mockNews.disallowHost(host),
-
-    /** Сохраняет конфиг и мгновенно синхронизирует политику эгресса (NF-4, AC-NF-7). */
-    setConfig: (config: NewsConfig): Promise<NewsConfig> =>
-      isTauri() ? invoke<NewsConfig>('set_news_config', { config }) : mockNews.setConfig(config),
-
-    /** Реестр источников v1 с действующими флагами — consent показывает, куда пойдут запросы. */
-    sources: (): Promise<NewsSource[]> =>
-      isTauri() ? invoke<NewsSource[]>('news_sources') : mockNews.sources(),
-
-    /** Полный текст статьи для reader (NF-6): кэш → guarded-фетч → RU-перевод. Долгий вызов. */
-    article: (id: number): Promise<NewsArticle> =>
-      isTauri() ? invoke<NewsArticle>('news_article', { id }) : mockNews.article(id),
-
-    /** «Сократить» (NF-6): 3–6 RU-тезисов по тексту статьи. */
-    summarize: (id: number): Promise<string[]> =>
-      isTauri() ? invoke<string[]>('news_summarize', { id }) : mockNews.summarize(id),
-
-    /** FLOW: заметки vault, релевантные новости (RAG по заголовку+резюме). Заметка, созданная из
-     *  этой же новости (frontmatter `source`==url), отфильтрована. Пусто, если RAG/индекс недоступны. */
-    related: (id: number, limit?: number): Promise<LinkSuggestion[]> =>
-      isTauri()
-        ? invoke<LinkSuggestion[]>('news_related', { id, limit })
-        : mockNews.related(id, limit),
-
-    /** W-39 «Диагностика»: история последних прогонов (свежие сверху, до `limit`). */
-    runs: (limit: number): Promise<NewsRun[]> =>
-      isTauri() ? invoke<NewsRun[]>('get_news_runs', { limit }) : mockNews.runs(limit),
-
-    /** W-39: пинг провайдера новостей (анализатор `ai.fast`→`ai.chat`) через политику эгресса. */
-    testEndpoint: (): Promise<NewsEndpointHealth> =>
-      isTauri() ? invoke<NewsEndpointHealth>('news_test_endpoint') : mockNews.testEndpoint(),
-
-    /** W-39: экспорт самого свежего лог-файла в файл через save-диалог. Путь файла, либо null
-     *  если отменили. fs — в доверенном бэкенде (как backup W-9); путь выбирает пользователь. */
-    exportLogs: async (): Promise<string | null> => {
-      if (!isTauri()) return mockNews.exportLogs();
-      const path = await saveDialog({
-        defaultPath: 'nexus-news.log',
-        filters: [{ name: 'Log', extensions: ['log'] }],
-      });
-      if (!path) return null;
-      await invoke<void>('export_news_logs', { path });
-      return path;
-    },
-  },
+  // F-2c: news-домен (лента NF-3/NF-5 + ридер NF-6 + диагностика W-39/40) вынесен в
+  // `lib/api/news/` — здесь реэкспорт.
+  news,
 
   /** Память агента (MEM): курируемые ЯВНЫЕ ФАКТЫ о пользователе/проектах. MEM-3 — захват:
    *  явное добавление + авто-предложение (`propose`) для чипа подтверждения. CRUD-обёртки для панели
@@ -1510,79 +1191,11 @@ export const tauriApi = {
         : mockMemory.consolidateUndo(opGroup),
   },
 
-  /** Эпизодическая память (EP-3): панель эпизодов + обратимость + тоггл. Вне Tauri — in-memory мок. */
-  /**
-   * Агент (UI-1): запуск/контроль прогона + стрим событий. `run` создаёт `Channel<AgentStreamEvent>`,
-   * подвешивает `onEvent` на `channel.onmessage` (как `chat.streamRag`), зовёт `agent_run` и резолвится
-   * `run_id`. Вне Tauri — мок-стрим (`./mock/agent`), ЗЕРКАЛЯЩИЙ контракт (те же формы/порядок событий).
-   */
-  agent: {
-    /**
-     * Запускает прогон: стримит события в `onEvent`, возвращает Promise<run_id>. Стрим асинхронный —
-     * run_id приходит сразу, события докапываются по ходу. Ошибку `agent_run` (нет vault и т.п.)
-     * прокидываем в `onEvent` как `error`-событие И реджектим Promise (стор покажет ошибку).
-     */
-    run: (
-      task: string,
-      autonomy: AgentAutonomy,
-      onEvent: (event: AgentStreamEvent) => void,
-      // W-4: история прошлых ходов сессии (мультитёрн) — чтобы follow-up продолжал работу прошлого
-      // хода и снова предлагал правки через гейт. Пусто для первого хода.
-      history: AgentHistoryMsg[] = [],
-      // W-38: id переписки (группировка ходов для истории). Опционален для обратной совместимости.
-      sessionId?: string,
-    ): Promise<number> => {
-      if (!isTauri()) return mockAgent.run(task, autonomy, onEvent, history, sessionId);
-      const channel = new Channel<AgentStreamEvent>();
-      channel.onmessage = onEvent;
-      return invoke<number>('agent_run', { task, autonomy, history, sessionId, channel }).catch(
-        (e: unknown) => {
-          onEvent({ type: 'error', message: String(e) });
-          throw e;
-        },
-      );
-    },
-    /** W-38: история переписок агента (левый сайдбар). list — сводки, load — ходы переписки. */
-    sessions: {
-      list: (): Promise<AgentSessionInfo[]> =>
-        isTauri() ? invoke<AgentSessionInfo[]>('agent_sessions_list') : mockAgent.sessionsList(),
-      load: (sessionId: string): Promise<AgentSessionData> =>
-        isTauri()
-          ? invoke<AgentSessionData>('agent_session_load', { sessionId })
-          : mockAgent.sessionLoad(sessionId),
-    },
-    /** Кормит UI-DecisionSource прогона решениями (Confirm-тир аппрув/реджект). */
-    approve: (runId: number, decisions: AgentApprovalDecision[]): Promise<void> =>
-      isTauri()
-        ? invoke<void>('agent_approve', { runId, decisions })
-        : mockAgent.approve(runId, decisions),
-    /** Пауза прогона (AGENT-5 kill-switch). */
-    pause: (runId: number): Promise<void> =>
-      isTauri() ? invoke<void>('agent_pause', { runId }) : mockAgent.pause(runId),
-    /** Снять паузу прогона. */
-    resume: (runId: number): Promise<void> =>
-      isTauri() ? invoke<void>('agent_resume', { runId }) : mockAgent.resume(runId),
-    /** Кооперативно отменить прогон. */
-    cancel: (runId: number): Promise<void> =>
-      isTauri() ? invoke<void>('agent_cancel', { runId }) : mockAgent.cancel(runId),
-    /** Откат применённых действий прогона (AGENT-4) → число откаченных. */
-    undo: (runId: number): Promise<number> =>
-      isTauri() ? invoke<number>('agent_undo', { runId }) : mockAgent.undo(runId),
-    /** W-10: список авто-навыков агента (read-only) + состояние самообучения. */
-    listSkills: (): Promise<SkillList> =>
-      isTauri() ? invoke<SkillList>('agent_list_skills') : mockAgent.listSkills(),
-    /** W-10: закрепить/открепить навык (no-op на vendor/user). */
-    setSkillPinned: (name: string, pinned: boolean): Promise<boolean> =>
-      isTauri()
-        ? invoke<boolean>('agent_skill_set_pinned', { name, pinned })
-        : mockAgent.setSkillPinned(name, pinned),
-    /** W-10: архивировать/разархивировать навык (обратимо; НЕ «выключить»). */
-    setSkillArchived: (name: string, archived: boolean): Promise<boolean> =>
-      isTauri()
-        ? invoke<boolean>('agent_skill_set_archived', { name, archived })
-        : mockAgent.setSkillArchived(name, archived),
-  },
+  // F-2c: agent-домен (прогоны UI-1 + история W-38 + навыки W-10) вынесен в `lib/api/agent/` —
+  // здесь реэкспорт. `agent.run` — честное bridge-исключение (Channel), коммент в домене.
+  agent,
 
+  /** Эпизодическая память (EP-3): панель эпизодов + обратимость + тоггл. Вне Tauri — in-memory мок. */
   episode: {
     /** Все эпизоды для панели (обратная хронология, со скрытыми). */
     list: (): Promise<EpisodeRow[]> =>
@@ -1667,48 +1280,10 @@ export const tauriApi = {
         ? invoke<AgentFlagsDto>('set_agent_flags', { flags })
         : mockSettings.setAgentFlags(flags),
 
-    /** CONN-4/ACP-1b/ACP-REMOTE-SSH: персистит режим подключения агента (`ai.connection`) + немедленно
-     *  свопает бэкенд. `mode` нормализуется (мусор → embedded); `null`-поля → бэк не трогает соответствующее
-     *  поле. Для acp-ssh передаются transport/host/key/remoteCommand; для acp-local — acpCommand. Возвращает
-     *  записанное. */
-    setAgentConnection: (
-      mode: 'embedded' | 'local' | 'remote' | 'acp',
-      socket: string | null,
-      acpCommand: string | null = null,
-      acpCwd: string | null = null,
-      acpTransport: string | null = null,
-      acpSshHost: string | null = null,
-      acpSshKey: string | null = null,
-      acpRemoteCommand: string | null = null,
-    ): Promise<AgentConnectionDto> =>
-      isTauri()
-        ? invoke<AgentConnectionDto>('set_agent_connection', {
-            mode,
-            socket,
-            acpCommand,
-            acpCwd,
-            acpTransport,
-            acpSshHost,
-            acpSshKey,
-            acpRemoteCommand,
-          })
-        : mockSettings.setAgentConnection(
-            mode,
-            socket,
-            acpCommand,
-            acpCwd,
-            acpTransport,
-            acpSshHost,
-            acpSshKey,
-            acpRemoteCommand,
-          ),
-
-    /** CONN-4/ACP-1b: проверка связи (local: AF_UNIX handshake; acp: spawn+initialize). Резолвится строкой
-     *  версии протокола; throw = недоступен / неверный режим. */
-    testAgentConnection: (): Promise<string> =>
-      isTauri()
-        ? invoke<string>('test_agent_connection')
-        : mockSettings.testAgentConnection(),
+    // F-2c: подключение агента (CONN-4/ACP — персист режима + проба связи) живёт в
+    // `lib/api/agent/` (`agentConnection`) — здесь реэкспорт под прежними именами.
+    setAgentConnection: agentConnection.set,
+    testAgentConnection: agentConnection.test,
   },
 };
 

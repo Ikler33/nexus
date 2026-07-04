@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import * as mockAgent from './agent';
 import { streamChat } from './vault';
-import type { AgentStreamEvent, ChatStreamEvent } from '../tauri-api';
+// F-2c: wire-тип AgentStreamEvent переехал в домен `lib/api/agent/types.ts` — капкан (а) выводит
+// варианты напрямую из доменного ИСТОЧНИКА типа (не через баррел-реэкспорт), сам капкан не ослаблен.
+import type { AgentStreamEvent } from '../api/agent/types';
+import type { ChatStreamEvent } from '../tauri-api';
 
 /**
  * P0-2 — гейт мок-паритета (защита от дрейфа, урок mock-must-match-backend / MEM-5):
@@ -131,10 +134,13 @@ describe('P0-2 гейт (в): литеральные инлайн-моки в AP
     // Baseline-история ratchet'а ВНИЗ: 23 (P0-2, 2026-07-02) → 19 (F-2a, 2026-07-03: vault-домен
     // вынесен в lib/api/vault/, его 4 инлайн-мока — vault.rescan/notesCount/fileMtime +
     // attachments.write — переехали в mock/vault.ts) → 18 (F-2b, 2026-07-04: chat-домен вынесен
-    // в lib/api/chat/, его 1 инлайн-мок — chat.sessions.toNote — переехал в mock/sessions.ts).
+    // в lib/api/chat/, его 1 инлайн-мок — chat.sessions.toNote — переехал в mock/sessions.ts)
+    // → 18 (F-2c, 2026-07-04: agent+news вынесены в lib/api/{agent,news}/ — инлайн-моков у этих
+    // доменов НЕ БЫЛО (все моки уже жили в mock/agent.ts / mock/news.ts / mock/settings.ts),
+    // фактическое число не изменилось; пересчитано по скоупу — 18).
     // Скоуп подсчёта с F-2a — баррел tauri-api.ts ПЛЮС весь новый слой lib/api/** (иначе
     // инлайн-моки могли бы тихо копиться в доменных модулях мимо храповика). Полная миграция
-    // остатка — срезы F-2c+; до них тест держит планку «не хуже»: новый инлайн-мок — красный тест
+    // остатка — срезы F-2d+; до них тест держит планку «не хуже»: новый инлайн-мок — красный тест
     // (новые моки обязаны жить в mock/* и зеркалить контракт). Мигрировали часть — ПОНИЗЬТЕ baseline.
     const INLINE_MOCK_BASELINE = 18;
     // cwd vitest = apps/desktop (vitest.config там) — import.meta.url в jsdom не file-схема.
