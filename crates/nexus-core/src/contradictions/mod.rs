@@ -39,15 +39,7 @@ const SETTING_CONTRA_ENABLED: &str = "contradictions.enabled";
 
 /// Включён ли поиск противоречий? Дефолт OFF (нет значения → false).
 pub async fn is_enabled(reader: &ReadPool) -> bool {
-    reader
-        .query(move |c| {
-            c.query_row(
-                "SELECT value FROM settings WHERE key=?1",
-                [SETTING_CONTRA_ENABLED],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-        })
+    crate::db::settings::get(reader, SETTING_CONTRA_ENABLED)
         .await
         .ok()
         .flatten()
@@ -57,17 +49,7 @@ pub async fn is_enabled(reader: &ReadPool) -> bool {
 
 /// Persist тоггла противоречий ("1"/"0").
 pub async fn set_enabled(writer: &WriteActor, on: bool) -> DbResult<()> {
-    let v = if on { "1" } else { "0" };
-    writer
-        .call(move |c| {
-            c.execute(
-                "INSERT INTO settings(key,value) VALUES('contradictions.enabled', ?1) \
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                [v],
-            )
-            .map(|_| ())
-        })
-        .await
+    crate::db::settings::set(writer, SETTING_CONTRA_ENABLED, if on { "1" } else { "0" }).await
 }
 
 /// Найденное противоречие (для UI). `ctype` — `hard`|`soft`|`temporal` (D3).
