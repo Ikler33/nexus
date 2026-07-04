@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
+import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
@@ -17,11 +18,7 @@ import { Titlebar } from './components/chrome/Titlebar';
 import { StatusBar } from './components/chrome/StatusBar';
 import { SelfCheck } from './components/chrome/SelfCheck';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { EditorArea } from './components/workspace/EditorArea';
-import { BoardView } from './components/board/BoardView';
-import { HomeView } from './components/home/HomeView';
-import { NewsView } from './components/news/NewsView';
-import { TodayView } from './components/today/TodayView';
+import { MainViewOutlet } from './components/workspace/MainViewOutlet';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
@@ -41,11 +38,8 @@ import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
+// (Ленивая AgentView переехала в lib/connector/core-views — main-вью резолвит MainViewOutlet.)
 const GraphView = lazy(() => import('./components/graph/GraphView'));
-// Вкладка Агента (UI-1) — отдельный воркспейс, грузится лениво (открывается по нав-кнопке/команде).
-const AgentView = lazy(() =>
-  import('./components/agent/AgentView').then((m) => ({ default: m.AgentView })),
-);
 const PluginsPanel = lazy(() =>
   import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
 );
@@ -254,21 +248,9 @@ export function App() {
             </aside>
           )}
           <main className={styles.main}>
-            {mainView === 'agent' ? (
-              <Suspense fallback={null}>
-                <AgentView />
-              </Suspense>
-            ) : mainView === 'today' ? (
-              <TodayView />
-            ) : mainView === 'home' ? (
-              <HomeView />
-            ) : mainView === 'news' ? (
-              <NewsView />
-            ) : mainView === 'board' ? (
-              <BoardView />
-            ) : (
-              <EditorArea />
-            )}
+            {/* F-8: активная main-вью резолвится реестром `views` (App-lookup), рендер — через
+                per-contribution ErrorBoundary (падение вью → плашка, app жив). */}
+            <MainViewOutlet />
           </main>
           {aiSide && <AiPanel />}
           {aiBottom && (

@@ -1383,6 +1383,12 @@
     "saveError": "Couldn't save the property",
     "flushError": "Save the note first (it has unsaved changes)"
   },
+  "connector": {
+    "moduleCrashed": "Module “{{name}}” crashed",
+    "moduleCrashedHint": "The rest of the app keeps working. Reload to recover this section.",
+    "reload": "Reload",
+    "commandFailed": "Command failed: {{name}}"
+  },
   "commands": {
     "palette.open": "Command palette",
     "recents.open": "Go to recent…",
@@ -1421,6 +1427,7 @@
     "view.today": "Today",
     "view.agent": "Castor",
     "view.home": "Home",
+    "view.editor": "Editor",
     "view.tasks": "Tasks",
     "view.inbox": "Inbox",
     "theme.toggle": "Toggle theme (light/dark)",

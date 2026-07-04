@@ -1,18 +1,7 @@
-import type { ReactNode } from 'react';
-import {
-  CalendarCheck,
-  FileText,
-  GitBranch,
-  Home,
-  Inbox,
-  LayoutGrid,
-  ListChecks,
-  Newspaper,
-  Settings,
-  Share2,
-} from 'lucide-react';
-import { CometIcon } from '../common/BrandGlyphs';
+import { Fragment, type ReactNode } from 'react';
+import { FileText, GitBranch, Inbox, ListChecks, Settings, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { viewRegistry } from '../../lib/connector';
 import { selectMainView, useUIStore } from '../../stores/ui';
 import styles from './ActivityBar.module.css';
 
@@ -20,6 +9,10 @@ import styles from './ActivityBar.module.css';
  * Вертикальный activity-bar на левом краю окна (DP-13, макет `app.jsx` `ActivityBar`,
  * Obsidian/VS Code-style): сверху навигация Home / Новости / Файлы (тоггл сайдбара) / Граф,
  * снизу Синхронизация (git) и Настройки. Сюда переехали входы, прежде жившие в титлбаре.
+ *
+ * F-8: кнопки main-вью (Home/Сегодня/Новости/Доска/Castor) теперь берутся из реестра `views`
+ * коннектора (order/icon/titleKey/activate/isActive) — легализация прежнего хардкода. Не-вью входы
+ * (файлы/граф/задачи/входящие/синх/настройки — это тогглы оверлеев, не main-вью) остаются здесь.
  */
 export function ActivityBar() {
   const { t } = useTranslation();
@@ -29,11 +22,6 @@ export function ActivityBar() {
   const graphOpen = useUIStore((s) => s.graphOpen);
   const tasksOpen = useUIStore((s) => s.tasksOpen);
   const inboxOpen = useUIStore((s) => s.inboxOpen);
-  const openHome = useUIStore((s) => s.openHome);
-  const openToday = useUIStore((s) => s.openToday);
-  const openNews = useUIStore((s) => s.openNews);
-  const openBoard = useUIStore((s) => s.openBoard);
-  const openAgent = useUIStore((s) => s.openAgent);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const toggleGraph = useUIStore((s) => s.toggleGraph);
   const toggleTasks = useUIStore((s) => s.toggleTasks);
@@ -54,36 +42,17 @@ export function ActivityBar() {
     </button>
   );
 
+  // Main-вью коннектора (F-8): порядок/иконка/имя/действие — из реестра `views`.
+  const viewButtons = viewRegistry.list().filter((v) => v.activityBar);
+
   return (
     <nav className={styles.activityBar} aria-label={t('chrome.nav')}>
       <div className={styles.group}>
-        {btn(<Home size={19} aria-hidden />, t('commands.view.home'), openHome, mainView === 'home')}
-        {btn(
-          <CalendarCheck size={19} aria-hidden />,
-          t('commands.view.today'),
-          openToday,
-          mainView === 'today',
-        )}
-        {btn(
-          <Newspaper size={19} aria-hidden />,
-          t('commands.view.news'),
-          openNews,
-          mainView === 'news',
-        )}
-        {btn(
-          <LayoutGrid size={19} aria-hidden />,
-          t('commands.view.board'),
-          openBoard,
-          mainView === 'board',
-        )}
-        {/* P0-3-смоук: НЕ передавать openAgent голой ссылкой — onClick подставит MouseEvent в
-            optional `seed`, и `seed.trim()` бросит TypeError (кнопка Castor «мертвела»). */}
-        {btn(
-          <CometIcon size={19} aria-hidden />,
-          t('commands.view.agent'),
-          () => openAgent(),
-          mainView === 'agent',
-        )}
+        {viewButtons.map((v) => (
+          <Fragment key={v.id}>
+            {btn(<v.icon size={19} aria-hidden />, t(v.titleKey), v.activate, v.isActive(mainView))}
+          </Fragment>
+        ))}
         {btn(
           <FileText size={19} aria-hidden />,
           t('sidebar.files'),
