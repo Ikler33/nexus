@@ -673,9 +673,10 @@ fn indexer_hooks(app: tauri::AppHandle) -> crate::indexer::IndexerHooks {
 }
 
 /// RAG-фундамент vault (Ф1-5) поверх КАНОННОГО эмбеддера ([`crate::bootstrap::EmbeddingBootstrap`],
-/// R-3b). Здесь остаётся vault-состояние (вне канона, зеркало agentd `build_rag_min`):
-/// (1) `reconcile_embedding_model` (§6.5) ДО открытия индексов — смена модели/размерности
-/// инвалидирует чанки и векторы → force-переиндексация; (2) открытие всех четырёх usearch-индексов.
+/// R-3b). Здесь остаётся vault-состояние (зеркало agentd `build_rag_min`):
+/// (1) КАНОННЫЙ [`crate::vector::reconcile_embedding_model`] (§6.5, R-3d) ДО открытия индексов —
+/// смена модели/размерности инвалидирует ВСЕ производные (chunks + 4 usearch-индекса) →
+/// force-переиндексация; та же модель — строгий no-op; (2) открытие всех четырёх usearch-индексов.
 /// `None` — reconcile/open не удались (RAG отключается, vault работает без AI); эмбеддер наружу
 /// попадает ТОЛЬКО из собранного бандла (RAG off целиком — усечённых состояний нет, как раньше).
 async fn build_rag(
@@ -690,9 +691,13 @@ async fn build_rag(
     Arc<VectorIndex>,
     bool,
 )> {
-    // §6.5: смена модели/размерности инвалидирует чанки и векторы → force-переиндексация.
-    let force = reconcile_embedding_model(db, root, &eb.model, eb.dim)
+    // §6.5 (R-3d): канонный reconcile — смена модели/размерности → полная чистка производных →
+    // force-переиндексация; та же модель — строгий no-op. Ошибка БД → RAG off.
+    let force = crate::vector::reconcile_embedding_model(db, root, &eb.model, eb.dim)
         .await
+        .map_err(
+            |e| tracing::warn!(error = %e, "reconcile embedding-модели не удался — RAG отключён"),
+        )
         .ok()?;
 
     let vectors = VectorIndex::open(root.join(".nexus").join("vectors.usearch"), eb.dim)
@@ -732,88 +737,9 @@ async fn build_rag(
     ))
 }
 
-/// Сверяет активную модель/размерность эмбеддера с `settings`. При расхождении на НЕпервом запуске
-/// чистит `chunks` (+FTS триггерами) и файл векторов, пишет новые `settings`. Возвращает `force` —
-/// нужна ли принудительная переиндексация (первое включение RAG ИЛИ смена модели §6.5).
-async fn reconcile_embedding_model(
-    db: &Database,
-    root: &Path,
-    model: &str,
-    dim: usize,
-) -> Result<bool, ()> {
-    let prev_model = get_setting(db, "embedding.model")
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "reconcile: чтение settings — RAG отключён"))?;
-    let prev_dim = get_setting(db, "embedding.dim")
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "reconcile: чтение settings — RAG отключён"))?;
-    if prev_model.as_deref() == Some(model) && prev_dim.as_deref() == Some(&dim.to_string()) {
-        return Ok(false); // та же модель — инкрементальная индексация, без переэмбеддизации
-    }
-    if prev_model.is_some() {
-        // Модель сменилась → старые векторы несовместимы по семантике/размерности.
-        db.writer()
-            .call(|c| c.execute("DELETE FROM chunks", []).map(|_| ()))
-            .await
-            .map_err(|e| tracing::warn!(error = %e, "reconcile: очистка chunks — RAG отключён"))?;
-        let _ = std::fs::remove_file(root.join(".nexus").join("vectors.usearch"));
-        // EP: эпизоды эмбеддились старой моделью → дропаем их индекс и помечаем на переэмбеддинг
-        // (summary-текст остаётся, бэкфилл на открытии переэмбеддит дёшево). Иначе запрос новой моделью
-        // против старых векторов → DimMismatch/семантический мусор (ложная память).
-        let _ = std::fs::remove_file(root.join(".nexus").join("episode_vectors.usearch"));
-        // MEM (P1-4): тот же orphan-класс — факты эмбеддились старой моделью. Дропаем индекс фактов;
-        // memory-бэкфилл на открытии (фильтр по `contains`) переэмбеддит их дёшево (текст в `memory_facts`
-        // остаётся). chat_vectors остаётся отдельной задачей (бэкфилл переписки есть, но сброса индекса
-        // под смену модели у него пока нет — вне рамок P1-4).
-        let _ = std::fs::remove_file(root.join(".nexus").join("memory_vectors.usearch"));
-        db.writer()
-            .call(|c| {
-                c.execute("UPDATE chat_episodes SET embed_model=NULL", [])
-                    .map(|_| ())
-            })
-            .await
-            .map_err(|e| tracing::warn!(error = %e, "reconcile: сброс embed_model эпизодов"))?;
-        tracing::info!(from = ?prev_model, to = %model, "смена embedding-модели → переэмбеддизация vault (§6.5)");
-    }
-    set_setting(db, "embedding.model", model)
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "reconcile: запись settings — RAG отключён"))?;
-    set_setting(db, "embedding.dim", &dim.to_string())
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "reconcile: запись settings — RAG отключён"))?;
-    Ok(true)
-}
-
-/// Читает значение из таблицы `settings` (или `None`).
-async fn get_setting(db: &Database, key: &str) -> Result<Option<String>, String> {
-    let key = key.to_string();
-    db.reader()
-        .query(move |c| {
-            c.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()
-        })
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Upsert значения в таблицу `settings`.
-async fn set_setting(db: &Database, key: &str, value: &str) -> Result<(), String> {
-    let key = key.to_string();
-    let value = value.to_string();
-    db.writer()
-        .call(move |c| {
-            c.execute(
-                "INSERT INTO settings(key,value) VALUES(?1,?2) \
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                rusqlite::params![key, value],
-            )
-            .map(|_| ())
-        })
-        .await
-        .map_err(|e| e.to_string())
-}
+// R-3d: локальная реплика `reconcile_embedding_model` (чистила chunks + 3 индекса БЕЗ chat_vectors)
+// удалена — build_rag зовёт КАНОН `crate::vector::reconcile_embedding_model` («полная чистка»,
+// решение владельца §8.5; вместе с репликой ушли её приватные хелперы get_setting/set_setting).
 
 /// Ручной реиндекс vault (quick action «Переиндексировать» из макета home.jsx + палитра):
 /// шлёт [`crate::watcher::VaultEvent::Rescan`] в watcher-петлю — полный обход `scan_vault`
@@ -1325,6 +1251,20 @@ mod tests {
         Database::open(root.join(".nexus/nexus.db")).await.unwrap()
     }
 
+    /// Тест-хелпер чтения `settings` (жил в проде рядом с удалённой репликой reconcile — R-3d).
+    async fn get_setting(db: &Database, key: &str) -> Option<String> {
+        let key = key.to_string();
+        db.reader()
+            .query(move |c| {
+                c.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
+                    r.get::<_, String>(0)
+                })
+                .optional()
+            })
+            .await
+            .unwrap()
+    }
+
     /// AC-EGR-13 (composition-root): канон `bootstrap::ProviderSet` строит провайдеров от ОДНОГО
     /// policy через guarded-клиент — переключение политики мгновенно видно ВСЕМ провайдерам
     /// (никаких собственных клиентов мимо chokepoint). До R-3b здесь были локальные
@@ -1467,29 +1407,31 @@ mod tests {
         assert_eq!(resolve("Нету такой").await, None);
     }
 
+    // R-3d: оба reconcile-теста переключены с удалённой desktop-реплики на КАНОН
+    // `crate::vector::reconcile_embedding_model` — ассерты ниже НЕ менялись (канон = superset:
+    // first-run/no-op/чистка chunks совпадают со старой desktop-семантикой; расширение канона —
+    // снос chat_vectors — запинено юнит-таблицей в nexus-core `vector::tests`).
+
     /// §6.5: первое включение RAG пишет settings и требует force; та же модель — без force.
     #[tokio::test]
     async fn reconcile_first_run_sets_settings_and_forces() {
         let dir = TempDir::new().unwrap();
         let db = open_db(dir.path()).await;
 
-        let force = reconcile_embedding_model(&db, dir.path(), "nomic", 768)
+        let force = crate::vector::reconcile_embedding_model(&db, dir.path(), "nomic", 768)
             .await
             .unwrap();
         assert!(force, "первое включение RAG → force-переиндексация");
         assert_eq!(
-            get_setting(&db, "embedding.model")
-                .await
-                .unwrap()
-                .as_deref(),
+            get_setting(&db, "embedding.model").await.as_deref(),
             Some("nomic")
         );
         assert_eq!(
-            get_setting(&db, "embedding.dim").await.unwrap().as_deref(),
+            get_setting(&db, "embedding.dim").await.as_deref(),
             Some("768")
         );
 
-        let again = reconcile_embedding_model(&db, dir.path(), "nomic", 768)
+        let again = crate::vector::reconcile_embedding_model(&db, dir.path(), "nomic", 768)
             .await
             .unwrap();
         assert!(!again, "та же модель/dim → без переэмбеддизации");
@@ -1501,7 +1443,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let db = open_db(root).await;
-        reconcile_embedding_model(&db, root, "nomic", 768)
+        crate::vector::reconcile_embedding_model(&db, root, "nomic", 768)
             .await
             .unwrap();
 
@@ -1526,7 +1468,7 @@ mod tests {
             .unwrap();
         assert_eq!(count_chunks(&db).await, 1);
 
-        let force = reconcile_embedding_model(&db, root, "bge-m3", 1024)
+        let force = crate::vector::reconcile_embedding_model(&db, root, "bge-m3", 1024)
             .await
             .unwrap();
         assert!(force, "смена модели → force");
@@ -1536,7 +1478,7 @@ mod tests {
             "смена модели очистила chunks (§6.5)"
         );
         assert_eq!(
-            get_setting(&db, "embedding.dim").await.unwrap().as_deref(),
+            get_setting(&db, "embedding.dim").await.as_deref(),
             Some("1024")
         );
     }
