@@ -10,7 +10,7 @@ import { useUIStore } from '../../stores/ui';
  * Проверяем: «Открыть раздел Агента» открывает агента без сида; каждый quick-start — с РАЗНЫМ промптом.
  */
 function reset() {
-  useUIStore.setState({ agentOpen: false, pendingAgentSeed: null });
+  useUIStore.setState({ mainView: 'home', pendingAgentSeed: null });
 }
 
 beforeEach(reset);
@@ -20,7 +20,7 @@ describe('AgentTab (Castor лаунчер, P1-11)', () => {
   it('«Открыть раздел Агента» открывает агента БЕЗ сида (просто вход)', () => {
     render(<AgentTab />);
     fireEvent.click(screen.getByRole('button', { name: /Открыть раздел Агента/ }));
-    expect(useUIStore.getState().agentOpen).toBe(true);
+    expect(useUIStore.getState().mainView).toBe('agent');
     expect(useUIStore.getState().pendingAgentSeed).toBeNull();
   });
 
@@ -33,10 +33,10 @@ describe('AgentTab (Castor лаунчер, P1-11)', () => {
 
     const seeds: string[] = [];
     for (const btn of quick) {
-      useUIStore.setState({ agentOpen: false, pendingAgentSeed: null });
+      useUIStore.setState({ mainView: 'home', pendingAgentSeed: null });
       fireEvent.click(btn);
       const seed = useUIStore.getState().pendingAgentSeed;
-      expect(useUIStore.getState().agentOpen).toBe(true); // агент открылся
+      expect(useUIStore.getState().mainView).toBe('agent'); // агент открылся
       expect(seed?.text.trim()).toBeTruthy(); // непустой промпт засеян
       seeds.push(seed!.text);
     }

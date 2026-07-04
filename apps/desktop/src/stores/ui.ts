@@ -29,7 +29,7 @@ type AiTab = 'chat' | 'agent';
  *  3) floats      — независимые плавающие слои (граф/плагины/sync/дайджест/противоречия/чат/сайдбар/
  *     reading/aiTab): НЕ взаимоисключаемы, живут отдельными булями (F-4b, если вообще).
  *  4) safe-flow   — модальные потоки редактора (conflict/versions/capture/templates): закрываются
- *     ЯВНО, при nav-переходе (SWITCH_MAIN) НЕ гасятся. Отдельный реестр — НЕ folded в trap.
+ *     ЯВНО, при nav-переходе (FLOATS_AND_TRAPS_CLOSED) НЕ гасятся. Отдельный реестр — НЕ folded в trap.
  */
 export type MainView = 'home' | 'today' | 'news' | 'board' | 'agent' | 'editor';
 export type TrapOverlay =
@@ -71,16 +71,12 @@ interface UIState {
   digestOpen: boolean;
   /** Открыта ли панель «Поиск противоречий» (#vision). */
   contradictionsOpen: boolean;
-  /** Открыта ли страница «Новости» (NF-5) — полная вью вместо редактора. */
-  newsOpen: boolean;
-  /** Открыта ли «Доска» (BOARD-4) — канбан-вью заметок-задач вместо редактора. */
-  boardOpen: boolean;
-  /** Открыт ли утренний экран «Сегодня» (TODAY-1) — сводка дня вместо редактора. */
-  todayOpen: boolean;
-  /** Открыта ли вкладка «Агент» (UI-1) — full-screen агентский воркспейс вместо редактора. */
-  agentOpen: boolean;
-  /** Открыт ли HOME-дашборд (DP-1) — лендинг-вью вместо редактора (стартовая после vault). */
-  homeOpen: boolean;
+  /**
+   * F-4 (семейство 1): активная полноэкранная main-вью — ЕДИНЫЙ источник истины вместо 5 отдельных
+   * `*Open`-булей (home/today/news/board/agent; 'editor' — когда открыт редактор). Взаимоисключаемость
+   * теперь СТРУКТУРНА (одно поле), а не держится на спреде констант. Читать — через `selectMainView`.
+   */
+  mainView: MainView;
   /** Онбординг пройден (DP-7, персист): welcome ведёт сразу к открытию vault. */
   onboardingDone: boolean;
   /** Многошаговый онбординг идёт прямо сейчас (держит экран и после открытия vault). */
@@ -180,6 +176,8 @@ interface UIState {
   closeHome: () => void;
   toggleHome: () => void;
   openHome: () => void;
+  /** F-4: перейти на произвольную main-вью (nav-семантика: гасит плавающие/trap-слои, как openX). */
+  setMainView: (view: MainView) => void;
   startOnboarding: () => void;
   finishOnboarding: () => void;
   toggleReading: () => void;
@@ -236,26 +234,14 @@ const TRAP_OVERLAYS_CLOSED = {
 } as const;
 
 /**
- * Полноэкранные main-вьюхи взаимоисключаемы (home ↔ news ↔ board ↔ today ↔ agent; редактор — когда
- * все закрыты). Спред этой константы в каждой open/toggle-ветке гасит остальные одним местом — иначе
- * при добавлении новой вью (UI-1 «Агент») легко забыть один из переходов и две вью наложатся.
- */
-const MAIN_VIEWS_CLOSED = {
-  homeOpen: false,
-  newsOpen: false,
-  boardOpen: false,
-  todayOpen: false,
-  agentOpen: false,
-} as const;
-
-/**
- * W-6: переход на полноэкранную main-вью (Home/News/Board/Today/Agent) обязан ПОГАСИТЬ и плавающие
- * слои, которые иначе остаются ПОВЕРХ main-области и навигация «не срабатывает» из них (ST-D1: граф —
+ * W-6: переход на полноэкранную main-вью (или в редактор/чат) обязан ПОГАСИТЬ и плавающие/trap-слои,
+ * которые иначе остаются ПОВЕРХ main-области и навигация «не срабатывает» из них (ST-D1: граф —
  * absolute-слой; Tasks/Inbox/Sync/Plugins/Goals/Memory/Episodes/палитра/шпаргалка/Настройки — top-
- * overlays в App.tsx). Не трогаем conflict/versions (модальные safe-flow редактора — закрываются явно).
+ * overlays App.tsx). Не трогаем conflict/versions/capture/templates (модальные safe-flow — закрываются
+ * ЯВНО). F-4: сама смена вью теперь = присвоение `mainView` (взаимоисключаемость структурная), поэтому
+ * здесь — ТОЛЬКО гашение слоёв (бывший MAIN_VIEWS_CLOSED растворился в едином поле).
  */
-const SWITCH_MAIN = {
-  ...MAIN_VIEWS_CLOSED,
+const FLOATS_AND_TRAPS_CLOSED = {
   ...TRAP_OVERLAYS_CLOSED, // palette/goals/tasks/inbox/cheatsheet/memory/episodes/tweaks
   graphOpen: false,
   pluginsOpen: false,
@@ -265,19 +251,12 @@ const SWITCH_MAIN = {
 } as const;
 
 /**
- * F-4 — DERIVED-селектор активной main-вью (семейство 1). Читает текущие `*Open`-були В ПРИОРИТЕТЕ
- * тернарника App.tsx (agent > today > home > news > board > editor). Единственный правильный способ
- * спросить «какая вью сейчас»: потребители подписываются `useUIStore(selectMainView)` (примитив →
- * React бэйлит ре-рендер). Коннектор F-8 строит реестр вью поверх этого enum.
+ * F-4 — селектор активной main-вью (семейство 1): единый источник истины `mainView`. Потребители
+ * подписываются `useUIStore(selectMainView)` (примитив → React бэйлит ре-рендер) — имя поля скрыто за
+ * селектором, коннектор F-8 строит реестр вью поверх этого enum. Приоритет тернарника App.tsx
+ * (agent > today > home > news > board > editor) теперь удерживается сеттерами (одно поле = одна вью).
  */
-export const selectMainView = (s: UIState): MainView => {
-  if (s.agentOpen) return 'agent';
-  if (s.todayOpen) return 'today';
-  if (s.homeOpen) return 'home';
-  if (s.newsOpen) return 'news';
-  if (s.boardOpen) return 'board';
-  return 'editor';
-};
+export const selectMainView = (s: UIState): MainView => s.mainView;
 
 /**
  * F-4 — DERIVED-селектор верхнего trap-оверлея (семейство 2): какой focus-trap-оверлей активен, или
@@ -338,12 +317,8 @@ export const useUIStore = create<UIState>((set) => ({
   inboxOpen: false,
   digestOpen: false,
   contradictionsOpen: false,
-  newsOpen: false,
-  boardOpen: false,
-  todayOpen: false,
-  agentOpen: false,
   // HOME — стартовый лендинг после открытия vault (макет: Home-вью по умолчанию).
-  homeOpen: true,
+  mainView: 'home',
   onboardingDone: readOnboarded(),
   onboardingActive: false,
   tweaksOpen: false,
@@ -367,22 +342,25 @@ export const useUIStore = create<UIState>((set) => ({
   // владельца 2026-06-11: приложение стартует на Home, и чат «не открывался»).
   openChat: () => {
     logUi('chat:open');
-    // W-6: SWITCH_MAIN (а не только MAIN_VIEWS_CLOSED) — иначе панель «открыта», но скрыта под графом/
-    // оверлеем (тот же ST-D1, что у main-нав). Чат — workspace-панель, гасим блокирующие слои.
-    set({ ...SWITCH_MAIN, chatOpen: true });
+    // W-6: гасим блокирующие слои И уводим в редактор — иначе панель «открыта», но скрыта под графом/
+    // оверлеем/main-вью (ST-D1). Чат — workspace-панель → mainView='editor' + FLOATS_AND_TRAPS_CLOSED.
+    set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: 'editor', chatOpen: true });
   },
   closeChat: () => set({ chatOpen: false }),
   toggleChat: () =>
     set((s) => {
       logUi('chat:toggle', s.chatOpen ? 'open→' : 'closed→');
-      if (!s.chatOpen) return { ...SWITCH_MAIN, chatOpen: true };
+      if (!s.chatOpen) return { ...FLOATS_AND_TRAPS_CLOSED, mainView: 'editor', chatOpen: true };
       // Панель уже «открыта», но скрыта за main-вью ИЛИ плавающим/trap-слоем (граф/Tasks/Inbox/Goals/
       // Memory/Episodes/Digest/Contradictions/Sync/…) → клик возвращает её в поле зрения (W-6).
-      // B2: набор блокирующих слоёв = РОВНО ключи SWITCH_MAIN (что ветка гасит — то и проверяет,
-      // список не дрейфует). Раньше рукописный список терял goals/memory/episodes/digest/
-      // contradictions, и чат «открывался» ПОД ними.
-      const blocked = (Object.keys(SWITCH_MAIN) as (keyof typeof SWITCH_MAIN)[]).some((k) => s[k]);
-      if (blocked) return { ...SWITCH_MAIN };
+      // B2: набор блокирующих слоёв = РОВНО то, что гасит ветка возврата (mainView≠'editor' ⊕ любой
+      // ключ FLOATS_AND_TRAPS_CLOSED) — список не дрейфует. Раньше рукописный список терял goals/
+      // memory/episodes/digest/contradictions, и чат «открывался» ПОД ними.
+      const blockedByLayer = (
+        Object.keys(FLOATS_AND_TRAPS_CLOSED) as (keyof typeof FLOATS_AND_TRAPS_CLOSED)[]
+      ).some((k) => s[k]);
+      if (s.mainView !== 'editor' || blockedByLayer)
+        return { ...FLOATS_AND_TRAPS_CLOSED, mainView: 'editor' };
       return { chatOpen: false };
     }),
   openPlugins: () => set({ pluginsOpen: true }),
@@ -469,48 +447,53 @@ export const useUIStore = create<UIState>((set) => ({
       logUi('contradictions:toggle', s.contradictionsOpen ? 'close' : 'open');
       return { contradictionsOpen: !s.contradictionsOpen };
     }),
-  // Полные вьюхи main-области взаимоисключающие: news ↔ home ↔ board ↔ today ↔ agent (редактор — когда все закрыты).
-  closeNews: () => set({ newsOpen: false }),
-  toggleNews: () => set((s) => ({ ...SWITCH_MAIN, newsOpen: !s.newsOpen })),
+  // Полные вьюхи main-области ВЗАИМОИСКЛЮЧАЕМЫ структурно (одно поле `mainView`). Nav-переход
+  // (setMainView/openX/toggleX) гасит плавающие/trap-слои (FLOATS_AND_TRAPS_CLOSED, W-6). closeX —
+  // «уйти из ЭТОЙ вью в редактор» (только если она активна), слои не трогает (как прежний
+  // `set({ xOpen: false })`: закрытие неактивной вью было no-op).
+  setMainView: (view) => set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: view }),
+  closeNews: () => set((s) => (s.mainView === 'news' ? { mainView: 'editor' } : {})),
+  toggleNews: () =>
+    set((s) => ({ ...FLOATS_AND_TRAPS_CLOSED, mainView: s.mainView === 'news' ? 'editor' : 'news' })),
   openNews: () => {
     logUi('news:open');
-    set({ ...SWITCH_MAIN, newsOpen: true });
+    set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: 'news' });
   },
-  closeBoard: () => set({ boardOpen: false }),
+  closeBoard: () => set((s) => (s.mainView === 'board' ? { mainView: 'editor' } : {})),
   toggleBoard: () =>
     set((s) => {
-      logUi('board:toggle', s.boardOpen ? 'close' : 'open');
-      return { ...SWITCH_MAIN, boardOpen: !s.boardOpen };
+      logUi('board:toggle', s.mainView === 'board' ? 'close' : 'open');
+      return { ...FLOATS_AND_TRAPS_CLOSED, mainView: s.mainView === 'board' ? 'editor' : 'board' };
     }),
   openBoard: () => {
     logUi('board:open');
-    set({ ...SWITCH_MAIN, boardOpen: true });
+    set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: 'board' });
   },
-  // «Сегодня» (TODAY-1) — полная main-вью, взаимоисключаема с home/news/board/agent (как они меж собой).
-  closeToday: () => set({ todayOpen: false }),
+  // «Сегодня» (TODAY-1) — полная main-вью, взаимоисключаема с прочими (структурно, как все).
+  closeToday: () => set((s) => (s.mainView === 'today' ? { mainView: 'editor' } : {})),
   toggleToday: () =>
     set((s) => {
-      logUi('today:toggle', s.todayOpen ? 'close' : 'open');
-      return { ...SWITCH_MAIN, todayOpen: !s.todayOpen };
+      logUi('today:toggle', s.mainView === 'today' ? 'close' : 'open');
+      return { ...FLOATS_AND_TRAPS_CLOSED, mainView: s.mainView === 'today' ? 'editor' : 'today' };
     }),
   openToday: () => {
     logUi('today:open');
-    set({ ...SWITCH_MAIN, todayOpen: true });
+    set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: 'today' });
   },
-  // «Агент» (UI-1) — полная main-вью, взаимоисключаема с home/news/board/today (как они меж собой).
-  closeAgent: () => set({ agentOpen: false }),
+  // «Агент» (UI-1) — полная main-вью, взаимоисключаема с прочими (структурно, как все).
+  closeAgent: () => set((s) => (s.mainView === 'agent' ? { mainView: 'editor' } : {})),
   toggleAgent: () =>
     set((s) => {
-      logUi('agent:toggle', s.agentOpen ? 'close' : 'open');
-      return { ...SWITCH_MAIN, agentOpen: !s.agentOpen };
+      logUi('agent:toggle', s.mainView === 'agent' ? 'close' : 'open');
+      return { ...FLOATS_AND_TRAPS_CLOSED, mainView: s.mainView === 'agent' ? 'editor' : 'agent' };
     }),
   openAgent: (seed?: string) => {
     logUi('agent:open', seed ? 'seeded' : '');
     // Сид пишем как { text, seq } (как revealTarget): повтор того же промпта растит seq → AgentView
     // перезапускает prefill. Пустой/пробельный seed (или без него) — поле не трогаем.
     set((s) => ({
-      ...SWITCH_MAIN,
-      agentOpen: true,
+      ...FLOATS_AND_TRAPS_CLOSED,
+      mainView: 'agent',
       pendingAgentSeed:
         seed && seed.trim()
           ? { text: seed, seq: (s.pendingAgentSeed?.seq ?? 0) + 1 }
@@ -520,13 +503,13 @@ export const useUIStore = create<UIState>((set) => ({
   pendingAgentSeed: null,
   consumeAgentSeed: () => set({ pendingAgentSeed: null }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-  closeHome: () => set({ homeOpen: false }),
+  closeHome: () => set((s) => (s.mainView === 'home' ? { mainView: 'editor' } : {})),
   toggleHome: () =>
     set((s) => {
-      logUi('home:toggle', s.homeOpen ? 'close' : 'open');
-      return { ...SWITCH_MAIN, homeOpen: !s.homeOpen };
+      logUi('home:toggle', s.mainView === 'home' ? 'close' : 'open');
+      return { ...FLOATS_AND_TRAPS_CLOSED, mainView: s.mainView === 'home' ? 'editor' : 'home' };
     }),
-  openHome: () => set({ ...SWITCH_MAIN, homeOpen: true }),
+  openHome: () => set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: 'home' }),
   startOnboarding: () => set({ onboardingActive: true }),
   finishOnboarding: () => {
     try {
@@ -554,8 +537,8 @@ export const useUIStore = create<UIState>((set) => ({
   // Закрываем оверлейные вью + выходим из reading (там инспектор-рейл скрыт, как у openTagFilter),
   // чтобы показался редактор с рейлом, и просим открыть секцию.
   openInspectorSection: (section) =>
-    // W-6: ведёт в редактор+inspector-rail → гасим граф/оверлеи (SWITCH_MAIN), иначе цель скрыта под ними.
-    set({ ...SWITCH_MAIN, reading: false, pendingInspectorSection: section }),
+    // W-6: ведёт в редактор+inspector-rail → гасим граф/оверлеи + mainView='editor', иначе цель скрыта.
+    set({ ...FLOATS_AND_TRAPS_CLOSED, mainView: 'editor', reading: false, pendingInspectorSection: section }),
   consumeInspectorSection: () => set({ pendingInspectorSection: null }),
   revealTarget: null,
   // Дерево видно только при открытом сайдбаре и не в reading — иначе скролл произойдёт незаметно.

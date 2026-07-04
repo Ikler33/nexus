@@ -47,7 +47,7 @@ function setAiConfig(partial: Partial<AiConfigDto>) {
 }
 
 function resetStores() {
-  useUIStore.setState({ homeOpen: true, newsOpen: false, chatOpen: false });
+  useUIStore.setState({ mainView: 'home', chatOpen: false });
   useChatStore.setState({ draft: '', pinned: [], mode: 'general', streaming: false });
   // «Инсайты» включены — проверяем рендер карточек вопросов/дрейфа с контентом (отдельный кейс ниже
   // проверяет disabled-состояние при OFF).
@@ -113,7 +113,7 @@ describe('HomeView (DP-1, макет home.jsx)', () => {
     render(<HomeView />);
     const row = await screen.findByRole('button', { name: /Embeddings/ });
     fireEvent.click(row);
-    await vi.waitFor(() => expect(useUIStore.getState().homeOpen).toBe(false));
+    await vi.waitFor(() => expect(useUIStore.getState().mainView).toBe('editor'));
   });
 
   // AIP-6: «Разобрать с ИИ» на открытом вопросе → открыть чат(vault) с prefill вопроса + пином заметки.
