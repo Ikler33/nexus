@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Изменено · R-3d — `reconcile_embedding_model`: канон «полная чистка» (ДЕКЛАРИРУЕМОЕ поведенческое изменение)
+
+Срез R-3d (REFACTOR-PLAN §8.5, **решение владельца 2026-07-02**): при смене embedding-модели/размерности чистится ВСЁ зависящее от эмбеддера. Это НЕ behavior-preserving срез — обе прежние реализации были «подмножествами», канон = их superset:
+
+| Чистка при смене модели/dim | desktop (реплика в `commands/vault.rs`, удалена) | core `vector::reconcile_embedding_model` (до R-3d) | КАНОН R-3d |
+|---|---|---|---|
+| `DELETE FROM chunks` (+FTS триггерами) | да | **нет** | **да** |
+| `vectors.usearch` | да | да | да |
+| `chat_vectors.usearch` | **нет** («вне рамок P1-4») | да | **да** |
+| `memory_vectors.usearch` | да | да | да |
+| `episode_vectors.usearch` | да | да | да |
+| `chat_episodes.embed_model=NULL` | да | да | да |
+
+- **Обоснование (владелец, §8.5):** исчезает целый класс багов «старые хвосты в поиске/памяти после смены эмбеддера» — desktop оставлял `chat_vectors` под старой моделью (DimMismatch/семантический мусор в памяти переписки), agentd оставлял `chunks` старой модели (hybrid-search мешал старые эмбеддинги с новыми). Теперь смена модели = гарантированно чистая полная переиндексация.
+- **Канон** — `nexus_core::vector::reconcile_embedding_model` (единственная реализация): смена модели/dim → полная чистка (таблица выше) + запись новых `settings` + возврат `true`-маркера (desktop передаёт его как `force` в `Indexer::with_rag` — механизм принудительной переиндексации сохранён; agentd логирует). Чистка идемпотентна: файлы сносятся ДО записи settings, крах между шагами повторит чистку на следующем старте. Оба вызывателя переключены: desktop `open_vault`/`build_rag` (реплика + её приватные `get_setting`/`set_setting` удалены; warn-тексты reconcile-ошибок схлопнуты в один «reconcile embedding-модели не удался — RAG отключён») и agentd `build_rag_min` (уже звал core-функцию — получил новую семантику).
+- **Данные пользователей / строгий no-op:** миграций НЕТ — операция ленивая, срабатывает только при фактической смене модели. Путь «модель/dim НЕ менялись» — СТРОГИЙ no-op (кроме чтения `settings` ничего не пишется/не удаляется): пользовательские индексы НЕ пересобираются на ровном месте. Закреплено обязательным тестом `reconcile_same_model_is_strict_noop` (файлы целы байт-в-байт, chunks целы, эпизоды не тронуты). Первое включение — инициализация без сноса (тест `reconcile_first_run_initializes_without_wipe`).
+- **Осознанно обновлённые ассерты** (тот редкий срез, где ассерты меняются, — задекларировано): core-тест `vector::tests::reconcile_resets_on_model_or_dim_change` пинил СТАРУЮ core-семантику (4 файла БЕЗ chunks) — заменён юнит-таблицей канона `reconcile_first_run_initializes_without_wipe` / `reconcile_same_model_is_strict_noop` / `reconcile_model_or_dim_change_full_cleanup` (смена модели И dim → chunks пусты + 4 файла снесены + эпизоды помечены + маркер). Desktop-тесты `reconcile_first_run_sets_settings_and_forces` / `reconcile_model_change_wipes_chunks_and_forces` переключены на канон БЕЗ изменения ассертов (старая desktop-семантика по chunks/first-run/no-op — подмножество канона); теста «chat_vectors не тронут» не существовало — расширение запинено новой юнит-таблицей core.
+- Доки: `docs/dev/indexer.md` (§6.5-абзац), `docs/dev/vector.md` (секция reconcile-канона), шапка `bootstrap/mod.rs`.
+
 ### Изменено · F-2c — распил tauri-api: домены agent + news
 
 Третий срез стадии F-2 фронт-волны REFACTOR-PLAN §4 (по образцу F-2a/F-2b). **Behavior-preserving**: потребители НЕ правились — баррел `lib/tauri-api.ts` реэкспортирует вынесенное; Rust не тронут.

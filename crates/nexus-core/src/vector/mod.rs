@@ -193,24 +193,28 @@ pub const VECTOR_INDEX_FILES: &[&str] = &[
     "episode_vectors.usearch",
 ];
 
-/// Гард совместимости on-disk индексов с активной embedding-моделью/размерностью (CORE-2a follow-up #2).
+/// КАНОН reconcile embedding-модели (R-3d, решение владельца §8.5): гард совместимости ВСЕХ
+/// производных vault (chunks + векторные индексы) с активной моделью/размерностью. Единственная
+/// реализация — desktop `open_vault`/`build_rag` и agentd `build_rag_min` зовут её ДО открытия
+/// usearch-индексов. До R-3d жили две реплики-«подмножества» (desktop чистил chunks + 3 индекса
+/// БЕЗ chat_vectors; эта — 4 индекса БЕЗ chunks); канон = superset обеих (см. CHANGELOG R-3d).
 ///
-/// Десктоп делает это в `open_vault` (app-приватный `reconcile_embedding_model`): при первом включении
-/// RAG или смене модели/dim старые векторы несовместимы (другая семантика/размерность) → их надо
-/// сбросить, иначе запрос НОВОЙ моделью против СТАРОГО индекса даёт `DimMismatch` (или семантический
-/// мусор = ложная память). headless-agentd должен пройти ту же сверку ДО открытия индексов, иначе
-/// унаследует пред-существующий `.nexus/*.usearch` (записанный прошлым прогоном десктопа под другой
-/// моделью) и упадёт на первом search/upsert.
+/// Семантика (§6.5 / CORE-2a #2):
+/// - **та же модель/dim** → СТРОГИЙ no-op, `Ok(false)`: кроме чтения `settings` ничего не пишется
+///   и не удаляется — пользовательские индексы НЕ пересобираются на ровном месте;
+/// - **первое включение** (settings пусты) → только запись `settings`, `Ok(true)` (индексация
+///   с нуля; производных ещё нет — существующие файлы НЕ трогаем, сноса нет);
+/// - **смена модели/dim** → ПОЛНАЯ чистка производных: `DELETE FROM chunks` (+FTS триггерами;
+///   перезаполнит принудительная переиндексация), снос ВСЕХ файлов [`VECTOR_INDEX_FILES`]
+///   (перезаполнят индексатор/бэкфиллы новой моделью), `chat_episodes.embed_model = NULL`
+///   (эпизоды на переэмбеддинг, summary-текст цел), запись новых `settings`, `Ok(true)`.
 ///
-/// Логика (зеркало app, но СИММЕТРИЧНО по ВСЕМ четырём индексам — agentd читает память тем же
-/// эмбеддером): сверяет `settings.embedding.{model,dim}` с активными `(model, dim)`. Совпали →
-/// `false` (ничего не делаем). Иначе — на СМЕНЕ модели (prev_model задан) сносит ВСЕ файлы
-/// [`VECTOR_INDEX_FILES`] (их перезаполнит индексатор/бэкфилл новой моделью) и сбрасывает
-/// `chat_episodes.embed_model` (помечает эпизоды на переэмбеддинг); затем персистит новые
-/// `settings` и возвращает `true` (нужна (пере)индексация). На ПЕРВОМ включении (prev_model нет)
-/// файлов ещё нет — только пишем settings, `true`.
+/// Иначе запрос НОВОЙ моделью против СТАРЫХ векторов/чанков даёт `DimMismatch` или семантический
+/// мусор (ложная память) — класс «старые хвосты в поиске/памяти после смены эмбеддера» закрыт.
 ///
-/// Возвращает `Ok(reindex_needed)`. Ошибки БД — `Err` (вызывающий деградирует: RAG/память off).
+/// Возвращает `Ok(reindex_needed)` — маркер принудительной (пере)индексации: desktop передаёт его
+/// в `Indexer::with_rag(force)` (начальный скан игнорирует mtime-шорткат), agentd логирует.
+/// Ошибки БД — `Err` (вызывающий деградирует: RAG/память off).
 pub async fn reconcile_embedding_model(
     db: &crate::db::Database,
     root: &Path,
@@ -240,20 +244,22 @@ pub async fn reconcile_embedding_model(
     }
 
     if prev_model.is_some() {
-        // Модель/dim сменились → ВСЕ on-disk векторы несовместимы. Сносим файлы (перезаполнятся
-        // новой моделью индексатором/бэкфиллом). `chunks` НЕ трогаем здесь (note-RAG переиндексация —
-        // дело индексатора; agentd-skeleton его не гоняет, но дроп файла vectors.usearch достаточно,
-        // чтобы не словить DimMismatch). Помечаем эпизоды на переэмбеддинг (summary-текст цел).
+        // Модель/dim сменились → ВСЕ производные несовместимы (R-3d, §8.5: «полная чистка»).
+        // Файлы сносим ДО записи settings: крах между шагами оставит prev-настройки — следующий
+        // запуск повторит чистку (идемпотентно), полусостояний не бывает.
         for f in VECTOR_INDEX_FILES {
             let _ = std::fs::remove_file(root.join(".nexus").join(f));
         }
         db.writer()
-            .call(|c| {
-                c.execute("UPDATE chat_episodes SET embed_model=NULL", [])
-                    .map(|_| ())
+            .transaction(|tx| {
+                // chunks эмбеддились старой моделью (FTS-производную чистят триггеры);
+                // эпизоды — на переэмбеддинг бэкфиллом (summary-текст цел).
+                tx.execute("DELETE FROM chunks", [])?;
+                tx.execute("UPDATE chat_episodes SET embed_model=NULL", [])?;
+                Ok(())
             })
             .await?;
-        tracing::info!(from = ?prev_model, to = %model, dim, "agentd: смена embedding-модели → сброс векторных индексов (CORE-2a #2)");
+        tracing::info!(from = ?prev_model, to = %model, dim, "смена embedding-модели → полная чистка производных: chunks + все векторные индексы (R-3d, §6.5)");
     }
 
     let (model_s, dim_s) = (model.to_string(), dim.to_string());
@@ -347,66 +353,162 @@ mod tests {
         assert_eq!(v2.search(&[0.0, 0.0, 0.0, 1.0], 1).unwrap()[0].chunk_id, 7);
     }
 
-    /// CORE-2a #2: reconcile_embedding_model. Первое включение (нет settings) → true, persisted.
-    /// Та же модель/dim → false (no-op). Смена модели → сносит ВСЕ индекс-файлы + true; смена dim
-    /// (та же модель) → тоже сброс + true.
-    #[tokio::test]
-    async fn reconcile_resets_on_model_or_dim_change() {
-        use crate::db::Database;
+    // ── Канон reconcile_embedding_model (R-3d, §6.5/§8.5, CORE-2a #2) ────────────────────────────
+    //
+    // R-3d: решение владельца — «полная чистка» (superset прежних реплик). Прежний тест
+    // `reconcile_resets_on_model_or_dim_change` пинил СТАРУЮ core-семантику (4 файла БЕЗ chunks) —
+    // ассерты обновлены ОСОЗНАННО: смена модели теперь чистит и `chunks` (+FTS триггерами) и
+    // помечает эпизоды. Путь «та же модель» закреплён отдельным тестом как СТРОГИЙ no-op —
+    // пользовательские индексы не пересобираются на ровном месте.
 
+    /// Сеет производные vault, зависящие от embedding-модели: chunk (files+chunks), эпизод
+    /// с `embed_model='old-model'` (chat_sessions+chat_episodes) и stale-файлы всех четырёх
+    /// usearch-индексов. Идемпотентен (повторный сев после чистки — для табличного теста).
+    async fn seed_derived(db: &crate::db::Database, root: &Path) {
+        db.writer()
+            .call(|c| {
+                c.execute_batch(
+                    "INSERT OR IGNORE INTO files(path,hash,created_at,updated_at,indexed_at,size_bytes) \
+                       VALUES('A.md','h',0,0,0,1); \
+                     INSERT INTO chunks(file_id,chunk_index,content,char_start,char_end,token_count) \
+                       SELECT id,0,'text',0,4,1 FROM files WHERE path='A.md'; \
+                     INSERT OR IGNORE INTO chat_sessions(id,title,created_at,updated_at) VALUES(1,'s',0,0); \
+                     INSERT INTO chat_episodes(session_id,summary,msg_count,last_msg_id,started_at,ended_at,embed_model,generated_at) \
+                       VALUES(1,'sum',1,1,0,0,'old-model',0) \
+                       ON CONFLICT(session_id) DO UPDATE SET embed_model='old-model';",
+                )
+            })
+            .await
+            .unwrap();
+        for f in VECTOR_INDEX_FILES {
+            std::fs::write(root.join(".nexus").join(f), b"stale").unwrap();
+        }
+    }
+
+    async fn count_chunks(db: &crate::db::Database) -> i64 {
+        db.reader()
+            .query(|c| c.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0)))
+            .await
+            .unwrap()
+    }
+
+    async fn episode_embed_model(db: &crate::db::Database) -> Option<String> {
+        db.reader()
+            .query(|c| {
+                c.query_row(
+                    "SELECT embed_model FROM chat_episodes WHERE session_id=1",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn open_db(root: &Path) -> crate::db::Database {
+        std::fs::create_dir_all(root.join(".nexus")).unwrap();
+        crate::db::Database::open(root.join(".nexus/nexus.db"))
+            .await
+            .unwrap()
+    }
+
+    /// R-3d: первое включение (settings пусты) — инициализация БЕЗ сноса: settings записаны
+    /// (второй вызов → false), reindex=true, а уже существующие производные НЕ тронуты.
+    #[tokio::test]
+    async fn reconcile_first_run_initializes_without_wipe() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
-        std::fs::create_dir_all(root.join(".nexus")).unwrap();
-        let db = Database::open(root.join(".nexus/nexus.db")).await.unwrap();
+        let db = open_db(root).await;
+        seed_derived(&db, root).await;
 
-        // Первое включение: settings пусты → reindex_needed=true, settings записаны.
         assert!(
             reconcile_embedding_model(&db, root, "bge-m3", 1024)
                 .await
                 .unwrap(),
             "первое включение требует индексации"
         );
-        // Та же модель/dim → false (совместимо, ничего не делаем).
+        assert_eq!(count_chunks(&db).await, 1, "первый запуск не чистит chunks");
+        for f in VECTOR_INDEX_FILES {
+            assert!(
+                root.join(".nexus").join(f).exists(),
+                "первый запуск не сносит {f}"
+            );
+        }
         assert!(
             !reconcile_embedding_model(&db, root, "bge-m3", 1024)
                 .await
                 .unwrap(),
-            "та же модель/dim — no-op"
+            "settings персистированы: повторный вызов той же моделью — false"
         );
+    }
 
-        // Кладём stale файлы всех индексов.
-        for f in VECTOR_INDEX_FILES {
-            std::fs::write(root.join(".nexus").join(f), b"stale").unwrap();
-        }
-        // Смена МОДЕЛИ → сброс всех файлов + true.
+    /// R-3d (критично для данных пользователей): та же модель/dim → СТРОГИЙ no-op — false,
+    /// chunks целы, все 4 файла индексов целы (байт-в-байт), embed_model эпизодов не тронут.
+    /// Обычный старт БЕЗ смены модели не пересобирает пользовательские индексы.
+    #[tokio::test]
+    async fn reconcile_same_model_is_strict_noop() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let db = open_db(root).await;
+        reconcile_embedding_model(&db, root, "bge-m3", 1024)
+            .await
+            .unwrap();
+        seed_derived(&db, root).await;
+
         assert!(
-            reconcile_embedding_model(&db, root, "other-model", 1024)
+            !reconcile_embedding_model(&db, root, "bge-m3", 1024)
                 .await
                 .unwrap(),
-            "смена модели требует переиндексации"
+            "та же модель/dim — без переиндексации"
+        );
+        assert_eq!(count_chunks(&db).await, 1, "no-op: chunks не тронуты");
+        assert_eq!(
+            episode_embed_model(&db).await.as_deref(),
+            Some("old-model"),
+            "no-op: эпизоды не помечены на переэмбеддинг"
         );
         for f in VECTOR_INDEX_FILES {
-            assert!(
-                !root.join(".nexus").join(f).exists(),
-                "stale {f} снесён при смене модели"
+            assert_eq!(
+                std::fs::read(root.join(".nexus").join(f)).unwrap(),
+                b"stale",
+                "no-op: файл {f} цел байт-в-байт"
             );
         }
+    }
 
-        // Снова stale; смена DIM (та же модель) → тоже сброс + true.
-        for f in VECTOR_INDEX_FILES {
-            std::fs::write(root.join(".nexus").join(f), b"stale").unwrap();
-        }
-        assert!(
-            reconcile_embedding_model(&db, root, "other-model", 768)
-                .await
-                .unwrap(),
-            "смена dim требует переиндексации"
-        );
-        for f in VECTOR_INDEX_FILES {
+    /// R-3d: решение владельца §8.5 — смена модели И смена dim делают ПОЛНУЮ чистку производных:
+    /// chunks пусты (+FTS триггерами), ВСЕ 4 usearch-файла снесены (вкл. chat_vectors — прежний
+    /// desktop-путь его НЕ трогал), эпизоды помечены на переэмбеддинг, маркер reindex=true.
+    #[tokio::test]
+    async fn reconcile_model_or_dim_change_full_cleanup() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let db = open_db(root).await;
+        reconcile_embedding_model(&db, root, "bge-m3", 1024)
+            .await
+            .unwrap();
+
+        // Таблица: (метка, новая модель, новый dim) — смена модели, затем смена только dim.
+        for (case, model, dim) in [
+            ("смена модели", "other-model", 1024_usize),
+            ("смена dim", "other-model", 768),
+        ] {
+            seed_derived(&db, root).await;
             assert!(
-                !root.join(".nexus").join(f).exists(),
-                "stale {f} снесён при смене dim"
+                reconcile_embedding_model(&db, root, model, dim)
+                    .await
+                    .unwrap(),
+                "{case}: требует переиндексации"
             );
+            assert_eq!(count_chunks(&db).await, 0, "{case}: chunks вычищены");
+            assert_eq!(
+                episode_embed_model(&db).await,
+                None,
+                "{case}: эпизоды помечены на переэмбеддинг"
+            );
+            for f in VECTOR_INDEX_FILES {
+                assert!(!root.join(".nexus").join(f).exists(), "{case}: {f} снесён");
+            }
         }
     }
 }
