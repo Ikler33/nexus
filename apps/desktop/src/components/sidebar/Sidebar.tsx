@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { highlightTerms } from '../../lib/highlight';
 import { tauriApi, type NoteRef, type SearchHit, type TagCount } from '../../lib/tauri-api';
 import { useStarredStore } from '../../stores/starred';
-import { useUIStore } from '../../stores/ui';
+import { selectMainView, useUIStore } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { FileTree } from './FileTree';
@@ -53,7 +53,8 @@ export function Sidebar() {
   const createNote = useVaultStore((s) => s.createNote);
   const vaultOpen = useVaultStore((s) => s.info != null);
   const vaultRoot = useVaultStore((s) => s.info?.root ?? null);
-  const homeOpen = useUIStore((s) => s.homeOpen);
+  // F-4 (семейство 1): «Home» активна ⇔ активная main-вью — home (derived-селектор вместо булей).
+  const homeActive = useUIStore(selectMainView) === 'home';
   const openHome = useUIStore((s) => s.openHome);
   const pendingTagFilter = useUIStore((s) => s.pendingTagFilter);
   const consumeTagFilter = useUIStore((s) => s.consumeTagFilter);
@@ -186,9 +187,9 @@ export function Sidebar() {
         <nav className={styles.sideNav} aria-label={t('sidebar.navLabel')}>
           <button
             type="button"
-            className={`${styles.navItem} ${homeOpen ? styles.navOn : ''}`}
+            className={`${styles.navItem} ${homeActive ? styles.navOn : ''}`}
             onClick={() => openHome()}
-            aria-current={homeOpen ? 'page' : undefined}
+            aria-current={homeActive ? 'page' : undefined}
           >
             <Home size={15} aria-hidden />
             <span>{t('sidebar.home')}</span>
