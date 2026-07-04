@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Изменено · F-4 — ui.ts: mainView-enum вместо 5 булей (инкрементально) + trapOverlay/Esc-селекторы
+
+Стадия F-4 REFACTOR-PLAN §4 (thermo-смелл №1 — булев-взрыв `apps/desktop/src/stores/ui.ts`, ~25 флагов). **Behavior-preserving; оракул — P0-3 Playwright-смоук (nav/overlays, 28 тестов на выделенном порту) + vitest ui.test/App.test.** ЖЁСТКО ИНКРЕМЕНТАЛЬНО (3 шага, зелёный смоук после каждого), чтобы избежать big-bang-приёмко-бомбы.
+
+- **Задокументированы 4 семейства UI-состояния** (критик: не 3): `mainView` (полноэкранные взаимоисключаемые вью), `trapOverlay` (focus-trap top-оверлеи, взаимоисключаемы), `floats` (независимые плавающие слои — граф/плагины/sync/дайджест/противоречия/чат/сайдбар/reading), `safe-flow` (модальные потоки редактора conflict/versions/capture/templates — закрываются ЯВНО, при nav НЕ гасятся, НЕ folded в trap).
+- **Шаг 1 (аддитивно):** введены DERIVED-селекторы поверх булей без удаления — `selectMainView` (приоритет тернарника App.tsx: agent > today > home > news > board > editor), `selectTrapOverlay` (верхний trap-оверлей или null), `selectReadingEscBlocked` (Esc-прецедент reading-режима, кодифицирован КАК ЕСТЬ — union trap+floats+safe-flow, точная копия App.tsx-гейта; P0-3-смоук пинит). Тип `MainView`/`TrapOverlay` экспортирован (коннектор F-8 строит реестр вью поверх enum).
+- **Шаг 2 (миграция потребителей по одному, отдельные коммиты):** App.tsx (рендер-тернарник + gate AI-панели `mainView==='editor'` + reading-Esc-гейт), ActivityBar (active-подсветка кнопок + «Файлы»), Sidebar («Home»-навитем) переведены на `selectMainView`/`selectReadingEscBlocked`. Каждый шаг — зелёный e2e.
+- **Шаг 3 (удаление булей):** `homeOpen/newsOpen/boardOpen/todayOpen/agentOpen` схлопнуты в ЕДИНОЕ поле `mainView: MainView` + примитив `setMainView` (взаимоисключаемость теперь СТРУКТУРНА). `MAIN_VIEWS_CLOSED` удалён, `SWITCH_MAIN`→`FLOATS_AND_TRAPS_CLOSED` (только гашение слоёв). Продюсеры open/close/toggle{Home,News,Board,Today,Agent}/openChat/openInspectorSection переведены на `{ ...FLOATS_AND_TRAPS_CLOSED, mainView }`. Публичный action-API (openX/closeX/toggleX) НЕ изменён → внешние вызовы (workspace/HomeView/BoardView/TodayView/Titlebar/AiPanel/commands-core) не тронуты. Удаление поля было tsc-guided (подсветило каждого потребителя-теста).
+- **P0-1 B2 СОХРАНЁН (не регрессировал):** toggleChat-возврат панели проверяет `mainView!=='editor' ∨ любой ключ FLOATS_AND_TRAPS_CLOSED` = РОВНО то, что гасит ветка возврата (набор проверки = набор гашения, дрейф невозможен).
+- **Границы F-4b (скоуп-дисциплина):** trapOverlay-були (палитра/шпаргалка/Цели/Задачи/Входящие/Память/Эпизоды/Настройки) НЕ схлопнуты — tweaks-дрейф (openSettings/toggleTweaks не спредят реестр) + независимый рендер оверлеев + focus-trap-семантика = риск смены поведения; floats/safe-flow — тоже отдельными булями. `selectTrapOverlay` даёт enum-ЧТЕНИЕ для F-8 без риска. Главное — main-вью enum ЕСТЬ.
+- Гейт: tsc `--noEmit` / eslint `--max-warnings 0` / vitest 1345 зелёных (123 файла, +9 F-4-юнитов) / P0-3 e2e 28 зелёных (двойной прогон, анти-флейк) — без пайпов. Rust не трогали.
+
 ### Изменено · R-11 — nexus-agentd/main.rs распил (2120→703) + B8 (smoke не паникует в release)
 
 Стадия R-11 REFACTOR-PLAN (thermo-смелл — `crates/nexus-agentd/src/main.rs` 2120 строк в ОДНОМ файле, крупнейший монолит-бинарь). **Behavior-preserving** (кроме задекларированного B8 на smoke-пути). Двухкоммитный приём (образец R-5a/b/R-6): коммит 1 — byte-identical вынос (тела тестов дословно), коммит 2 — B8 + cargo-feature `smoke`.
