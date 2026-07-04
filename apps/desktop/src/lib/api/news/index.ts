@@ -2,10 +2,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import * as mockNews from '../../mock/news';
 import { bridge, isTauri, subscribe } from '../bridge';
-// `LinkSuggestion` (suggest-домен) — результат `news.related`, принадлежит ЧУЖОМУ домену и до
-// своего среза F-2d+ живёт в барреле. Импорт type-only — в рантайме стирается, цикла баррел ↔
-// домен нет (тот же паттерн, что у `lib/mock/*` и `chat/types.ts`).
-import type { LinkSuggestion } from '../../tauri-api';
+// `LinkSuggestion` (suggest-домен, вынесен в F-2d) — результат `news.related`, принадлежит ЧУЖОМУ
+// домену. Импорт type-only из его доменного источника — в рантайме стирается, цикла домен ↔ домен
+// нет (тот же паттерн, что у `lib/mock/*` и `chat/types.ts`).
+import type { LinkSuggestion } from '../suggest/types';
 import type {
   NewsArticle,
   NewsConfig,

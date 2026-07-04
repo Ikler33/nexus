@@ -3,7 +3,7 @@
 // (todo/doing/done), off-set статус («ожидание» → виртуальная «Прочее»), проекты, приоритеты,
 // дедлайны (в т.ч. просроченный) и теги — чтобы превью BoardView было содержательным.
 
-import type { BoardConfig, BoardData, BoardSummary, StaleTask, TaskCard } from '../tauri-api';
+import type { BoardConfig, BoardData, BoardSummary, StaleTask, TaskCard, TaskItem } from '../tauri-api';
 
 const SEED: TaskCard[] = [
   {
@@ -130,4 +130,12 @@ export async function staleTasks(): Promise<StaleTask[]> {
       daysStale: 50,
     },
   ];
+}
+
+// ── F-2d: инлайн-заглушка tasks-домена переехала из tauri-api.ts (ratchet parity-гейта (в)) ──────
+
+/** Зеркало `list_tasks` (TASK-1, дашборд): в браузере vault для скана нет — пусто (как настоящая
+ *  команда на пустом/незагруженном vault). Поведение прежней инлайн-заглушки сохранено. */
+export async function listTasks(): Promise<TaskItem[]> {
+  return [];
 }
