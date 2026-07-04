@@ -136,3 +136,8 @@ export async function staleRadar(): Promise<StaleNote[]> {
     { ...base, path: 'Notes/Черновик статьи.md', title: 'Черновик статьи', score: 35, severity: 'orange', ageDays: 29, isWip: true, action: 'update' },
   ];
 }
+
+/** Зеркало `refresh_stale_radar` (H4, слой 2): в браузере LLM-обогащения нет — no-op (виджеты уже
+ *  сидированы; событие завершения мок-бэкенд не эмитит). Инлайн-заглушка переехала из tauri-api.ts
+ *  (ratchet parity-гейта (в), F-2d). */
+export async function staleRefresh(): Promise<void> {}

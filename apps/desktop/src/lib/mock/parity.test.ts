@@ -136,13 +136,15 @@ describe('P0-2 гейт (в): литеральные инлайн-моки в AP
     // attachments.write — переехали в mock/vault.ts) → 18 (F-2b, 2026-07-04: chat-домен вынесен
     // в lib/api/chat/, его 1 инлайн-мок — chat.sessions.toNote — переехал в mock/sessions.ts)
     // → 18 (F-2c, 2026-07-04: agent+news вынесены в lib/api/{agent,news}/ — инлайн-моков у этих
-    // доменов НЕ БЫЛО (все моки уже жили в mock/agent.ts / mock/news.ts / mock/settings.ts),
-    // фактическое число не изменилось; пересчитано по скоупу — 18).
-    // Скоуп подсчёта с F-2a — баррел tauri-api.ts ПЛЮС весь новый слой lib/api/** (иначе
-    // инлайн-моки могли бы тихо копиться в доменных модулях мимо храповика). Полная миграция
-    // остатка — срезы F-2d+; до них тест держит планку «не хуже»: новый инлайн-мок — красный тест
-    // (новые моки обязаны жить в mock/* и зеркалить контракт). Мигрировали часть — ПОНИЗЬТЕ baseline.
-    const INLINE_MOCK_BASELINE = 18;
+    // доменов НЕ БЫЛО, все моки уже жили в mock/*) → 1 (F-2d, 2026-07-04: вынесен ВЕСЬ остаток
+    // доменов — tauri-api.ts стал тонким barrel'ом; 17 инлайн-заглушек (app×2, tasks, suggest×2,
+    // home.staleRefresh, digest.generate, scheduler×7, contradictions.generate, websearch×2)
+    // переехали в mock/* (mock/app.ts, mock/scheduler.ts + добавки в mock/{board,vault,home,settings}.ts)
+    // и зовутся через `bridge`). ОСТАВШАЯСЯ 1 — `external.open` (app-домен): её браузерная ветка —
+    // прямой `window.open` (навигация ОС, НЕ запрос к мок-бэкенду), честное исключение из `bridge`,
+    // не инлайн-мок. Скоуп подсчёта — баррел tauri-api.ts ПЛЮС весь слой lib/api/** (иначе инлайн-
+    // моки могли бы тихо копиться в доменных модулях мимо храповика). Мигрировали ещё — ПОНИЗЬТЕ baseline.
+    const INLINE_MOCK_BASELINE = 1;
     // cwd vitest = apps/desktop (vitest.config там) — import.meta.url в jsdom не file-схема.
     const files = [join(process.cwd(), 'src/lib/tauri-api.ts'), ...tsFilesUnder(join(process.cwd(), 'src/lib/api'))];
     const count = files

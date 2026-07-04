@@ -5,9 +5,10 @@
  */
 
 // `SearchHit` (search-домен) и `EpisodeHit` (episode-домен) — payload'ы событий чат-стрима,
-// принадлежат ЧУЖИМ доменам и до своих срезов F-2c+ живут в барреле. Импорт type-only —
-// в рантайме стирается, цикла баррел ↔ домен нет (тот же паттерн, что у lib/mock/*).
-import type { EpisodeHit, SearchHit } from '../../tauri-api';
+// принадлежат ЧУЖИМ доменам (вынесены в F-2d). Импорт type-only из их доменных источников —
+// в рантайме стирается, цикла домен ↔ домен нет (тот же паттерн, что у lib/mock/*).
+import type { EpisodeHit } from '../episode/types';
+import type { SearchHit } from '../search/types';
 
 /** Сессия чата (зеркалит Rust `chat_log::ChatSession`) — история-дропдаун AI-панели. */
 export interface ChatSessionInfo {

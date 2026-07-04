@@ -4,6 +4,7 @@ import type {
   AiConfigDto,
   AiEndpoint,
   SetAiResult,
+  WebSearchConfig,
 } from '../tauri-api';
 
 /**
@@ -121,4 +122,18 @@ export async function setAgentConnection(
  *  «недоступен» (mock-must-match-backend: реальная команда тоже вернёт ошибку без демона/агента). */
 export async function testAgentConnection(): Promise<string> {
   throw new Error('подключение недоступно (превью)');
+}
+
+// ── F-2d: consent-конфиг web-поиска (W-3) — инлайн-заглушка переехала из tauri-api.ts ────────────
+// Стейтфул-мок (in-memory): getConfig отдаёт текущее, setConfig персистит в памяти процесса и
+// возвращает записанное — зеркалит контракт Rust `get_websearch_config`/`set_websearch_config`.
+let webSearch: WebSearchConfig = { enabled: false, url: '' };
+
+export async function getWebsearchConfig(): Promise<WebSearchConfig> {
+  return { ...webSearch };
+}
+
+export async function setWebsearchConfig(config: WebSearchConfig): Promise<WebSearchConfig> {
+  webSearch = { ...config };
+  return { ...webSearch };
 }

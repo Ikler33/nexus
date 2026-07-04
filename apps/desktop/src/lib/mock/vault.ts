@@ -457,6 +457,10 @@ export async function getDigest(): Promise<Digest> {
   };
 }
 
+/** Зеркало `generate_digest`: в браузере воркера-планировщика нет — no-op (событие `jobs:changed`
+ *  мок-бэкенд не эмитит). Инлайн-заглушка переехала из tauri-api.ts (ratchet parity-гейта (в), F-2d). */
+export async function generateDigest(): Promise<void> {}
+
 // ── P0-2: мок-чат — ПОЛНОЕ зеркало входа/событий команды `chat_rag` ──────────────────────────────
 // Константы = бэкенд-константам (chat.rs / search::rerank / episode) — чтобы капы были наблюдаемо
 // теми же: DEFAULT_K=8, MEMORY_K=3, EPISODE_K=2, RERANK_RETRIEVE=24, PINNED_MAX_NOTES=5.
@@ -695,6 +699,10 @@ export function contradictionsSetEnabled(on: boolean): Promise<void> {
   return Promise.resolve();
 }
 
+/** Зеркало `generate_contradictions`: в браузере воркера нет — no-op (событие `jobs:changed` не
+ *  эмитится). Инлайн-заглушка переехала из tauri-api.ts (ratchet parity-гейта (в), F-2d). */
+export async function generateContradictions(): Promise<void> {}
+
 /** Мок краткого резюме заметки (Inspector «Резюме») — зеркалит контракт `get_note_summary`:
  *  пустой текст → null, иначе короткая сводка. Небольшая задержка имитирует LLM. */
 export function noteSummary(text: string): Promise<string | null> {
@@ -706,6 +714,20 @@ export function noteSummary(text: string): Promise<string | null> {
       400,
     ),
   );
+}
+
+// ── F-2d: инлайн-заглушки suggest-домена переехали из tauri-api.ts (ratchet parity-гейта (в)) ────
+
+/** Зеркало `explain_relation` (AIP-10): в браузере утилитарной LLM нет — '' (естественный фолбэк на
+ *  сырой сниппет; тот же контракт, что у настоящей команды при отсутствии модели). */
+export async function explainRelation(): Promise<string> {
+  return '';
+}
+
+/** Зеркало `get_starting_questions` (AIP-SQ): в браузере утилитарной LLM нет — [] (фронт покажет
+ *  статические подсказки; контракт настоящей команды при отсутствии модели/контента). */
+export async function startingQuestions(): Promise<string[]> {
+  return [];
 }
 
 /** Симуляция inline-стрима (IL-2) для превью/тестов: несколько токенов по режиму → done. */
