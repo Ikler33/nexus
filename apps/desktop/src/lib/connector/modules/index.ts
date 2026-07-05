@@ -11,6 +11,7 @@
 import { modules } from '../module-manager';
 import { episodesModule } from './episodes';
 import { goalsModule } from './goals';
+import { inboxModule } from './inbox';
 import { memoryModule } from './memory';
 import { newsModule } from './news';
 import { tasksModule } from './tasks';
@@ -27,6 +28,7 @@ export function activateModules(): void {
   modules.register(memoryModule);
   modules.register(episodesModule);
   modules.register(tasksModule);
+  modules.register(inboxModule);
   modules.activateAll();
 }
 

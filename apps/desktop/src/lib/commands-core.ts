@@ -370,17 +370,8 @@ export function registerCoreCommands(): Disposable {
     }),
     // view.tasks — вырезана в модуль `connector/modules/tasks` (F-10b): регистрируется через
     // `ctx.commands` (id → `tasks:view.tasks`, source=plugin, хоткей ⌘⇧K сохранён). Ядро её не объявляет.
-    commands.register({
-      // INBOX-1: панель «Входящие» (GTD-разбор Inbox.md). Без хоткея — ActivityBar/палитра.
-      id: 'view.inbox',
-      title: 'Inbox',
-      titleKey: 'commands.view.inbox',
-      source: 'core',
-      run: () => {
-        if (!useVaultStore.getState().info) return;
-        useUIStore.getState().toggleInbox();
-      },
-    }),
+    // view.inbox — вырезана в модуль `connector/modules/inbox` (F-10b): регистрируется через
+    // `ctx.commands` (id → `inbox:view.inbox`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'view.chat',
       title: 'AI chat',
