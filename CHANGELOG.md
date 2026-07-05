@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Изменено · F-9 — news: первый вырезанный модуль через коннектор (эталон-шаблон для F-10)
+
+Стадия F-9 REFACTOR-PLAN §5 — **ПЕРВЫЙ реально вырезанный модуль через коннектор F-8**. Эталон-PR «как вырезать модуль» (задаёт шаблон для F-10-серии). **Behavior-preserving: news работает точно как раньше, но подключён через `ctx`, а НЕ прямыми правками ядра.** Инвариант: **ядро (App/ActivityBar/SettingsView/MainViewOutlet/core-views) больше НЕ импортирует `components/news`** — вклады отдаёт реестр коннектора.
+
+- **news-модуль (`apps/desktop/src/lib/connector/modules/news.ts`, ~55 строк):** `NexusModule { id: 'news', activate(ctx) }`. В `activate` три вклада через `ctx` (order/icon/titleKey/nav перенесены КАК ЕСТЬ — behavior-preserving):
+  - `ctx.views.register` — main-вью «Новости» (NewsView) + кнопка ActivityBar (order 30, `openNews`, `isActive`);
+  - `ctx.settings.register` — секция настроек «Новости» (NewsSettingsSection, order 50);
+  - `ctx.commands.register` — команда палитры (прежняя `view.news` → префиксуется в `news:view.news`, source=plugin; палитра ищет по названию — путь пользователя не меняется).
+- **Единая точка регистрации (`connector/modules/index.ts`):** `activateModules()` — `modules.register(newsModule)` + `modules.activateAll()`, импортируется сайд-эффектом из `App.tsx` (как `core-views`) до первого рендера. F-10-модули добавляются сюда одной строкой.
+- **Ядро-ссылки на news УБРАНЫ:** из `core-views.ts` (вью + импорт NewsView + иконка), `SettingsView.CORE_SETTINGS_SECTIONS` (секция + импорт NewsSettingsSection), `commands-core.ts` (команда `view.news`). Ни один ядро-компонент больше не импортирует `components/news`.
+- **grep-инвариант (стереж):** `grep -rl "components/news" src | grep -v 'components/news/\|modules/news.ts'` → **пусто**. Единственный импортёр `components/news` вне самой фичи — её манифест-модуль (`modules/news.ts`), живущий ВНЕ `src/components/**` (F-1 линт границ его не трогает — модуль легальный слой проводки).
+- **Сцепки news из аудита — разрублены/оставлены с обоснованием (документировано в `docs/dev/connector.md`):**
+  - **i18n-ключи news** (namespace `news.*` ~93 + `settings.news.*` ~23) ОСТАЛИСЬ в монолитных `i18n/ru.json`/`en.json` — вынос в per-module namespace = отдельная фича (не блокер вырезания). → F-9b/будущее (YAGNI: i18n-namespace-EP тут не строим).
+  - **`DeadJobsModal` (ядро-chrome) знает job-kind `'newsfeed'`** — это строковый kind ядровой jobs-инфраструктуры (планировщик ядровой), НЕ импорт `components/news`. Реестр `kind→label` как вклад модулей — возможная будущая EP; для v0 ядро-знание kind'ов приемлемо. → оставлено.
+  - **Rust news-backend** (`commands/chat.rs`, `live_smoke.rs` → `crate::news`) НЕ трогали — сервер-паритет; F-9 вырезает только фронт.
+  - **`NewsSettingsSection.tsx`** остаётся в `components/settings/` (делит `SettingsView.module.css` — переезд создал бы худшую связь news→settings-CSS); модуль импортирует его оттуда, ядро SettingsView — нет.
+- **Тест регистрации (`modules/news.test.ts`):** `newsModule.activate(ctx)` регистрирует view/settings/command в реестрах коннектора (`viewRegistry.get('news')`, секция `news`, команда `news:view.news`+source=plugin); `disposeAll` снимает всё скопом. `registries.test.ts` обновлён: news — уже НЕ ядровая вью (`viewRegistry.get('news')` undefined после core-views), покрытие news-вью переехало в модуль-тест. ErrorBoundary news-вью наследуется из F-8 (MainViewOutlet), доказан `isolation.test.tsx`.
+- Гейт: tsc `--noEmit` / eslint `--max-warnings 0` / vitest **1367 зелёных** (129 файлов, +2 F-9-теста) / coverage-храповик (86.2% ≥ floor 63) / vite build / **P0-3 e2e 28 зелёных (двойной прогон, анти-флейк)** — без пайпов; locale ru-RU в конфиге (урок F-4). Rust не трогали.
+
 ### Добавлено · F-8 — Коннектор v0: каркас модулей (5 реестров + ErrorBoundary + изоляция)
 
 Стадия F-8 REFACTOR-PLAN §5 (владелец одобрил: ядро/модули с прицелом на сторонние плагины). **Behavior-preserving каркас — БЕЗ вырезания модулей (это F-9).** Строгий YAGNI-срез (критик §5): только `NexusModule {id, activate(ctx)}` + `ModuleContext` с 5 реестрами + Disposable + ErrorBoundary per-contribution. Оракул — тест изоляции (падающая вью тест-модуля → app жив + плашка) + P0-3 e2e 28 (каркас не меняет поведение). Док: `docs/dev/connector.md`.

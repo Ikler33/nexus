@@ -103,6 +103,13 @@ export function spellCombo(combo: string): string {
 /** Ключ localStorage для пользовательского ремапа хоткеев (combo → id). */
 const HOTKEYS_KEY = 'nexus.hotkeys.v1';
 
+/** Алиасы переименованных id команд (старый → новый). При вырезании фичи в модуль (F-9+) id команды
+ *  префиксуется (`view.news` → `news:view.news`); ручной хоткей пользователя хранит СТАРЫЙ id и без
+ *  ремапа no-op'ил бы. Каждый срез F-10 дописывает сюда свою пару. */
+const COMMAND_ID_ALIASES: Record<string, string> = {
+  'view.news': 'news:view.news',
+};
+
 class CommandRegistry {
   private commands = new Map<string, Command>();
   private userKeymap = new Map<string, string>(); // combo → id (пользовательский ремап)
@@ -218,11 +225,13 @@ class CommandRegistry {
     }
   }
 
-  /** Резолвит combo в id команды: пользователь > плагин > ядро. */
+  /** Резолвит combo в id команды: пользователь > плагин > ядро. Сохранённый пользователем биндинг
+   *  на СТАРЫЙ id (переименован при вырезании фичи в модуль, F-9+) ремапится через COMMAND_ID_ALIASES —
+   *  иначе ручной хоткей молча no-op'ил бы на несуществующий id. Серия F-10 расширяет карту одной строкой. */
   resolve(combo: string): string | undefined {
     const norm = normalizeCombo(combo);
     const user = this.userKeymap.get(norm);
-    if (user) return user;
+    if (user) return COMMAND_ID_ALIASES[user] ?? user;
     const matches = this.list().filter(
       (c) => c.defaultKey && normalizeCombo(c.defaultKey) === norm,
     );

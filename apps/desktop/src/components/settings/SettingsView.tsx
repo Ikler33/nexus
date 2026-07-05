@@ -9,7 +9,6 @@ import {
   Info,
   Keyboard,
   Loader2,
-  Newspaper,
   Palette,
   Pencil,
   RotateCcw,
@@ -46,7 +45,6 @@ import { useVaultStore } from '../../stores/vault';
 import { settingsRegistry } from '../../lib/connector';
 import type { SettingsContribution } from '../../lib/connector';
 import { ErrorBoundary } from '../common/ErrorBoundary';
-import { NewsSettingsSection } from './NewsSettingsSection';
 import styles from './SettingsView.module.css';
 
 /** Превью-цвет свотча акцента (реальный акцент — data-accent в токенах). */
@@ -94,6 +92,10 @@ const THEME_PREVIEW: Record<Theme, { bg: string; text: string; accent: string }>
  * Регистрируются сайд-эффектом при импорте SettingsView (idempotent Map-реестр). Нав и контент ниже
  * рендерятся ИЗ реестра; контент каждой секции — через per-contribution ErrorBoundary. Ссылки на
  * компоненты секций (function-declarations ниже) валидны за счёт хойстинга.
+ *
+ * F-9: секция «Новости» (order 50) вырезана отсюда — её регистрирует модуль `connector/modules/news`
+ * через `ctx.settings` (ядро SettingsView больше НЕ импортирует NewsSettingsSection). В наве встаёт на
+ * прежнее место (сортировка по order → между «AI»=40 и «Данные»=60).
  */
 const CORE_SETTINGS_SECTIONS: SettingsContribution[] = [
   { id: 'general', icon: Globe, titleKey: 'settings.general', order: 10, component: GeneralSection },
@@ -106,13 +108,6 @@ const CORE_SETTINGS_SECTIONS: SettingsContribution[] = [
     component: AppearanceSection,
   },
   { id: 'ai', icon: Cpu, titleKey: 'settings.ai', order: 40, component: AiSection },
-  {
-    id: 'news',
-    icon: Newspaper,
-    titleKey: 'settings.news.title',
-    order: 50,
-    component: NewsSettingsSection,
-  },
   { id: 'data', icon: Database, titleKey: 'settings.data', order: 60, component: DataSection },
   { id: 'hotkeys', icon: Keyboard, titleKey: 'settings.hotkeys', order: 70, component: HotkeysSection },
   { id: 'about', icon: Info, titleKey: 'settings.about', order: 80, component: AboutSection },

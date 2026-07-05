@@ -458,13 +458,8 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().toggleContradictions(),
     }),
-    commands.register({
-      id: 'view.news',
-      title: 'News feed',
-      titleKey: 'commands.view.news',
-      source: 'core',
-      run: () => useUIStore.getState().toggleNews(),
-    }),
+    // view.news — вырезана в модуль `connector/modules/news` (F-9): регистрируется через
+    // `ctx.commands` (id → `news:view.news`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'view.home',
       title: 'Home',
