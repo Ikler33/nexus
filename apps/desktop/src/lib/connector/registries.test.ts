@@ -61,10 +61,13 @@ describe('viewRegistry (F-8)', () => {
     expect(viewRegistry.get('t:dup')).toBeUndefined();
   });
 
-  it('ядровые вью легализованы: home/today/news/board/agent/editor присутствуют', () => {
-    for (const id of ['home', 'today', 'news', 'board', 'agent', 'editor']) {
+  it('ядровые вью легализованы: home/today/board/agent/editor присутствуют', () => {
+    // news вырезана в модуль (F-9) — регистрируется через ctx при активации модуля, не в core-views;
+    // здесь проверяем ТОЛЬКО ядровые вью. Регистрацию news-вью покрывает modules/news.test.ts.
+    for (const id of ['home', 'today', 'board', 'agent', 'editor']) {
       expect(viewRegistry.get(id), id).toBeDefined();
     }
+    expect(viewRegistry.get('news'), 'news — модуль, не ядровая вью').toBeUndefined();
     // Editor — дефолт-вью, не в ActivityBar; остальные — в ActivityBar.
     expect(viewRegistry.get('editor')?.activityBar).toBe(false);
     expect(viewRegistry.get('home')?.activityBar).toBe(true);
