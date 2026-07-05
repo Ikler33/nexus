@@ -108,6 +108,12 @@ const HOTKEYS_KEY = 'nexus.hotkeys.v1';
  *  ремапа no-op'ил бы. Каждый срез F-10 дописывает сюда свою пару. */
 const COMMAND_ID_ALIASES: Record<string, string> = {
   'view.news': 'news:view.news',
+  'view.goals': 'goals:view.goals', // F-10b (оверлей-модуль)
+  'view.memory': 'memory:view.memory', // F-10b
+  'view.tasks': 'tasks:view.tasks', // F-10b
+  'view.inbox': 'inbox:view.inbox', // F-10b
+  'view.digest': 'digest:view.digest', // F-10b
+  'view.contradictions': 'contradictions:view.contradictions', // F-10b
 };
 
 class CommandRegistry {

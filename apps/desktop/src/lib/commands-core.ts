@@ -368,29 +368,10 @@ export function registerCoreCommands(): Disposable {
       defaultKey: 'mod+g',
       run: () => useUIStore.getState().toggleGraph(),
     }),
-    commands.register({
-      // TASK-1: панель «Задачи» (сводка всех `- [ ]` vault). Mod-Shift-K свободен.
-      id: 'view.tasks',
-      title: 'Tasks',
-      titleKey: 'commands.view.tasks',
-      source: 'core',
-      defaultKey: 'mod+shift+k',
-      run: () => {
-        if (!useVaultStore.getState().info) return; // нет vault — нечего сканировать
-        useUIStore.getState().toggleTasks();
-      },
-    }),
-    commands.register({
-      // INBOX-1: панель «Входящие» (GTD-разбор Inbox.md). Без хоткея — ActivityBar/палитра.
-      id: 'view.inbox',
-      title: 'Inbox',
-      titleKey: 'commands.view.inbox',
-      source: 'core',
-      run: () => {
-        if (!useVaultStore.getState().info) return;
-        useUIStore.getState().toggleInbox();
-      },
-    }),
+    // view.tasks — вырезана в модуль `connector/modules/tasks` (F-10b): регистрируется через
+    // `ctx.commands` (id → `tasks:view.tasks`, source=plugin, хоткей ⌘⇧K сохранён). Ядро её не объявляет.
+    // view.inbox — вырезана в модуль `connector/modules/inbox` (F-10b): регистрируется через
+    // `ctx.commands` (id → `inbox:view.inbox`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'view.chat',
       title: 'AI chat',
@@ -402,17 +383,8 @@ export function registerCoreCommands(): Disposable {
         useUIStore.getState().openChat();
       },
     }),
-    commands.register({
-      // MEM-4: панель «Память ИИ» — управление явными фактами памяти агента.
-      id: 'view.memory',
-      title: 'AI memory',
-      titleKey: 'commands.view.memory',
-      source: 'core',
-      run: () => {
-        if (!useVaultStore.getState().info) return;
-        useUIStore.getState().toggleMemory();
-      },
-    }),
+    // view.memory — вырезана в модуль `connector/modules/memory` (F-10b): регистрируется через
+    // `ctx.commands` (id → `memory:view.memory`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'view.suggest',
       title: 'Link suggestions',
@@ -437,27 +409,11 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().toggleSync(),
     }),
-    commands.register({
-      id: 'view.goals',
-      title: 'Goals',
-      titleKey: 'commands.view.goals',
-      source: 'core',
-      run: () => useUIStore.getState().toggleGoals(),
-    }),
-    commands.register({
-      id: 'view.digest',
-      title: 'Changes digest',
-      titleKey: 'commands.view.digest',
-      source: 'core',
-      run: () => useUIStore.getState().toggleDigest(),
-    }),
-    commands.register({
-      id: 'view.contradictions',
-      title: 'Contradiction finder',
-      titleKey: 'commands.view.contradictions',
-      source: 'core',
-      run: () => useUIStore.getState().toggleContradictions(),
-    }),
+    // view.goals — вырезана в модуль `connector/modules/goals` (F-10b): регистрируется через
+    // `ctx.commands` (id → `goals:view.goals`, source=plugin). Ядро её больше не объявляет.
+    // view.digest — вырезана в модуль `connector/modules/digest` (F-10b): id → `digest:view.digest`.
+    // view.contradictions — вырезана в модуль `connector/modules/contradictions` (F-10b): id →
+    // `contradictions:view.contradictions`, source=plugin. Ядро её больше не объявляет.
     // view.news — вырезана в модуль `connector/modules/news` (F-9): регистрируется через
     // `ctx.commands` (id → `news:view.news`, source=plugin). Ядро её больше не объявляет.
     commands.register({

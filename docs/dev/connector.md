@@ -40,23 +40,57 @@ per-contribution изоляцию сбоев. **F-9 вырезал первый 
   идемпотентность. Отличие от `views`: оверлей — НЕ полноэкранная вью, а панель поверх тела со своей
   видимостью (`isOpen`-селектор) и своим Esc/close внутри компонента (взаимоисключаемость/стекинг —
   логика ui-стора, не реестра).
-- **`isOpen: (state: UIState) => boolean`** — селектор из ui-стора (`(s) => s.goalsOpen`). F-8c читает
-  СУЩЕСТВУЮЩИЕ `*Open`-були (перенос стейта в модули — вырезание F-10b, не здесь).
+- **`isOpen: (state: UIState) => boolean`** — селектор из ui-стора (`(s) => s.goalsOpen`). Читает
+  `*Open`-були (F-10b оставил их ядровыми — см. «ПАТТЕРН оверлей-модуля» ниже; модуль даёт селектор).
 - **`OverlayOutlet` (`components/workspace/OverlayOutlet.tsx`)** — по образцу `MainViewOutlet`:
   рендерит `overlayRegistry.list()`, каждый открытый (`isOpen(uiState)`) — через per-contribution
   **ErrorBoundary** (`key` по id). Заменяет 7 хардкод-строк App.tsx. Счастливый путь — 0 DOM-след
   (якоря панелей не смещаются). Подписка на весь ui-стор (`useUIStore()`): `isOpen`-селекторы
   непрозрачны, outlet ре-рендерится на любое ui-изменение и заново считает видимость.
-- **`core-overlays.ts`** — ядровые 7 оверлеев регистрируются напрямую (каркас, НЕ модуль — как
-  `registerCoreViews`), сайд-эффектом при импорте из App.tsx. order 10..70 = прежний DOM-порядок
-  App.tsx (стекинг floats digest/contradictions поверх trap-оверлеев сохранён).
+- **`core-overlays.ts`** — БЫЛ каркасом ядровых 7 оверлеев (как `registerCoreViews`). **F-10b удалил
+  его**: все 7 вырезаны в модули (`connector/modules/*`), реестр `overlays` питается ТОЛЬКО модулями
+  через `ctx.overlays`. order 10..70 (прежний DOM-порядок App.tsx, стекинг floats поверх trap) сохранён
+  в манифестах модулей. См. «### F-10b: вырез оверлея в модуль» ниже.
 - **v0-коупл (осознанно):** `isOpen` типизирован против `UIState` (ui-стор — источник флагов ядровых
   оверлеев; `UIState` экспортирован из `stores/ui.ts`, type-only импорт в `types.ts`). Store-agnostic
   абстракция состояния оверлея (для сторонних плагинов) отложена вместе с прочим north-star плагинов —
   как apiVersion/capabilities (см. «Отложено»).
-- **Готово для F-10b:** `ctx.overlays.register(...)` в `ModuleContext`. Вырез оверлея в модуль =
-  (1) панель через `ctx.overlays` в манифесте модуля, (2) убрать её из `core-overlays.ts`,
-  (3) перенести `*Open`-стейт из ui-стора в модуль.
+### F-10b: вырез оверлея в модуль (ПАТТЕРН оверлей-модуля)
+
+F-10b вырезал **все 7 оверлеев** (goals/memory/episodes/tasks/inbox/digest/contradictions) в модули
+через `ctx.overlays` — `core-overlays.ts` удалён. **Behavior-preserving:** каждый оверлей
+открывается/закрывается/стекается как раньше. Шаблон (`connector/modules/<feature>.ts`):
+
+1. `ctx.overlays.register({ id, titleKey, isOpen, order, component })` — компонент панели + `isOpen`-
+   селектор + order 10..70 перенесены КАК ЕСТЬ из `core-overlays.ts`.
+2. `ctx.commands.register(...)` — команда палитры (у 6 из 7; у **episodes** команды НЕТ). id
+   префиксуется модулем: `view.goals`→`goals:view.goals`, source=plugin. Хоткеи (⌘⇧K у tasks) +
+   vault-guard'ы сохранены. Пара `view.X`→`X:view.X` в `COMMAND_ID_ALIASES` (`lib/commands.ts`) —
+   ручной хоткей пользователя на старый id ремапится (иначе no-op).
+3. `ctx.events.on(...)` — фича-эффект App.tsx рядом со своим оверлеем: `jobs:changed`-refetch у
+   digest/contradictions (combined-эффект App.tsx расщеплён — каждая фича refetch'ит свой стор),
+   `vault:changed`-дебаунс-пересчёт у goals.
+4. Строка в `connector/modules/index.ts` (`modules.register(<feature>Module)`).
+
+**ПАТТЕРН оверлей-модуля (v0, ГЛАВНОЕ решение F-10b): стейт видимости — ядровой, модуль даёт
+компонент+isOpen.** Були `*Open` + действия `open/close/toggleX` + Esc-прецедент
+(`selectReadingEscBlocked`) + trap-взаимоисключаемость (`TRAP_OVERLAYS_CLOSED`) **ОСТАЮТСЯ в ui-сторе
+как ядро-управляемый стейт видимости оверлеев** (аналог `mainView`). Модуль лишь регистрирует `isOpen`-
+СЕЛЕКТОР поверх ядрового флага + компонент + команду. Это чище store-agnostic-абстракции (YAGNI — до
+сторонних плагинов): видимость/Esc/стекинг — ядро, компонент — модуль.
+
+**grep-инвариант** «ядро (App/ActivityBar/Titlebar/SettingsView/OverlayOutlet) не импортирует
+`components/<feature>`» **достигается переносом ИМПОРТА панели в манифест** (App.tsx/core-overlays её
+больше не импортят — она в модуле). **`*Open`-стейт в ui-сторе — НЕ нарушение инварианта**
+(стейт ≠ импорт компонента; ui-стор ядровой, управляет видимостью). Стереж на фичу:
+`grep -rl "components/<feature>" src | grep -v 'components/<feature>/\|modules/<feature>.ts'` → пусто.
+
+**Что оставлено ядро-chrome (обосновано — НЕ блокеры):** пункты меню «AI-инсайты» Titlebar
+(goals/digest/contradictions) — titlebar-menu-реестра нет (см. ниже), зовут `toggleX()`; кнопки
+«Память ИИ…»/«Эпизоды…» + тогглы agentMemory/episodic/insights/**contradictions** в ai-секции настроек
+— тоггл фичи в ОБЩЕЙ ai-секции (НЕ отдельная секция настроек; `useAiFeaturesStore`/pref, не импорт
+панели); кнопки «Задачи»/«Входящие» ActivityBar/«Сегодня»-вью — зовут `toggleX()` ui-стора. Все они
+трогают ui/aiFeatures-стор, а НЕ `components/<feature>` → инвариант держится.
 
 ### titlebar-menu (AI-инсайты) — оставлено ядро-chrome (v0, F-8c)
 AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `Titlebar.tsx` `aiItem`) **не вынесено в
@@ -72,9 +106,9 @@ AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
 активации (= порядок регистрации). `modules.disposeAll()` снимает все вклады всех модулей.
 Единая точка регистрации прод-модулей — `connector/modules/index.ts` (`activateModules()`,
-импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде один модуль — `news`** (F-9);
-F-10-серия добавляет свои строкой в `activateModules`. Тест-модуль-заглушка (`isolation.test.tsx`) —
-для доказательства изоляции сбоев.
+импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 8 модулей:** `news` (F-9) +
+7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/digest/contradictions). Новый модуль —
+строкой в `activateModules`. Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
 
 ### ErrorBoundary per-contribution
 `components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`), оверлей
@@ -89,7 +123,7 @@ F-10-серия добавляет свои строкой в `activateModules`.
 |-----------|------------------------------------------|-------------------------------------------------|
 | commands  | `commands-core` + `commands` registry    | `ctx.commands` — та же registry, id в namespace |
 | views     | тернарник App.tsx + хардкод ActivityBar  | `viewRegistry` (core-views) → MainViewOutlet + ActivityBar |
-| overlays  | 7 хардкод-строк `{xOpen && <Panel/>}` App.tsx | `overlayRegistry` (core-overlays) → OverlayOutlet (F-8c) |
+| overlays  | 7 хардкод-строк `{xOpen && <Panel/>}` App.tsx | `overlayRegistry` → OverlayOutlet; питается 7 оверлей-модулями `ctx.overlays` (F-10b; core-overlays удалён) |
 | settings  | массив `SECTIONS` в SettingsView         | `settingsRegistry` → нав + SettingsSectionOutlet |
 | events    | россыпь `useEffect` + window/tauri        | `onCoreEvent` (обёртка тех же каналов)          |
 | api       | `tauriApi`                                | `ctx.api` (тот же объект)                        |
@@ -102,12 +136,12 @@ F-10-серия добавляет свои строкой в `activateModules`.
 - динамическая загрузка бандлов, манифест-файлы модулей;
 - песочница исполнения модулей.
 
-## Отложено в F-8b (скоуп-дисциплина среза)
-- **Миграция фича-эффектов App.tsx на `ctx.events`.** Реестр `events` ЕСТЬ и покрыт тестами
-  (`events.test.ts`), но существующие `useEffect` в `App.tsx` (goals-reload по `vault:changed`,
-  digest/contradictions-refetch по `jobs:changed`, episodic/aiFeatures-sync по смене vault) пока
-  подписываются напрямую — их перевод на `onCoreEvent` behavior-preserving, но раздувал бы срез.
-  Каркас доказан тестом изоляции без этой миграции.
+## Отложено в F-8b → частично сделано в F-10b
+- **Миграция фича-эффектов App.tsx на `ctx.events`.** F-10b перевёл оверлей-эффекты на `ctx.events`
+  вместе с вырезом их оверлеев: goals-reload (`vault:changed`) → `modules/goals.ts`,
+  digest/contradictions-refetch (`jobs:changed`, combined-эффект расщеплён) → `modules/{digest,
+  contradictions}.ts`. Остаток (episodic/aiFeatures-sync по смене vault) — НЕ оверлей-эффект, живёт в
+  App.tsx (его фичи не вырезались); перевод на `onCoreEvent` behavior-preserving, отложен до их выреза.
 
 ## Эталон: как вырезан news (F-9) — ШАБЛОН для F-10
 

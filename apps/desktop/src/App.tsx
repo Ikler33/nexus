@@ -1,16 +1,12 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
-import './lib/connector/core-overlays'; // F-8c: регистрирует ядровые оверлеи в реестр `overlays` до рендера
-import './lib/connector/modules'; // F-9: регистрирует+активирует модули-вклады (news-пилот) до рендера
+import './lib/connector/modules'; // F-9/F-10b: регистрирует+активирует модули-вклады (включая 7 оверлеев) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
 import { useAiFeaturesStore } from './stores/aiFeatures';
 import { flushAllDirty } from './stores/autosave';
 import { useChatStore } from './stores/chat';
-import { useContradictionsStore } from './stores/contradictions';
-import { useDigestStore } from './stores/digest';
-import { useGoalsStore } from './stores/goals';
 import { usePrefsStore } from './stores/prefs';
 import { selectMainView, selectReadingEscBlocked, useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
@@ -103,25 +99,8 @@ export function App() {
     }
   }, [vaultRoot]);
 
-  // Живой пересчёт зависимых от индекса вьюх по событию индексатора (ADR-007 S8, AC-GP-3):
-  // сейчас — «Цели» (#35), и только когда панель открыта. Дебаунс — событий может быть пачка.
-  useEffect(() => {
-    let unlisten = () => {};
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    void tauriApi.events
-      .onVaultChanged(() => {
-        if (!useUIStore.getState().goalsOpen) return;
-        clearTimeout(timer);
-        timer = setTimeout(() => void useGoalsStore.getState().load(), 800);
-      })
-      .then((fn) => {
-        unlisten = fn;
-      });
-    return () => {
-      clearTimeout(timer);
-      unlisten();
-    };
-  }, []);
+  // F-10b: живой пересчёт «Целей» по `vault:changed` (ADR-007 S8, AC-GP-3) переехал в модуль
+  // `connector/modules/goals` (через `ctx.events`) — фича-эффект живёт рядом со своим оверлеем.
 
   // SAFE-3: внешнее изменение конкретного файла (`vault:file-changed`) → судьба открытого буфера
   // решается в сторе (эхо своего сейва / тихий reload чистого / баннер guard'а грязного).
@@ -166,21 +145,8 @@ export function App() {
     return () => unlisten();
   }, []);
 
-  // Готовые результаты фоновых джоб прилетают по `jobs:changed` → refetch открытой панели (без поллинга,
-  // ADR-007 slice 4/5). Дайджест и «Поиск противоречий» — обе LLM-фичи планировщика.
-  useEffect(() => {
-    let unlisten = () => {};
-    void tauriApi.events
-      .onJobsChanged(() => {
-        const ui = useUIStore.getState();
-        if (ui.digestOpen) void useDigestStore.getState().load();
-        if (ui.contradictionsOpen) void useContradictionsStore.getState().load();
-      })
-      .then((fn) => {
-        unlisten = fn;
-      });
-    return () => unlisten();
-  }, []);
+  // F-10b: refetch открытых панелей по `jobs:changed` (ADR-007 slice 4/5) переехал в оверлей-модули
+  // `connector/modules/{digest,contradictions}` (`ctx.events`) — каждая фича refetch'ит свой стор.
 
   // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
   useEffect(() => {

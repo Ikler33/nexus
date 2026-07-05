@@ -15,7 +15,8 @@ import { ErrorBoundary } from '../common/ErrorBoundary';
  * панелей не смещаются относительно прежнего рендера App.tsx.
  *
  * НЕ импортирует ни одной фича-панели напрямую — компоненты приходят из реестра как ссылки (границы
- * модулей F-1 соблюдены; оверлеи регистрируются в lib/connector/core-overlays, вырезание — F-10b).
+ * модулей F-1 соблюдены; после F-10b все 7 оверлеев регистрируются оверлей-модулями `connector/modules/*`
+ * через `ctx.overlays` — core-overlays удалён).
  */
 export function OverlayOutlet() {
   const { t } = useTranslation();

@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### Изменено · F-10b — вырезаны 7 оверлеев в модули через `ctx.overlays` (goals/memory/episodes/tasks/inbox/digest/contradictions)
+
+Стадия F-10b REFACTOR-PLAN §5 — **вырезание 7 оверлеев** через overlays-реестр F-8c. **Behavior-preserving: каждый оверлей открывается/закрывается/стекается как раньше.** Каждый вырез — отдельный коммит (реверт-стори) + прогон e2e. Инвариант per-фича: ядро (App/ActivityBar/Titlebar/SettingsView/OverlayOutlet) больше НЕ импортирует `components/<feature>` — панель приходит из реестра как ссылка.
+
+- **7 оверлей-модулей (`connector/modules/{goals,memory,episodes,tasks,inbox,digest,contradictions}.ts`):** каждый — `NexusModule` с `activate(ctx)`, вклады через `ctx` (перенос из `core-overlays.ts`/`commands-core.ts` КАК ЕСТЬ):
+  - `ctx.overlays.register` — оверлей (компонент панели + `isOpen`-селектор + order 10..70, прежний DOM-порядок/стекинг);
+  - `ctx.commands.register` — команда палитры (у 6 из 7; у **episodes** команды НЕТ — вход только из настроек). id префиксуется модулем: `view.goals`→`goals:view.goals` и т.д., source=plugin; хоткей ⌘⇧K у tasks + vault-guard'ы сохранены;
+  - `ctx.events.on('jobs:changed')` — refetch у **digest**/**contradictions** (combined-эффект App.tsx РАСЩЕПЛЁН: каждая фича refetch'ит свой стор, только когда открыта); `ctx.events.on('vault:changed')` — дебаунс-пересчёт у **goals** (перенос фича-эффекта App.tsx, F-8b миграция).
+- **ПАТТЕРН оверлей-модуля (v0, задокументирован в `docs/dev/connector.md`):** стейт видимости `*Open` + действия `open/close/toggleX` + Esc-прецедент (`selectReadingEscBlocked`) + trap-взаимоисключаемость ОСТАЮТСЯ ядром (ui-стор — **ядро-управляемый стейт видимости, как `mainView`**). Модуль даёт КОМПОНЕНТ + `isOpen`-СЕЛЕКТОР поверх ядрового флага. **grep-инвариант «ядро не импортирует components/<feature>» достигается переносом ИМПОРТА панели в манифест** — стейт ≠ импорт компонента; `*Open` в ui-сторе НЕ нарушение инварианта.
+- **Что оставлено ядро-chrome (обосновано):** пункты меню «AI-инсайты» Titlebar (goals/digest/contradictions) — titlebar-menu-реестра нет по решению F-8c, зовут `toggleX()` ui-стора; кнопки «Память ИИ…»/«Эпизоды…» + тогглы agentMemory/episodic/insights/**contradictions** в ai-секции настроек — тоггл фичи в общей ai-секции (НЕ отдельная секция; `useAiFeaturesStore`/pref, не импорт панели); кнопки «Задачи»/«Входящие» ActivityBar/«Сегодня»-вью — зовут `toggleX()`.
+- **COMMAND_ID_ALIASES (`lib/commands.ts`):** пара `view.X`→`X:view.X` на каждую из 6 переименованных команд — ручной хоткей пользователя на старый id ремапится (иначе no-op на несуществующий id).
+- **core-overlays.ts УДАЛЁН:** все 7 оверлеев теперь модули → файл (был пуст) удалён; реестр `overlays` питается ТОЛЬКО модулями через `ctx.overlays`. Убраны: side-effect import в App.tsx, `export registerCoreOverlays` из barrel, import в overlays.test.ts. App.tsx: убраны goals-reload и combined jobs:changed useEffect'ы + импорты `useGoalsStore`/`useDigestStore`/`useContradictionsStore`.
+- **Тесты:** 7 модуль-тестов (`<feature>.test.ts`) — регистрация оверлея (order/titleKey/isOpen) + команды (id-префикс/source=plugin/непрефиксованного id нет) + `disposeAll` снимает скопом. `overlays.test.ts` обновлён: источник оверлеев — только `modules` (все 7 present, порядок 10..70, isOpen). **P0-3 e2e overlays.spec** пинит открытие/Esc/стекинг каждого из 7 оверлеев КАК РАНЬШЕ.
+- Гейт (после КАЖДОГО из 7 вырезов): tsc `--noEmit` / eslint `--max-warnings 0` / vitest **1390 зелёных** (139 файлов, +14 F-10b-тестов) / vite build / **P0-3 e2e 28 зелёных** — без пайпов; locale ru-RU в конфиге. Rust не трогали (сервер-паритет).
+
 ### Добавлено · F-8c — расширение коннектора: реестр оверлеев + OverlayOutlet (разблокиратор F-10)
 
 Стадия F-8c REFACTOR-PLAN §5 — **разблокиратор серии F-10** (разведка F-10a: 7 модулей — оверлеи/AI-меню, не main-вью; коннектору v0 не хватало реестра под них). F-8 сознательно отложил preview/inspector/statusBar-реестры «до первого модуля, который потребует» — F-10a ровно этот момент: **7 однотипных оверлеев** App.tsx (`{goalsOpen && <GoalsPanel/>}` … `{contradictionsOpen && <ContradictionsPanel/>}`) не ложатся на 5 реестров v0. **Behavior-preserving расширение коннектора — БЕЗ вырезания модулей (это F-10b).** Добавлено РОВНО то, что разблокирует F-10b (никаких preview/inspector/statusBar «заодно» — YAGNI).
