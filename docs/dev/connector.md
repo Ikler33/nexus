@@ -106,13 +106,17 @@ AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
 активации (= порядок регистрации). `modules.disposeAll()` снимает все вклады всех модулей.
 Единая точка регистрации прод-модулей — `connector/modules/index.ts` (`activateModules()`,
-импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 9 модулей:** `news` (F-9,
+импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 10 модулей:** `news` (F-9,
 вью-модуль) + `board` (F-10c, вью-модуль) + 7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/
-digest/contradictions). Новый модуль — строкой в `activateModules` + строкой в `MODULE_FEATURES`
-(eslint.config.js, граница F-1b). Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
+digest/contradictions) + `sync` (F-10c, оверлей-модуль). Новый модуль — строкой в `activateModules` +
+строкой в `MODULE_FEATURES` (eslint.config.js, граница F-1b). Тест-модуль-заглушка
+(`isolation.test.tsx`) — для изоляции сбоев.
 
 **F-10c (разведка-driven, скоуп-дисциплина «лучше меньше чистых»):** из 4 кандидатов вырезаны 2 —
-`board` (вью-модуль, зеркало news) и `sync` (оверлей-модуль). `graph` **оставлен ядром** (отложен в
+`board` (вью-модуль, зеркало news) и `sync` (оверлей-модуль). У `sync` вырезан ТОЛЬКО `SyncPanel`;
+`ConflictResolver` (git-merge, safe-flow) живёт в той же зоне `components/sync`, но ОСТАЁТСЯ ядром
+(standalone из статусбара, DP-14) → App.tsx честно тянет его через `MODULE_BOUNDARY_EXCEPTIONS`
+(единственная оговорка границы в проекте; только App.tsx, только sync-зона). `graph` **оставлен ядром** (отложен в
 F-10d): его слой `.graphLayer` спозиционирован `position:absolute; inset:0` ВНУТРИ `.appBody` (намеренно
 НЕ покрывает титлбар/статусбар — фикс по отчёту владельца «хром торчал поверх графа»); стандартный
 `OverlayOutlet` рендерит на уровне `.app` (не позиционирован) → граф якорился бы к вьюпорту, регрессия.

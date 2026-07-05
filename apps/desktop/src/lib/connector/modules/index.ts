@@ -17,6 +17,7 @@ import { goalsModule } from './goals';
 import { inboxModule } from './inbox';
 import { memoryModule } from './memory';
 import { newsModule } from './news';
+import { syncModule } from './sync';
 import { tasksModule } from './tasks';
 
 let activated = false;
@@ -36,6 +37,8 @@ export function activateModules(): void {
   modules.register(inboxModule);
   modules.register(digestModule);
   modules.register(contradictionsModule);
+  // F-10c: оверлей-модуль «Синхронизация» (SyncPanel вырезан из App.tsx через `ctx.overlays`).
+  modules.register(syncModule);
   modules.activateAll();
 }
 

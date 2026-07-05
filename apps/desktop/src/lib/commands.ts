@@ -114,6 +114,7 @@ const COMMAND_ID_ALIASES: Record<string, string> = {
   'view.inbox': 'inbox:view.inbox', // F-10b
   'view.digest': 'digest:view.digest', // F-10b
   'view.contradictions': 'contradictions:view.contradictions', // F-10b
+  'view.sync': 'sync:view.sync', // F-10c (оверлей-модуль)
 };
 
 class CommandRegistry {

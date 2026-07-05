@@ -131,13 +131,23 @@ const MODULE_FEATURES = [
   'digest',
   'contradictions',
   'board', // F-10c (вью-модуль)
+  'sync', // F-10c (оверлей-модуль; ConflictResolver из этой зоны — ядро, см. MODULE_BOUNDARY_EXCEPTIONS)
 ];
 
 // Явные исключения границы модулей (аналог CROSS_IMPORT_WHITELIST для F-1): если shared-компонент
 // ЧЕСТНО нужен ядру — задокументируй файл здесь с обоснованием, вместо ослабления правила глобально.
 // Формат: { files, selfModule } — расширяет разрешение указанного файла на зону/манифест selfModule.
-// Пусто: F-9/F-10b вырезали модули НАЧИСТО — ни один core/manifest не тянет чужой модуль.
-const MODULE_BOUNDARY_EXCEPTIONS = [];
+const MODULE_BOUNDARY_EXCEPTIONS = [
+  {
+    // F-10c: зона `components/sync` содержит ДВА компонента — SyncPanel (вырезан в оверлей-модуль
+    // `sync`) и ConflictResolver (git-merge-резолвер, ОСТАЁТСЯ ядром: safe-flow, рендерится standalone
+    // из пилюли статусбара по `conflictOpen`, DP-14). App.tsx честно импортирует ConflictResolver из
+    // sync-зоны — это легитимный shared-компонент. Оговорка расширяет ТОЛЬКО App.tsx и ТОЛЬКО на
+    // sync-зону (прочие модули App-у по-прежнему закрыты). grep-инвариант держит `App ⇏ SyncPanel`.
+    files: 'src/App.tsx',
+    selfModule: 'sync',
+  },
+];
 
 /** Паттерны no-restricted-imports для границы модулей.
  *  - selfModule: модуль, чьи ЗОНА `components/<mod>` и МАНИФЕСТ `modules/<mod>` импортировать МОЖНО
