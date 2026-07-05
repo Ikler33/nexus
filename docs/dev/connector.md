@@ -113,10 +113,11 @@ digest/contradictions) + `sync` (F-10c, оверлей-модуль). Новый
 (`isolation.test.tsx`) — для изоляции сбоев.
 
 **F-10c (разведка-driven, скоуп-дисциплина «лучше меньше чистых»):** из 4 кандидатов вырезаны 2 —
-`board` (вью-модуль, зеркало news) и `sync` (оверлей-модуль). У `sync` вырезан ТОЛЬКО `SyncPanel`;
-`ConflictResolver` (git-merge, safe-flow) живёт в той же зоне `components/sync`, но ОСТАЁТСЯ ядром
-(standalone из статусбара, DP-14) → App.tsx честно тянет его через `MODULE_BOUNDARY_EXCEPTIONS`
-(единственная оговорка границы в проекте; только App.tsx, только sync-зона). `graph` **оставлен ядром** (отложен в
+`board` (вью-модуль, зеркало news) и `sync` (оверлей-модуль). У `sync` вырезан `SyncPanel`;
+`ConflictResolver` (git-merge, safe-flow, standalone из статусбара DP-14) ОСТАЁТСЯ ядром и **вынесен из
+`components/sync` в `components/common`** (он genuinely core — тянет только hooks/lib/stores, НЕ
+SyncPanel). Так sync-зона изолирована НАЧИСТО (App.tsx не импортит из неё ничего), а
+`MODULE_BOUNDARY_EXCEPTIONS` = `[]` — sync чист как board/news, БЕЗ оговорок границы. `graph` **оставлен ядром** (отложен в
 F-10d): его слой `.graphLayer` спозиционирован `position:absolute; inset:0` ВНУТРИ `.appBody` (намеренно
 НЕ покрывает титлбар/статусбар — фикс по отчёту владельца «хром торчал поверх графа»); стандартный
 `OverlayOutlet` рендерит на уровне `.app` (не позиционирован) → граф якорился бы к вьюпорту, регрессия.

@@ -36,11 +36,12 @@ const GraphView = lazy(() => import('./components/graph/GraphView'));
 const PluginsPanel = lazy(() =>
   import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
 );
-// ConflictResolver ОСТАЁТСЯ ядром (safe-flow git-merge, standalone из пилюли статусбара по conflictOpen,
-// DP-14). Живёт в зоне sync вместе с вырезанным SyncPanel → импорт задокументирован в
-// MODULE_BOUNDARY_EXCEPTIONS (eslint.config.js): ядро честно тянет ConflictResolver из sync-зоны.
+// ConflictResolver — ЯДРО (safe-flow git-merge, standalone из пилюли статусбара по conflictOpen, DP-14;
+// + внутри SyncPanel). F-10c вынес его из зоны sync в `components/common` (он genuinely core: тянет
+// только hooks/lib/stores, НЕ SyncPanel) — так App.tsx не импортит НИЧЕГО из вырезанной sync-зоны, и
+// граница F-1b держится ПОЛНЫМ eslint-enforcement (без оговорок MODULE_BOUNDARY_EXCEPTIONS).
 const ConflictResolver = lazy(() =>
-  import('./components/sync/ConflictResolver').then((m) => ({ default: m.ConflictResolver })),
+  import('./components/common/ConflictResolver').then((m) => ({ default: m.ConflictResolver })),
 );
 const VersionHistory = lazy(() =>
   import('./components/editor/VersionHistory').then((m) => ({ default: m.VersionHistory })),

@@ -8,11 +8,12 @@
  * ядром (ui-стор) — модуль даёт КОМПОНЕНТ + `isOpen`-селектор + команду палитры. Кнопка «Синхронизация»
  * в ActivityBar остаётся ядро-chrome (зовёт `toggleSync()` ui-стора) — как AI-меню «Цели» у goals.
  *
- * ГРАНИЦА (F-1b): зона `components/sync` содержит ДВА компонента — SyncPanel (этот оверлей) и
- * ConflictResolver (git-merge-резолвер). ConflictResolver ОСТАЁТСЯ ядром (safe-flow, вызывается
- * standalone из пилюли статусбара по `conflictOpen`, DP-14) и внутри SyncPanel. Поэтому App.tsx честно
- * импортирует ConflictResolver из зоны sync — задокументировано в MODULE_BOUNDARY_EXCEPTIONS
- * (eslint.config.js). Сам вырезаемый оверлей — только SyncPanel.
+ * ГРАНИЦА (F-1b): зона `components/sync` вырезана НАЧИСТО — в ней остаётся ТОЛЬКО SyncPanel (+ CSS/тест).
+ * ConflictResolver (git-merge-резолвер, ОСТАЁТСЯ ядром: safe-flow, вызывается standalone из пилюли
+ * статусбара по `conflictOpen` DP-14 + внутри SyncPanel) вынесен в `components/common` — он genuinely
+ * core (тянет только hooks/lib/stores, НЕ SyncPanel). Поэтому ни ядро (App.tsx), ни кто-либо вне
+ * sync-зоны/её манифеста НЕ импортирует `components/sync` → граница держится ПОЛНЫМ eslint-enforcement
+ * F-1b, без единой оговорки MODULE_BOUNDARY_EXCEPTIONS.
  */
 import { SyncPanel } from '../../../components/sync/SyncPanel';
 import { useUIStore } from '../../../stores/ui';
