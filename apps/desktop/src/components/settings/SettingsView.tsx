@@ -43,6 +43,9 @@ import type { Accent, Theme } from '../../stores/theme';
 import { useUIStore } from '../../stores/ui';
 import type { SettingsSection } from '../../stores/ui';
 import { useVaultStore } from '../../stores/vault';
+import { settingsRegistry } from '../../lib/connector';
+import type { SettingsContribution } from '../../lib/connector';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 import { NewsSettingsSection } from './NewsSettingsSection';
 import styles from './SettingsView.module.css';
 
@@ -86,16 +89,35 @@ const THEME_PREVIEW: Record<Theme, { bg: string; text: string; accent: string }>
   marble: { bg: '#ece4d2', text: '#2a2418', accent: '#9a5a28' },
 };
 
-const SECTIONS: { id: SettingsSection; icon: typeof Palette; key: string }[] = [
-  { id: 'general', icon: Globe, key: 'settings.general' },
-  { id: 'editor', icon: Pencil, key: 'settings.editor' },
-  { id: 'appearance', icon: Palette, key: 'settings.appearance' },
-  { id: 'ai', icon: Cpu, key: 'settings.ai' },
-  { id: 'news', icon: Newspaper, key: 'settings.news.title' },
-  { id: 'data', icon: Database, key: 'settings.data' },
-  { id: 'hotkeys', icon: Keyboard, key: 'settings.hotkeys' },
-  { id: 'about', icon: Info, key: 'settings.about' },
+/**
+ * F-8: секции настроек — вклады реестра `settings` коннектора (легализация прежнего массива SECTIONS).
+ * Регистрируются сайд-эффектом при импорте SettingsView (idempotent Map-реестр). Нав и контент ниже
+ * рендерятся ИЗ реестра; контент каждой секции — через per-contribution ErrorBoundary. Ссылки на
+ * компоненты секций (function-declarations ниже) валидны за счёт хойстинга.
+ */
+const CORE_SETTINGS_SECTIONS: SettingsContribution[] = [
+  { id: 'general', icon: Globe, titleKey: 'settings.general', order: 10, component: GeneralSection },
+  { id: 'editor', icon: Pencil, titleKey: 'settings.editor', order: 20, component: EditorSection },
+  {
+    id: 'appearance',
+    icon: Palette,
+    titleKey: 'settings.appearance',
+    order: 30,
+    component: AppearanceSection,
+  },
+  { id: 'ai', icon: Cpu, titleKey: 'settings.ai', order: 40, component: AiSection },
+  {
+    id: 'news',
+    icon: Newspaper,
+    titleKey: 'settings.news.title',
+    order: 50,
+    component: NewsSettingsSection,
+  },
+  { id: 'data', icon: Database, titleKey: 'settings.data', order: 60, component: DataSection },
+  { id: 'hotkeys', icon: Keyboard, titleKey: 'settings.hotkeys', order: 70, component: HotkeysSection },
+  { id: 'about', icon: Info, titleKey: 'settings.about', order: 80, component: AboutSection },
 ];
+for (const s of CORE_SETTINGS_SECTIONS) settingsRegistry.register(s);
 
 /**
  * Раздел настроек (кросс-план #11, по образцу Obsidian): модалка с левым навом секций + контент-панель.
@@ -132,32 +154,42 @@ export function SettingsView() {
         </header>
 
         <nav className={styles.nav} aria-label={t('settings.title')}>
-          {SECTIONS.map((s) => (
+          {settingsRegistry.list().map((s) => (
             <button
               key={s.id}
               type="button"
               className={`${styles.navItem} ${section === s.id ? styles.navOn : ''}`}
-              onClick={() => setSection(s.id)}
+              onClick={() => setSection(s.id as SettingsSection)}
               aria-current={section === s.id}
             >
               <s.icon size={15} aria-hidden />
-              <span>{t(s.key)}</span>
+              <span>{t(s.titleKey)}</span>
             </button>
           ))}
         </nav>
 
         <div className={styles.content}>
-          {section === 'general' && <GeneralSection />}
-          {section === 'editor' && <EditorSection />}
-          {section === 'appearance' && <AppearanceSection />}
-          {section === 'ai' && <AiSection />}
-          {section === 'news' && <NewsSettingsSection />}
-          {section === 'data' && <DataSection />}
-          {section === 'hotkeys' && <HotkeysSection />}
-          {section === 'about' && <AboutSection />}
+          <SettingsSectionOutlet section={section} />
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * F-8: контент активной секции из реестра `settings`, обёрнутый в per-contribution ErrorBoundary
+ * (падение секции → плашка, остальные настройки/app живы). `key` по id ремонтит boundary при смене
+ * секции (эквивалент прежнего условного рендера).
+ */
+function SettingsSectionOutlet({ section }: { section: SettingsSection }) {
+  const { t } = useTranslation();
+  const active = settingsRegistry.list().find((s) => s.id === section);
+  if (!active) return null;
+  const Body = active.component;
+  return (
+    <ErrorBoundary key={active.id} label={t(active.titleKey)}>
+      <Body />
+    </ErrorBoundary>
   );
 }
 

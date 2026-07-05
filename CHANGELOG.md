@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### Добавлено · F-8 — Коннектор v0: каркас модулей (5 реестров + ErrorBoundary + изоляция)
+
+Стадия F-8 REFACTOR-PLAN §5 (владелец одобрил: ядро/модули с прицелом на сторонние плагины). **Behavior-preserving каркас — БЕЗ вырезания модулей (это F-9).** Строгий YAGNI-срез (критик §5): только `NexusModule {id, activate(ctx)}` + `ModuleContext` с 5 реестрами + Disposable + ErrorBoundary per-contribution. Оракул — тест изоляции (падающая вью тест-модуля → app жив + плашка) + P0-3 e2e 28 (каркас не меняет поведение). Док: `docs/dev/connector.md`.
+
+- **Коннектор-API (`apps/desktop/src/lib/connector/`):** `NexusModule {id, activate(ctx)}` (РОВНО это — YAGNI); `ModuleContext` = единственный вход модуля в ядро с 5 реестрами + `api` (`tauriApi` F-2, прокинут как есть) + `subscriptions: Disposable[]` (авто-трекинг, dispose скопом). `ModuleManager` (`modules.register`/`activateAll`/`disposeAll`) — детерминированный порядок активации (= порядок регистрации), скоупированный dispose. **Реальных модулей в проде НОЛЬ** (каркас); news остаётся в ядре до F-9.
+- **5 реестров — легализация существующего, НЕ изобретение нового:**
+  - **commands** (легализовано) — тонкая обёртка над `commands-core`/`CommandRegistry`; id команды модуля префиксуется `${moduleId}:${id}`, source=`plugin` (приоритет хоткеев пользователь > плагин > ядро уже был).
+  - **views** (легализовано + ново App-lookup) — реестр main-вью поверх **mainView-enum F-4**. Ядровые 5 вью + редактор регистрируются в `core-views.ts`; новый `MainViewOutlet` резолвит активную вью из реестра (заменил приоритетный тернарник App.tsx), ActivityBar рендерит 5 кнопок из реестра (order/icon/titleKey/activate/isActive) — прежний хардкод легализован behavior-preserving (вкл. P0-3-фикс `() => openAgent()`).
+  - **settings** (легализовано) — реестр секций (был массив `SettingsView.SECTIONS`); нав и контент настроек рендерятся из реестра, контент каждой секции — через ErrorBoundary.
+  - **events** (легализовано) — `onCoreEvent('vault:opened'|'vault:changed'|'jobs:changed')` — обёртка над СУЩЕСТВУЮЩИМИ каналами (F-1 window-событие `vault:switched`; F-2 доменные `tauriApi.events.onVaultChanged`/`onJobsChanged`), **НЕ новая шина**. Корректно снимает async-подписку даже при dispose до её резолва.
+  - **api** (ново, тривиально) — `ctx.api = tauriApi` (типизированный `lib/api/<домены>` F-2).
+- **ErrorBoundary per-contribution** (`components/common/ErrorBoundary.tsx`): каждая вью (`MainViewOutlet`) и секция настроек (`SettingsSectionOutlet`) обёрнуты в React-ErrorBoundary — рендер-сбой вклада даёт плашку «модуль X упал» + reload вместо белого экрана; `CommandRegistry.run` — в try/catch (упавшая команда → error-тост, не висящий reject). Счастливый путь рендерит children БЕЗ обёртки-узла (e2e-якори не смещаются). Цель владельца: «ИИ правит модуль → app не падает».
+- **Тест изоляции (обязательный оракул):** `lib/connector/isolation.test.tsx` — тест-модуль регистрирует намеренно падающую вью через полную цепочку коннектора (module → views-реестр → MainViewOutlet → ErrorBoundary); ожидание доказано: рендер НЕ падает, соседний «хром» жив, на месте вью — плашка + reload. Контроль: нормальная вью модуля рендерится без плашки.
+- **Отложено в F-8b (скоуп-дисциплина):** миграция фича-эффектов `App.tsx` (goals-reload/digest/contradictions-refetch/episodic-sync) на `ctx.events`. Реестр `events` ЕСТЬ и покрыт тестами, но существующие `useEffect` пока подписываются напрямую — их перевод behavior-preserving, но раздувал бы срез; каркас доказан тестом изоляции без этой миграции.
+- **YAGNI (НЕ строили до реальных плагинов):** apiVersion/semver/stability-tiers, capabilities[], deactivate()/hot-unload, динамическая загрузка бандлов, манифест-файлы, песочница. CI-линт границ F-1 — без изменений (модуль ходит в ядро только через `ctx`; новых правил срез не потребовал).
+- Гейт: tsc `--noEmit` / eslint `--max-warnings 0` / vitest **1365 зелёных** (128 файлов, +18 F-8-юнитов) / coverage-храповик (86.2% ≥ floor 63) / vite build / **P0-3 e2e 28 зелёных (двойной прогон, анти-флейк)** — без пайпов; locale ru-RU в конфиге (урок F-4). Rust не трогали.
+
 ### Изменено · F-4 — ui.ts: mainView-enum вместо 5 булей (инкрементально) + trapOverlay/Esc-селекторы
 
 Стадия F-4 REFACTOR-PLAN §4 (thermo-смелл №1 — булев-взрыв `apps/desktop/src/stores/ui.ts`, ~25 флагов). **Behavior-preserving; оракул — P0-3 Playwright-смоук (nav/overlays, 28 тестов на выделенном порту) + vitest ui.test/App.test.** ЖЁСТКО ИНКРЕМЕНТАЛЬНО (3 шага, зелёный смоук после каждого), чтобы избежать big-bang-приёмко-бомбы.

@@ -1404,6 +1404,12 @@
     "saveError": "Не удалось сохранить свойство",
     "flushError": "Сначала сохраните заметку (есть несохранённые правки)"
   },
+  "connector": {
+    "moduleCrashed": "Модуль «{{name}}» упал",
+    "moduleCrashedHint": "Остальное приложение продолжает работать. Перезагрузите, чтобы восстановить раздел.",
+    "reload": "Перезагрузить",
+    "commandFailed": "Команда не выполнена: {{name}}"
+  },
   "commands": {
     "palette.open": "Палитра команд",
     "recents.open": "Перейти к недавним…",
@@ -1442,6 +1448,7 @@
     "view.today": "Сегодня",
     "view.agent": "Castor",
     "view.home": "Home",
+    "view.editor": "Редактор",
     "view.tasks": "Задачи",
     "view.inbox": "Входящие",
     "format.bold": "Жирный",

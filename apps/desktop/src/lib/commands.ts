@@ -6,6 +6,10 @@
  * Конфликты хоткеев разрешаются по приоритету **пользователь > плагин > ядро**.
  */
 
+import i18n from '../i18n/setup';
+import { logUi } from './debug-log';
+import { useToastStore } from '../stores/toast';
+
 export type CommandSource = 'core' | 'plugin' | 'user';
 
 export interface CommandCtx {
@@ -128,7 +132,20 @@ class CommandRegistry {
   }
 
   async run(id: string, ctx?: CommandCtx): Promise<void> {
-    await this.commands.get(id)?.run(ctx);
+    const cmd = this.commands.get(id);
+    if (!cmd) return;
+    // F-8 (ErrorBoundary для команд): вклад-команда упала → тост, НЕ белый экран/висящий reject
+    // (`commands.run` зовут через `void` в useKeymap/CommandPalette). Логируем в бэкенд-журнал
+    // (не console.error — тот ловит e2e-гейт). Цель владельца: «ИИ правит модуль → app не падает».
+    try {
+      await cmd.run(ctx);
+    } catch (err) {
+      logUi('command-error', `${id}: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
+      const name = cmd.titleKey ? i18n.t(cmd.titleKey) : cmd.title;
+      useToastStore.getState().addToast(i18n.t('connector.commandFailed', { name }), {
+        kind: 'error',
+      });
+    }
   }
 
   /** Пользовательский ремап combo → команда (наивысший приоритет). Персист. */
