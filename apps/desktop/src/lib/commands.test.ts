@@ -58,6 +58,14 @@ describe('command registry (Ф0-8)', () => {
     expect(commands.resolve('mod+k')).toBe('core.x'); // пользователь перекрывает
   });
 
+  it('resolve: ремап переименованного id команды (F-9 news alias — хоткей выживает вырезание модуля)', () => {
+    // Пользователь когда-то вручную забиндил СТАРЫЙ id (до вырезания news в модуль).
+    commands.setUserKey('mod+9', 'view.news');
+    // Новый id команды — под модулем; alias ремапит сохранённый старый бинд, а не no-op.
+    commands.register({ id: 'news:view.news', title: 'Новости', source: 'plugin', run: () => {} });
+    expect(commands.resolve('mod+9')).toBe('news:view.news');
+  });
+
   it('remap / effectiveKey / userKeyFor / resetKey (слайс 4)', () => {
     commands.register({ id: 'c.g', title: 'g', source: 'core', defaultKey: 'mod+g', run: () => {} });
     // Дефолт (jsdom = не-mac → mod→ctrl).
