@@ -37,4 +37,7 @@ echo "── Frontend: tsc · eslint · vitest · build ──"
   pnpm exec vite build
 )
 
+echo "── F-1b: negative-check границы модуль/ядро (eslint enforce'ит инвариант, не grep) ──"
+node scripts/check-module-boundary.mjs
+
 echo "✅ Все проверки пройдены."

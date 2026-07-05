@@ -6,6 +6,54 @@
 
 ## [Unreleased]
 
+### Добавлено · F-1b — CI-enforcement границы модуль/ядро (перед массой F-10c)
+
+Инфра-срез (правило линта + negative-check, **поведение приложения НЕ трогает**). F-10b-adversarial
+вскрыл: инвариант «ядро не импортирует модуль» держался **grep-ом в ревью, НЕ в CI** — будущий импорт
+ядро→модуль CI бы пропустил, изоляция тихо сломалась бы. F-1b закрепил инвариант в eslint.
+
+- **Правило F-1b (`apps/desktop/eslint.config.js`, рядом с F-1 «фича не импортирует фичу»):** список
+  вырезанных модулей `MODULE_FEATURES` (8: `news, goals, memory, episodes, tasks, inbox, digest,
+  contradictions`). Для каждого — пара изолированных зон: UI `src/components/<mod>/**` и манифест
+  `src/lib/connector/modules/<mod>.ts`. **Запрещён импорт этой пары откуда-либо, КРОМЕ самой фичи и её
+  манифеста** (+ его теста). Конкретно ловит то, что F-1 НЕ ловил:
+  - **ЯДРО** (вне `src/components/**` и вне `src/lib/connector/modules/**`: `App.tsx`/`stores`/`hooks`/
+    `i18n`/`lib` вне connector) → импорт `components/<mod>` или конкретного манифеста `modules/<mod>` =
+    красный. Барильер `lib/connector/modules` (активатор `activateModules`) — РАЗРЕШЁН (композиционный
+    корень, не модуль). `ctx`-API коннектора (`lib/connector` — реестры/типы/`ModuleContext`) — тоже
+    РАЗРЕШЁН ядру (запрещены только `modules/<mod>` и `components/<mod>`).
+  - **Манифест `<X>.ts` → чужой манифест `<Y>.ts`** = красный (модули независимы; манифесты подключает
+    только `modules/index.ts`).
+  - **FLOOR модуль-дир (adversarial-фикс):** ЛЮБОЙ файл в `connector/modules/**` кроме точных
+    `<feature>.ts`/`<feature>.test.ts`/`index.ts` (стрэй-хелпер; манифест, забытый в `MODULE_FEATURES`)
+    закрыт floor-блоком (`selfModule:null` запрещает всё; легит-файлы переопределяют его ниже). Без
+    floor такой файл проваливался бы сквозь все блоки = 0 правил → laundering (манифест→легальный
+    `./helper`→чужая зона в обход границы).
+  - Динамические `import()` покрыты компаньоном `no-restricted-syntax` (как F-1 §P2 — иначе границу
+    обходил бы `await import('../components/<mod>/…')`).
+- **Известное ограничение (низкий риск, документировано в connector.md):** импорт манифеста
+  `modules/<mod>` из НЕ-модульной компонент-зоны (`components/agent` → `modules/news`) не ловится
+  (ядровой блок игнорирует `components/**` — там правит F-1; `components/<mod>` при этом ловится).
+  Риск низкий: манифесты не тянут чужие манифесты, а `agent`/`chat` ещё не модули. Закрытие = влить
+  F-1b-баны в F-1-хелпер (смешение концернов) — отложено до реального кейса.
+- **Исключения (`MODULE_BOUNDARY_EXCEPTIONS`) — пусто:** F-9/F-10b вырезали модули начисто (ни один
+  core/manifest не тянет чужой модуль). Если shared-компонент честно нужен ядру — документируется там
+  (аналог `CROSS_IMPORT_WHITELIST` для F-1), без глобального ослабления.
+- **negative-check (`scripts/check-module-boundary.mjs`, гейт CI + `test-all.sh`):** ДОКАЗЫВАЕТ
+  enforcement двумя негатив-кейсами — (1) временный ядровой файл с запрещённым импортом
+  (`components/news` + манифест); (2) laundering — стрэй-файл ВНУТРИ `modules/` с импортом чужой
+  зоны+манифеста (доказывает, что floor закрыл дыру coverage) → eslint ОБЯЗАН упасть (exit≠0); плюс
+  позитив-контроль (реальные манифесты/тесты/`index` зелёные — нет ложных срабатываний). Времянки
+  всегда удаляются. Zero-dep. Подключён в CI job frontend (`node scripts/check-module-boundary.mjs`
+  после `pnpm lint` — нужен eslint, потому не в zero-dep traceability-джобе).
+- **Как добавить модуль F-10c в правило:** одна строка в `MODULE_FEATURES` — автоматически появятся и
+  запрет зоны/манифеста для ядра, и разрешение для его манифеста+теста (документировано в
+  `docs/dev/connector.md` → «Граница модуль/ядро в CI (F-1b)»).
+- **Оракул:** существующий код ЗЕЛЁНЫЙ (`eslint . --max-warnings 0`, все 8 модулей уже чисты — правило
+  без ложных срабатываний) + negative-check КРАСНЫЙ на искусственном импорте ядро→модуль
+  (доказательство). Гейт: tsc `--noEmit` / eslint `--max-warnings 0` / vitest / vite build / F-1b
+  negative-check / **P0-3 e2e 28 зелёных** — без пайпов; locale ru-RU в конфиге. Rust не трогали.
+
 ### Изменено · F-10b — вырезаны 7 оверлеев в модули через `ctx.overlays` (goals/memory/episodes/tasks/inbox/digest/contradictions)
 
 Стадия F-10b REFACTOR-PLAN §5 — **вырезание 7 оверлеев** через overlays-реестр F-8c. **Behavior-preserving: каждый оверлей открывается/закрывается/стекается как раньше.** Каждый вырез — отдельный коммит (реверт-стори) + прогон e2e. Инвариант per-фича: ядро (App/ActivityBar/Titlebar/SettingsView/OverlayOutlet) больше НЕ импортирует `components/<feature>` — панель приходит из реестра как ссылка.
