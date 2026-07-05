@@ -9,6 +9,7 @@
  * `modules.disposeAll()` (тесты/HMR).
  */
 import { modules } from '../module-manager';
+import { contradictionsModule } from './contradictions';
 import { digestModule } from './digest';
 import { episodesModule } from './episodes';
 import { goalsModule } from './goals';
@@ -31,6 +32,7 @@ export function activateModules(): void {
   modules.register(tasksModule);
   modules.register(inboxModule);
   modules.register(digestModule);
+  modules.register(contradictionsModule);
   modules.activateAll();
 }
 

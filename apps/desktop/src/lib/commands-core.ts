@@ -412,13 +412,8 @@ export function registerCoreCommands(): Disposable {
     // view.goals — вырезана в модуль `connector/modules/goals` (F-10b): регистрируется через
     // `ctx.commands` (id → `goals:view.goals`, source=plugin). Ядро её больше не объявляет.
     // view.digest — вырезана в модуль `connector/modules/digest` (F-10b): id → `digest:view.digest`.
-    commands.register({
-      id: 'view.contradictions',
-      title: 'Contradiction finder',
-      titleKey: 'commands.view.contradictions',
-      source: 'core',
-      run: () => useUIStore.getState().toggleContradictions(),
-    }),
+    // view.contradictions — вырезана в модуль `connector/modules/contradictions` (F-10b): id →
+    // `contradictions:view.contradictions`, source=plugin. Ядро её больше не объявляет.
     // view.news — вырезана в модуль `connector/modules/news` (F-9): регистрируется через
     // `ctx.commands` (id → `news:view.news`, source=plugin). Ядро её больше не объявляет.
     commands.register({

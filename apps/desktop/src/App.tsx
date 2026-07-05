@@ -1,14 +1,12 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
-import './lib/connector/core-overlays'; // F-8c: регистрирует ядровые оверлеи в реестр `overlays` до рендера
-import './lib/connector/modules'; // F-9: регистрирует+активирует модули-вклады (news-пилот) до рендера
+import './lib/connector/modules'; // F-9/F-10b: регистрирует+активирует модули-вклады (включая 7 оверлеев) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
 import { useAiFeaturesStore } from './stores/aiFeatures';
 import { flushAllDirty } from './stores/autosave';
 import { useChatStore } from './stores/chat';
-import { useContradictionsStore } from './stores/contradictions';
 import { usePrefsStore } from './stores/prefs';
 import { selectMainView, selectReadingEscBlocked, useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
@@ -147,20 +145,8 @@ export function App() {
     return () => unlisten();
   }, []);
 
-  // Готовые результаты фоновых джоб прилетают по `jobs:changed` → refetch открытой панели (без поллинга,
-  // ADR-007 slice 4/5). F-10b: refetch «Дайджеста» переехал в модуль `connector/modules/digest`
-  // (`ctx.events`); здесь остался «Поиск противоречий» до его выреза (F-10b contradictions).
-  useEffect(() => {
-    let unlisten = () => {};
-    void tauriApi.events
-      .onJobsChanged(() => {
-        if (useUIStore.getState().contradictionsOpen) void useContradictionsStore.getState().load();
-      })
-      .then((fn) => {
-        unlisten = fn;
-      });
-    return () => unlisten();
-  }, []);
+  // F-10b: refetch открытых панелей по `jobs:changed` (ADR-007 slice 4/5) переехал в оверлей-модули
+  // `connector/modules/{digest,contradictions}` (`ctx.events`) — каждая фича refetch'ит свой стор.
 
   // Esc выходит из режима чтения (если поверх нет оверлея — у них свой Esc).
   useEffect(() => {

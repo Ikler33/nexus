@@ -22,4 +22,5 @@ export { overlayRegistry, settingsRegistry, viewRegistry } from './registries';
 export { modules } from './module-manager';
 export { onCoreEvent } from './events';
 export { registerCoreViews } from './core-views';
-export { registerCoreOverlays } from './core-overlays';
+// core-overlays удалён (F-10b): все 7 оверлеев вырезаны в модули (`connector/modules/*`); реестр
+// `overlays` теперь питается ТОЛЬКО модулями через `ctx.overlays` (см. docs/dev/connector.md).
