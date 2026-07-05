@@ -23,6 +23,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
+      # F-1b negative-check: ДОКАЗЫВАЕТ, что eslint реально enforce'ит границу модуль/ядро
+      # (временный запрещённый импорт ядро→модуль → eslint exit≠0). Требует node_modules (eslint) —
+      # потому в job frontend, а не в zero-dep traceability. Детали — scripts/check-module-boundary.mjs.
+      - run: node scripts/check-module-boundary.mjs
       - run: pnpm test:coverage  # тесты + coverage-гейт (V1.2): пороги в vitest.config.ts (храповик «не ниже»)
       - run: pnpm build
 
