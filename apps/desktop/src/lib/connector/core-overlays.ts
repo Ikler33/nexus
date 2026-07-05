@@ -7,7 +7,13 @@
  * Behavior-preserving: `component`/порядок перенесены КАК ЕСТЬ из App.tsx (order 10..70 сохраняет
  * прежний DOM-порядок goals→memory→episodes→tasks→inbox→digest→contradictions — важно для стекинга
  * независимых floats digest/contradictions поверх trap-оверлеев). `isOpen` — существующие `*Open`-були
- * ui-стора (F-8c читает их КАК ЕСТЬ; перенос стейта в модули — вырезание F-10b).
+ * ui-стора (читаются КАК ЕСТЬ).
+ *
+ * F-10b ВЫРЕЗАЕТ эти оверлеи по одному в свои модули (`connector/modules/<feature>`) через
+ * `ctx.overlays.register` — по мере выреза запись уходит отсюда (см. комментарии-заглушки). ПАТТЕРН
+ * оверлей-модуля: стейт видимости `*Open` + действия open/close/toggle ОСТАЮТСЯ ядром (ui-стор, как
+ * `mainView`), модуль лишь регистрирует КОМПОНЕНТ + `isOpen`-селектор поверх ядрового флага. Остаток
+ * (ещё не вырезанное) регистрируется тут напрямую, как `registerCoreViews` для main-вью.
  *
  * Регистрация — сайд-эффект при импорте (idempotent Map-реестр). App.tsx импортирует модуль ради
  * него, поэтому реестр заполнен до первого рендера OverlayOutlet (в т.ч. в юнит-тестах <App/>).
@@ -15,7 +21,6 @@
 import { ContradictionsPanel } from '../../components/contradictions/ContradictionsPanel';
 import { DigestPanel } from '../../components/digest/DigestPanel';
 import { EpisodesPanel } from '../../components/episodes/EpisodesPanel';
-import { GoalsPanel } from '../../components/goals/GoalsPanel';
 import { InboxPanel } from '../../components/inbox/InboxPanel';
 import { MemoryPanel } from '../../components/memory/MemoryPanel';
 import { TasksPanel } from '../../components/tasks/TasksPanel';
@@ -23,19 +28,13 @@ import { overlayRegistry } from './registries';
 
 let registered = false;
 
-/** Регистрирует 7 ядровых оверлеев (goals/memory/episodes/tasks/inbox/digest/contradictions) в реестр
- *  `overlays`. Идемпотентно. F-10b вырежет каждый в свой модуль (`ctx.overlays.register`). */
+/** Регистрирует ещё НЕ вырезанные ядровые оверлеи в реестр `overlays`. Идемпотентно. F-10b вырезает
+ *  каждый в свой модуль (`ctx.overlays.register`) — вырезанные помечены комментарием-заглушкой. */
 export function registerCoreOverlays(): void {
   if (registered) return;
   registered = true;
 
-  overlayRegistry.register({
-    id: 'goals',
-    titleKey: 'commands.view.goals',
-    order: 10,
-    isOpen: (s) => s.goalsOpen,
-    component: GoalsPanel,
-  });
+  // goals — вырезан в модуль `connector/modules/goals` (F-10b): регистрируется через `ctx.overlays`.
   overlayRegistry.register({
     id: 'memory',
     titleKey: 'commands.view.memory',

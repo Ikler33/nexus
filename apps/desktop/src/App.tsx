@@ -10,7 +10,6 @@ import { flushAllDirty } from './stores/autosave';
 import { useChatStore } from './stores/chat';
 import { useContradictionsStore } from './stores/contradictions';
 import { useDigestStore } from './stores/digest';
-import { useGoalsStore } from './stores/goals';
 import { usePrefsStore } from './stores/prefs';
 import { selectMainView, selectReadingEscBlocked, useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
@@ -103,25 +102,8 @@ export function App() {
     }
   }, [vaultRoot]);
 
-  // Живой пересчёт зависимых от индекса вьюх по событию индексатора (ADR-007 S8, AC-GP-3):
-  // сейчас — «Цели» (#35), и только когда панель открыта. Дебаунс — событий может быть пачка.
-  useEffect(() => {
-    let unlisten = () => {};
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    void tauriApi.events
-      .onVaultChanged(() => {
-        if (!useUIStore.getState().goalsOpen) return;
-        clearTimeout(timer);
-        timer = setTimeout(() => void useGoalsStore.getState().load(), 800);
-      })
-      .then((fn) => {
-        unlisten = fn;
-      });
-    return () => {
-      clearTimeout(timer);
-      unlisten();
-    };
-  }, []);
+  // F-10b: живой пересчёт «Целей» по `vault:changed` (ADR-007 S8, AC-GP-3) переехал в модуль
+  // `connector/modules/goals` (через `ctx.events`) — фича-эффект живёт рядом со своим оверлеем.
 
   // SAFE-3: внешнее изменение конкретного файла (`vault:file-changed`) → судьба открытого буфера
   // решается в сторе (эхо своего сейва / тихий reload чистого / баннер guard'а грязного).

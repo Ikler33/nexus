@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import './core-overlays'; // сайд-эффект: регистрирует 7 ядровых оверлеев (проверка легализации)
+import './core-overlays'; // сайд-эффект: регистрирует ещё НЕ вырезанные ядровые оверлеи
+import './modules'; // сайд-эффект: активирует оверлей-модули F-10b (goals/… — вырезаны из core-overlays)
 import { overlayRegistry } from './registries';
 import { useUIStore } from '../../stores/ui';
 import type { UIState } from '../../stores/ui';
@@ -7,9 +8,11 @@ import type { OverlayContribution } from './types';
 
 /**
  * Реестр оверлеев (F-8c): register/get/list-детерминизм/dispose/идемпотентность + легализация 7
- * ядровых оверлеев (goals/…/contradictions) сайд-эффектом core-overlays. Свои вклады — id с префиксом
- * `t:` (каждый тест снимает свои dispose'ом; ядровые не трогаем). Изоляцию падающего оверлея через
- * OverlayOutlet покрывает overlay-isolation.test.tsx (как isolation.test.tsx для main-вью).
+ * оверлеев (goals/…/contradictions). Полный набор собирается из ДВУХ источников: ещё-ядровые —
+ * сайд-эффектом core-overlays, вырезанные (F-10b) — сайд-эффектом modules (`ctx.overlays`). Тест
+ * проверяет РЕЗУЛЬТАТ (все 7 present, порядок 10..70, isOpen), не источник. Свои вклады — id с
+ * префиксом `t:` (каждый тест снимает свои dispose'ом; ядровые/модульные не трогаем). Изоляцию
+ * падающего оверлея через OverlayOutlet покрывает overlay-isolation.test.tsx.
  */
 
 const nullComp = () => null;
@@ -55,7 +58,7 @@ describe('overlayRegistry (F-8c)', () => {
     expect(overlayRegistry.get('t:dup')).toBeUndefined();
   });
 
-  it('ядровые оверлеи легализованы: 7 панелей present, порядок сохранён', () => {
+  it('оверлеи легализованы (core-overlays + модули F-10b): 7 панелей present, порядок сохранён', () => {
     const coreIds = overlayRegistry
       .list()
       .filter((o) => !o.id.startsWith('t:'))

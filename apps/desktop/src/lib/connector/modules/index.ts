@@ -9,6 +9,7 @@
  * `modules.disposeAll()` (тесты/HMR).
  */
 import { modules } from '../module-manager';
+import { goalsModule } from './goals';
 import { newsModule } from './news';
 
 let activated = false;
@@ -18,7 +19,8 @@ export function activateModules(): void {
   if (activated) return;
   activated = true;
   modules.register(newsModule);
-  // F-10: следующие вырезанные модули регистрируются здесь (одной строкой на модуль).
+  // F-10b: оверлей-модули (вырезаны из core-overlays через `ctx.overlays`).
+  modules.register(goalsModule);
   modules.activateAll();
 }
 

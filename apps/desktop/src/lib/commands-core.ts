@@ -437,13 +437,8 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().toggleSync(),
     }),
-    commands.register({
-      id: 'view.goals',
-      title: 'Goals',
-      titleKey: 'commands.view.goals',
-      source: 'core',
-      run: () => useUIStore.getState().toggleGoals(),
-    }),
+    // view.goals — вырезана в модуль `connector/modules/goals` (F-10b): регистрируется через
+    // `ctx.commands` (id → `goals:view.goals`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'view.digest',
       title: 'Changes digest',
