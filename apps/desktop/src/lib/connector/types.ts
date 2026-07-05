@@ -13,6 +13,7 @@
 import type { ComponentType } from 'react';
 import type { Command, Disposable } from '../commands';
 import type { TauriApi } from '../tauri-api';
+import type { UIState } from '../../stores/ui';
 
 export type { Disposable };
 
@@ -72,6 +73,29 @@ export interface SettingsContribution {
   component: ComponentType;
 }
 
+/**
+ * Вклад «оверлей» (реестр `overlays`, F-8c — легализация 7 хардкод-строк App.tsx `{xOpen && <Panel/>}`:
+ * goals/memory/episodes/tasks/inbox/digest/contradictions). НЕ полноэкранная вью (`views`), а
+ * плавающая/модальная панель поверх тела: своя видимость (`isOpen`-селектор), свой Esc/close внутри
+ * компонента. Питает `OverlayOutlet` — рендерит открытые оверлеи, КАЖДЫЙ через ErrorBoundary.
+ *
+ * `isOpen` — селектор из ui-стора (v0-коупл: оверлеи ядра управляются `*Open`-булями `UIState`;
+ * store-agnostic абстракция состояния оверлея отложена вместе с прочим north-star плагинов, YAGNI —
+ * см. docs/dev/connector.md). F-8c — ТОЛЬКО реестр+outlet; перенос `*Open`-стейта в модули — F-10b.
+ */
+export interface OverlayContribution {
+  /** Идентификатор оверлея (ключ реестра, `key` ErrorBoundary). */
+  id: string;
+  /** i18n-ключ имени панели (плашка ErrorBoundary «модуль X упал»). */
+  titleKey: string;
+  /** Селектор видимости из ui-стора: `(s) => s.goalsOpen`. Читает существующие були (F-8c). */
+  isOpen: (state: UIState) => boolean;
+  /** Порядок рендера в OverlayOutlet (по возрастанию) — сохраняет прежний DOM-порядок App.tsx. */
+  order: number;
+  /** React-компонент панели (рендерится через ErrorBoundary в `OverlayOutlet`). */
+  component: ComponentType;
+}
+
 /** Реестр команд — тонкая обёртка над `commands-core`; префиксует id → `${moduleId}:${id}`. */
 export interface CommandsRegistry {
   register(cmd: Command): Disposable;
@@ -90,6 +114,13 @@ export interface SettingsRegistry {
   list(): SettingsContribution[];
 }
 
+/** Реестр оверлеев (F-8c — легализация 7 хардкод-строк App.tsx, питает OverlayOutlet). */
+export interface OverlaysRegistry {
+  register(overlay: OverlayContribution): Disposable;
+  list(): OverlayContribution[];
+  get(id: string): OverlayContribution | undefined;
+}
+
 /** Подписки на lifecycle-события ядра (window/доменные, НЕ новая шина). */
 export interface EventsRegistry {
   on(event: CoreEvent, cb: () => void): Disposable;
@@ -106,6 +137,8 @@ export interface ModuleContext {
   commands: CommandsRegistry;
   views: ViewsRegistry;
   settings: SettingsRegistry;
+  /** Реестр оверлеев (F-8c): модуль регистрирует плавающую/модальную панель — вырезание F-10b. */
+  overlays: OverlaysRegistry;
   events: EventsRegistry;
   /** Типизированный доступ к нативному слою (lib/api F-2), прокинут как есть. */
   api: TauriApi;
