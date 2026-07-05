@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
+import './lib/connector/core-overlays'; // F-8c: регистрирует ядровые оверлеи в реестр `overlays` до рендера
 import './lib/connector/modules'; // F-9: регистрирует+активирует модули-вклады (news-пилот) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
@@ -20,6 +21,7 @@ import { StatusBar } from './components/chrome/StatusBar';
 import { SelfCheck } from './components/chrome/SelfCheck';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { MainViewOutlet } from './components/workspace/MainViewOutlet';
+import { OverlayOutlet } from './components/workspace/OverlayOutlet';
 import { AiPanel } from './components/chat/AiPanel';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
@@ -28,13 +30,6 @@ import { HotkeysCheatsheet } from './components/command/HotkeysCheatsheet';
 import { ToastViewport } from './components/chrome/ToastViewport';
 import { Onboarding } from './components/onboarding/Onboarding';
 import { SettingsView } from './components/settings/SettingsView';
-import { GoalsPanel } from './components/goals/GoalsPanel';
-import { MemoryPanel } from './components/memory/MemoryPanel';
-import { EpisodesPanel } from './components/episodes/EpisodesPanel';
-import { TasksPanel } from './components/tasks/TasksPanel';
-import { InboxPanel } from './components/inbox/InboxPanel';
-import { DigestPanel } from './components/digest/DigestPanel';
-import { ContradictionsPanel } from './components/contradictions/ContradictionsPanel';
 import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
@@ -69,13 +64,8 @@ export function App() {
   const closeConflict = useUIStore((s) => s.closeConflict);
   const versionsOpen = useUIStore((s) => s.versionsOpen);
   const closeVersions = useUIStore((s) => s.closeVersions);
-  const goalsOpen = useUIStore((s) => s.goalsOpen);
-  const memoryOpen = useUIStore((s) => s.memoryOpen);
-  const episodesOpen = useUIStore((s) => s.episodesOpen);
-  const tasksOpen = useUIStore((s) => s.tasksOpen);
-  const inboxOpen = useUIStore((s) => s.inboxOpen);
-  const digestOpen = useUIStore((s) => s.digestOpen);
-  const contradictionsOpen = useUIStore((s) => s.contradictionsOpen);
+  // F-8c: 7 оверлеев (goals/memory/episodes/tasks/inbox/digest/contradictions) резолвит реестр
+  // `overlays` через <OverlayOutlet/> (App больше не подписан на их `*Open`-були по отдельности).
   // F-4 (семейство 1): единый derived-селектор активной main-вью вместо 5 отдельных `*Open`-булей.
   const mainView = useUIStore(selectMainView);
   const onboardingActive = useUIStore((s) => s.onboardingActive);
@@ -314,13 +304,10 @@ export function App() {
         </Suspense>
       )}
       {tweaksOpen && <SettingsView />}
-      {goalsOpen && <GoalsPanel />}
-      {memoryOpen && <MemoryPanel />}
-      {episodesOpen && <EpisodesPanel />}
-      {tasksOpen && <TasksPanel />}
-      {inboxOpen && <InboxPanel />}
-      {digestOpen && <DigestPanel />}
-      {contradictionsOpen && <ContradictionsPanel />}
+      {/* F-8c: 7 оверлеев (goals/memory/episodes/tasks/inbox/digest/contradictions) — из реестра
+          `overlays` (App-lookup), каждый через per-contribution ErrorBoundary. Заменяет прежние 7
+          хардкод-строк `{xOpen && <Panel/>}`; поведение идентично (те же панели/условия + изоляция). */}
+      <OverlayOutlet />
     </div>
   );
 }

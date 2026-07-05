@@ -5,6 +5,8 @@
  * это существующий `commands-core` (легализуется тонкой обёрткой в module-manager).
  */
 import type {
+  OverlayContribution,
+  OverlaysRegistry,
   SettingsContribution,
   SettingsRegistry,
   ViewContribution,
@@ -54,8 +56,34 @@ class SettingsRegistryImpl implements SettingsRegistry {
   }
 }
 
+class OverlayRegistryImpl implements OverlaysRegistry {
+  private map = new Map<string, OverlayContribution>();
+
+  register(overlay: OverlayContribution): Disposable {
+    this.map.set(overlay.id, overlay);
+    return { dispose: () => this.map.delete(overlay.id) };
+  }
+
+  get(id: string): OverlayContribution | undefined {
+    return this.map.get(id);
+  }
+
+  /** Все оверлеи, отсортированные по `order` (детерминированный DOM-порядок OverlayOutlet). */
+  list(): OverlayContribution[] {
+    return [...this.map.values()].sort((a, b) => a.order - b.order);
+  }
+
+  /** Только для тестов: полный сброс. */
+  _reset(): void {
+    this.map.clear();
+  }
+}
+
 /** Глобальный реестр main-вью (питает MainViewOutlet + ActivityBar). */
 export const viewRegistry = new ViewRegistryImpl();
 
 /** Глобальный реестр секций настроек (питает SettingsView). */
 export const settingsRegistry = new SettingsRegistryImpl();
+
+/** Глобальный реестр оверлеев (F-8c — питает OverlayOutlet: goals/memory/…/contradictions). */
+export const overlayRegistry = new OverlayRegistryImpl();

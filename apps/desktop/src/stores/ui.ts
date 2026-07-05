@@ -53,7 +53,7 @@ export type SettingsSection =
   | 'hotkeys'
   | 'about';
 
-interface UIState {
+export interface UIState {
   paletteOpen: boolean;
   graphOpen: boolean;
   chatOpen: boolean;

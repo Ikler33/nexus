@@ -24,7 +24,49 @@ per-contribution изоляцию сбоев. **F-9 вырезал первый 
     `vault:switched` (F-1), `vault:changed`/`jobs:changed` → доменные подписки F-2
     (`tauriApi.events.*`).
   - `api` — типизированный `lib/api/<домены>` (F-2), прокинут как есть (`tauriApi`).
+  - `overlays` (F-8c) — реестр **оверлеев** (плавающих/модальных панелей поверх тела: goals/memory/
+    episodes/tasks/inbox/digest/contradictions). Легализация 7 хардкод-строк App.tsx `{xOpen &&
+    <Panel/>}`. Питает `OverlayOutlet`. См. «### Реестр оверлеев (F-8c)» ниже.
   - `subscriptions: Disposable[]` — всё зарегистрированное авто-трекается; ядро dispose'ит скопом.
+
+### Реестр оверлеев (F-8c)
+Расширение коннектора под **серию F-10** (разведка F-10a: 7 модулей — оверлеи, не main-вью). F-8
+отложил preview/inspector/statusBar-реестры «до первого модуля, который потребует»; F-10a — этот
+момент (7 однотипных оверлеев не ложатся на 5 реестров v0). Добавлен РОВНО оверлей-реестр (YAGNI:
+никаких preview/inspector/statusBar «заодно»).
+
+- **`overlays.register({ id, titleKey, isOpen, order, component })`** (`OverlayContribution`) — Map-
+  реестр ПО ОБРАЗЦУ `viewRegistry`: `list()` детерминирован (сортировка по `order`), `get(id)`,
+  идемпотентность. Отличие от `views`: оверлей — НЕ полноэкранная вью, а панель поверх тела со своей
+  видимостью (`isOpen`-селектор) и своим Esc/close внутри компонента (взаимоисключаемость/стекинг —
+  логика ui-стора, не реестра).
+- **`isOpen: (state: UIState) => boolean`** — селектор из ui-стора (`(s) => s.goalsOpen`). F-8c читает
+  СУЩЕСТВУЮЩИЕ `*Open`-були (перенос стейта в модули — вырезание F-10b, не здесь).
+- **`OverlayOutlet` (`components/workspace/OverlayOutlet.tsx`)** — по образцу `MainViewOutlet`:
+  рендерит `overlayRegistry.list()`, каждый открытый (`isOpen(uiState)`) — через per-contribution
+  **ErrorBoundary** (`key` по id). Заменяет 7 хардкод-строк App.tsx. Счастливый путь — 0 DOM-след
+  (якоря панелей не смещаются). Подписка на весь ui-стор (`useUIStore()`): `isOpen`-селекторы
+  непрозрачны, outlet ре-рендерится на любое ui-изменение и заново считает видимость.
+- **`core-overlays.ts`** — ядровые 7 оверлеев регистрируются напрямую (каркас, НЕ модуль — как
+  `registerCoreViews`), сайд-эффектом при импорте из App.tsx. order 10..70 = прежний DOM-порядок
+  App.tsx (стекинг floats digest/contradictions поверх trap-оверлеев сохранён).
+- **v0-коупл (осознанно):** `isOpen` типизирован против `UIState` (ui-стор — источник флагов ядровых
+  оверлеев; `UIState` экспортирован из `stores/ui.ts`, type-only импорт в `types.ts`). Store-agnostic
+  абстракция состояния оверлея (для сторонних плагинов) отложена вместе с прочим north-star плагинов —
+  как apiVersion/capabilities (см. «Отложено»).
+- **Готово для F-10b:** `ctx.overlays.register(...)` в `ModuleContext`. Вырез оверлея в модуль =
+  (1) панель через `ctx.overlays` в манифесте модуля, (2) убрать её из `core-overlays.ts`,
+  (3) перенести `*Open`-стейт из ui-стора в модуль.
+
+### titlebar-menu (AI-инсайты) — оставлено ядро-chrome (v0, F-8c)
+AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `Titlebar.tsx` `aiItem`) **не вынесено в
+реестр** — оставлено ядро-chrome для v0. Обоснование: (1) titlebar-menu-реестр = новый тип вклада +
+реестр + поле `ModuleContext` + рефактор Titlebar + тесты — НЕ тривиален как overlays (те дословно
+зеркалят `viewRegistry`); (2) **не нужен для разблокировки F-10b** — 7 вырезов требуют оверлей-реестра,
+а пункт меню может остаться ядром, вызывая `openX()`/`toggleX()` ui-стора (стейт `*Open` уедет в модули
+лишь в F-10b); (3) реестр «не нужный 7 оверлеям» = нарушение скоуп-дисциплины (YAGNI). Прецедент —
+`DeadJobsModal` знает job-kind'ы (ядро-chrome-знание фич приемлемо в v0). Реестр titlebar-пунктов как
+вклад модулей — возможная будущая EP (когда сторонний модуль захочет свой пункт AI-меню). → отложено.
 
 ### Реестр модулей
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
@@ -35,17 +77,19 @@ F-10-серия добавляет свои строкой в `activateModules`.
 для доказательства изоляции сбоев.
 
 ### ErrorBoundary per-contribution
-`components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`) и секция
-настроек (`SettingsSectionOutlet`) оборачивается React-ErrorBoundary: рендер-сбой вклада показывает
-плашку «модуль X упал» + reload вместо белого экрана. `CommandRegistry.run` — в try/catch (упавшая
-команда → тост, не висящий reject). Цель владельца: **«ИИ правит модуль → app не падает»**. Доказано
-`src/lib/connector/isolation.test.tsx` (падающая вью тест-модуля → app жив + плашка).
+`components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`), оверлей
+(`OverlayOutlet`, F-8c) и секция настроек (`SettingsSectionOutlet`) оборачивается React-ErrorBoundary:
+рендер-сбой вклада показывает плашку «модуль X упал» + reload вместо белого экрана. `CommandRegistry.run`
+— в try/catch (упавшая команда → тост, не висящий reject). Цель владельца: **«ИИ правит модуль → app не
+падает»**. Доказано `src/lib/connector/isolation.test.tsx` (падающая вью тест-модуля → app жив + плашка)
+и `src/lib/connector/overlay-isolation.test.tsx` (падающий оверлей через `ctx.overlays` → app жив + плашка).
 
 ## Легализация (что было — что стало)
 | Реестр    | Было (ядро)                              | Стало (через коннектор)                         |
 |-----------|------------------------------------------|-------------------------------------------------|
 | commands  | `commands-core` + `commands` registry    | `ctx.commands` — та же registry, id в namespace |
 | views     | тернарник App.tsx + хардкод ActivityBar  | `viewRegistry` (core-views) → MainViewOutlet + ActivityBar |
+| overlays  | 7 хардкод-строк `{xOpen && <Panel/>}` App.tsx | `overlayRegistry` (core-overlays) → OverlayOutlet (F-8c) |
 | settings  | массив `SECTIONS` в SettingsView         | `settingsRegistry` → нав + SettingsSectionOutlet |
 | events    | россыпь `useEffect` + window/tauri        | `onCoreEvent` (обёртка тех же каналов)          |
 | api       | `tauriApi`                                | `ctx.api` (тот же объект)                        |

@@ -11,12 +11,15 @@ export type {
   IconComponent,
   ModuleContext,
   NexusModule,
+  OverlayContribution,
+  OverlaysRegistry,
   SettingsContribution,
   SettingsRegistry,
   ViewContribution,
   ViewsRegistry,
 } from './types';
-export { settingsRegistry, viewRegistry } from './registries';
+export { overlayRegistry, settingsRegistry, viewRegistry } from './registries';
 export { modules } from './module-manager';
 export { onCoreEvent } from './events';
 export { registerCoreViews } from './core-views';
+export { registerCoreOverlays } from './core-overlays';
