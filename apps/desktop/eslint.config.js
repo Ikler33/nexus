@@ -271,6 +271,25 @@ export default tseslint.config(
       }),
     },
   },
+  // FLOOR модуль-дир (adversarial F-1b): ядровой блок ИГНОРИРУЕТ `modules/**`, а блоки ниже матчат
+  // ТОЛЬКО точные имена `<feature>.ts`/`<feature>.test.ts`/`index.ts`. Без этого floor ЛЮБОЙ другой
+  // файл в `modules/` (стрэй-хелпер `news-helper.ts`; новый манифест `analytics.ts`, забытый в
+  // MODULE_FEATURES) проваливался бы сквозь все блоки = 0 правил → laundering: манифест импортит
+  // легальный на вид `./news-helper`, а тот свободно тянет чужую зону/манифест в обход границы.
+  // Floor запрещает ВСЁ (selfModule:null); легит-случаи `<feature>.ts`/`index.ts` переопределяют его
+  // блоками НИЖЕ (flat-config «последний матч по правилу побеждает»). siblingManifests — путь внутри
+  // `modules/` до манифеста относительный (`./goals`), его тоже надо закрыть для стрэй-файлов.
+  {
+    files: ['src/lib/connector/modules/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': restrictModuleImports({
+        selfModule: null,
+        allowManifests: false,
+        siblingManifests: true,
+      }),
+      'no-restricted-syntax': restrictModuleDynamicImports({ selfModule: null, allowManifests: false }),
+    },
+  },
   // Манифест модуля и его тест: разрешены СВОЯ зона `components/<mod>` и СВОЙ манифест `./<mod>`;
   // чужие зоны и чужие манифесты — запрещены (модули независимы, общаются через ядро/ctx).
   ...MODULE_FEATURES.map((feature) => ({
