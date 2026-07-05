@@ -9,7 +9,6 @@ import { useAiFeaturesStore } from './stores/aiFeatures';
 import { flushAllDirty } from './stores/autosave';
 import { useChatStore } from './stores/chat';
 import { useContradictionsStore } from './stores/contradictions';
-import { useDigestStore } from './stores/digest';
 import { usePrefsStore } from './stores/prefs';
 import { selectMainView, selectReadingEscBlocked, useUIStore } from './stores/ui';
 import { useVaultStore } from './stores/vault';
@@ -149,14 +148,13 @@ export function App() {
   }, []);
 
   // Готовые результаты фоновых джоб прилетают по `jobs:changed` → refetch открытой панели (без поллинга,
-  // ADR-007 slice 4/5). Дайджест и «Поиск противоречий» — обе LLM-фичи планировщика.
+  // ADR-007 slice 4/5). F-10b: refetch «Дайджеста» переехал в модуль `connector/modules/digest`
+  // (`ctx.events`); здесь остался «Поиск противоречий» до его выреза (F-10b contradictions).
   useEffect(() => {
     let unlisten = () => {};
     void tauriApi.events
       .onJobsChanged(() => {
-        const ui = useUIStore.getState();
-        if (ui.digestOpen) void useDigestStore.getState().load();
-        if (ui.contradictionsOpen) void useContradictionsStore.getState().load();
+        if (useUIStore.getState().contradictionsOpen) void useContradictionsStore.getState().load();
       })
       .then((fn) => {
         unlisten = fn;

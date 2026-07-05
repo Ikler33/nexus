@@ -19,7 +19,6 @@
  * него, поэтому реестр заполнен до первого рендера OverlayOutlet (в т.ч. в юнит-тестах <App/>).
  */
 import { ContradictionsPanel } from '../../components/contradictions/ContradictionsPanel';
-import { DigestPanel } from '../../components/digest/DigestPanel';
 import { overlayRegistry } from './registries';
 
 let registered = false;
@@ -30,14 +29,7 @@ export function registerCoreOverlays(): void {
   if (registered) return;
   registered = true;
 
-  // goals, memory, episodes, tasks, inbox — вырезаны в модули `connector/modules/*` (F-10b).
-  overlayRegistry.register({
-    id: 'digest',
-    titleKey: 'commands.view.digest',
-    order: 60,
-    isOpen: (s) => s.digestOpen,
-    component: DigestPanel,
-  });
+  // goals, memory, episodes, tasks, inbox, digest — вырезаны в модули `connector/modules/*` (F-10b).
   overlayRegistry.register({
     id: 'contradictions',
     titleKey: 'commands.view.contradictions',

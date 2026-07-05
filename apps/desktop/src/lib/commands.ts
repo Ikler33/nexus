@@ -112,6 +112,7 @@ const COMMAND_ID_ALIASES: Record<string, string> = {
   'view.memory': 'memory:view.memory', // F-10b
   'view.tasks': 'tasks:view.tasks', // F-10b
   'view.inbox': 'inbox:view.inbox', // F-10b
+  'view.digest': 'digest:view.digest', // F-10b
 };
 
 class CommandRegistry {

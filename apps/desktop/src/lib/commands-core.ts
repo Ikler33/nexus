@@ -411,13 +411,7 @@ export function registerCoreCommands(): Disposable {
     }),
     // view.goals — вырезана в модуль `connector/modules/goals` (F-10b): регистрируется через
     // `ctx.commands` (id → `goals:view.goals`, source=plugin). Ядро её больше не объявляет.
-    commands.register({
-      id: 'view.digest',
-      title: 'Changes digest',
-      titleKey: 'commands.view.digest',
-      source: 'core',
-      run: () => useUIStore.getState().toggleDigest(),
-    }),
+    // view.digest — вырезана в модуль `connector/modules/digest` (F-10b): id → `digest:view.digest`.
     commands.register({
       id: 'view.contradictions',
       title: 'Contradiction finder',
