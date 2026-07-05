@@ -81,6 +81,9 @@ export function registerCoreViews(): void {
     icon: CometIcon,
     order: 50,
     component: AgentView,
+    // AgentView — lazy(): явная Suspense-граница как в прежнем App.tsx (не полагаемся на неявную
+    // root-suspension React 19). Оживляет ветку MainViewOutlet `view.suspense ?…` (adversarial F-8).
+    suspense: true,
     activityBar: true,
     // P0-3-смоук: НЕ голая ссылка — onClick подставил бы MouseEvent в optional `seed` и `seed.trim()`
     // бросил бы TypeError (кнопка Castor «мертвела»). Обёртка гасит аргумент.
