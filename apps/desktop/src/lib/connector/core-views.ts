@@ -1,9 +1,9 @@
 /**
  * Легализация main-вью ядра (F-8) через реестр `views` поверх mainView-enum F-4. Это НЕ модуль
  * (каркас) — ядровые вью регистрируются напрямую, как `registerCoreCommands` для команд. Питает
- * `MainViewOutlet` (App-lookup) и кнопки ActivityBar (home/today/board/agent). Редактор — дефолт-вью
- * (не в ActivityBar: вход через дерево/сайдбар). news (F-9) — уже НЕ здесь: вырезана в модуль
- * `connector/modules/news` и регистрируется через `ctx.views` (эталон вырезания модуля).
+ * `MainViewOutlet` (App-lookup) и кнопки ActivityBar (home/today/agent). Редактор — дефолт-вью
+ * (не в ActivityBar: вход через дерево/сайдбар). news (F-9) и board (F-10c) — уже НЕ здесь: вырезаны
+ * в модули `connector/modules/{news,board}` и регистрируются через `ctx.views` (эталон вью-модуля).
  *
  * Порядок/иконки/titleKey перенесены КАК ЕСТЬ из прежнего тернарника App.tsx и хардкода ActivityBar
  * (behavior-preserving). Нав-действия — существующие экшены ui-стора (openHome/… — не setMainView,
@@ -14,9 +14,8 @@
  * рендерящих <App/> напрямую, минуя main.tsx).
  */
 import { lazy } from 'react';
-import { CalendarCheck, FileText, Home, LayoutGrid } from 'lucide-react';
+import { CalendarCheck, FileText, Home } from 'lucide-react';
 import { CometIcon } from '../../components/common/BrandGlyphs';
-import { BoardView } from '../../components/board/BoardView';
 import { HomeView } from '../../components/home/HomeView';
 import { TodayView } from '../../components/today/TodayView';
 import { EditorArea } from '../../components/workspace/EditorArea';
@@ -30,8 +29,8 @@ const AgentView = lazy(() =>
 
 let registered = false;
 
-/** Регистрирует ядровые main-вью (home/today/board/agent) + редактор в реестр `views`. news —
- *  отдельный модуль (F-9), не здесь. Идемпотентно. */
+/** Регистрирует ядровые main-вью (home/today/agent) + редактор в реестр `views`. news (F-9) и
+ *  board (F-10c) — отдельные модули, не здесь. Идемпотентно. */
 export function registerCoreViews(): void {
   if (registered) return;
   registered = true;
@@ -59,16 +58,8 @@ export function registerCoreViews(): void {
   // news (order 30) — БОЛЬШЕ НЕ ядровая вью: вырезана в модуль `connector/modules/news` (F-9, первый
   // пилот вырезания). Регистрируется через `ctx.views` при активации модуля; в ActivityBar встаёт на
   // прежнее место (сортировка по order → между «Сегодня»=20 и «Доска»=40).
-  viewRegistry.register({
-    id: 'board',
-    titleKey: 'commands.view.board',
-    icon: LayoutGrid,
-    order: 40,
-    component: BoardView,
-    activityBar: true,
-    activate: () => useUIStore.getState().openBoard(),
-    isActive: (v) => v === 'board',
-  });
+  // board (order 40) — БОЛЬШЕ НЕ ядровая вью: вырезана в модуль `connector/modules/board` (F-10c).
+  // Регистрируется через `ctx.views`; в ActivityBar встаёт между «Новости»=30 и «Агент»=50.
   viewRegistry.register({
     id: 'agent',
     titleKey: 'commands.view.agent',

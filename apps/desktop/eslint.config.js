@@ -130,6 +130,7 @@ const MODULE_FEATURES = [
   'inbox',
   'digest',
   'contradictions',
+  'board', // F-10c (вью-модуль)
 ];
 
 // Явные исключения границы модулей (аналог CROSS_IMPORT_WHITELIST для F-1): если shared-компонент

@@ -106,9 +106,21 @@ AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
 активации (= порядок регистрации). `modules.disposeAll()` снимает все вклады всех модулей.
 Единая точка регистрации прод-модулей — `connector/modules/index.ts` (`activateModules()`,
-импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 8 модулей:** `news` (F-9) +
-7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/digest/contradictions). Новый модуль —
-строкой в `activateModules`. Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
+импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 9 модулей:** `news` (F-9,
+вью-модуль) + `board` (F-10c, вью-модуль) + 7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/
+digest/contradictions). Новый модуль — строкой в `activateModules` + строкой в `MODULE_FEATURES`
+(eslint.config.js, граница F-1b). Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
+
+**F-10c (разведка-driven, скоуп-дисциплина «лучше меньше чистых»):** из 4 кандидатов вырезаны 2 —
+`board` (вью-модуль, зеркало news) и `sync` (оверлей-модуль). `graph` **оставлен ядром** (отложен в
+F-10d): его слой `.graphLayer` спозиционирован `position:absolute; inset:0` ВНУТРИ `.appBody` (намеренно
+НЕ покрывает титлбар/статусбар — фикс по отчёту владельца «хром торчал поверх графа»); стандартный
+`OverlayOutlet` рендерит на уровне `.app` (не позиционирован) → граф якорился бы к вьюпорту, регрессия.
+Чистый вырез требует mount-point/«layer»-концепции у `OverlayContribution` — это НОВАЯ машинерия, не
+behavior-preserving-рефактор → F-10d. `plugins` **оставлен ядром** (мета-функция): `PluginsPanel` —
+UI-менеджер САМИХ плагинов (нативный `lib/plugin-host` iframe-хост + `tauriApi.plugins` + DP-8 consent),
+т.е. фронт плагин-**инфраструктуры**, а не доменная фича; делать плагин-менеджер «модулем» —
+концептуально инвертировано. Остаётся коннектор-chrome.
 
 ### ErrorBoundary per-contribution
 `components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`), оверлей

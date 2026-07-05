@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### Изменено · F-10c — вырез graph/sync-оверлеев + board-вью в модули (под защитой F-1b)
+
+Серия вырезаний F-10, порция C. **Behavior-preserving** (проводка меняется, поведение — нет). Каждый
+вырез добавляет модуль в `MODULE_FEATURES` (eslint.config.js) → CI-граница F-1b стережёт изоляцию.
+Разведка кандидатов ДО выреза сместила ожидания оркестратора (graph/sync — «верные», board — «спорный»):
+board оказался чистейшим (зеркало news), а graph/sync — со сложностями (детали ниже).
+
+- **`board` → вью-модуль** (`connector/modules/board.ts`, эталон вью-модуля F-9 news). «Доска» —
+  полноэкранная main-вью (`mainView='board'`): вклад через `ctx.views` (кнопка ActivityBar +
+  MainViewOutlet), ядро (`core-views`) больше НЕ импортирует `components/board`. order=40/icon/titleKey/
+  нав-действие `openBoard` перенесены КАК ЕСТЬ. Board **не имел** ни секции настроек, ни команды палитры
+  (ядро никогда не объявляло `view.board` — вход только кнопкой) → COMMAND_ID_ALIASES не нужен. AI-команда
+  `board.promote` (commands-core) ОСТАЁТСЯ ядром (зовёт `openBoard()`, импортит `lib/board-promote`, не
+  `components/board`). Стейт `mainView` + `openBoard/toggleBoard/closeBoard` остаются ядром (ui-стор).
+  `MODULE_FEATURES` += `board`. Тест `modules/board.test.ts`; `registries.test.ts` больше не ждёт board
+  среди ядровых вью.
+
 ### Добавлено · F-1b — CI-enforcement границы модуль/ядро (перед массой F-10c)
 
 Инфра-срез (правило линта + negative-check, **поведение приложения НЕ трогает**). F-10b-adversarial
