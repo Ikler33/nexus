@@ -22,7 +22,6 @@ import { ContradictionsPanel } from '../../components/contradictions/Contradicti
 import { DigestPanel } from '../../components/digest/DigestPanel';
 import { EpisodesPanel } from '../../components/episodes/EpisodesPanel';
 import { InboxPanel } from '../../components/inbox/InboxPanel';
-import { MemoryPanel } from '../../components/memory/MemoryPanel';
 import { TasksPanel } from '../../components/tasks/TasksPanel';
 import { overlayRegistry } from './registries';
 
@@ -34,14 +33,7 @@ export function registerCoreOverlays(): void {
   if (registered) return;
   registered = true;
 
-  // goals — вырезан в модуль `connector/modules/goals` (F-10b): регистрируется через `ctx.overlays`.
-  overlayRegistry.register({
-    id: 'memory',
-    titleKey: 'commands.view.memory',
-    order: 20,
-    isOpen: (s) => s.memoryOpen,
-    component: MemoryPanel,
-  });
+  // goals, memory — вырезаны в модули `connector/modules/{goals,memory}` (F-10b): через `ctx.overlays`.
   overlayRegistry.register({
     id: 'episodes',
     titleKey: 'episode.title',

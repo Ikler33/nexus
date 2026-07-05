@@ -109,6 +109,7 @@ const HOTKEYS_KEY = 'nexus.hotkeys.v1';
 const COMMAND_ID_ALIASES: Record<string, string> = {
   'view.news': 'news:view.news',
   'view.goals': 'goals:view.goals', // F-10b (оверлей-модуль)
+  'view.memory': 'memory:view.memory', // F-10b
 };
 
 class CommandRegistry {

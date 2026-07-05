@@ -402,17 +402,8 @@ export function registerCoreCommands(): Disposable {
         useUIStore.getState().openChat();
       },
     }),
-    commands.register({
-      // MEM-4: панель «Память ИИ» — управление явными фактами памяти агента.
-      id: 'view.memory',
-      title: 'AI memory',
-      titleKey: 'commands.view.memory',
-      source: 'core',
-      run: () => {
-        if (!useVaultStore.getState().info) return;
-        useUIStore.getState().toggleMemory();
-      },
-    }),
+    // view.memory — вырезана в модуль `connector/modules/memory` (F-10b): регистрируется через
+    // `ctx.commands` (id → `memory:view.memory`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'view.suggest',
       title: 'Link suggestions',
