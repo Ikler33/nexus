@@ -9,6 +9,7 @@
  * `modules.disposeAll()` (тесты/HMR).
  */
 import { modules } from '../module-manager';
+import { episodesModule } from './episodes';
 import { goalsModule } from './goals';
 import { memoryModule } from './memory';
 import { newsModule } from './news';
@@ -23,6 +24,7 @@ export function activateModules(): void {
   // F-10b: оверлей-модули (вырезаны из core-overlays через `ctx.overlays`).
   modules.register(goalsModule);
   modules.register(memoryModule);
+  modules.register(episodesModule);
   modules.activateAll();
 }
 
