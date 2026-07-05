@@ -13,6 +13,7 @@ import { episodesModule } from './episodes';
 import { goalsModule } from './goals';
 import { memoryModule } from './memory';
 import { newsModule } from './news';
+import { tasksModule } from './tasks';
 
 let activated = false;
 
@@ -25,6 +26,7 @@ export function activateModules(): void {
   modules.register(goalsModule);
   modules.register(memoryModule);
   modules.register(episodesModule);
+  modules.register(tasksModule);
   modules.activateAll();
 }
 

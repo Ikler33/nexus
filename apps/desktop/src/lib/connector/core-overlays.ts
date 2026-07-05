@@ -21,7 +21,6 @@
 import { ContradictionsPanel } from '../../components/contradictions/ContradictionsPanel';
 import { DigestPanel } from '../../components/digest/DigestPanel';
 import { InboxPanel } from '../../components/inbox/InboxPanel';
-import { TasksPanel } from '../../components/tasks/TasksPanel';
 import { overlayRegistry } from './registries';
 
 let registered = false;
@@ -32,14 +31,7 @@ export function registerCoreOverlays(): void {
   if (registered) return;
   registered = true;
 
-  // goals, memory, episodes — вырезаны в модули `connector/modules/*` (F-10b): через `ctx.overlays`.
-  overlayRegistry.register({
-    id: 'tasks',
-    titleKey: 'commands.view.tasks',
-    order: 40,
-    isOpen: (s) => s.tasksOpen,
-    component: TasksPanel,
-  });
+  // goals, memory, episodes, tasks — вырезаны в модули `connector/modules/*` (F-10b): `ctx.overlays`.
   overlayRegistry.register({
     id: 'inbox',
     titleKey: 'commands.view.inbox',

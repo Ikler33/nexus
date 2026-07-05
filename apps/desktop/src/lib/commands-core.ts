@@ -368,18 +368,8 @@ export function registerCoreCommands(): Disposable {
       defaultKey: 'mod+g',
       run: () => useUIStore.getState().toggleGraph(),
     }),
-    commands.register({
-      // TASK-1: панель «Задачи» (сводка всех `- [ ]` vault). Mod-Shift-K свободен.
-      id: 'view.tasks',
-      title: 'Tasks',
-      titleKey: 'commands.view.tasks',
-      source: 'core',
-      defaultKey: 'mod+shift+k',
-      run: () => {
-        if (!useVaultStore.getState().info) return; // нет vault — нечего сканировать
-        useUIStore.getState().toggleTasks();
-      },
-    }),
+    // view.tasks — вырезана в модуль `connector/modules/tasks` (F-10b): регистрируется через
+    // `ctx.commands` (id → `tasks:view.tasks`, source=plugin, хоткей ⌘⇧K сохранён). Ядро её не объявляет.
     commands.register({
       // INBOX-1: панель «Входящие» (GTD-разбор Inbox.md). Без хоткея — ActivityBar/палитра.
       id: 'view.inbox',
