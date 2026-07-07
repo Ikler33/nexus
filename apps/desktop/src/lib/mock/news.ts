@@ -3,6 +3,7 @@
  * семантикой, что бэкенд-команды NF-3 (страница/прочитано/в заметку/конфиг). Контент
  * зеркалит мок дизайн-прототипа (`news.jsx` хендоффа) — превью сверяется с макетом 1:1.
  */
+import { mockEmit } from '../api/bridge';
 import type {
   LinkSuggestion,
   NewsArticle,
@@ -148,10 +149,23 @@ export async function toNote(id: number): Promise<string> {
 }
 
 export async function refresh(): Promise<boolean> {
-  // Эмулируем прогон: через секунду «обновился» runAt (без новых записей).
+  // NB-1: эмулируем ЖИВОЙ прогон — эмитим те же этапы `news:progress`, что шлёт бэкенд-пайплайн
+  // (run.rs: sources → llm → digest → save), чтобы браузер-превью показывало живой статус
+  // «Опрашиваю источники k/N» / «Анализирую записи k/M», а не немой спиннер (mock-must-match-backend).
+  // Тайминги сжаты (< 1.5с до `save`), чтобы уложиться в отложенный refetch стора вне Tauri.
+  const SRC = 6;
+  const ITEMS = 8;
+  let d = 0;
+  const emitSources = (i: number) => mockEmit('news:progress', { stage: 'sources', done: i, total: SRC });
+  const emitLlm = (i: number) => mockEmit('news:progress', { stage: 'llm', done: i, total: ITEMS });
+  for (let i = 0; i <= SRC; i++) setTimeout(() => emitSources(i), (d += 45));
+  for (let i = 0; i <= ITEMS; i++) setTimeout(() => emitLlm(i), (d += 55));
+  setTimeout(() => mockEmit('news:progress', { stage: 'digest', done: 0, total: 1 }), (d += 120));
   setTimeout(() => {
     if (run) run = { ...run, runAt: Math.floor(Date.now() / 1000) };
-  }, 1000);
+    mockEmit('news:progress', { stage: 'save', done: 1, total: 1 });
+    mockEmit('jobs:changed');
+  }, (d += 120));
   return true;
 }
 

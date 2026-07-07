@@ -70,10 +70,14 @@ export function NewsView() {
     unreadOnly,
     loading,
     refreshing,
+    stage: runStage,
+    stuck,
+    died,
     error,
     notice,
     load,
     refresh,
+    onProgress,
     markRead,
     toNote,
     setEnabled,
@@ -85,10 +89,6 @@ export function NewsView() {
   const [gearOpen, setGearOpen] = useState(false);
   // Облако тем свёрнуто по умолчанию при их избытке (фидбэк владельца: 47 чипов застилали экран).
   const [tagsExpanded, setTagsExpanded] = useState(false);
-  // Этапный прогресс прогона (фидбэк 11.06): «Опрашиваю источники 7/16» вместо немого «Собираю…».
-  const [runStage, setRunStage] = useState<{ stage: string; done: number; total: number } | null>(
-    null,
-  );
   // Доверенные хосты статей (per-host consent из ридера) — для управления в gear-меню.
   const [extraHosts, setExtraHosts] = useState<string[]>([]);
   const [offline, setOffline] = useState(false);
@@ -110,15 +110,15 @@ export function NewsView() {
     return () => unlisten();
   }, [load]);
 
+  // NB-1: этап живого прогона (`news:progress`) → стор (единый источник статуса; ливнес-вотчдог
+  // и «зависло/умерло» решаются в сторе поверх той же джоб-инфры, без новой шины).
   useEffect(() => {
     let off = () => {};
-    void tauriApi.events
-      .onNewsProgress((p) => setRunStage(p.stage === 'save' ? null : p))
-      .then((fn) => {
-        off = fn;
-      });
+    void tauriApi.events.onNewsProgress(onProgress).then((fn) => {
+      off = fn;
+    });
     return () => off();
-  }, []);
+  }, [onProgress]);
 
   // При открытии меню подтягиваем актуальный список доверенных хостов.
   useEffect(() => {
@@ -230,6 +230,18 @@ export function NewsView() {
           count: run.llmFailed,
         })
       : legacyLlmError;
+  // NB-1: джоба прогона умерла (dead) — честная ошибка ЭТАПА вместо вечного «Собираю…». Причина —
+  // `last_error` мёртвой джобы; этап — последний виденный по `news:progress`. НЕ дублируем W-2-баннер
+  // llmDown (иной путь: там Ok-прогон с записью run, здесь — упавшая джоба), поэтому уступаем ему.
+  const diedMsg =
+    died && !llmError
+      ? died.stage
+        ? t('news.diedAt', {
+            stage: t(`news.stageLabel.${died.stage}`),
+            reason: died.reason || t('news.diedReasonUnknown'),
+          })
+        : t('news.diedAtUnknown', { reason: died.reason || t('news.diedReasonUnknown') })
+      : null;
 
   const card = (it: NewsItem) => (
     <div key={it.id} className={`${styles.card} ${it.read ? styles.cardRead : ''}`}>
@@ -305,6 +317,21 @@ export function NewsView() {
           <div className={styles.errBanner}>
             <AlertTriangle size={15} aria-hidden />
             {llmError}
+          </div>
+        )}
+        {/* NB-1: прогон умер — честная ошибка ЭТАПА (на чём встало + почему), а не немой спиннер. */}
+        {diedMsg && (
+          <div className={styles.errBanner} role="alert">
+            <AlertTriangle size={15} aria-hidden />
+            {diedMsg}
+          </div>
+        )}
+        {/* NB-1: прогресс не двигается дольше порога при живой джобе — МЯГКОЕ «похоже, зависло»
+            (не ошибка): отвечает на жалобу «долгая обработка или что-то сломалось?». */}
+        {refreshing && stuck && !diedMsg && (
+          <div className={styles.stuckBanner} role="status">
+            <AlertTriangle size={15} aria-hidden />
+            {t('news.stuck')}
           </div>
         )}
 

@@ -1056,6 +1056,16 @@
       "digest": "Writing the daily digest…"
     },
     "stalled": "The scheduler is not responding: the job is queued but never runs. Restart the app — diagnostics are written to the log (Library/Application Support/app.nexus.desktop/logs).",
+    "stuck": "Taking longer than usual with no progress — the run looks stuck. Still waiting and watching the connection.",
+    "diedAt": "The run stopped at the “{{stage}}” stage: {{reason}}",
+    "diedAtUnknown": "The run stopped: {{reason}}",
+    "diedReasonUnknown": "reason not recorded (see Diagnostics → Download logs)",
+    "stageLabel": {
+      "sources": "polling sources",
+      "llm": "analyzing entries",
+      "digest": "daily digest",
+      "save": "saving"
+    },
     "diag": {
       "title": "Diagnostics",
       "open": "Loading diagnostics",
