@@ -253,8 +253,10 @@ export function AgentView() {
                     onBulk={(d) => {
                       setAllDecisions(d);
                       toast(
+                        // Fix BF-1 №3c: bulk доступен только ДО «Подтвердить» (кнопки disabled вне
+                        // awaiting) → «выбрано», а не «применено» (реальная запись — после подтверждения).
                         d === 'applied'
-                          ? t('agent.changeset.applyToast')
+                          ? t('agent.changeset.selectToast')
                           : t('agent.changeset.rejectToast'),
                       );
                     }}
@@ -495,6 +497,7 @@ function TurnView({
           awaiting={isLast && status === 'awaiting'}
           approving={isLast && approving}
           active={active}
+          cancelled={status === 'cancelled'}
           onFile={onFile}
           onBulk={onBulk}
           onApprove={onApprove}
@@ -542,6 +545,9 @@ interface ChangesetProps {
   approving: boolean;
   /** Ход активен (running/paused/awaiting) — гейт анимации авто-бейджа Castor. */
   active: boolean;
+  /** Fix BF-1 №3c/MINOR-1: ход отменён — per-file выборы НЕ применялись; карточка сворачивается в
+   *  честное «прогон отменён» (не «применено: N»). */
+  cancelled: boolean;
   onFile: (actionId: number, decision: 'applied' | 'rejected') => void;
   onBulk: (decision: 'applied' | 'rejected') => void;
   onApprove: () => void;
@@ -570,6 +576,7 @@ function Changeset({
   awaiting,
   approving,
   active,
+  cancelled,
   onFile,
   onBulk,
   onApprove,
@@ -610,15 +617,21 @@ function Changeset({
   // интерактивную карточку в компактную строку-итог: окно «разрешения» уходит, мёртвых кнопок нет
   // (баг: карточка зависала после нажатия и «вела» вёрстку). Применённые правки видны в шагах хода.
   // `pending===0`: на паузе с нерешённым changeset карточка остаётся полной — resume вернёт кнопки.
-  if (!auto && !awaiting && pending === 0) {
+  // Fix BF-1 №3c/MINOR-1: ОТМЕНЁННЫЙ confirm-ход сворачиваем ВСЕГДА (даже с нерешёнными файлами —
+  // кнопки мертвы) и показываем честное «прогон отменён» вместо «применено: N»: per-file решения были
+  // лишь ВЫБОРОМ до «Подтвердить», запись не состоялась (или прервана отменой). auto-ход не трогаем —
+  // там правки реально применялись агентом до отмены.
+  if (!auto && !awaiting && (pending === 0 || cancelled)) {
     const applied = files.filter((f) => f.decision === 'applied').length;
     const rejected = files.filter((f) => f.decision === 'rejected').length;
-    const summary = [
-      applied > 0 ? t('agent.changeset.resolvedApplied', { count: applied }) : null,
-      rejected > 0 ? t('agent.changeset.resolvedRejected', { count: rejected }) : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
+    const summary = cancelled
+      ? t('agent.changeset.cancelledSummary')
+      : [
+          applied > 0 ? t('agent.changeset.resolvedApplied', { count: applied }) : null,
+          rejected > 0 ? t('agent.changeset.resolvedRejected', { count: rejected }) : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
     return (
       <div className={`${styles.changeset} ${styles.csResolved}`}>
         <div className={styles.csH}>
@@ -733,7 +746,15 @@ function Changeset({
                 {decision === 'applied' ? (
                   <span className={`${styles.cfBadge} ${styles.cfOk}`}>
                     {auto ? <OrbitIcon size={12} aria-hidden /> : <Check size={12} aria-hidden />}
-                    {auto ? t('agent.changeset.autoMark') : t('agent.changeset.applied')}
+                    {/* Fix BF-1 №3c: честная терминология гейта. Пока ход ждёт подтверждения
+                        (awaiting) per-file решение — лишь «выбрано» (запись НЕ произошла); после
+                        «Подтвердить» (ход ушёл из awaiting) — настоящее «применено». auto-режим
+                        применяет сам → «авто». */}
+                    {auto
+                      ? t('agent.changeset.autoMark')
+                      : awaiting
+                        ? t('agent.changeset.selected')
+                        : t('agent.changeset.applied')}
                   </span>
                 ) : decision === 'rejected' ? (
                   <span className={`${styles.cfBadge} ${styles.cfNo}`}>

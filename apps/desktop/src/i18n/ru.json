@@ -463,7 +463,9 @@
   "file": {
     "noActiveNote": "Откройте заметку, чтобы скопировать",
     "copied": "Заметка скопирована как Markdown",
-    "copyFailed": "Не удалось скопировать заметку"
+    "copyFailed": "Не удалось скопировать заметку",
+    "openVaultFailed": "Не удалось открыть папку: {{msg}}",
+    "openVaultDenied": "Нет доступа к папке. macOS: Системные настройки → Конфиденциальность и безопасность → Файлы и папки (или выберите папку вне Documents/Desktop/Downloads)."
   },
   "tree": {
     "label": "Файлы vault",
@@ -734,17 +736,19 @@
       "new": "новый",
       "edit": "правка",
       "execLabel": "Выполнить команду",
+      "selected": "выбрано",
       "applied": "применено",
       "rejected": "отклонено",
       "resolvedApplied": "применено: {{count}}",
       "resolvedRejected": "отклонено: {{count}}",
+      "cancelledSummary": "прогон отменён",
       "autoBadge": "Авто · агент ревьюит сам",
       "autoMark": "авто",
       "confirmApprove": "Подтвердить",
       "footAuto": "Авто-режим · изменения применяются агентом",
       "footPending": "{{count}} на ревью · агент ждёт решения",
       "footHandled": "Все изменения обработаны",
-      "applyToast": "Все изменения применены",
+      "selectToast": "Все изменения выбраны",
       "rejectToast": "Все изменения отклонены"
     },
     "dock": {

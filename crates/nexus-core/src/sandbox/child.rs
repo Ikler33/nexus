@@ -151,6 +151,9 @@ where
             &tk,
             &cancel,
             &paused,
+            // Fix BF-1 №1: in-container backstop без гейта (решение — host-side через act.sock); свежий
+            // 0-счётчик пауз (авторитетный wall-clock паузит/убивает host podman, см. модульную доку).
+            &Arc::new(std::sync::atomic::AtomicU64::new(0)),
             RunCtx::run(spec.run_id),
             &mut on_event,
         )

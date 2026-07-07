@@ -14,7 +14,7 @@
 //! Границы ([`LoopBounds`] + [`ContextBudget`]) → [`LoopOutcome::BudgetExhausted`] (без дальнейших
 //! исполнений инструментов). Терминальный сбой провайдера → [`LoopOutcome::Error`].
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -99,6 +99,10 @@ fn count_used(tk: &dyn Tokenizer, messages: &[ChatMessage]) -> usize {
 /// цикл останавливается на следующей проверке границы → [`BudgetKind::Paused`] (не `Cancelled`,
 /// не `Error`): хендлер ре-кьюит прогон для возобновления на un-pause. Это ВТОРОЙ из трёх чек-пойнтов
 /// kill-switch (1-й — `drive` до старта оставляет прогон queued; 3-й — актуатор не пишет под паузой).
+/// `paused_nanos` — **Fix BF-1 №1**: счётчик наносекунд, накопленных на ОЖИДАНИИ человеческого решения
+/// у гейта (пишется в `decide()` — см. `session::PauseAccountingDecision`). Это время ВЫЧИТАЕТСЯ из
+/// стенного возраста при проверке `wall_clock` (раздумья человека у changeset-гейта НЕ жгут бюджет).
+/// Прямые вызыватели без гейта (smoke/eval/sandbox-child) передают свежий 0-счётчик (поведение прежнее).
 #[allow(clippy::too_many_arguments)] // цикл явно принимает все свои зависимости (тестируемость > эргономика)
 pub async fn run_agent_loop(
     provider: &dyn ToolCapableProvider,
@@ -109,6 +113,7 @@ pub async fn run_agent_loop(
     tk: &dyn Tokenizer,
     cancel: &Arc<AtomicBool>,
     agent_paused: &Arc<AtomicBool>,
+    paused_nanos: &Arc<AtomicU64>,
     ctx: RunCtx,
     on_event: &mut (dyn FnMut(AgentEvent) + Send),
 ) -> LoopOutcome {
@@ -137,11 +142,14 @@ pub async fn run_agent_loop(
                 partial: last_content,
             };
         }
-        if start.elapsed() >= bounds.wall_clock {
-            return LoopOutcome::BudgetExhausted {
-                kind: BudgetKind::WallClock,
-                partial: last_content,
-            };
+        // Fix BF-1 №1: время ОЖИДАНИЯ человеческого решения у гейта (`paused_nanos`, копится в `decide()`)
+        // ВЫЧИТАЕТСЯ из стенного возраста — раздумья человека НЕ жгут wall_clock-бюджет. saturating_sub:
+        // пауза не может дать «отрицательный» возраст. Kill-switch/Cancelled выше — их семантика цела
+        // (вычитается ТОЛЬКО блокировка на decide, не отмена/пауза прогона).
+        let paused = Duration::from_nanos(paused_nanos.load(Ordering::Relaxed));
+        if start.elapsed().saturating_sub(paused) >= bounds.wall_clock {
+            // Fix BF-1 №2: жёсткий исход бюджета эмитит терминальный Error (иначе UI вечно «Выполняю…»).
+            return emit_budget_exhausted(on_event, BudgetKind::WallClock, last_content);
         }
         // Токен-бюджет: сообщения не должны превышать ВХОДНОЙ бюджет окна (резерв под ответ оставлен).
         let used = count_used(tk, &messages);
@@ -150,10 +158,7 @@ pub async fn run_agent_loop(
             window: budget.context_window,
         });
         if used > budget.input_budget() {
-            return LoopOutcome::BudgetExhausted {
-                kind: BudgetKind::Tokens,
-                partial: last_content,
-            };
+            return emit_budget_exhausted(on_event, BudgetKind::Tokens, last_content);
         }
 
         // — ход модели (контент стримится как AssistantToken; параллельно копим его в `last_content`,
@@ -238,16 +243,42 @@ pub async fn run_agent_loop(
     }
 
     // Исчерпан max_steps без финала.
-    LoopOutcome::BudgetExhausted {
-        kind: BudgetKind::Steps,
-        partial: last_content,
-    }
+    emit_budget_exhausted(on_event, BudgetKind::Steps, last_content)
 }
 
 /// Можно ли простить этот сбой одним re-ask. Только «битый ответ модели» (склей args не-JSON / ход без
 /// валидных вызовов) — это [`crate::ai::AiError::BadResponse`]. Сетевые/политические/таймаут — нет.
 fn is_reaskable(e: &crate::ai::AiError) -> bool {
     matches!(e, crate::ai::AiError::BadResponse(_))
+}
+
+/// **Fix BF-1 №2 — ЕДИНЫЙ текст «бюджет исчерпан»** для Steps/WallClock/Tokens. Один источник для
+/// стрим-события цикла ([`emit_budget_exhausted`]) И финализации run_store
+/// ([`super::finish::outcome_to_finish`]) — чтобы UI (терминал стрима) и история прогона (запись в БД)
+/// НЕ расходились. `Paused`/`Cancelled` имеют СВОИ тексты (у финализатора) и через этот хелпер НЕ идут.
+pub(crate) fn budget_exhausted_text(kind: BudgetKind, partial: &str) -> String {
+    format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}")
+}
+
+/// **Fix BF-1 №2**: собрать `BudgetExhausted`-исход ЖЁСТКОГО бюджета (Steps/WallClock/Tokens) И эмитить
+/// терминальное [`AgentEvent::Error`] в поток. До фикса эти исходы не слали НИ ОДНОГО терминального
+/// события → one-shot вызыватели (desktop/cli/acp/connect) не уводили UI из «Выполняю…». Одно место
+/// чинит всех. Текст — из [`budget_exhausted_text`] (совпадает с записью в БД). `Paused` (agentd
+/// паркует/ре-кьюит — НЕ терминал) и `Cancelled` (финализирует вызыватель) сюда НЕ передаются.
+fn emit_budget_exhausted(
+    on_event: &mut (dyn FnMut(AgentEvent) + Send),
+    kind: BudgetKind,
+    partial: String,
+) -> LoopOutcome {
+    debug_assert!(
+        matches!(
+            kind,
+            BudgetKind::Steps | BudgetKind::WallClock | BudgetKind::Tokens
+        ),
+        "emit_budget_exhausted только для жёсткого бюджета (не Paused/Cancelled)"
+    );
+    on_event(AgentEvent::Error(budget_exhausted_text(kind, &partial)));
+    LoopOutcome::BudgetExhausted { kind, partial }
 }
 
 #[cfg(test)]
@@ -340,6 +371,46 @@ mod tests {
         }
     }
 
+    /// **Fix BF-1 №1 (тест)**: инструмент, чей `invoke` БЛОКИРУЕТСЯ `delay` (эмулируя ожидание
+    /// человеческого решения у гейта) и — если задан `paused_nanos` — записывает эту длительность в
+    /// счётчик пауз (ровно как [`crate::agent::session::PauseAccountingDecision`] вокруг `decide()`). Так
+    /// wall_clock-вычитание паузы доказывается на уровне цикла, БЕЗ поднятия всего актуатора. Имя `debug.pause`.
+    struct PausingTool {
+        delay: Duration,
+        paused_nanos: Option<Arc<AtomicU64>>,
+    }
+
+    #[async_trait]
+    impl crate::agent::tool::Tool for PausingTool {
+        fn spec(&self) -> crate::agent::tool::ToolSpec {
+            crate::agent::tool::ToolSpec {
+                name: "debug.pause".into(),
+                description: "спит delay (эмуляция ожидания решения)".into(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        }
+        async fn invoke(&self, _args: &str) -> Result<String, crate::agent::tool::ToolError> {
+            // Кредитуем ИЗМЕРЕННОЕ время сна (не константу delay) — как реальный декоратор мерит
+            // фактическую блокировку на decide(). На нагруженном CI sleep может занять дольше delay;
+            // константа оставила бы некредитованный хвост → флейк wall_clock-теста.
+            let t0 = Instant::now();
+            tokio::time::sleep(self.delay).await;
+            if let Some(p) = &self.paused_nanos {
+                let elapsed = u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                p.fetch_add(elapsed, Ordering::Relaxed);
+            }
+            Ok("paused".into())
+        }
+    }
+
+    fn pause_call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            name: "debug.pause".into(),
+            arguments: "{}".into(),
+        }
+    }
+
     fn budget() -> ContextBudget {
         ContextBudget {
             context_window: 100_000,
@@ -379,6 +450,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -504,6 +576,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -543,6 +616,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -575,6 +649,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -621,6 +696,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -662,6 +738,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -710,6 +787,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |e| events.push(e),
         )
@@ -751,6 +829,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -784,6 +863,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -844,6 +924,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut on_event,
         )
@@ -888,6 +969,7 @@ mod tests {
             &tk,
             &cancel,
             &agent_paused,
+            &Arc::new(AtomicU64::new(0)),
             RunCtx::NONE,
             &mut |_| {},
         )
@@ -900,5 +982,204 @@ mod tests {
             }
         ));
         assert_eq!(*provider.calls_seen.lock().unwrap(), 0);
+    }
+
+    /// **Fix BF-1 №1 (ключевое доказательство)**: время ожидания человеческого решения у гейта
+    /// (записанное в `paused_nanos`, как это делает `PauseAccountingDecision` вокруг `decide()`) НЕ тикает
+    /// против wall_clock. wall_clock=20мс; инструмент «ждёт решения» 60мс и кредитует это как паузу. На
+    /// СЛЕДУЮЩЕЙ проверке границы стенной возраст ~60мс, но `60−60 ≈ 0 < 20` ⇒ НЕ WallClock ⇒ цикл
+    /// доходит до Final. Без вычитания тот же прогон умер бы по WallClock (см. control-тест ниже).
+    #[tokio::test]
+    async fn wall_clock_excludes_decision_wait_time() {
+        let provider = FakeToolProvider::new(vec![
+            ScriptedTurn {
+                stream: None,
+                result: Ok(ToolTurn::ToolCalls(vec![pause_call("p1")])),
+            },
+            ScriptedTurn {
+                stream: None,
+                result: Ok(ToolTurn::Final("готово".into())),
+            },
+        ]);
+        let paused_nanos = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.insert(Arc::new(PausingTool {
+            delay: Duration::from_millis(60),
+            paused_nanos: Some(paused_nanos.clone()),
+        }));
+        let tk = WordTokenizer;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
+        let bounds = LoopBounds {
+            max_steps: 5,
+            wall_clock: Duration::from_millis(20),
+        };
+        let outcome = run_agent_loop(
+            &provider,
+            &reg,
+            vec![ChatMessage::user("работай")],
+            bounds,
+            &budget(),
+            &tk,
+            &cancel,
+            &agent_paused,
+            &paused_nanos,
+            RunCtx::NONE,
+            &mut |_| {},
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            LoopOutcome::Final("готово".into()),
+            "ожидание решения у гейта НЕ должно убивать прогон по WallClock: {outcome:?}"
+        );
+    }
+
+    /// **Fix BF-1 №1 (control)**: тот же сценарий, но время инструмента НЕ кредитуется как пауза (обычная
+    /// работа, не ожидание решения). Стенной возраст ~60мс ≥ 20мс, paused=0 ⇒ WallClock срабатывает на
+    /// следующей границе. Доказывает, что вычитается ИМЕННО пауза — жёсткий бюджет по-прежнему стережёт.
+    #[tokio::test]
+    async fn wall_clock_still_trips_when_time_not_credited_as_pause() {
+        let provider = FakeToolProvider::new(vec![
+            ScriptedTurn {
+                stream: None,
+                result: Ok(ToolTurn::ToolCalls(vec![pause_call("p1")])),
+            },
+            ScriptedTurn {
+                stream: None,
+                result: Ok(ToolTurn::Final("не достигнут".into())),
+            },
+        ]);
+        let paused_nanos = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.insert(Arc::new(PausingTool {
+            delay: Duration::from_millis(60),
+            paused_nanos: None,
+        }));
+        let tk = WordTokenizer;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
+        let bounds = LoopBounds {
+            max_steps: 5,
+            wall_clock: Duration::from_millis(20),
+        };
+        let outcome = run_agent_loop(
+            &provider,
+            &reg,
+            vec![ChatMessage::user("работай")],
+            bounds,
+            &budget(),
+            &tk,
+            &cancel,
+            &agent_paused,
+            &paused_nanos,
+            RunCtx::NONE,
+            &mut |_| {},
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                LoopOutcome::BudgetExhausted {
+                    kind: BudgetKind::WallClock,
+                    ..
+                }
+            ),
+            "без учёта паузы жёсткий wall_clock обязан сработать: {outcome:?}"
+        );
+    }
+
+    /// **Fix BF-1 №2**: жёсткий исход бюджета (здесь WallClock) эмитит РОВНО ОДНО терминальное
+    /// [`AgentEvent::Error`] в поток — иначе one-shot UI (desktop/cli/acp/connect) вечно «Выполняю…».
+    /// Текст события СОВПАДАЕТ с записью в БД ([`budget_exhausted_text`] = `finish::outcome_to_finish`).
+    #[tokio::test]
+    async fn hard_budget_exhaustion_emits_terminal_error_once() {
+        let provider = FakeToolProvider::new(vec![]);
+        let reg = ToolRegistry::new();
+        let paused_nanos = Arc::new(AtomicU64::new(0));
+        let tk = WordTokenizer;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(false));
+        let bounds = LoopBounds {
+            max_steps: 5,
+            wall_clock: Duration::ZERO,
+        };
+        let mut events = Vec::new();
+        let outcome = run_agent_loop(
+            &provider,
+            &reg,
+            vec![ChatMessage::user("q")],
+            bounds,
+            &budget(),
+            &tk,
+            &cancel,
+            &agent_paused,
+            &paused_nanos,
+            RunCtx::NONE,
+            &mut |e| events.push(e),
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            LoopOutcome::BudgetExhausted {
+                kind: BudgetKind::WallClock,
+                ..
+            }
+        ));
+        let errs: Vec<&String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Error(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            errs.len(),
+            1,
+            "ровно ОДНО терминальное Error-событие: {events:?}"
+        );
+        assert_eq!(
+            errs[0],
+            &budget_exhausted_text(BudgetKind::WallClock, ""),
+            "текст события совпадает с записью в БД (finish::outcome_to_finish)"
+        );
+    }
+
+    /// **Fix BF-1 №2 (граница)**: `Paused` (kill-switch) — НЕ терминал (agentd паркует/ре-кьюит прогон)
+    /// ⇒ НИ ОДНОГО Error-события (иначе UI показал бы ошибку у прогона, который лишь приостановлен).
+    #[tokio::test]
+    async fn paused_outcome_does_not_emit_error() {
+        let provider = FakeToolProvider::new(vec![]);
+        let reg = ToolRegistry::new();
+        let paused_nanos = Arc::new(AtomicU64::new(0));
+        let tk = WordTokenizer;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let agent_paused = Arc::new(AtomicBool::new(true)); // пауза до старта
+        let mut events = Vec::new();
+        let outcome = run_agent_loop(
+            &provider,
+            &reg,
+            vec![ChatMessage::user("q")],
+            LoopBounds::default(),
+            &budget(),
+            &tk,
+            &cancel,
+            &agent_paused,
+            &paused_nanos,
+            RunCtx::NONE,
+            &mut |e| events.push(e),
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            LoopOutcome::BudgetExhausted {
+                kind: BudgetKind::Paused,
+                ..
+            }
+        ));
+        assert!(
+            !events.iter().any(|e| matches!(e, AgentEvent::Error(_))),
+            "Paused НЕ эмитит терминальный Error: {events:?}"
+        );
     }
 }

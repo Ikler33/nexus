@@ -944,13 +944,77 @@ async fn probe_endpoint(probe: &GuardedClient, url: &str) -> AppResult<()> {
         Ok(_) => Ok(()),
         Err(NetError::Denied(d)) => Err(AiError::Denied(d).into()),
         Err(NetError::BadUrl) => Err(AppError::Msg("некорректный URL".into())),
-        Err(NetError::Http(e)) => Err(AppError::Msg(e.to_string())),
+        // Fix BF-1 №3a: сетевой сбой на хосте `localhost` — дописываем подсказку про IPv6 (::1). Только
+        // текст; сетевое поведение не меняется. Единственный вызыватель — `test_ai_connection` (его
+        // используют SelfCheck и блок «Подключение» настроек); `test_agent_connection` (AF_UNIX/ACP)
+        // идёт СВОИМ путём и этой подсказки не получает.
+        Err(NetError::Http(e)) => Err(AppError::Msg(with_localhost_ipv6_hint(url, e.to_string()))),
     }
+}
+
+/// Fix BF-1 №3a: если хост URL — `localhost` и связь не удалась, дописываем подсказку про IPv6. `localhost`
+/// часто резолвится в IPv6 (`::1`), тогда как локальные LLM-серверы нередко слушают только IPv4 — явный
+/// `http://127.0.0.1:<порт>` тогда помогает. Диагностика ТОЛЬКО в тексте ошибки — сеть не трогаем.
+fn with_localhost_ipv6_hint(url: &str, msg: String) -> String {
+    if url_host_is_localhost(url) {
+        format!(
+            "{msg} — подсказка: «localhost» может резолвиться в IPv6 (::1); если сервер слушает только \
+             IPv4, укажите http://127.0.0.1:<порт>"
+        )
+    } else {
+        msg
+    }
+}
+
+/// Хост URL — ровно `localhost` (регистронезависимо). Лёгкий парс без зависимостей: срезаем схему,
+/// берём authority до пути/запроса, отбрасываем userinfo (`@`) и порт (`:`); IPv6-литерал `[..]` не имя.
+fn url_host_is_localhost(url: &str) -> bool {
+    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    let host = if let Some(stripped) = host_port.strip_prefix('[') {
+        // IPv6-литерал (`[::1]`) — не хост-имя `localhost`.
+        stripped
+            .split_once(']')
+            .map(|(h, _)| h)
+            .unwrap_or(host_port)
+    } else {
+        host_port
+            .split_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(host_port)
+    };
+    host.eq_ignore_ascii_case("localhost")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fix BF-1 №3a: детектор `localhost`-хоста для IPv6-подсказки. Только имя `localhost` (не 127.0.0.1,
+    /// не `[::1]`, не суффиксы вроде `notlocalhost`); порт/схема/userinfo не мешают.
+    #[test]
+    fn localhost_host_detected_for_ipv6_hint() {
+        assert!(url_host_is_localhost("http://localhost:8080/v1"));
+        assert!(url_host_is_localhost("https://LocalHost"));
+        assert!(url_host_is_localhost("http://user@localhost:1234"));
+        assert!(!url_host_is_localhost("http://127.0.0.1:8080"));
+        assert!(!url_host_is_localhost("http://[::1]:8080"));
+        assert!(!url_host_is_localhost("http://notlocalhost:8080"));
+        assert!(!url_host_is_localhost("http://192.168.0.31:8080/v1"));
+        // Подсказка добавляется только для localhost.
+        assert!(
+            with_localhost_ipv6_hint("http://localhost:8080", "нет связи".into())
+                .contains("127.0.0.1")
+        );
+        assert_eq!(
+            with_localhost_ipv6_hint("http://127.0.0.1:8080", "нет связи".into()),
+            "нет связи"
+        );
+    }
 
     #[test]
     fn apply_ai_sets_fields_preserves_others_and_detects_embedding_change() {

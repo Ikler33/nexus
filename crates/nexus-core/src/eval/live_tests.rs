@@ -1019,6 +1019,7 @@ async fn live_tool_call_smoke() {
         &tk,
         &cancel,
         &agent_paused,
+        &Arc::new(std::sync::atomic::AtomicU64::new(0)),
         RunCtx::NONE,
         &mut |e| match e {
             AgentEvent::ToolCall { kind, args, .. } => {

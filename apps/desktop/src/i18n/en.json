@@ -457,7 +457,9 @@
   "file": {
     "noActiveNote": "Open a note to copy",
     "copied": "Note copied as Markdown",
-    "copyFailed": "Couldn't copy the note"
+    "copyFailed": "Couldn't copy the note",
+    "openVaultFailed": "Couldn't open the folder: {{msg}}",
+    "openVaultDenied": "No access to this folder. macOS: System Settings → Privacy & Security → Files and Folders (or pick a folder outside Documents/Desktop/Downloads)."
   },
   "tree": {
     "label": "Vault files",
@@ -722,17 +724,19 @@
       "new": "new",
       "edit": "edit",
       "execLabel": "Run command",
+      "selected": "selected",
       "applied": "applied",
       "rejected": "rejected",
       "resolvedApplied": "{{count}} applied",
       "resolvedRejected": "{{count}} rejected",
+      "cancelledSummary": "run cancelled",
       "autoBadge": "Auto · agent self-reviews",
       "autoMark": "auto",
       "confirmApprove": "Confirm",
       "footAuto": "Auto mode · changes applied by the agent",
       "footPending": "{{count}} pending · agent is waiting",
       "footHandled": "All changes handled",
-      "applyToast": "All changes applied",
+      "selectToast": "All changes selected",
       "rejectToast": "All changes rejected"
     },
     "dock": {

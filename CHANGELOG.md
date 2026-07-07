@@ -6,6 +6,57 @@
 
 ## [Unreleased]
 
+### Исправлено · BF-1 — wall-clock у гейта, терминал бюджета, UX-мелочи (live-приёмка 2026-07-08)
+
+Три починки, найденные live-приёмкой и верифицированные по коду. **Backend-часть behavior-preserving
+для «здорового» пути** — новое поведение только на границах (пауза человека / исчерпание бюджета).
+
+- **Fix 1 (MAJOR) — время ожидания решения человека НЕ жжёт `wall_clock`.** Ожидание аппрува у
+  changeset-гейта происходит внутри tool-диспатча (`decision_source.decide().await` без таймаута), а
+  `run_agent_loop` мерил wall_clock как «сырое» стенное время → раздумья >5 мин у гейта = мгновенный
+  «бюджет исчерпан (WallClock)» сразу после «Подтвердить». Введён per-run счётчик пауз
+  `Arc<AtomicU64>`: декоратор `session::PauseAccountingDecision` вокруг `DecisionSource::decide`
+  аккумулирует туда длительность блокировки на решении, а `run_agent_loop` вычитает её из возраста
+  прогона (`start.elapsed().saturating_sub(paused) >= wall_clock`). Декоратор ставится на ЕДИНЫЙ
+  `decide()` канона `run_proposal_round` → покрывает in-process пути note-changeset (`GatedToolCtx`) и
+  `skill.save` (`SkillSaveCtx`). Kill-switch (пауза агента) и Cancelled НЕ ослаблены — вычитается только
+  длительность `decide()`. Тесты: `wall_clock_excludes_decision_wait_time` (+ control
+  `wall_clock_still_trips_when_time_not_credited_as_pause`). Конфигурируемый `wall_clock`, edge общего
+  gate у субагента и межпроцессная exec-пауза — осознанно отложены (`docs/BACKLOG.md` §«Хвосты BF-1»).
+
+- **Fix 2 (MAJOR) — исходы бюджета эмитят терминальное событие (UI больше не «Выполняю…» вечно).**
+  `run_agent_loop` на `BudgetExhausted{Steps|WallClock|Tokens}` возвращал исход БЕЗ `on_event` → one-shot
+  вызыватели (desktop/cli/acp/connect) не уводили ход из «running». Теперь `emit_budget_exhausted`
+  эмитит `AgentEvent::Error` перед возвратом (одно место чинит всех вызывателей). Текст — единый с БД:
+  `runner::budget_exhausted_text` переиспользуется и стрим-событием, и `finish::outcome_to_finish` (UI и
+  история не расходятся). `Paused` (agentd паркует/ре-кьюит — НЕ терминал) и `Cancelled` (финализирует
+  вызыватель) события НЕ эмитят. Тесты: `hard_budget_exhaustion_emits_terminal_error_once`,
+  `paused_outcome_does_not_emit_error`.
+
+- **Fix 3 (миноры):**
+  - **3a — IPv6-подсказка** в «Проверить связь»/self-check: при сетевом сбое на хосте `localhost`
+    дописываем в текст ошибки подсказку про `::1` и `http://127.0.0.1:<порт>` (`probe_endpoint`,
+    только текст; сеть не трогаем). Тест `localhost_host_detected_for_ipv6_hint`.
+  - **3b — TCC/PermissionDenied UX:** `openVaultFlow` теперь ловит ошибку открытия vault (частая на
+    macOS — `os error 13`) и показывает внятный тост (i18n `file.openVaultDenied`/`file.openVaultFailed`)
+    вместо тихого js-unhandled-rejection.
+  - **3c — честная терминология гейта:** per-file метка и bulk-тост ДО «Подтвердить» переименованы с
+    «применено» на «выбрано» (i18n `changeset.selected` + `changeset.selectToast`); настоящий пост-apply
+    статус остаётся «применено» (`changeset.applied`/`resolvedApplied`) — бейдж выбирает ключ по `awaiting`.
+
+- **Доводка по adversarial-ревью (тот же срез):** (1) session-уровневый тест проводки декоратора
+  `session_slow_gate_decision_does_not_burn_wall_clock` через новый pub(crate)-шов
+  `run_agent_session_bounded` — мутант «голый `deps.decision_source` в гейт» проверен вручную и валит
+  тест; (2) MINOR-1 — отменённый confirm-ход сворачивает changeset-карточку в честное «прогон отменён»
+  (i18n `changeset.cancelledSummary`) вместо ложного «применено: N» (записи не было; auto-ход не тронут —
+  там правки реально применялись) + компонент-тест; (3) юнит-тесты catch-пути `openVaultFlow`
+  (denied vs generic, `commands-core.test.ts`); (4) `PausingTool` кредитует ИЗМЕРЕННОЕ время сна
+  (анти-флейк CI); (5) поправлены врущие комментарии (субагент с общим gate кредитует счётчик РОДИТЕЛЯ;
+  `probe_endpoint` зовёт только `test_ai_connection`); (6) BACKLOG дополнен: амплификация кредита при
+  конкурентных детях, pre-existing «cancel не разблокирует висящий `decide()`», CLI-дубль текста бюджета
+  (осознанно оставлен — консистентен с provider-Error), IPv6-подсказка в реестре нелокализованных
+  probe-текстов AC-EGR-14.
+
 ### Изменено · F-10d — граф: layer-mount у OverlayContribution + вырез graph (11-й модуль)
 
 Серия вырезаний F-10, порция D. **Behavior-preserving** (проводка меняется, поведение/геометрия — нет).
