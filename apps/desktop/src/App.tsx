@@ -29,10 +29,11 @@ import { SettingsView } from './components/settings/SettingsView';
 import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
-// Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
+// Панели грузятся лениво (плагины — iframe-демо).
 // (Ленивая AgentView переехала в lib/connector/core-views — main-вью резолвит MainViewOutlet.)
 // (F-10c: SyncPanel вырезан в модуль `connector/modules/sync` — приходит через OverlayOutlet.)
-const GraphView = lazy(() => import('./components/graph/GraphView'));
+// (F-10d: Граф — тяжёлый d3-force/louvain §10 — вырезан в модуль `connector/modules/graph`; ленивый
+//  GraphView под Suspense живёт в graph-зоне `GraphLayer`, приходит через appBody-инстанс OverlayOutlet.)
 const PluginsPanel = lazy(() =>
   import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
 );
@@ -54,7 +55,8 @@ const VersionHistory = lazy(() =>
  */
 export function App() {
   const info = useVaultStore((s) => s.info);
-  const graphOpen = useUIStore((s) => s.graphOpen);
+  // F-10d: Граф (`graphOpen`) резолвит реестр `overlays` через appBody-инстанс <OverlayOutlet mount="appBody"/>
+  // внутри `.appBody` — App больше не подписан на `graphOpen` и не рендерит слой напрямую.
   const chatOpen = useUIStore((s) => s.chatOpen);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
   // F-10c: SyncPanel (`syncOpen`) резолвит реестр `overlays` через <OverlayOutlet/> — App больше не
@@ -228,16 +230,12 @@ export function App() {
               <AiPanel variant="overlay" />
             </div>
           )}
-          {/* Граф — absolute-слой ПОВЕРХ тела (между титлбаром и статусбаром, рейл живой).
-              Раньше рендерился 4-м ребёнком грида .app → implicit-строка ПОСЛЕ статусбара,
-              на реальном vault хром торчал поверх графа (отчёт владельца). */}
-          {graphOpen && (
-            <Suspense fallback={null}>
-              <div className={styles.graphLayer}>
-                <GraphView />
-              </div>
-            </Suspense>
-          )}
+          {/* F-10d: оверлеи mount:'appBody' (единственный — Граф) — из реестра `overlays` через
+              appBody-инстанс OverlayOutlet ВНУТРИ `.appBody`. Слой графа `.graph-layer` (absolute
+              inset:0) остаётся В ГРАНИЦАХ тела, не поверх титлбара/статусбара (фикс владельца «хром
+              торчал поверх графа»). Заменяет прежний хардкод `{graphOpen && <div.graphLayer><GraphView/></div>}`;
+              позиция/поведение идентичны + per-contribution ErrorBoundary. */}
+          <OverlayOutlet mount="appBody" />
         </div>
       </div>
       <InlineAria />

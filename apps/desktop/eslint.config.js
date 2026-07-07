@@ -132,6 +132,7 @@ const MODULE_FEATURES = [
   'contradictions',
   'board', // F-10c (вью-модуль)
   'sync', // F-10c (оверлей-модуль; вырезан НАЧИСТО — ConflictResolver вынесен в components/common)
+  'graph', // F-10d (оверлей-модуль, mount:'appBody'; GraphLayer-слой в graph-зоне)
 ];
 
 // Явные исключения границы модулей (аналог CROSS_IMPORT_WHITELIST для F-1): если shared-компонент

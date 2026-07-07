@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import './modules'; // сайд-эффект: активирует оверлей-модули (7 F-10b + sync F-10c) — источник оверлеев
+import './modules'; // сайд-эффект: активирует оверлей-модули (7 F-10b + sync F-10c + graph F-10d) — источник оверлеев
 import { overlayRegistry } from './registries';
 import { useUIStore } from '../../stores/ui';
 import type { UIState } from '../../stores/ui';
@@ -56,13 +56,12 @@ describe('overlayRegistry (F-8c)', () => {
     expect(overlayRegistry.get('t:dup')).toBeUndefined();
   });
 
-  it('оверлеи легализованы (7 модулей F-10b + sync F-10c): 8 панелей present, порядок сохранён', () => {
-    const coreIds = overlayRegistry
-      .list()
-      .filter((o) => !o.id.startsWith('t:'))
-      .map((o) => o.id);
+  it('оверлеи легализованы (7 модулей F-10b + sync F-10c + graph F-10d): 9 панелей present, порядок сохранён', () => {
+    const core = overlayRegistry.list().filter((o) => !o.id.startsWith('t:'));
+    const coreIds = core.map((o) => o.id);
     // Порядок 10..70 — прежний DOM-порядок App.tsx (goals→…→contradictions); sync (F-10c) — order=80
-    // (после 7 оверлеев F-10b; стекинг решает z-index панели, DOM-порядок среди fixed косметичен).
+    // (после 7 оверлеев F-10b; стекинг решает z-index панели, DOM-порядок среди fixed косметичен);
+    // graph (F-10d) — order=90, но в ОТДЕЛЬНОЙ mount-группе ('appBody'), рендерится другим инстансом.
     expect(coreIds).toEqual([
       'goals',
       'memory',
@@ -72,7 +71,14 @@ describe('overlayRegistry (F-8c)', () => {
       'digest',
       'contradictions',
       'sync',
+      'graph',
     ]);
+    // 8 прежних оверлеев НЕ задают mount → default 'app' (их точка/стекинг байт-идентичны F-10c);
+    // ТОЛЬКО graph несёт mount:'appBody' (слой внутри тела, фикс владельца). Это и держит «8 не сдвинулись».
+    for (const o of core) {
+      if (o.id === 'graph') expect(o.mount).toBe('appBody');
+      else expect(o.mount).toBeUndefined();
+    }
   });
 
   it('isOpen-селекторы читают соответствующие `*Open`-були ui-стора', () => {

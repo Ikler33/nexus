@@ -74,6 +74,17 @@ export interface SettingsContribution {
 }
 
 /**
+ * Точка монтирования оверлея в дереве оболочки (F-10d, МИНИМАЛЬНО — НЕ универсальная mount-система,
+ * YAGNI). ДВЕ точки, обе питает `OverlayOutlet` (по инстансу на точку):
+ * - `'app'` (по умолчанию) — уровень `.app`, поверх всей оболочки (титлбар/тело/статусбар). Так
+ *   рендерятся 8 оверлеев F-8c/F-10b/F-10c (все `position:fixed`, стекинг по z-index).
+ * - `'appBody'` — ВНУТРЬ тела `.appBody` (между титлбаром и статусбаром). Единственный потребитель —
+ *   `graph` (F-10d): его слой `position:absolute; inset:0` НЕ должен покрывать хром (фикс владельца
+ *   «хром торчал поверх графа»). `.app`-точка (не позиционирована) якорила бы граф к вьюпорту.
+ */
+export type OverlayMount = 'app' | 'appBody';
+
+/**
  * Вклад «оверлей» (реестр `overlays`, F-8c — легализация 7 хардкод-строк App.tsx `{xOpen && <Panel/>}`:
  * goals/memory/episodes/tasks/inbox/digest/contradictions). НЕ полноэкранная вью (`views`), а
  * плавающая/модальная панель поверх тела: своя видимость (`isOpen`-селектор), свой Esc/close внутри
@@ -94,6 +105,11 @@ export interface OverlayContribution {
   order: number;
   /** React-компонент панели (рендерится через ErrorBoundary в `OverlayOutlet`). */
   component: ComponentType;
+  /**
+   * Точка монтирования (F-10d). По умолчанию `'app'` — 8 оверлеев его НЕ задают, их DOM/стекинг
+   * байт-идентичны. `graph` задаёт `'appBody'` (слой внутри тела, не покрывает хром). См. `OverlayMount`.
+   */
+  mount?: OverlayMount;
 }
 
 /** Реестр команд — тонкая обёртка над `commands-core`; префиксует id → `${moduleId}:${id}`. */

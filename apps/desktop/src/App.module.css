@@ -56,13 +56,9 @@
   justify-content: flex-end;
 }
 
-/* Граф — полноэкранный слой поверх тела (между титлбаром и статусбаром; рейл кликабелен). */
-.graphLayer {
-  position: absolute;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-}
+/* F-10d: `.graphLayer` перенесён в graph-зону (`components/graph/graph.css` → `.graph-layer`) при
+   вырезе graph в оверлей-модуль (mount:'appBody'). Слой рендерит `GraphLayer` через appBody-инстанс
+   `OverlayOutlet` внутри `.appBody` — позиция (absolute inset:0, не поверх хрома) сохранена. */
 
 /* Свёрнутый сайдбар (DP-13: кнопка «Файлы» activity-bar). */
 .sidebarCollapsed {
