@@ -23,9 +23,15 @@ unmaintained = "workspace"
 # 0.39.4 через plist←tauri 2.11.2 (локальные plist, риск минимальный) → ждём апстрим-бампа tauri.
 # Ignore временный и осознанный: разблокирует CI (упал бы на любом PR после публикации адвизори
 # 2026-07-02), НЕ отменяет фикс.
+# RUSTSEC-2026-0204 (crossbeam-epoch: invalid pointer deref в `fmt::Pointer` impl для Atomic/Shared,
+# только при Debug-форматировании УЖЕ невалидного указателя — мы такого не делаем). Глубоко транзитивная:
+# crossbeam-epoch←crossbeam-deque←rayon-core←rayon←rayon-cond←tokenizers←nexus-core (токенизатор эмбеддингов),
+# вне нашего контроля — ждём апстрим-бампа rayon/crossbeam. Опубликовано ~2026-07-07, падает любой PR (как
+# quick-xml ранее). Ignore временный/осознанный (снять при бампе rayon); задача в BACKLOG.
 ignore = [
     { id = "RUSTSEC-2026-0194", reason = "quick-xml<0.41 DoS; прямой путь чинится миграцией на 0.41 (BACKLOG), транзитивный plist←tauri ждёт апстрим" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml<0.41 DoS; прямой путь чинится миграцией на 0.41 (BACKLOG), транзитивный plist←tauri ждёт апстрим" },
+    { id = "RUSTSEC-2026-0204", reason = "crossbeam-epoch fmt::Pointer invalid-deref (Debug-only edge); транзитивная rayon←tokenizers, ждём апстрим-бамп (BACKLOG); экспозиция минимальна" },
 ]
 
 [licenses]
