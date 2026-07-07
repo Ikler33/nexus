@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### Исправлено/Добавлено · NB-2 + NB-3 — починка DnD доски (dragDropEnabled) + «Скрыть выполненные»
+
+**NB-2 — «карточки не перетаскиваются» (репорт владельца)**. Корень был ВНЕ DnD-хендлеров: HTML5
+DnD в webview не работал из-за перехвата drag-событий нативным file-drop Tauri (`dragDropEnabled`
+по умолчанию `true` в Tauri v2 → на macOS/WKWebView нативный file-drop-хендлер глотает drag и
+HTML5 DnD внутри страницы мёртв; jsdom-тесты это не ловят — они не проходят через WKWebView).
+Фикс: окну `main` в `tauri.conf.json` задан `"dragDropEnabled": false`; нативный tauri-file-drop
+(`onDragDropEvent`/`tauri://drag*`) в кодовой базе нигде не используется — отключение безопасно.
+⚠️ На будущее: если понадобится перетаскивание ФАЙЛОВ из Finder — делать через DOM
+`dataTransfer.files` (работает при `dragDropEnabled: false`), НЕ через tauri-событие file-drop.
+Дополнительно добавлен хендлер `keydown Escape` в `BoardView`: сбрасывает `dragRef` и подсветку
+целевой колонки, отменяя текущее перетаскивание без изменений (недостающий UX-кейс BOARD-5;
+кросс-колоночный DnD, optimistic + rollback, busy-гард — были в коде ранее и корректны).
+
+**NB-3** — тоггл «Скрыть выполненные» (`board.hideDone`, localStorage key
+`nexus.board.hideDone.v1`). Нажатие скрывает все `doneLike`-колонки в канбан-вью и
+`doneLike`-карточки в list-вью; повторное нажатие возвращает их. Настройка переживает перезапуск
+(localStorage, тот же механизм, что VIEW-1 `viewMode`). Кнопка со значком Eye/EyeOff в
+`headActions`, `aria-pressed` для a11y.
+
+Изменённые файлы: `tauri.conf.json`, `BoardView.tsx`, `BoardView.module.css`, `en.json`,
+`ru.json`, `BoardView.test.tsx` (+6 тестов: 1 Escape-отмена + 5 hideDone).
+
 ### Добавлено · NB-1 — живой статус прогона ленты новостей («долго» vs «зависло» vs «упало»)
 
 Замечание владельца с приёмки 2026-07-08: «Новости — непонятен статус. Идёт загрузка, но нет понимания:

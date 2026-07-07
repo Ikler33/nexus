@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarClock,
+  Eye,
+  EyeOff,
   FolderClosed,
   Hourglass,
   LayoutGrid,
@@ -52,6 +54,25 @@ function readViewMode(): ViewMode {
 function persistViewMode(mode: ViewMode): void {
   try {
     localStorage.setItem(VIEW_MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** NB-3: «Скрыть выполненные» — тоггл, персист в localStorage. */
+const HIDE_DONE_KEY = 'nexus.board.hideDone.v1';
+
+function readHideDone(): boolean {
+  try {
+    return localStorage.getItem(HIDE_DONE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function persistHideDone(v: boolean): void {
+  try {
+    localStorage.setItem(HIDE_DONE_KEY, String(v));
   } catch {
     /* ignore */
   }
@@ -134,6 +155,15 @@ export function BoardView() {
     setViewMode(mode);
     persistViewMode(mode);
   };
+  // NB-3: скрытие done-like колонок/карточек — клиентский префо, персист в localStorage.
+  const [hideDone, setHideDone] = useState<boolean>(readHideDone);
+  const toggleHideDone = () => {
+    setHideDone((v) => {
+      const next = !v;
+      persistHideDone(next);
+      return next;
+    });
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -170,6 +200,19 @@ export function BoardView() {
     return () => window.removeEventListener('focus', onFocus);
   }, [load]);
 
+  // NB-2: отмена DnD по Escape — сбрасываем dragRef + подсветку цели, browser снимет ghost сам.
+  // Refs и stable setters не меняются → пустой dep-массив безопасен (нет stale-closure).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && dragRef.current) {
+        dragRef.current = null;
+        setDropCol(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const openNote = (path: string) => {
     void useWorkspaceStore.getState().openFile(path);
     closeBoard();
@@ -190,6 +233,26 @@ export function BoardView() {
         config!.columns.map((c) => c.id),
       ).map((col) => ({ ...col, cards: applyOrder(col.cards, config!.order[col.id]) }))
     : [];
+  // NB-3: «Скрыть выполненные» — фильтруем done-like колонки (конфиг.doneLike) + карточки для list-вью.
+  // OTHER_COLUMN_ID не в config.columns → cfg=undefined → !cfg?.doneLike = true → всегда показывается.
+  const visibleColumns =
+    hideDone && config
+      ? columns.filter((col) => {
+          const cfg = config.columns.find((c) => c.id === col.id);
+          return !cfg?.doneLike;
+        })
+      : columns;
+  // Карточки для list-вью: при hideDone — скрываем карточки с done-like статусом.
+  const visibleCards =
+    hideDone && config
+      ? (data?.cards ?? []).filter((card) => {
+          const cfg = config.columns.find(
+            (c) => c.id.toLowerCase() === card.status.trim().toLowerCase(),
+          );
+          return !cfg?.doneLike;
+        })
+      : (data?.cards ?? []);
+
   // Карточка в превью (если открыта и ещё существует — иначе панель просто не рендерится, напр. после удаления).
   const peekCard = peekPath ? (data?.cards.find((c) => c.path === peekPath) ?? null) : null;
   const labelById = new Map((config?.columns ?? []).map((c) => [c.id, c.label]));
@@ -341,6 +404,18 @@ export function BoardView() {
               {t('board.stale.count', { count: stuck.length })}
             </button>
           )}
+          {/* NB-3: тоггл «Скрыть выполненные» — персист в localStorage. */}
+          <button
+            type="button"
+            className={`${styles.hideDoneBtn} ${hideDone ? styles.hideDoneActive : ''}`}
+            onClick={toggleHideDone}
+            aria-pressed={hideDone}
+            title={hideDone ? t('board.hideDone.show') : t('board.hideDone.hide')}
+            aria-label={hideDone ? t('board.hideDone.show') : t('board.hideDone.hide')}
+          >
+            {hideDone ? <Eye size={13} aria-hidden /> : <EyeOff size={13} aria-hidden />}
+            {hideDone ? t('board.hideDone.show') : t('board.hideDone.hide')}
+          </button>
           {/* VIEW-1: переключатель представления (канбан / список) — сегментированный тоггл. */}
           <div className={styles.viewToggle} role="group" aria-label={t('board.list.viewToggle')}>
             <button
@@ -454,7 +529,7 @@ export function BoardView() {
       {data && total > 0 && viewMode === 'list' && (
         <div className={styles.bodyRow}>
           <ListBoardView
-            cards={data.cards}
+            cards={visibleCards}
             today={today}
             onOpen={setPeekPath}
             columnLabel={columnLabel}
@@ -475,7 +550,7 @@ export function BoardView() {
       {data && total > 0 && viewMode === 'columns' && (
         <div className={styles.bodyRow}>
         <div className={styles.columns}>
-          {columns.map((col) => {
+          {visibleColumns.map((col) => {
             const droppable = col.id !== OTHER_COLUMN_ID; // в «Прочее» ронять нельзя (нет статуса)
             const allowDrop = (e: React.DragEvent) => {
               if (!droppable || !e.dataTransfer.types.includes(CARD_MIME)) return false;

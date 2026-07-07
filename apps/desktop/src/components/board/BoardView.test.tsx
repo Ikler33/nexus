@@ -114,6 +114,19 @@ describe('BoardView DnD (BOARD-5 — optimistic + rollback, §14.6)', () => {
     expect(screen.getByRole('heading', { name: /Board/i })).toBeInTheDocument();
   });
 
+  it('NB-2: Escape во время перетаскивания отменяет ход — setFrontmatterField НЕ вызван', async () => {
+    const setFm = vi.spyOn(tauriApi.vault, 'setFrontmatterField');
+    render(<BoardView />);
+    const card = (await screen.findByText('Task T')).closest('button')!;
+
+    fireEvent.dragStart(card, { dataTransfer: dt() });
+    // Escape отменяет drag (сбрасывает dragRef + dropCol — ход не случится).
+    fireEvent.keyDown(window, { key: 'Escape' });
+    // Карточка остаётся в «To do» — no-op, статус не менялся.
+    expect(within(column(/To do/i)).getByText('Task T')).toBeInTheDocument();
+    expect(setFm).not.toHaveBeenCalled();
+  });
+
   it('R3: фокус во время хода НЕ рефетчит доску (busy-гард против гонки)', async () => {
     let resolveFm: (v: { content: string; hash: string }) => void = () => {};
     vi.spyOn(tauriApi.vault, 'setFrontmatterField').mockReturnValue(
@@ -212,5 +225,103 @@ describe('BoardView — переключатель представления (V
     fireEvent.click(screen.getByRole('button', { name: 'List' }));
     const row = await screen.findByRole('button', { name: /Task T/ });
     expect(row.getAttribute('draggable')).not.toBe('true');
+  });
+});
+
+describe('BoardView — NB-3 «Скрыть выполненные»', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en');
+    vi.restoreAllMocks();
+    // Детерминированный in-memory localStorage (тот же паттерн, что у VIEW-1).
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: () => null,
+      length: 0,
+    });
+    useWorkspaceStore.setState({ buffers: {} });
+    vi.spyOn(tauriApi.board, 'get').mockResolvedValue(boardData());
+    vi.spyOn(tauriApi.board, 'save').mockResolvedValue(undefined);
+    vi.spyOn(tauriApi.board, 'stale').mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('«Done» колонка показывается по умолчанию (hideDone=false)', async () => {
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    // Секция колонки «Done» есть.
+    expect(column(/Done/i)).toBeInTheDocument();
+  });
+
+  it('тоггл «Скрыть выполненные» убирает done-like колонку из доски', async () => {
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    expect(column(/Done/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide done/i }));
+    // Колонка «Done» скрыта; «To do» и «In progress» на месте.
+    expect(screen.queryByRole('region', { name: /Done/i })).toBeNull();
+    expect(column(/To do/i)).toBeInTheDocument();
+    expect(column(/In progress/i)).toBeInTheDocument();
+  });
+
+  it('тоггл персистится в localStorage (ключ nexus.board.hideDone.v1)', async () => {
+    render(<BoardView />);
+    await screen.findByText('Task T');
+
+    fireEvent.click(screen.getByRole('button', { name: /hide done/i }));
+    expect(localStorage.getItem('nexus.board.hideDone.v1')).toBe('true');
+
+    // Повторный клик снимает.
+    fireEvent.click(screen.getByRole('button', { name: /show done/i }));
+    expect(localStorage.getItem('nexus.board.hideDone.v1')).toBe('false');
+  });
+
+  it('настройка восстанавливается при ремоунте (читается из localStorage)', async () => {
+    const { unmount } = render(<BoardView />);
+    await screen.findByText('Task T');
+    fireEvent.click(screen.getByRole('button', { name: /hide done/i }));
+    expect(screen.queryByRole('region', { name: /Done/i })).toBeNull();
+    unmount();
+
+    // Второй рендер: localStorage сохранён → «Done» по-прежнему скрыта.
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    expect(screen.queryByRole('region', { name: /Done/i })).toBeNull();
+  });
+
+  it('в list-режиме done-like карточки скрываются при включённом тоггле', async () => {
+    // Добавляем done-карточку в данные.
+    const data = boardData();
+    data.cards.push({
+      path: 'd.md',
+      title: 'Done Task',
+      status: 'done',
+      project: null,
+      priority: null,
+      due: null,
+      tags: [],
+    });
+    vi.spyOn(tauriApi.board, 'get').mockResolvedValue(data);
+
+    render(<BoardView />);
+    await screen.findByText('Task T');
+    // Переключаемся в list-режим.
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    // Done Task видна в списке при hideDone=false.
+    expect(await screen.findByRole('button', { name: /Done Task/ })).toBeInTheDocument();
+
+    // Включаем hideDone.
+    fireEvent.click(screen.getByRole('button', { name: /hide done/i }));
+    // Done Task исчезает из списка.
+    expect(screen.queryByRole('button', { name: /Done Task/ })).toBeNull();
+    // Task T (status=todo) остаётся.
+    expect(screen.getByRole('button', { name: /Task T/ })).toBeInTheDocument();
   });
 });

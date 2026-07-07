@@ -1388,6 +1388,10 @@
         "searchPlaceholder": "Search tasks…"
       },
       "emptyFiltered": "No tasks match the filter"
+    },
+    "hideDone": {
+      "hide": "Hide done",
+      "show": "Show done"
     }
   },
   "prop": {
