@@ -14,6 +14,7 @@ import { contradictionsModule } from './contradictions';
 import { digestModule } from './digest';
 import { episodesModule } from './episodes';
 import { goalsModule } from './goals';
+import { graphModule } from './graph';
 import { inboxModule } from './inbox';
 import { memoryModule } from './memory';
 import { newsModule } from './news';
@@ -39,6 +40,8 @@ export function activateModules(): void {
   modules.register(contradictionsModule);
   // F-10c: оверлей-модуль «Синхронизация» (SyncPanel вырезан из App.tsx через `ctx.overlays`).
   modules.register(syncModule);
+  // F-10d: оверлей-модуль «Граф» (GraphLayer вырезан из App.tsx через `ctx.overlays`, mount:'appBody').
+  modules.register(graphModule);
   modules.activateAll();
 }
 

@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+### Изменено · F-10d — граф: layer-mount у OverlayContribution + вырез graph (11-й модуль)
+
+Серия вырезаний F-10, порция D. **Behavior-preserving** (проводка меняется, поведение/геометрия — нет).
+Двухчастный срез в одном PR (как F-8c-механизм → F-10b-вырез, но один потребитель): сначала МИНИМАЛЬНОЕ
+расширение коннектора mount-полем, затем вырез graph. Причина отсрочки из F-10c: слой графа
+`position:absolute; inset:0` живёт ВНУТРИ `.appBody` (намеренно НЕ покрывает титлбар/статусбар — фикс по
+отчёту владельца «хром торчал поверх графа»), а `OverlayOutlet` рендерил на уровне `.app` → наивный вырез
+= регрессия.
+
+- **Часть 1 — поле `mount?: 'app' | 'appBody'` (`OverlayMount`) в `OverlayContribution`.** МИНИМАЛЬНО (ровно
+  две точки под единственного потребителя, НЕ универсальная mount-система — YAGNI). `OverlayOutlet` принял
+  проп `mount` (default `'app'`) и фильтрует реестр по нему. App.tsx ставит ДВА инстанса: `<OverlayOutlet />`
+  на уровне `.app` (8 оверлеев F-10b/F-10c) и `<OverlayOutlet mount="appBody" />` ВНУТРИ `.appBody` (там, где
+  был хардкод `.graphLayer`). **8 существующих оверлеев поле НЕ задают → default `'app'`: их точка/стекинг/
+  порядок/ErrorBoundary байт-идентичны (доказано `overlays.test.ts` + геометрия-пробой + e2e).** ErrorBoundary
+  per-contribution сохраняется в обеих mount-точках.
+
+- **Часть 2 — `graph` → оверлей-модуль** (`connector/modules/graph.ts`, 11-й прод-модуль). `GraphView`
+  вырезан из App.tsx (`{graphOpen && <div.graphLayer><GraphView/></div>}`) в реестр `overlays`
+  (mount:'appBody', order=90). Слой-обёртка `GraphLayer` (`components/graph/GraphLayer.tsx`) переехала из
+  App.tsx в graph-зону: ленивый `GraphView` под `Suspense` внутри `div.graph-layer` (лениво-загружаемый
+  тяжёлый d3-force/louvain-чанк сохранён). CSS-класс перенесён `App.module.css .graphLayer` →
+  `graph.css .graph-layer` (`position:absolute; inset:0; z-index:60` — как было). Команда `view.graph`
+  (commands-core) → модуль `ctx.commands` (id `graph:view.graph`, source=plugin, хоткей ⌘G сохранён) + пара
+  в `COMMAND_ID_ALIASES` (`view.graph`→`graph:view.graph`). Стейт `graphOpen` + `open/close/toggleGraph` +
+  Esc-прецедент и кнопка ActivityBar (зовёт `toggleGraph()`) остаются ядром. `MODULE_FEATURES` += `graph`
+  (11) → F-1b enforce'ит «App.tsx не импортит `components/graph`» (убран `lazy(()=>import(GraphView))`).
+  Тесты: `modules/graph.test.ts` (регистрация + mount:'appBody'), `overlay-mount.test.tsx` (роутинг app vs
+  appBody), `overlays.test.ts` теперь ждёт 9 оверлеев (+ mount-инвариант). Живой геометрия-пробой:
+  `.graph-layer` (top=38, bottom=vh−26) точно заполняет `.appBody`, хром НЕ покрыт.
+
 ### Изменено · F-10c — вырез graph/sync-оверлеев + board-вью в модули (под защитой F-1b)
 
 Серия вырезаний F-10, порция C. **Behavior-preserving** (проводка меняется, поведение — нет). Каждый

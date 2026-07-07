@@ -4,6 +4,17 @@
    Цвет узла: тегированные — хеш-oklch по первому тегу (inline fill, hue из graph-sim,
    светлота/хрома — переменные ниже), без тегов — фолбэк .g-dot. Анимации — на CSS-классах.
    ============================================================ */
+
+/* F-10d: слой графа — полноэкранный поверх тела, ВНУТРИ `.appBody` (между титлбаром и статусбаром;
+   рейл кликабелен). Перенесён из App.module.css `.graphLayer` при вырезе graph в оверлей-модуль
+   (mount:'appBody'). z-index 60 / display:flex — как было; `.graph-view` (flex:1) заполняет слой. */
+.graph-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+}
+
 .graph-view {
   flex: 1;
   display: flex;

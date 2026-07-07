@@ -35,18 +35,25 @@ per-contribution изоляцию сбоев. **F-9 вырезал первый 
 момент (7 однотипных оверлеев не ложатся на 5 реестров v0). Добавлен РОВНО оверлей-реестр (YAGNI:
 никаких preview/inspector/statusBar «заодно»).
 
-- **`overlays.register({ id, titleKey, isOpen, order, component })`** (`OverlayContribution`) — Map-
-  реестр ПО ОБРАЗЦУ `viewRegistry`: `list()` детерминирован (сортировка по `order`), `get(id)`,
+- **`overlays.register({ id, titleKey, isOpen, order, component, mount? })`** (`OverlayContribution`) —
+  Map-реестр ПО ОБРАЗЦУ `viewRegistry`: `list()` детерминирован (сортировка по `order`), `get(id)`,
   идемпотентность. Отличие от `views`: оверлей — НЕ полноэкранная вью, а панель поверх тела со своей
   видимостью (`isOpen`-селектор) и своим Esc/close внутри компонента (взаимоисключаемость/стекинг —
   логика ui-стора, не реестра).
+- **`mount?: 'app' | 'appBody'`** (`OverlayMount`, F-10d — МИНИМАЛЬНО, НЕ универсальная mount-система,
+  YAGNI). Точка монтирования оверлея: `'app'` (по умолчанию — уровень `.app` поверх всей оболочки;
+  так 8 оверлеев F-10b/F-10c) либо `'appBody'` (ВНУТРЬ тела `.appBody`, между титлбаром/статусбаром).
+  Единственный `appBody`-потребитель — `graph` (слой `absolute inset:0` НЕ должен покрывать хром, фикс
+  владельца). `OverlayOutlet` фильтрует по `mount`, App.tsx ставит ДВА инстанса (см. ниже «F-10d»).
 - **`isOpen: (state: UIState) => boolean`** — селектор из ui-стора (`(s) => s.goalsOpen`). Читает
   `*Open`-були (F-10b оставил их ядровыми — см. «ПАТТЕРН оверлей-модуля» ниже; модуль даёт селектор).
 - **`OverlayOutlet` (`components/workspace/OverlayOutlet.tsx`)** — по образцу `MainViewOutlet`:
   рендерит `overlayRegistry.list()`, каждый открытый (`isOpen(uiState)`) — через per-contribution
   **ErrorBoundary** (`key` по id). Заменяет 7 хардкод-строк App.tsx. Счастливый путь — 0 DOM-след
   (якоря панелей не смещаются). Подписка на весь ui-стор (`useUIStore()`): `isOpen`-селекторы
-  непрозрачны, outlet ре-рендерится на любое ui-изменение и заново считает видимость.
+  непрозрачны, outlet ре-рендерится на любое ui-изменение и заново считает видимость. **F-10d:** принимает
+  проп `mount` (default `'app'`) и фильтрует реестр по нему — App.tsx ставит ДВА инстанса: `<OverlayOutlet />`
+  на уровне `.app` (8 оверлеев) и `<OverlayOutlet mount="appBody" />` ВНУТРИ `.appBody` (только `graph`).
 - **`core-overlays.ts`** — БЫЛ каркасом ядровых 7 оверлеев (как `registerCoreViews`). **F-10b удалил
   его**: все 7 вырезаны в модули (`connector/modules/*`), реестр `overlays` питается ТОЛЬКО модулями
   через `ctx.overlays`. order 10..70 (прежний DOM-порядок App.tsx, стекинг floats поверх trap) сохранён
@@ -106,26 +113,40 @@ AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
 активации (= порядок регистрации). `modules.disposeAll()` снимает все вклады всех модулей.
 Единая точка регистрации прод-модулей — `connector/modules/index.ts` (`activateModules()`,
-импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 10 модулей:** `news` (F-9,
+импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 11 модулей:** `news` (F-9,
 вью-модуль) + `board` (F-10c, вью-модуль) + 7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/
-digest/contradictions) + `sync` (F-10c, оверлей-модуль). Новый модуль — строкой в `activateModules` +
-строкой в `MODULE_FEATURES` (eslint.config.js, граница F-1b). Тест-модуль-заглушка
-(`isolation.test.tsx`) — для изоляции сбоев.
+digest/contradictions) + `sync` (F-10c, оверлей-модуль) + `graph` (F-10d, оверлей-модуль, mount:'appBody').
+Новый модуль — строкой в `activateModules` + строкой в `MODULE_FEATURES` (eslint.config.js, граница F-1b).
+Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
 
 **F-10c (разведка-driven, скоуп-дисциплина «лучше меньше чистых»):** из 4 кандидатов вырезаны 2 —
 `board` (вью-модуль, зеркало news) и `sync` (оверлей-модуль). У `sync` вырезан `SyncPanel`;
 `ConflictResolver` (git-merge, safe-flow, standalone из статусбара DP-14) ОСТАЁТСЯ ядром и **вынесен из
 `components/sync` в `components/common`** (он genuinely core — тянет только hooks/lib/stores, НЕ
 SyncPanel). Так sync-зона изолирована НАЧИСТО (App.tsx не импортит из неё ничего), а
-`MODULE_BOUNDARY_EXCEPTIONS` = `[]` — sync чист как board/news, БЕЗ оговорок границы. `graph` **оставлен ядром** (отложен в
-F-10d): его слой `.graphLayer` спозиционирован `position:absolute; inset:0` ВНУТРИ `.appBody` (намеренно
-НЕ покрывает титлбар/статусбар — фикс по отчёту владельца «хром торчал поверх графа»); стандартный
-`OverlayOutlet` рендерит на уровне `.app` (не позиционирован) → граф якорился бы к вьюпорту, регрессия.
-Чистый вырез требует mount-point/«layer»-концепции у `OverlayContribution` — это НОВАЯ машинерия, не
-behavior-preserving-рефактор → F-10d. `plugins` **оставлен ядром** (мета-функция): `PluginsPanel` —
+`MODULE_BOUNDARY_EXCEPTIONS` = `[]` — sync чист как board/news, БЕЗ оговорок границы. `graph` **отложен в
+F-10d** (вырезан там, см. ниже): его слой `.graphLayer` спозиционирован `position:absolute; inset:0`
+ВНУТРИ `.appBody` (намеренно НЕ покрывает титлбар/статусбар — фикс по отчёту владельца «хром торчал
+поверх графа»); стандартный `OverlayOutlet` рендерил на уровне `.app` (не позиционирован) → наивный
+вырез якорил бы граф к вьюпорту = регрессия. Чистый вырез требовал mount-point-концепции у
+`OverlayContribution` (не behavior-preserving-рефактор) → F-10d. `plugins` **оставлен ядром** (мета-функция): `PluginsPanel` —
 UI-менеджер САМИХ плагинов (нативный `lib/plugin-host` iframe-хост + `tauriApi.plugins` + DP-8 consent),
 т.е. фронт плагин-**инфраструктуры**, а не доменная фича; делать плагин-менеджер «модулем» —
 концептуально инвертировано. Остаётся коннектор-chrome.
+
+**F-10d (граф — 11-й модуль, механизм mount + вырез в одном PR):** добавлено МИНИМАЛЬНОЕ поле
+`mount?: 'app' | 'appBody'` в `OverlayContribution` (НЕ универсальная mount-система — YAGNI, ровно две
+точки под единственного потребителя). `OverlayOutlet` фильтрует реестр по `mount` (`undefined`→`'app'`),
+App.tsx ставит ДВА инстанса: `<OverlayOutlet />` на `.app` (8 оверлеев, точка/стекинг байт-идентичны —
+поле не задают → default) и `<OverlayOutlet mount="appBody" />` ВНУТРИ `.appBody` (только `graph`).
+Слой-обёртка `GraphLayer` (`components/graph/GraphLayer.tsx`) переехала из App.tsx в graph-зону: ленивый
+`GraphView` под `Suspense` внутри `div.graph-layer` (класс перенесён из `App.module.css .graphLayer` в
+`graph.css .graph-layer` — `position:absolute; inset:0; z-index:60`, слой В ГРАНИЦАХ `.appBody`, НЕ поверх
+хрома). Модуль `connector/modules/graph.ts` регистрирует оверлей (mount:'appBody', order=90) + команду
+`view.graph`→`graph:view.graph` (хоткей ⌘G сохранён, пара в `COMMAND_ID_ALIASES`). App.tsx больше НЕ
+импортит `components/graph` (убран `lazy(()=>import(GraphView))`); граница держится eslint-ом F-1b (`graph`
+в `MODULE_FEATURES`). Стейт `graphOpen` + `open/close/toggleGraph` + Esc-прецедент остаются ядром (паттерн
+оверлей-модуля). Behavior-preserving: геометрия слоя (top=38/bottom=vh−26) и z-index идентичны прежним.
 
 ### ErrorBoundary per-contribution
 `components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`), оверлей
@@ -140,7 +161,7 @@ UI-менеджер САМИХ плагинов (нативный `lib/plugin-ho
 |-----------|------------------------------------------|-------------------------------------------------|
 | commands  | `commands-core` + `commands` registry    | `ctx.commands` — та же registry, id в namespace |
 | views     | тернарник App.tsx + хардкод ActivityBar  | `viewRegistry` (core-views) → MainViewOutlet + ActivityBar |
-| overlays  | 7 хардкод-строк `{xOpen && <Panel/>}` App.tsx | `overlayRegistry` → OverlayOutlet; питается 7 оверлей-модулями `ctx.overlays` (F-10b; core-overlays удалён) |
+| overlays  | 7 хардкод-строк `{xOpen && <Panel/>}` + `{graphOpen && <div.graphLayer><GraphView/></div>}` App.tsx | `overlayRegistry` → OverlayOutlet (`mount` app/appBody, F-10d); 9 оверлей-модулей `ctx.overlays` (7 F-10b + sync F-10c + graph F-10d appBody; core-overlays удалён) |
 | settings  | массив `SECTIONS` в SettingsView         | `settingsRegistry` → нав + SettingsSectionOutlet |
 | events    | россыпь `useEffect` + window/tauri        | `onCoreEvent` (обёртка тех же каналов)          |
 | api       | `tauriApi`                                | `ctx.api` (тот же объект)                        |

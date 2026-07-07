@@ -360,14 +360,8 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().openVersions(),
     }),
-    commands.register({
-      id: 'view.graph',
-      title: 'Local graph',
-      titleKey: 'commands.view.graph',
-      source: 'core',
-      defaultKey: 'mod+g',
-      run: () => useUIStore.getState().toggleGraph(),
-    }),
+    // view.graph — вырезана в модуль `connector/modules/graph` (F-10d): регистрируется через
+    // `ctx.commands` (id → `graph:view.graph`, source=plugin, хоткей ⌘G сохранён). Ядро её не объявляет.
     // view.tasks — вырезана в модуль `connector/modules/tasks` (F-10b): регистрируется через
     // `ctx.commands` (id → `tasks:view.tasks`, source=plugin, хоткей ⌘⇧K сохранён). Ядро её не объявляет.
     // view.inbox — вырезана в модуль `connector/modules/inbox` (F-10b): регистрируется через

@@ -12,6 +12,7 @@ export type {
   ModuleContext,
   NexusModule,
   OverlayContribution,
+  OverlayMount,
   OverlaysRegistry,
   SettingsContribution,
   SettingsRegistry,

@@ -115,6 +115,7 @@ const COMMAND_ID_ALIASES: Record<string, string> = {
   'view.digest': 'digest:view.digest', // F-10b
   'view.contradictions': 'contradictions:view.contradictions', // F-10b
   'view.sync': 'sync:view.sync', // F-10c (оверлей-модуль)
+  'view.graph': 'graph:view.graph', // F-10d (оверлей-модуль, mount:'appBody')
 };
 
 class CommandRegistry {
