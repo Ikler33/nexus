@@ -10,7 +10,9 @@ import {
 } from '../../lib/tauri-api';
 import { useSyncStore } from '../../stores/sync';
 import { useUIStore } from '../../stores/ui';
-import { ConflictResolver } from './ConflictResolver';
+// ConflictResolver вынесен в `components/common` (F-10c) — общий safe-flow-компонент, чтобы App.tsx
+// (statusbar-пилюля) тянул его вне вырезанной sync-зоны. Импорт из common легален и для sync-зоны.
+import { ConflictResolver } from '../common/ConflictResolver';
 import styles from './SyncPanel.module.css';
 
 type SyncResult = GitPullOutcome | { status: 'error'; message: string };

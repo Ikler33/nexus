@@ -130,12 +130,17 @@ const MODULE_FEATURES = [
   'inbox',
   'digest',
   'contradictions',
+  'board', // F-10c (вью-модуль)
+  'sync', // F-10c (оверлей-модуль; вырезан НАЧИСТО — ConflictResolver вынесен в components/common)
 ];
 
 // Явные исключения границы модулей (аналог CROSS_IMPORT_WHITELIST для F-1): если shared-компонент
 // ЧЕСТНО нужен ядру — задокументируй файл здесь с обоснованием, вместо ослабления правила глобально.
 // Формат: { files, selfModule } — расширяет разрешение указанного файла на зону/манифест selfModule.
-// Пусто: F-9/F-10b вырезали модули НАЧИСТО — ни один core/manifest не тянет чужой модуль.
+// Пусто: F-9/F-10b/F-10c вырезали модули НАЧИСТО — ни один core/manifest не тянет чужой модуль. (F-10c
+// НЕ стал открывать sync-зону оговоркой ради ConflictResolver — вместо этого вынес его в
+// `components/common`, где ему и место как shared safe-flow-компоненту; sync изолирован ПОЛНОСТЬЮ,
+// F-1b enforce'ит любой App→components/sync без исключений.)
 const MODULE_BOUNDARY_EXCEPTIONS = [];
 
 /** Паттерны no-restricted-imports для границы модулей.

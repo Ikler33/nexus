@@ -9,6 +9,7 @@
  * `modules.disposeAll()` (тесты/HMR).
  */
 import { modules } from '../module-manager';
+import { boardModule } from './board';
 import { contradictionsModule } from './contradictions';
 import { digestModule } from './digest';
 import { episodesModule } from './episodes';
@@ -16,6 +17,7 @@ import { goalsModule } from './goals';
 import { inboxModule } from './inbox';
 import { memoryModule } from './memory';
 import { newsModule } from './news';
+import { syncModule } from './sync';
 import { tasksModule } from './tasks';
 
 let activated = false;
@@ -25,6 +27,8 @@ export function activateModules(): void {
   if (activated) return;
   activated = true;
   modules.register(newsModule);
+  // F-10c: вью-модуль «Доска» (вырезан из core-views через `ctx.views`, как news).
+  modules.register(boardModule);
   // F-10b: оверлей-модули (вырезаны из core-overlays через `ctx.overlays`).
   modules.register(goalsModule);
   modules.register(memoryModule);
@@ -33,6 +37,8 @@ export function activateModules(): void {
   modules.register(inboxModule);
   modules.register(digestModule);
   modules.register(contradictionsModule);
+  // F-10c: оверлей-модуль «Синхронизация» (SyncPanel вырезан из App.tsx через `ctx.overlays`).
+  modules.register(syncModule);
   modules.activateAll();
 }
 

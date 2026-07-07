@@ -6,6 +6,52 @@
 
 ## [Unreleased]
 
+### Изменено · F-10c — вырез graph/sync-оверлеев + board-вью в модули (под защитой F-1b)
+
+Серия вырезаний F-10, порция C. **Behavior-preserving** (проводка меняется, поведение — нет). Каждый
+вырез добавляет модуль в `MODULE_FEATURES` (eslint.config.js) → CI-граница F-1b стережёт изоляцию.
+Разведка кандидатов ДО выреза сместила ожидания оркестратора (graph/sync — «верные», board — «спорный»):
+board оказался чистейшим (зеркало news), а graph/sync — со сложностями (детали ниже).
+
+- **`board` → вью-модуль** (`connector/modules/board.ts`, эталон вью-модуля F-9 news). «Доска» —
+  полноэкранная main-вью (`mainView='board'`): вклад через `ctx.views` (кнопка ActivityBar +
+  MainViewOutlet), ядро (`core-views`) больше НЕ импортирует `components/board`. order=40/icon/titleKey/
+  нав-действие `openBoard` перенесены КАК ЕСТЬ. Board **не имел** ни секции настроек, ни команды палитры
+  (ядро никогда не объявляло `view.board` — вход только кнопкой) → COMMAND_ID_ALIASES не нужен. AI-команда
+  `board.promote` (commands-core) ОСТАЁТСЯ ядром (зовёт `openBoard()`, импортит `lib/board-promote`, не
+  `components/board`). Стейт `mainView` + `openBoard/toggleBoard/closeBoard` остаются ядром (ui-стор).
+  `MODULE_FEATURES` += `board`. Тест `modules/board.test.ts`; `registries.test.ts` больше не ждёт board
+  среди ядровых вью.
+
+- **`sync` → оверлей-модуль** (`connector/modules/sync.ts`, эталон оверлей-модуля F-10b). `SyncPanel`
+  («Синхронизация git») вырезан из App.tsx (`{syncOpen && <SyncPanel/>}`) в реестр `overlays` →
+  рендерится через `OverlayOutlet` (order=80, per-contribution ErrorBoundary). Команда `view.sync`
+  (commands-core) → модуль `ctx.commands` (id `sync:view.sync`, source=plugin) + пара в
+  `COMMAND_ID_ALIASES` (`view.sync`→`sync:view.sync`). Стейт `syncOpen` + `open/close/toggleSync` и
+  кнопка ActivityBar (зовёт `toggleSync()`) остаются ядром. `MODULE_FEATURES` += `sync`. Тест
+  `modules/sync.test.ts`; `overlays.test.ts` теперь ждёт 8 оверлеев.
+  - **ConflictResolver — ЯДРО, вынесен `components/sync` → `components/common`.** Git-merge safe-flow-
+    резолвер (standalone из пилюли статусбара по `conflictOpen`, DP-14 + внутри SyncPanel) genuinely
+    core: тянет только `hooks/useFocusTrap` + `lib/tauri-api` + `stores/sync`, НЕ SyncPanel. Раньше жил в
+    зоне sync — при вырезе SyncPanel это заставило бы App.tsx импортить из вырезанной sync-зоны. Вместо
+    оговорки (которая открыла бы ВСЮ sync-зону для App и оставила бы grep-only инвариант — ровно то,
+    против чего F-1b) **файл перенесён в common** (git mv .tsx+.module.css+.test.tsx; внутр. импорты и
+    поведение не тронуты — та же глубина `../../`). Импортёры обновлены: App.tsx
+    (`components/common/ConflictResolver`), SyncPanel (`../common/ConflictResolver`). Итог: **sync-зона
+    изолирована ПОЛНОСТЬЮ**, `MODULE_BOUNDARY_EXCEPTIONS` остаётся `[]`, F-1b enforce'ит любой
+    `App→components/sync` без единой оговорки (sync чист как board/news).
+
+- **`graph` — ОТЛОЖЕН (ядро, → F-10d).** Разведка: слой `.graphLayer` спозиционирован
+  `position:absolute; inset:0` ВНУТРИ `.appBody` (намеренно НЕ покрывает титлбар/статусбар — фикс по
+  отчёту владельца «хром торчал поверх графа»). Стандартный `OverlayOutlet` рендерит на уровне `.app`
+  (не позиционирован) → граф якорился бы к вьюпорту, регрессия. Чистый вырез требует mount-point/«layer»-
+  концепции у `OverlayContribution` — НОВАЯ машинерия, не behavior-preserving-рефактор → F-10d.
+
+- **`plugins` — ОСТАВЛЕН ядром (мета-функция).** `PluginsPanel` — UI-менеджер САМИХ плагинов (нативный
+  `lib/plugin-host` iframe-хост + `tauriApi.plugins` + DP-8 consent), т.е. фронт плагин-**инфраструктуры**,
+  а не доменная фича. Делать плагин-менеджер «модулем» концептуально инвертировано (модуль управляет
+  модулями). Остаётся коннектор-chrome (как решено в спеке «вероятно оставить ядром»).
+
 ### Добавлено · F-1b — CI-enforcement границы модуль/ядро (перед массой F-10c)
 
 Инфра-срез (правило линта + negative-check, **поведение приложения НЕ трогает**). F-10b-adversarial

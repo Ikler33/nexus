@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import './modules'; // сайд-эффект: активирует 7 оверлей-модулей F-10b (единственный источник оверлеев)
+import './modules'; // сайд-эффект: активирует оверлей-модули (7 F-10b + sync F-10c) — источник оверлеев
 import { overlayRegistry } from './registries';
 import { useUIStore } from '../../stores/ui';
 import type { UIState } from '../../stores/ui';
@@ -56,12 +56,13 @@ describe('overlayRegistry (F-8c)', () => {
     expect(overlayRegistry.get('t:dup')).toBeUndefined();
   });
 
-  it('оверлеи легализованы (7 модулей F-10b): 7 панелей present, порядок сохранён', () => {
+  it('оверлеи легализованы (7 модулей F-10b + sync F-10c): 8 панелей present, порядок сохранён', () => {
     const coreIds = overlayRegistry
       .list()
       .filter((o) => !o.id.startsWith('t:'))
       .map((o) => o.id);
-    // Порядок 10..70 — прежний DOM-порядок App.tsx (goals→…→contradictions).
+    // Порядок 10..70 — прежний DOM-порядок App.tsx (goals→…→contradictions); sync (F-10c) — order=80
+    // (после 7 оверлеев F-10b; стекинг решает z-index панели, DOM-порядок среди fixed косметичен).
     expect(coreIds).toEqual([
       'goals',
       'memory',
@@ -70,6 +71,7 @@ describe('overlayRegistry (F-8c)', () => {
       'inbox',
       'digest',
       'contradictions',
+      'sync',
     ]);
   });
 

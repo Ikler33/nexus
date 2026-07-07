@@ -402,13 +402,8 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().togglePlugins(),
     }),
-    commands.register({
-      id: 'view.sync',
-      title: 'Sync (git)',
-      titleKey: 'commands.view.sync',
-      source: 'core',
-      run: () => useUIStore.getState().toggleSync(),
-    }),
+    // view.sync — вырезана в модуль `connector/modules/sync` (F-10c): регистрируется через
+    // `ctx.commands` (id → `sync:view.sync`, source=plugin). Ядро её больше не объявляет.
     // view.goals — вырезана в модуль `connector/modules/goals` (F-10b): регистрируется через
     // `ctx.commands` (id → `goals:view.goals`, source=plugin). Ядро её больше не объявляет.
     // view.digest — вырезана в модуль `connector/modules/digest` (F-10b): id → `digest:view.digest`.

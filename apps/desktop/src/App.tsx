@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
-import './lib/connector/modules'; // F-9/F-10b: регистрирует+активирует модули-вклады (включая 7 оверлеев) до рендера
+import './lib/connector/modules'; // F-9/F-10b/F-10c: регистрирует+активирует модули-вклады (news/board/оверлеи/sync) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
@@ -31,15 +31,17 @@ import styles from './App.module.css';
 
 // Граф и панели грузятся лениво (граф — тяжёлый sigma.js §10; плагины — iframe-демо).
 // (Ленивая AgentView переехала в lib/connector/core-views — main-вью резолвит MainViewOutlet.)
+// (F-10c: SyncPanel вырезан в модуль `connector/modules/sync` — приходит через OverlayOutlet.)
 const GraphView = lazy(() => import('./components/graph/GraphView'));
 const PluginsPanel = lazy(() =>
   import('./components/plugins/PluginsPanel').then((m) => ({ default: m.PluginsPanel })),
 );
-const SyncPanel = lazy(() =>
-  import('./components/sync/SyncPanel').then((m) => ({ default: m.SyncPanel })),
-);
+// ConflictResolver — ЯДРО (safe-flow git-merge, standalone из пилюли статусбара по conflictOpen, DP-14;
+// + внутри SyncPanel). F-10c вынес его из зоны sync в `components/common` (он genuinely core: тянет
+// только hooks/lib/stores, НЕ SyncPanel) — так App.tsx не импортит НИЧЕГО из вырезанной sync-зоны, и
+// граница F-1b держится ПОЛНЫМ eslint-enforcement (без оговорок MODULE_BOUNDARY_EXCEPTIONS).
 const ConflictResolver = lazy(() =>
-  import('./components/sync/ConflictResolver').then((m) => ({ default: m.ConflictResolver })),
+  import('./components/common/ConflictResolver').then((m) => ({ default: m.ConflictResolver })),
 );
 const VersionHistory = lazy(() =>
   import('./components/editor/VersionHistory').then((m) => ({ default: m.VersionHistory })),
@@ -55,7 +57,8 @@ export function App() {
   const graphOpen = useUIStore((s) => s.graphOpen);
   const chatOpen = useUIStore((s) => s.chatOpen);
   const pluginsOpen = useUIStore((s) => s.pluginsOpen);
-  const syncOpen = useUIStore((s) => s.syncOpen);
+  // F-10c: SyncPanel (`syncOpen`) резолвит реестр `overlays` через <OverlayOutlet/> — App больше не
+  // подписан на `syncOpen` и не рендерит панель напрямую.
   const conflictOpen = useUIStore((s) => s.conflictOpen);
   const closeConflict = useUIStore((s) => s.closeConflict);
   const versionsOpen = useUIStore((s) => s.versionsOpen);
@@ -252,11 +255,8 @@ export function App() {
           <PluginsPanel />
         </Suspense>
       )}
-      {syncOpen && (
-        <Suspense fallback={null}>
-          <SyncPanel />
-        </Suspense>
-      )}
+      {/* F-10c: SyncPanel (`syncOpen`) переехал в модуль `connector/modules/sync` — рендерится из
+          реестра `overlays` через <OverlayOutlet/> ниже (per-contribution ErrorBoundary). */}
       {/* DP-14: конфликт-резолвер из пилюли статусбара (мимо SyncPanel, как onConflict макета). */}
       {conflictOpen && (
         <Suspense fallback={null}>
