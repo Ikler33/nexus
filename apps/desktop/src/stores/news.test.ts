@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../lib/tauri-api';
-import { evaluateQueue, evaluateRun, selectCurrentRun, useNewsStore } from './news';
+import {
+  __setWatchdogStateForTest,
+  evaluateQueue,
+  evaluateRun,
+  selectCurrentRun,
+  useNewsStore,
+} from './news';
 
 afterEach(() => {
   vi.restoreAllMocks();
+  __setWatchdogStateForTest({ active: false, trackedId: null });
   useNewsStore.setState({
     items: [],
     topic: null,
@@ -299,5 +306,32 @@ describe('news store — load() при живом прогоне (NB-1)', () => 
     expect(useNewsStore.getState().refreshing).toBe(false);
     // Смерть последнего прогона остаётся видимой (её снимает только новый живой прогон/refresh).
     expect(useNewsStore.getState().died).toEqual({ stage: 'llm', reason: 'актуальная смерть' });
+  });
+
+  // MINOR-A (ревью NB-1): вотчдог держит бэкофф-джобу по id (pending с run_at за 5с-зазором) →
+  // load() от чужого jobs:changed (gc/digest) обязан видеть ЕЁ ЖЕ, а не гасить refreshing
+  // (иначе цикл умирает и смерть attempt-2 до первого progress-события теряется молча).
+  it('вотчдог держит бэкофф-джобу по id → load() не гасит refreshing', async () => {
+    vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run: null } as never);
+    vi.spyOn(tauriApi.news, 'getConfig').mockResolvedValue({} as never);
+    vi.spyOn(tauriApi.news, 'sources').mockResolvedValue([] as never);
+    const nowSec = Math.floor(Date.now() / 1000);
+    vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([
+      // «Завтрашняя» recurring + НАША джоба на ретрай-бэкоффе (run_at +60с — вне ready-зазора).
+      { id: 7, kind: 'newsfeed', state: 'pending', runAt: nowSec + 86_400, attempts: 0 },
+      { id: 42, kind: 'newsfeed', state: 'pending', runAt: nowSec + 60, attempts: 1 },
+    ]);
+    __setWatchdogStateForTest({ active: true, trackedId: 42 });
+    useNewsStore.setState({ refreshing: true });
+
+    await useNewsStore.getState().load();
+    // Ready-фильтр без id дал бы «прогона нет» — с tracked id наблюдение сохраняется.
+    expect(useNewsStore.getState().refreshing).toBe(true);
+
+    // Контраст: без активного вотчдога тот же снапшот честно гасит спиннер (бэкофф-джоба
+    // анонимному load() неизвестна — подхватится вотчдогом/довершится jobs:changed'ом).
+    __setWatchdogStateForTest({ active: false, trackedId: null });
+    await useNewsStore.getState().load();
+    expect(useNewsStore.getState().refreshing).toBe(false);
   });
 });

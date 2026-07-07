@@ -247,20 +247,38 @@ let progressSubscribed = false;
 function ensureProgressSubscription() {
   if (progressSubscribed) return;
   progressSubscribed = true;
-  void tauriApi.events.onNewsProgress((p) => useNewsStore.getState().onProgress(p));
+  void tauriApi.events
+    .onNewsProgress((p) => useNewsStore.getState().onProgress(p))
+    .catch(() => {
+      // Подписка не встала (отклонённый listen) → сброс флага: следующий load/refresh повторит,
+      // иначе живой статус молча потерян навсегда.
+      progressSubscribed = false;
+    });
+}
+
+/** ТОЛЬКО для тестов: взводит/гасит наблюдение вотчдога без запуска цикла (в vitest `isTauri()`
+ *  = false — публичного пути нет). Нужен склейке `load()` + tracked id (MINOR-A). */
+export function __setWatchdogStateForTest(s: { active: boolean; trackedId: number | null }): void {
+  watchdogActive = s.active;
+  trackedJobId = s.trackedId;
 }
 
 export const useNewsStore = create<NewsState>((set, get) => {
-  /** Запускает цикл опроса очереди (только под Tauri — вне его реального планировщика нет). */
-  const startWatchdog = () => {
+  /** Запускает цикл опроса очереди (только под Tauri — вне его реального планировщика нет).
+   *  `keepProgressMarks` — MINOR-B: взвод из `onProgress` НЕ стирает только что записанные
+   *  `lastProgressAt`/`lastStageName` (иначе смерть сразу после ПЕРВОГО события планового
+   *  прогона давала diedAtUnknown вместо этапа). */
+  const startWatchdog = (keepProgressMarks = false) => {
     if (watchdogActive || !isTauri()) return;
     watchdogActive = true;
     watchdogStartedAt = Date.now();
     // Новое окно наблюдения: прежние прогресс-метки/id не относятся к этому прогону.
     trackedJobId = null;
     stuckStreak = 0;
-    lastProgressAt = null;
-    lastStageName = null;
+    if (!keepProgressMarks) {
+      lastProgressAt = null;
+      lastStageName = null;
+    }
 
     const tick = async () => {
       if (!get().refreshing) {
@@ -365,7 +383,12 @@ export const useNewsStore = create<NewsState>((set, get) => {
         // CRITICAL-2 (корень жалобы владельца): `jobActive` (Rust is_kind_busy) считает и «завтрашнюю»
         // recurring-pending → в steady state спиннер «Собираю…» горел ВЕЧНО. Ready-семантика
         // (selectCurrentRun) считает прогоном только running / pending с наступившим run_at.
-        const stillRefreshing = selectCurrentRun(activeList, null, Date.now()) !== undefined;
+        // MINOR-A: пока вотчдог держит джобу по id (ретрай-бэкофф — pending с run_at за 5с-зазором),
+        // load() от чужого jobs:changed обязан видеть ЕЁ ЖЕ — иначе refreshing=false гасит цикл и
+        // смерть attempt-2 до первого progress-события молча теряется.
+        const stillRefreshing =
+          selectCurrentRun(activeList, watchdogActive ? trackedJobId : null, Date.now()) !==
+          undefined;
         if (epoch !== loadEpoch) return; // фильтр сменился во время загрузки → этот ответ устарел
         set({
           config,
@@ -424,7 +447,8 @@ export const useNewsStore = create<NewsState>((set, get) => {
         died: null,
         ...(live && !get().refreshing ? { refreshing: true } : {}),
       });
-      if (live) startWatchdog(); // no-op, если цикл уже идёт / вне Tauri
+      // MINOR-B: keepProgressMarks — только что записанные метки этого события не стираются.
+      if (live) startWatchdog(true); // no-op, если цикл уже идёт / вне Tauri
     },
 
     markRead: async (id, read) => {
