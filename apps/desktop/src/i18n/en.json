@@ -1063,8 +1063,7 @@
     "stageLabel": {
       "sources": "polling sources",
       "llm": "analyzing entries",
-      "digest": "daily digest",
-      "save": "saving"
+      "digest": "daily digest"
     },
     "diag": {
       "title": "Diagnostics",

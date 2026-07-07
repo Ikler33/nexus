@@ -77,7 +77,6 @@ export function NewsView() {
     notice,
     load,
     refresh,
-    onProgress,
     markRead,
     toNote,
     setEnabled,
@@ -110,15 +109,9 @@ export function NewsView() {
     return () => unlisten();
   }, [load]);
 
-  // NB-1: этап живого прогона (`news:progress`) → стор (единый источник статуса; ливнес-вотчдог
-  // и «зависло/умерло» решаются в сторе поверх той же джоб-инфры, без новой шины).
-  useEffect(() => {
-    let off = () => {};
-    void tauriApi.events.onNewsProgress(onProgress).then((fn) => {
-      off = fn;
-    });
-    return () => off();
-  }, [onProgress]);
+  // NB-1: подписки на `news:progress` здесь НЕТ намеренно (ревью, MAJOR-1) — она живёт на уровне
+  // стора (`stores/news.ts::ensureProgressSubscription`): уход со вкладки во время прогона не
+  // слепит ливнес-вотчдог и не теряет этап для атрибуции смерти.
 
   // При открытии меню подтягиваем актуальный список доверенных хостов.
   useEffect(() => {

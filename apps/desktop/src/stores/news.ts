@@ -23,6 +23,15 @@ import {
  *  - `died` — ЧЕСТНАЯ ошибка ЭТАПА: джоба ушла в dead → показываем, на каком этапе (последний
  *    виденный `stage`) и почему (`last_error` мёртвой джобы). Не дублирует W-2-баннер llmDown
  *    (тот — Ok-прогон с записью run; здесь — именно упавшая джоба).
+ *
+ * ⚠️ СЕМАНТИКА ОЧЕРЕДИ (ревью NB-1, CRITICAL-1/2): `newsfeed` — recurring-kind. После КАЖДОГО
+ * завершения (и Ok, и fail) воркер тут же перепланирует следующий прогон (`reschedule_if_absent`,
+ * scheduler.rs) → в steady state в очереди ВСЕГДА лежит pending «на завтра». Поэтому:
+ *  - «джоба kind=newsfeed есть в activeJobs» ≠ «прогон идёт» — фильтруем ready-семантикой
+ *    (`selectCurrentRun`: `running` ИЛИ `pending` с наступившим `run_at`), как Rust `has_ready_job`;
+ *  - `jobActive` (Rust `is_kind_busy`: pending с ЛЮБЫМ run_at) для новостей НЕПРИГОДЕН — он и был
+ *    корнем вечного «Собираю…» в шапке (CRITICAL-2): `load()` теперь считает `refreshing` тем же
+ *    клиентским фильтром по `activeJobs`.
  */
 interface NewsState {
   items: NewsItem[];
@@ -35,7 +44,7 @@ interface NewsState {
   unreadOnly: boolean;
   /** Первая загрузка страницы (до прихода данных). */
   loading: boolean;
-  /** Джоба прогона в очереди/выполняется («Собираю…» на кнопке). */
+  /** ТЕКУЩИЙ прогон в очереди/выполняется («Собираю…» на кнопке) — ready-семантика, НЕ is_kind_busy. */
   refreshing: boolean;
   /** NB-1: текущий этап живого прогона (`null` — прогон не идёт / завершился этапом `save`). */
   stage: RunStage | null;
@@ -49,7 +58,7 @@ interface NewsState {
   load: () => Promise<void>;
   /** Ручной прогон (AC-NF-6): дедуп на бэке; снимается по `jobs:changed`-refetch. */
   refresh: () => Promise<void>;
-  /** NB-1: этап прогона из события `news:progress` (зовёт подписчик в NewsView). */
+  /** NB-1: этап прогона из события `news:progress` (подписка живёт на уровне стора, MAJOR-1). */
   onProgress: (p: RunStage) => void;
   markRead: (id: number, read: boolean) => Promise<void>;
   toNote: (id: number) => Promise<void>;
@@ -81,12 +90,69 @@ export interface RunDeath {
 const POLL_MS = 5000;
 /** `pending` дольше этого без запуска → планировщик мёртв (честная ошибка `stalled`, инцидент 06-12). */
 const PENDING_STALL_MS = 60_000;
-/** Абсолютный потолок `running` (бэкенд-вотчдог тика оборвёт сам тик) → `stalled`. */
+/** Абсолютный потолок наблюдения (бэкенд-вотчдог тика оборвёт сам тик) → `stalled`. */
 const RUNNING_CAP_MS = 20 * 60_000;
-/** Прогресс не двигается дольше этого при живой джобе → мягкое «похоже, зависло» (не ошибка). */
+/** Прогресс не двигается дольше этого при живой джобе → кандидат в «похоже, зависло». */
 const STUCK_MS = 120_000;
-/** Насколько «назад» от старта вотчдога dead-джоба считается смертью ИМЕННО этого прогона. */
-const DEAD_SLACK_MS = 30_000;
+/** Гистерезис stuck (MINOR-1 ревью): подряд stuck-тиков до показа баннера — каденс этапов
+ *  121–125с не мерцает предупреждением. */
+const STUCK_TICKS = 2;
+/** Зазор «pending вот-вот стартует» при выборе текущего прогона (только вперёд, в БУДУЩЕЕ):
+ *  джоба, чей run_at наступает в пределах ближайшего опроса, уже считается текущей. */
+const CURRENT_RUN_SLACK_MS = POLL_MS;
+
+// ── Чистая склейка со снапшотом очереди (тестируется на реалистичных снапшотах, ревью NB-1) ────
+
+/** Мини-форма активной джобы (структурное подмножество `ActiveJob`) — вход чистых функций. */
+export interface QueueJob {
+  id: number;
+  kind: string;
+  state: 'running' | 'pending';
+  /** Unix-СЕКУНДЫ (как в `ActiveJob`). */
+  runAt: number;
+}
+
+/** Мини-форма dead-джобы (структурное подмножество `DeadJob`). */
+export interface QueueDead {
+  id: number;
+  kind: string;
+  lastError: string | null;
+  /** Unix-СЕКУНДЫ (как в `DeadJob`). */
+  updatedAt: number;
+}
+
+/**
+ * NB-1 (CRITICAL-1/2): выбирает из очереди джобу ТЕКУЩЕГО прогона новостей, отфильтровывая
+ * «завтрашнюю» recurring-pending (у неё run_at в будущем). Семантика зеркалит Rust `has_ready_job`:
+ * `running` ИЛИ `pending` с наступившим (± ближайший опрос) `run_at`. Если прогон уже отслеживается
+ * (`trackedId`), держимся ЕГО id — так ретрай-бэкофф (pending с run_at в будущем) не теряется.
+ */
+export function selectCurrentRun(
+  active: QueueJob[],
+  trackedId: number | null,
+  now: number,
+): QueueJob | undefined {
+  const news = active.filter((j) => j.kind === 'newsfeed');
+  if (trackedId !== null) return news.find((j) => j.id === trackedId);
+  return news.find((j) => j.state === 'running' || j.runAt * 1000 <= now + CURRENT_RUN_SLACK_MS);
+}
+
+/**
+ * NB-1 (MAJOR-2): атрибуция смерти НАШЕМУ прогону. По id, если прогон отслеживался; иначе — только
+ * dead-записи, умершие ПОСЛЕ старта наблюдения (`updatedAt >= startedAt`, БЕЗ обратного зазора:
+ * прежний 30с-зазор ловил старую смерть как «нашу» после успешного ретрая).
+ */
+export function attributeDeath(
+  dead: QueueDead[],
+  trackedId: number | null,
+  startedAtMs: number,
+): QueueDead | undefined {
+  const news = dead.filter((d) => d.kind === 'newsfeed');
+  if (trackedId !== null) return news.find((d) => d.id === trackedId);
+  return news
+    .filter((d) => d.updatedAt * 1000 >= startedAtMs)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+}
 
 /** Решение вотчдога по снимку очереди (чистая функция — вся логика ливнеса тестируема без таймеров). */
 export type RunDecision =
@@ -97,10 +163,10 @@ export type RunDecision =
   | { kind: 'died'; reason: string | null };
 
 /**
- * NB-1: чистое решение по одному снимку очереди. Разводит «долго/живо» и «встало/умерло»:
- *  - нет активной джобы + есть свежая dead-джоба → `died` (причина = её `last_error`);
- *  - нет активной джобы, dead нет → `done` (refetch: успех/дедуп);
- *  - `pending` дольше `PENDING_STALL_MS` ИЛИ `running` дольше `RUNNING_CAP_MS` → `stalled` (жёстко);
+ * NB-1: чистое решение по ВЫБРАННОЙ джобе текущего прогона. Разводит «долго/живо» и «встало/умерло»:
+ *  - текущей джобы нет + есть атрибутированная dead → `died` (причина = её `last_error`);
+ *  - текущей джобы нет, dead нет → `done` (refetch: успех/дедуп);
+ *  - `pending` дольше `PENDING_STALL_MS` ИЛИ наблюдение дольше `RUNNING_CAP_MS` → `stalled` (жёстко);
  *  - `running` без движения прогресса дольше `STUCK_MS` → `stuck` (мягко, опрос продолжается);
  *  - иначе → `progressing`.
  * `lastProgressAt` = момент последнего `news:progress`; `null` → отсчёт от старта вотчдога (джоба
@@ -126,20 +192,63 @@ export function evaluateRun(o: {
   return { kind: 'progressing' };
 }
 
+/**
+ * NB-1: полная склейка «снимок очереди → решение» = `selectCurrentRun` + `attributeDeath` +
+ * `evaluateRun` (ровно то, что делает тик вотчдога). Тестируется на РЕАЛИСТИЧНЫХ снапшотах —
+ * в т.ч. очереди с recurring-pending «на завтра», которую живой планировщик держит всегда.
+ * Возвращает решение и обновлённый `trackedId` (id найденной текущей джобы фиксируется).
+ */
+export function evaluateQueue(o: {
+  active: QueueJob[];
+  /** Dead-джобы; пустой список = не запрашивали (текущая джоба есть) либо dead нет. */
+  dead: QueueDead[];
+  trackedId: number | null;
+  now: number;
+  startedAt: number;
+  lastProgressAt: number | null;
+}): { decision: RunDecision; trackedId: number | null } {
+  const job = selectCurrentRun(o.active, o.trackedId, o.now);
+  const deadJob = job ? undefined : attributeDeath(o.dead, o.trackedId, o.startedAt);
+  return {
+    decision: evaluateRun({
+      job,
+      deadJob,
+      now: o.now,
+      startedAt: o.startedAt,
+      lastProgressAt: o.lastProgressAt,
+    }),
+    trackedId: job ? job.id : o.trackedId,
+  };
+}
+
 // Epoch-счётчик загрузок (audit B13): быстрая смена темы/«непрочитанные» во время in-flight load
 // могла применить устаревший ответ (темы A) уже после переключения на B → лента не совпадала с чипом.
 let loadEpoch = 0;
 
-// ── Ливнес-вотчдог (NB-1): один цикл на прогон, разделяемый refresh()/load(). Модульные, чтобы
-// пережить пересоздание объекта состояния и гарантировать единственность цикла. ──────────────────
-/** Идёт ли уже цикл опроса (гард против двойного запуска из refresh()+load()). */
+// ── Ливнес-вотчдог (NB-1): один цикл на прогон, разделяемый refresh()/load()/onProgress. Модульные,
+// чтобы пережить пересоздание объекта состояния и гарантировать единственность цикла. ─────────────
+/** Идёт ли уже цикл опроса (гард против двойного запуска). */
 let watchdogActive = false;
 /** Момент старта текущего цикла опроса (база для `RUNNING_CAP`/`STUCK`, атрибуция dead-джоб). */
 let watchdogStartedAt = 0;
+/** id джобы текущего прогона (CRITICAL-1: следим за КОНКРЕТНОЙ джобой, не за kind'ом). */
+let trackedJobId: number | null = null;
+/** Подряд идущих stuck-тиков (гистерезис MINOR-1). */
+let stuckStreak = 0;
 /** Момент последнего `news:progress` (движется ли прогон); `null` — событий ещё не было. */
 let lastProgressAt: number | null = null;
 /** Последний ненулевой этап (для атрибуции смерти: «прервалось на этапе X»). */
 let lastStageName: string | null = null;
+
+/** MAJOR-1: подписка `news:progress` живёт на уровне СТОРА (не вью) — уход со вкладки во время
+ *  прогона больше не слепит вотчдог (ложное stuck) и не теряет этап для атрибуции смерти.
+ *  Одна подписка на процесс, без снятия (слушатель дешёвый, стор — синглтон). */
+let progressSubscribed = false;
+function ensureProgressSubscription() {
+  if (progressSubscribed) return;
+  progressSubscribed = true;
+  void tauriApi.events.onNewsProgress((p) => useNewsStore.getState().onProgress(p));
+}
 
 export const useNewsStore = create<NewsState>((set, get) => {
   /** Запускает цикл опроса очереди (только под Tauri — вне его реального планировщика нет). */
@@ -147,7 +256,9 @@ export const useNewsStore = create<NewsState>((set, get) => {
     if (watchdogActive || !isTauri()) return;
     watchdogActive = true;
     watchdogStartedAt = Date.now();
-    // Новое окно наблюдения: прежние прогресс-метки не относятся к этому прогону.
+    // Новое окно наблюдения: прежние прогресс-метки/id не относятся к этому прогону.
+    trackedJobId = null;
+    stuckStreak = 0;
     lastProgressAt = null;
     lastStageName = null;
 
@@ -160,36 +271,43 @@ export const useNewsStore = create<NewsState>((set, get) => {
       try {
         active = await tauriApi.scheduler.activeJobs();
       } catch {
+        // MINOR-3: IPC-сбои тоже ограничены общим потолком — не перепланируем тик бесконечно.
+        if (Date.now() - watchdogStartedAt > RUNNING_CAP_MS) {
+          watchdogActive = false;
+          set({ refreshing: false, stage: null, stuck: false, error: 'stalled' });
+          return;
+        }
         setTimeout(() => void tick(), POLL_MS);
         return;
       }
-      const job = active.find((j) => j.kind === 'newsfeed');
-      let deadJob;
-      if (!job) {
-        let dead: Awaited<ReturnType<typeof tauriApi.scheduler.deadJobs>> = [];
+      // Dead-джобы нужны только когда текущей джобы не стало (done vs died).
+      let dead: QueueDead[] = [];
+      if (!selectCurrentRun(active, trackedJobId, Date.now())) {
         try {
           dead = await tauriApi.scheduler.deadJobs();
         } catch {
           /* нет доступа к dead → трактуем как завершение (done) */
         }
-        deadJob = dead
-          .filter(
-            (d) => d.kind === 'newsfeed' && d.updatedAt * 1000 >= watchdogStartedAt - DEAD_SLACK_MS,
-          )
-          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
       }
-      const decision = evaluateRun({
-        job,
-        deadJob,
+      const { decision, trackedId } = evaluateQueue({
+        active,
+        dead,
+        trackedId: trackedJobId,
         now: Date.now(),
         startedAt: watchdogStartedAt,
         lastProgressAt,
       });
+      trackedJobId = trackedId;
       switch (decision.kind) {
         case 'died':
           watchdogActive = false;
           // Прошлые данные целы (как W-2/errorSub) — поверх них честный баннер этапа+причины.
-          set({ refreshing: false, stage: null, stuck: false, died: { stage: lastStageName, reason: decision.reason } });
+          set({
+            refreshing: false,
+            stage: null,
+            stuck: false,
+            died: { stage: lastStageName, reason: decision.reason },
+          });
           return;
         case 'done':
           watchdogActive = false;
@@ -202,10 +320,13 @@ export const useNewsStore = create<NewsState>((set, get) => {
           set({ refreshing: false, stage: null, stuck: false, error: 'stalled' });
           return;
         case 'stuck':
-          if (!get().stuck) set({ stuck: true });
+          // Гистерезис (MINOR-1): один stuck-тик на границе порога не мерцает баннером.
+          stuckStreak += 1;
+          if (stuckStreak >= STUCK_TICKS && !get().stuck) set({ stuck: true });
           setTimeout(() => void tick(), POLL_MS);
           return;
         case 'progressing':
+          stuckStreak = 0;
           if (get().stuck) set({ stuck: false });
           setTimeout(() => void tick(), POLL_MS);
           return;
@@ -231,15 +352,20 @@ export const useNewsStore = create<NewsState>((set, get) => {
     notice: null,
 
     load: async () => {
+      ensureProgressSubscription();
       const epoch = ++loadEpoch;
       try {
         const { topic, unreadOnly } = get();
-        const [config, sources, page] = await Promise.all([
+        const [config, sources, page, activeList] = await Promise.all([
           tauriApi.news.getConfig(),
           tauriApi.news.sources(),
           tauriApi.news.page({ topic: topic ?? undefined, unreadOnly }),
+          tauriApi.scheduler.activeJobs(),
         ]);
-        const stillRefreshing = await tauriApi.scheduler.jobActive('newsfeed');
+        // CRITICAL-2 (корень жалобы владельца): `jobActive` (Rust is_kind_busy) считает и «завтрашнюю»
+        // recurring-pending → в steady state спиннер «Собираю…» горел ВЕЧНО. Ready-семантика
+        // (selectCurrentRun) считает прогоном только running / pending с наступившим run_at.
+        const stillRefreshing = selectCurrentRun(activeList, null, Date.now()) !== undefined;
         if (epoch !== loadEpoch) return; // фильтр сменился во время загрузки → этот ответ устарел
         set({
           config,
@@ -250,9 +376,12 @@ export const useNewsStore = create<NewsState>((set, get) => {
           loading: false,
           refreshing: stillRefreshing,
           error: null,
+          // MINOR-2: живой прогон обнаружен (напр. ретрай dead-джобы из модалки очереди) →
+          // прежний баннер «прервалось» неактуален.
+          ...(stillRefreshing ? { died: null } : {}),
         });
-        // NB-1: прогон уже идёт (плановый суточный тик или тот, что запустили при закрытой странице) —
-        // поднимаем ливнес-вотчдог, чтобы «зависло/умерло» отслеживалось и вне ручного «Обновить».
+        // NB-1: прогон уже идёт (плановый суточный тик / ретрай из модалки / прогон, запущенный при
+        // закрытой странице) — поднимаем ливнес-вотчдог, чтобы «зависло/умерло» отслеживалось всегда.
         if (stillRefreshing) startWatchdog();
       } catch (e) {
         if (epoch !== loadEpoch) return; // устаревшая загрузка не показывает свою ошибку
@@ -262,6 +391,7 @@ export const useNewsStore = create<NewsState>((set, get) => {
 
     refresh: async () => {
       if (get().refreshing) return;
+      ensureProgressSubscription();
       // Новый прогон: гасим прежние сигналы прошлого прогона (этап/зависание/смерть/ошибку).
       set({ refreshing: true, error: null, stage: null, stuck: false, died: null });
       try {
@@ -273,8 +403,8 @@ export const useNewsStore = create<NewsState>((set, get) => {
           return;
         }
         // Ливнес-вотчдог (инцидент 2026-06-12 + NB-1): поллит очередь и разводит «долго/живо» vs
-        // «встало/умерло» через чистую `evaluateRun`. Джобы нет → done|died; pending>минуты или
-        // running>потолка → stalled; running без движения прогресса > STUCK → мягкое «зависло».
+        // «встало/умерло» через чистую `evaluateQueue`. Текущей джобы нет → done|died; pending>минуты
+        // или наблюдение>потолка → stalled; running без движения прогресса > STUCK → мягкое «зависло».
         startWatchdog();
       } catch (e) {
         set({ refreshing: false, error: String(e) });
@@ -283,9 +413,18 @@ export const useNewsStore = create<NewsState>((set, get) => {
 
     onProgress: (p) => {
       lastProgressAt = Date.now();
-      if (p.stage !== 'save') lastStageName = p.stage;
-      // Живой этап пришёл → прогон точно двигается: снимаем «зависло» и любую атрибутированную смерть.
-      set({ stage: p.stage === 'save' ? null : p, stuck: false, died: null });
+      stuckStreak = 0;
+      const live = p.stage !== 'save';
+      if (live) lastStageName = p.stage;
+      // Живой этап пришёл → прогон точно идёт и двигается: снимаем «зависло»/смерть; если прогон
+      // начался планово (не через refresh) — взводим refreshing и вотчдог, чтобы статус был живым.
+      set({
+        stage: live ? p : null,
+        stuck: false,
+        died: null,
+        ...(live && !get().refreshing ? { refreshing: true } : {}),
+      });
+      if (live) startWatchdog(); // no-op, если цикл уже идёт / вне Tauri
     },
 
     markRead: async (id, read) => {

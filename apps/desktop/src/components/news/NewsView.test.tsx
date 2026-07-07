@@ -412,8 +412,10 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
       died: { stage: 'llm', reason: 'connection refused (192.168.1.104:8084)' },
     });
     // Этап («анализ записей») + причина в одном alert-баннере.
-    expect(await screen.findByText(/анализ записей|analyzing entries/i)).toBeInTheDocument();
+    const banner = await screen.findByText(/анализ записей|analyzing entries/i);
     expect(screen.getByText(/connection refused/)).toBeInTheDocument();
+    // Это ОШИБКА (role=alert) — симметрия с мягким stuck (role=status), ревью NB-1.
+    expect(banner.closest('[role="alert"]')).not.toBeNull();
   });
 
   // NB-1: причина не записана (last_error=null) → подсказка «см. Диагностику», без пустого баннера.

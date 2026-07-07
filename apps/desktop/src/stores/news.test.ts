@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { tauriApi } from '../lib/tauri-api';
-import { evaluateRun, useNewsStore } from './news';
+import { evaluateQueue, evaluateRun, selectCurrentRun, useNewsStore } from './news';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -10,6 +10,7 @@ afterEach(() => {
     topic: null,
     unreadOnly: false,
     loading: true,
+    refreshing: false,
     error: null,
     stage: null,
     stuck: false,
@@ -27,7 +28,7 @@ describe('news store — epoch-гард load (audit B13)', () => {
     );
     vi.spyOn(tauriApi.news, 'getConfig').mockResolvedValue({} as never);
     vi.spyOn(tauriApi.news, 'sources').mockResolvedValue([] as never);
-    vi.spyOn(tauriApi.scheduler, 'jobActive').mockResolvedValue(false as never);
+    vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([]);
 
     const p1 = useNewsStore.getState().load(); // epoch 1 (тема A)
     const p2 = useNewsStore.getState().load(); // epoch 2 (тема B — вытесняет)
@@ -45,7 +46,7 @@ describe('news store — epoch-гард load (audit B13)', () => {
     } as never);
     vi.spyOn(tauriApi.news, 'getConfig').mockResolvedValue({} as never);
     vi.spyOn(tauriApi.news, 'sources').mockResolvedValue([] as never);
-    vi.spyOn(tauriApi.scheduler, 'jobActive').mockResolvedValue(false as never);
+    vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([]);
 
     await useNewsStore.getState().load();
     expect(useNewsStore.getState().items.map((i) => i.id)).toEqual([7]);
@@ -53,7 +54,113 @@ describe('news store — epoch-гард load (audit B13)', () => {
   });
 });
 
+// ── NB-1 (ревью, CRITICAL-1/2): склейка со СНАПШОТОМ очереди. Реалистичные снапшоты: newsfeed —
+// recurring, после каждого завершения в очереди ВСЕГДА лежит pending «на завтра» (reschedule_if_absent
+// в том же проходе воркера) — наивный поиск по kind её и находил, убивая ветки done/died. ────────────
+describe('news store — selectCurrentRun/evaluateQueue (склейка со снапшотом очереди)', () => {
+  const NOW = 1_800_000_000_000; // «сейчас» (мс)
+  const sec = (ms: number) => Math.floor(ms / 1000);
+  /** Recurring-джоба следующего суточного прогона — фон КАЖДОГО steady-state снапшота. */
+  const tomorrow = { id: 7, kind: 'newsfeed', state: 'pending' as const, runAt: sec(NOW) + 86_400 };
+
+  it('CRITICAL-2 (корень вечного «Собираю…»): steady state — только «завтрашняя» pending → прогона НЕТ', () => {
+    expect(selectCurrentRun([tomorrow], null, NOW)).toBeUndefined();
+  });
+
+  it('running-джоба на фоне «завтрашней» → текущий прогон, id фиксируется', () => {
+    const running = { id: 42, kind: 'newsfeed', state: 'running' as const, runAt: sec(NOW) - 10 };
+    const r = evaluateQueue({
+      active: [tomorrow, running],
+      dead: [],
+      trackedId: null,
+      now: NOW,
+      startedAt: NOW - 10_000,
+      lastProgressAt: NOW - 5_000,
+    });
+    expect(r.decision).toEqual({ kind: 'progressing' });
+    expect(r.trackedId).toBe(42);
+  });
+
+  it('pending с наступившим run_at (ручной прогон ещё не заклеймлен) → текущий прогон', () => {
+    const manual = { id: 43, kind: 'newsfeed', state: 'pending' as const, runAt: sec(NOW) - 1 };
+    expect(selectCurrentRun([tomorrow, manual], null, NOW)?.id).toBe(43);
+  });
+
+  it('чужой kind (digest и т.п.) не участвует в выборе', () => {
+    const digest = { id: 9, kind: 'digest', state: 'running' as const, runAt: sec(NOW) };
+    expect(selectCurrentRun([digest, tomorrow], null, NOW)).toBeUndefined();
+  });
+
+  it('CRITICAL-1: done ДОСТИЖИМ — прогон завершился, в очереди осталась лишь «завтрашняя»', () => {
+    const { decision } = evaluateQueue({
+      active: [tomorrow], // прежний фильтр по kind нашёл бы её и никогда не дал done
+      dead: [],
+      trackedId: 42,
+      now: NOW,
+      startedAt: NOW - 60_000,
+      lastProgressAt: NOW - 30_000,
+    });
+    expect(decision).toEqual({ kind: 'done' });
+  });
+
+  it('CRITICAL-1: died ДОСТИЖИМ — наша джоба в dead при «завтрашней» pending в очереди', () => {
+    const dead = [{ id: 42, kind: 'newsfeed', lastError: 'llm: connection refused', updatedAt: sec(NOW) }];
+    const { decision } = evaluateQueue({
+      active: [tomorrow],
+      dead,
+      trackedId: 42, // id зафиксирован, пока джоба была видна running
+      now: NOW,
+      startedAt: NOW - 60_000,
+      lastProgressAt: NOW - 30_000,
+    });
+    expect(decision).toEqual({ kind: 'died', reason: 'llm: connection refused' });
+  });
+
+  it('MAJOR-2: чужая dead (умерла ДО старта наблюдения) НЕ атрибутируется → done, не ложный died', () => {
+    // Сценарий ревью: прогон умер → «Обновить» → успех; в dead осталась СТАРАЯ запись.
+    const dead = [{ id: 41, kind: 'newsfeed', lastError: 'старая смерть', updatedAt: sec(NOW) - 20 }];
+    const { decision } = evaluateQueue({
+      active: [tomorrow],
+      dead,
+      trackedId: null, // новый прогон завершился до первого тика — id не успел зафиксироваться
+      now: NOW,
+      startedAt: NOW, // наблюдение началось ПОСЛЕ старой смерти
+      lastProgressAt: null,
+    });
+    expect(decision).toEqual({ kind: 'done' });
+  });
+
+  it('без tracked id свежая (после старта наблюдения) dead-джоба атрибутируется', () => {
+    const dead = [{ id: 44, kind: 'newsfeed', lastError: 'паника хендлера', updatedAt: sec(NOW) }];
+    const { decision } = evaluateQueue({
+      active: [tomorrow],
+      dead,
+      trackedId: null,
+      now: NOW,
+      startedAt: NOW - 30_000,
+      lastProgressAt: null,
+    });
+    expect(decision).toEqual({ kind: 'died', reason: 'паника хендлера' });
+  });
+
+  it('tracked id держит прогон и на ретрай-бэкоффе (pending с run_at в будущем)', () => {
+    // fail() перекладывает джобу в pending с отложенным run_at — это ЕЩЁ наш прогон, не «завтрашняя».
+    const retrying = { id: 42, kind: 'newsfeed', state: 'pending' as const, runAt: sec(NOW) + 60 };
+    const r = evaluateQueue({
+      active: [tomorrow, retrying],
+      dead: [],
+      trackedId: 42,
+      now: NOW,
+      startedAt: NOW - 30_000,
+      lastProgressAt: NOW - 10_000,
+    });
+    expect(r.decision).toEqual({ kind: 'progressing' });
+    expect(r.trackedId).toBe(42);
+  });
+});
+
 // NB-1: ливнес-решение вотчдога — чистая функция, разводит «долго/живо» и «встало/умерло».
+// (Юниты внутреннего решения; реалистичная склейка со снапшотом очереди — describe выше.)
 describe('news store — evaluateRun (NB-1 ливнес прогона)', () => {
   const T0 = 1_000_000_000_000; // база «сейчас» (мс)
 
@@ -137,17 +244,60 @@ describe('news store — evaluateRun (NB-1 ливнес прогона)', () => 
 
 // NB-1: onProgress — этап живого прогона в стор; снимает «зависло/умерло» (прогон точно двигается).
 describe('news store — onProgress (NB-1 живой этап)', () => {
-  it('этап sources/llm → stage выставлен, stuck/died сняты', () => {
-    useNewsStore.setState({ stuck: true, died: { stage: 'llm', reason: 'x' } });
+  it('этап sources/llm → stage выставлен, stuck/died сняты, refreshing взведён (плановый прогон)', () => {
+    useNewsStore.setState({ stuck: true, died: { stage: 'llm', reason: 'x' }, refreshing: false });
     useNewsStore.getState().onProgress({ stage: 'llm', done: 12, total: 40 });
     const s = useNewsStore.getState();
     expect(s.stage).toEqual({ stage: 'llm', done: 12, total: 40 });
     expect(s.stuck).toBe(false);
     expect(s.died).toBeNull();
+    // Плановый (не через «Обновить») прогон тоже показывает живой статус в шапке.
+    expect(s.refreshing).toBe(true);
   });
 
-  it('этап save → stage очищается (прогон завершил этапы)', () => {
+  it('этап save → stage очищается (прогон завершил этапы), refreshing НЕ взводится', () => {
     useNewsStore.getState().onProgress({ stage: 'save', done: 1, total: 1 });
     expect(useNewsStore.getState().stage).toBeNull();
+    expect(useNewsStore.getState().refreshing).toBe(false);
+  });
+});
+
+// NB-1 (MINOR-2 ревью): ретрай dead-джобы из модалки очереди → jobs:changed → load(): живой прогон
+// обнаружен → баннер «прервалось» снимается (иначе «прервалось» и «Собираю…» висели бы вместе).
+describe('news store — load() при живом прогоне (NB-1)', () => {
+  it('живой прогон в очереди → refreshing=true и died снят', async () => {
+    vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run: null } as never);
+    vi.spyOn(tauriApi.news, 'getConfig').mockResolvedValue({} as never);
+    vi.spyOn(tauriApi.news, 'sources').mockResolvedValue([] as never);
+    vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([
+      { id: 5, kind: 'newsfeed', state: 'running', runAt: Math.floor(Date.now() / 1000), attempts: 1 },
+    ]);
+    useNewsStore.setState({ died: { stage: 'llm', reason: 'умерла в прошлый раз' } });
+
+    await useNewsStore.getState().load();
+    expect(useNewsStore.getState().refreshing).toBe(true);
+    expect(useNewsStore.getState().died).toBeNull();
+  });
+
+  it('steady state («завтрашняя» pending) → refreshing=false, died прошлого прогона сохранён', async () => {
+    vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run: null } as never);
+    vi.spyOn(tauriApi.news, 'getConfig').mockResolvedValue({} as never);
+    vi.spyOn(tauriApi.news, 'sources').mockResolvedValue([] as never);
+    vi.spyOn(tauriApi.scheduler, 'activeJobs').mockResolvedValue([
+      {
+        id: 7,
+        kind: 'newsfeed',
+        state: 'pending',
+        runAt: Math.floor(Date.now() / 1000) + 86_400,
+        attempts: 0,
+      },
+    ]);
+    useNewsStore.setState({ died: { stage: 'llm', reason: 'актуальная смерть' } });
+
+    await useNewsStore.getState().load();
+    // CRITICAL-2: «завтрашняя» recurring-pending НЕ зажигает вечный спиннер.
+    expect(useNewsStore.getState().refreshing).toBe(false);
+    // Смерть последнего прогона остаётся видимой (её снимает только новый живой прогон/refresh).
+    expect(useNewsStore.getState().died).toEqual({ stage: 'llm', reason: 'актуальная смерть' });
   });
 });
