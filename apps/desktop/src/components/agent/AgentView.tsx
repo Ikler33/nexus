@@ -253,8 +253,10 @@ export function AgentView() {
                     onBulk={(d) => {
                       setAllDecisions(d);
                       toast(
+                        // Fix BF-1 №3c: bulk доступен только ДО «Подтвердить» (кнопки disabled вне
+                        // awaiting) → «выбрано», а не «применено» (реальная запись — после подтверждения).
                         d === 'applied'
-                          ? t('agent.changeset.applyToast')
+                          ? t('agent.changeset.selectToast')
                           : t('agent.changeset.rejectToast'),
                       );
                     }}
@@ -733,7 +735,15 @@ function Changeset({
                 {decision === 'applied' ? (
                   <span className={`${styles.cfBadge} ${styles.cfOk}`}>
                     {auto ? <OrbitIcon size={12} aria-hidden /> : <Check size={12} aria-hidden />}
-                    {auto ? t('agent.changeset.autoMark') : t('agent.changeset.applied')}
+                    {/* Fix BF-1 №3c: честная терминология гейта. Пока ход ждёт подтверждения
+                        (awaiting) per-file решение — лишь «выбрано» (запись НЕ произошла); после
+                        «Подтвердить» (ход ушёл из awaiting) — настоящее «применено». auto-режим
+                        применяет сам → «авто». */}
+                    {auto
+                      ? t('agent.changeset.autoMark')
+                      : awaiting
+                        ? t('agent.changeset.selected')
+                        : t('agent.changeset.applied')}
                   </span>
                 ) : decision === 'rejected' ? (
                   <span className={`${styles.cfBadge} ${styles.cfNo}`}>

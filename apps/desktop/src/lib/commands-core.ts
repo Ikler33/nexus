@@ -82,12 +82,25 @@ export async function promoteNoteToBoard(path: string): Promise<void> {
 
 /** Открытие vault: нативный диалог в Tauri, мок в браузере; сбрасывает рабочее пространство. */
 export async function openVaultFlow(): Promise<void> {
-  if (isTauri()) {
-    const dir = await tauriApi.vault.pickDirectory();
-    if (!dir) return;
-    await useVaultStore.getState().openVault(dir);
-  } else {
-    await useVaultStore.getState().openVault('');
+  try {
+    if (isTauri()) {
+      const dir = await tauriApi.vault.pickDirectory();
+      if (!dir) return;
+      await useVaultStore.getState().openVault(dir);
+    } else {
+      await useVaultStore.getState().openVault('');
+    }
+  } catch (e) {
+    // Fix BF-1 №3b: открытие vault упало (частая причина на macOS — TCC-запрет доступа к папке,
+    // `os error 13`). Раньше ошибка всплывала как js-unhandled-rejection и экран молчал. Ловим тут
+    // (единая точка welcome/palette) и показываем внятный тост существующим механизмом.
+    const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : JSON.stringify(e);
+    const denied = /permission denied|os error 13/i.test(msg);
+    useToastStore.getState().addToast(
+      denied ? i18n.t('file.openVaultDenied') : i18n.t('file.openVaultFailed', { msg }),
+      { kind: 'error' },
+    );
+    return;
   }
   useWorkspaceStore.getState().reset();
 }
