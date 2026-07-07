@@ -44,6 +44,19 @@
     «применено» на «выбрано» (i18n `changeset.selected` + `changeset.selectToast`); настоящий пост-apply
     статус остаётся «применено» (`changeset.applied`/`resolvedApplied`) — бейдж выбирает ключ по `awaiting`.
 
+- **Доводка по adversarial-ревью (тот же срез):** (1) session-уровневый тест проводки декоратора
+  `session_slow_gate_decision_does_not_burn_wall_clock` через новый pub(crate)-шов
+  `run_agent_session_bounded` — мутант «голый `deps.decision_source` в гейт» проверен вручную и валит
+  тест; (2) MINOR-1 — отменённый confirm-ход сворачивает changeset-карточку в честное «прогон отменён»
+  (i18n `changeset.cancelledSummary`) вместо ложного «применено: N» (записи не было; auto-ход не тронут —
+  там правки реально применялись) + компонент-тест; (3) юнит-тесты catch-пути `openVaultFlow`
+  (denied vs generic, `commands-core.test.ts`); (4) `PausingTool` кредитует ИЗМЕРЕННОЕ время сна
+  (анти-флейк CI); (5) поправлены врущие комментарии (субагент с общим gate кредитует счётчик РОДИТЕЛЯ;
+  `probe_endpoint` зовёт только `test_ai_connection`); (6) BACKLOG дополнен: амплификация кредита при
+  конкурентных детях, pre-existing «cancel не разблокирует висящий `decide()`», CLI-дубль текста бюджета
+  (осознанно оставлен — консистентен с provider-Error), IPv6-подсказка в реестре нелокализованных
+  probe-текстов AC-EGR-14.
+
 ### Изменено · F-10d — граф: layer-mount у OverlayContribution + вырез graph (11-й модуль)
 
 Серия вырезаний F-10, порция D. **Behavior-preserving** (проводка меняется, поведение/геометрия — нет).

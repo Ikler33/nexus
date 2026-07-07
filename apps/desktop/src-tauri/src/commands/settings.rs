@@ -945,7 +945,9 @@ async fn probe_endpoint(probe: &GuardedClient, url: &str) -> AppResult<()> {
         Err(NetError::Denied(d)) => Err(AiError::Denied(d).into()),
         Err(NetError::BadUrl) => Err(AppError::Msg("некорректный URL".into())),
         // Fix BF-1 №3a: сетевой сбой на хосте `localhost` — дописываем подсказку про IPv6 (::1). Только
-        // текст; сетевое поведение не меняется. `test_agent_connection`/self-check идут этим же путём.
+        // текст; сетевое поведение не меняется. Единственный вызыватель — `test_ai_connection` (его
+        // используют SelfCheck и блок «Подключение» настроек); `test_agent_connection` (AF_UNIX/ACP)
+        // идёт СВОИМ путём и этой подсказки не получает.
         Err(NetError::Http(e)) => Err(AppError::Msg(with_localhost_ipv6_hint(url, e.to_string()))),
     }
 }

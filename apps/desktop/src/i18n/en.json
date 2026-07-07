@@ -729,6 +729,7 @@
       "rejected": "rejected",
       "resolvedApplied": "{{count}} applied",
       "resolvedRejected": "{{count}} rejected",
+      "cancelledSummary": "run cancelled",
       "autoBadge": "Auto · agent self-reviews",
       "autoMark": "auto",
       "confirmApprove": "Confirm",

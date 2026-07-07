@@ -390,9 +390,14 @@ mod tests {
             }
         }
         async fn invoke(&self, _args: &str) -> Result<String, crate::agent::tool::ToolError> {
+            // Кредитуем ИЗМЕРЕННОЕ время сна (не константу delay) — как реальный декоратор мерит
+            // фактическую блокировку на decide(). На нагруженном CI sleep может занять дольше delay;
+            // константа оставила бы некредитованный хвост → флейк wall_clock-теста.
+            let t0 = Instant::now();
             tokio::time::sleep(self.delay).await;
             if let Some(p) = &self.paused_nanos {
-                p.fetch_add(self.delay.as_nanos() as u64, Ordering::Relaxed);
+                let elapsed = u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                p.fetch_add(elapsed, Ordering::Relaxed);
             }
             Ok("paused".into())
         }

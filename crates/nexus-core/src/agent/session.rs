@@ -221,6 +221,20 @@ pub async fn run_agent_session(
     deps: &SessionDeps<'_>,
     role: SessionRole<'_>,
 ) -> LoopOutcome {
+    run_agent_session_bounded(spec, deps, role, LoopBounds::default()).await
+}
+
+/// Как [`run_agent_session`], но с ЯВНЫМИ [`LoopBounds`] (прод-путь всегда даёт
+/// [`LoopBounds::default`] через публичную обёртку — конфигурируемый wall_clock осознанно отложен, см.
+/// `docs/BACKLOG.md` §«Хвосты среза BF-1»). Тест-шов Fix BF-1 №1: session-тест с коротким `wall_clock`
+/// доказывает ПРОВОДКУ pause-accounting-декоратора (медленное решение у гейта не валит прогон по
+/// WallClock) — мутант «в гейт передан голый `deps.decision_source`» валит этот тест.
+pub(crate) async fn run_agent_session_bounded(
+    spec: &SessionSpec,
+    deps: &SessionDeps<'_>,
+    role: SessionRole<'_>,
+    bounds: LoopBounds,
+) -> LoopOutcome {
     // Начальный контекст: [system преамбул] + [recall памяти] + [меню скиллов] + [задача]. recall —
     // только чтение, никогда не ошибка (деградирует в пусто); None память → пусто (без регрессии).
     // Меню скиллов (tier-1) — фенсенный user-role блок (данные, не инструкции, I-5); per-request
@@ -244,14 +258,18 @@ pub async fn run_agent_session(
     messages.extend(spec.history.iter().cloned());
     messages.push(ChatMessage::user(&spec.task));
 
-    let bounds = LoopBounds::default();
     let budget = ContextBudget::from_context_window(spec.context_window);
     let tk = QwenTokenizer::embedded();
 
     // Fix BF-1 №1: per-run счётчик «времени на паузе» у гейта. Гейт актуатора получает decision_source,
     // ОБЁРНУТЫЙ в [`PauseAccountingDecision`] (копит наносекунды блокировки на `decide()` сюда), а цикл
-    // получает `&paused_nanos` и вычитает это время из wall_clock. Делегирование/research отдают ДЕТЯМ
-    // НЕобёрнутый `deps.decision_source` — ребёнок заводит СВОЙ счётчик в собственном `run_agent_session`.
+    // получает `&paused_nanos` и вычитает это время из wall_clock. Делегирование/research кладут в
+    // `SubagentContext` НЕобёрнутый `deps.decision_source` И родительский `parent_dispatcher`
+    // (features.rs): ребёнок БЕЗ общего gate (`dispatcher=None`) обернёт источник СВОИМ счётчиком в
+    // собственном `run_agent_session`; ребёнок с ОБЩИМ родительским gate (`dispatcher=Some`) свой гейт
+    // НЕ строит и идёт через РОДИТЕЛЬСКИЙ декоратор — ожидания решений по его правкам кредитуются в
+    // счётчик РОДИТЕЛЯ, а собственный `paused_nanos` ребёнка не пополняется (осознанный хвост, ошибка
+    // fail-safe «родитель работает дольше»; см. `docs/BACKLOG.md` §«Хвосты среза BF-1»).
     let paused_nanos = Arc::new(AtomicU64::new(0));
     let gate_decision: Arc<dyn DecisionSource> = Arc::new(PauseAccountingDecision {
         inner: deps.decision_source.clone(),
@@ -309,8 +327,10 @@ pub async fn run_agent_session(
                 }
             }
             // Fix BF-1 №1: note-гейт получает pause-accounting-обёртку (раздумья человека не жгут бюджет).
-            // `deps.decision_source` (НЕобёрнутый) остаётся для `SubagentContext` делегирования ниже —
-            // ребёнок заводит собственный счётчик пауз в своём `run_agent_session`.
+            // `deps.decision_source` (НЕобёрнутый) остаётся для `SubagentContext` делегирования ниже:
+            // им пользуется только ребёнок, строящий СВОЙ гейт (`dispatcher=None`); ребёнок с ОБЩИМ
+            // родительским gate идёт через ЭТОТ декоратор и кредитует счётчик РОДИТЕЛЯ (см. коммент у
+            // `paused_nanos` выше + BACKLOG §«Хвосты среза BF-1»).
             Arc::new(GatedToolCtx::new(
                 spec.canon_root.clone(),
                 ledger,

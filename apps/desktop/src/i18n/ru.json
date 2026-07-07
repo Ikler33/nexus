@@ -741,6 +741,7 @@
       "rejected": "отклонено",
       "resolvedApplied": "применено: {{count}}",
       "resolvedRejected": "отклонено: {{count}}",
+      "cancelledSummary": "прогон отменён",
       "autoBadge": "Авто · агент ревьюит сам",
       "autoMark": "авто",
       "confirmApprove": "Подтвердить",

@@ -793,3 +793,101 @@ async fn live_actuator_create_and_undo_on_rig() {
     assert!(undo.restored() >= 1, "undo должен откатить >=1 действие");
     assert!(!path.exists(), "undo должен удалить созданную заметку");
 }
+
+/// **Fix BF-1 №1 — ПРОВОДКА pause-accounting-декоратора (session-уровень).** Доказывает, что
+/// `run_agent_session` реально ставит [`PauseAccountingDecision`] на путь гейта и отдаёт ТОТ ЖЕ счётчик
+/// циклу: МЕДЛЕННОЕ человеческое решение (сон в `decide()` ДОЛЬШЕ wall_clock) не валит прогон по
+/// WallClock — после аппрува цикл доходит до Final, а одобренная заметка реально записана.
+/// **Мутант-гард:** передать в `GatedToolCtx` голый `deps.decision_source` вместо `gate_decision`
+/// (фикс молча развинчен) → сон не кредитуется в `paused_nanos` → WallClock → тест падает.
+#[tokio::test]
+async fn session_slow_gate_decision_does_not_burn_wall_clock() {
+    use crate::actuator::{BatchDecision, ItemDecision, ProposalBatch};
+    use crate::agent::run_store;
+    use std::time::Duration;
+
+    /// ApproveAll с задержкой: эмулирует человека, думающего над changeset'ом дольше wall_clock.
+    struct SlowApproveAll(Duration);
+    #[async_trait]
+    impl DecisionSource for SlowApproveAll {
+        async fn decide(&self, batch: &ProposalBatch) -> BatchDecision {
+            tokio::time::sleep(self.0).await;
+            BatchDecision::from_pairs(
+                batch
+                    .items
+                    .iter()
+                    .map(|i| (i.action_id, ItemDecision::Approve)),
+            )
+        }
+    }
+
+    let dir = TempDir::new().unwrap();
+    let canon = dir.path().canonicalize().unwrap();
+    let db = Database::open(canon.join("nexus.db")).await.unwrap();
+    let run_id = run_store::create_run(db.writer(), "медленное решение", None, Some("confirm"))
+        .await
+        .unwrap();
+
+    // Ход 1: note.create (confirm-прогон → propose → decide спит 500мс → approve → apply). Ход 2: Final.
+    let provider = FakeProvider::new(vec![
+        Ok(ToolTurn::ToolCalls(vec![ToolCall {
+            id: "c1".into(),
+            name: "note.create".into(),
+            arguments: r#"{"path":"Notes/BF1.md","content":"привет"}"#.into(),
+        }])),
+        Ok(ToolTurn::Final("успел".into())),
+    ]);
+    let spec = SessionSpec {
+        run_id,
+        task: "создай заметку".into(),
+        history: Vec::new(),
+        autonomy: Some("confirm".into()),
+        actuator_enabled: true,
+        overwrite_threshold: 64 * 1024,
+        blast_cap: 16,
+        context_window: Some(4096),
+        canon_root: canon.clone(),
+        skills_learning_enabled: false,
+    };
+    let fwd = Arc::new(CollectingForwarder::default());
+    let paused = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(AtomicBool::new(false));
+    // wall_clock (250мс) ЗАМЕТНО МЕНЬШЕ сна решения (1с): без вычитания паузы прогон обязан упасть
+    // по WallClock на границе перед ходом 2; с проводкой декоратора — дойти до Final. Слак 250мс на
+    // НЕкредитуемую работу (sqlite/classify/apply) — запас против медленного CI.
+    let bounds = LoopBounds {
+        max_steps: 5,
+        wall_clock: Duration::from_millis(250),
+    };
+    let outcome = run_agent_session_bounded(
+        &spec,
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: Arc::new(SlowApproveAll(Duration::from_millis(1000))),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None,
+        },
+        bounds,
+    )
+    .await;
+    assert_eq!(
+        outcome,
+        LoopOutcome::Final("успел".into()),
+        "медленное решение у гейта НЕ должно жечь wall_clock (проводка декоратора): {outcome:?}"
+    );
+    // Одобренная правка реально применена (полный путь propose→decide→approve→apply прошёл).
+    assert!(
+        canon.join("Notes/BF1.md").exists(),
+        "одобренная заметка должна быть записана"
+    );
+}
