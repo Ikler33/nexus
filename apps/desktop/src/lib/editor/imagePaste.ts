@@ -47,8 +47,9 @@ async function insertImage(view: EditorView, file: Blob, at: number): Promise<vo
 
 /**
  * Вставка/перетаскивание картинки в редактор (IMG-1): берёт image-файл из буфера обмена (Cmd-V) или
- * drag-drop, сохраняет в `attachments/<имя>` и вставляет markdown-ссылку `![](…)`. Не-image вставка/
- * дроп проходят штатно (return false). Картинка показывается в превью (MarkdownPreview VaultImage).
+ * drag-drop, сохраняет в `attachments/<имя>` и вставляет markdown-ссылку `![](…)`. Не-image ВСТАВКА
+ * (paste) проходит штатно (return false); не-image ФАЙЛОВЫЙ дроп глотается (NB-2: иначе builtin-drop
+ * CodeMirror вставил бы содержимое файла как текст). Картинка показывается в превью (VaultImage).
  */
 export function imagePaste(): Extension {
   return EditorView.domEventHandlers({
@@ -70,7 +71,17 @@ export function imagePaste(): Extension {
     drop(event, view) {
       const files = event.dataTransfer?.files;
       const images = files ? Array.from(files).filter((f) => f.type.startsWith('image/')) : [];
-      if (images.length === 0) return false;
+      if (images.length === 0) {
+        // Файловый дроп БЕЗ картинок — глотаем: иначе встроенный drop CodeMirror вставит СОДЕРЖИМОЕ
+        // файла как текст (для бинарника — мусор в заметке). Актуально с dragDropEnabled:false (NB-2):
+        // раньше нативный file-drop Tauri не пускал файлы до DOM. Не-файловые дропы (текст/выделение)
+        // проходят штатно (return false).
+        if (files && files.length > 0) {
+          event.preventDefault();
+          return true;
+        }
+        return false;
+      }
       event.preventDefault();
       const start = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.head;
       void (async () => {

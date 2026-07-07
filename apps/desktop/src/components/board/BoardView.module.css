@@ -83,6 +83,36 @@
   cursor: default;
 }
 
+/* NB-3: тоггл «Скрыть выполненные» — нейтральный вид, акцент при нажатии. */
+.hideDoneBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) var(--ease-out, ease);
+}
+.hideDoneBtn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+/* Активное состояние (done скрыта) — лёгкий акцент, не агрессивный. */
+.hideDoneActive {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft, var(--color-surface));
+}
+.hideDoneActive:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-accent);
+}
+
 /* VIEW-1: сегментированный переключатель представления (канбан / список). */
 .viewToggle {
   display: inline-flex;
