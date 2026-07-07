@@ -105,7 +105,9 @@ pub fn outcome_to_finish(
         },
         LoopOutcome::BudgetExhausted { kind, partial } => RunFinish::Finalize {
             status: STATUS_ERROR,
-            text: format!("бюджет исчерпан ({kind:?}); частичный ответ: {partial}"),
+            // Fix BF-1 №2: ЕДИНЫЙ текст с терминальным стрим-событием цикла (см. `runner::emit_budget_exhausted`)
+            // — UI (стрим) и история (эта запись в БД) не расходятся.
+            text: super::runner::budget_exhausted_text(*kind, partial),
         },
         LoopOutcome::Error(e) => RunFinish::Finalize {
             status: STATUS_ERROR,

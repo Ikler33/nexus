@@ -209,6 +209,7 @@ async fn agent_loop_smoke() -> Result<(), String> {
         &tk,
         &cancel,
         &agent_paused,
+        &Arc::new(std::sync::atomic::AtomicU64::new(0)),
         RunCtx::NONE,
         &mut |e| {
             if matches!(e, AgentEvent::ToolResult { .. }) {

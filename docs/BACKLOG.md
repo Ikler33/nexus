@@ -79,6 +79,11 @@
 - 🔒 **Фаза 2 — sandbox**: rootless Podman `--network=none` + GuardedProxy (AF_UNIX) + control-plane + MCP-lite. Пререквизиты: durable plugin-audit + agent_proposals.
 - 🔒 **Фаза 3 — host-actuator**: shell/process/git ActionTargets в песочнице. Гейт: THREAT_MODEL принят + env-scrub реализован + `shell_enable` config.
 
+### Хвосты среза BF-1 (wall-clock / гейт, 2026-07-08)
+- ✂️ **Конфигурируемый `wall_clock`** (`ai.agent_wall_clock_secs` в `.nexus/local.json`, дефолт 300). Отложено осознанно: проброс тянет широкий дифф (`LocalConfig`-парс + `SessionSpec` + все 8 вызывателей `run_agent_session`), а BF-1 закрыл коренную проблему (пауза человека больше не жжёт бюджет) — жёсткого лимита в 300 с реального времени работы теперь достаточно. Триггер: запрос владельца на другой потолок. Источник: BF-1 Fix 1 (bonus).
+- ✂️ **Субагент с ОБЩИМ родительским gate** (`SessionRole::Subagent { dispatcher: Some }`): решение-ожидания ребёнка кредитуются в `paused_nanos` РОДИТЕЛЯ (обёртка `PauseAccountingDecision` живёт в родительском gate), а `wall_clock` ребёнка читает СВОЙ (свежий) счётчик → ребёнок не получает вычет за собственные раздумья, а родитель получает лишний кредит. Влияние низкое: headless-субагенты идут под `PolicyDefault` (мгновенный DENY, паузы нет); направление ошибки fail-safe («работать дольше», не «убить»). Триггер: живой human-in-loop делегированный прогон с длинными раздумьями по дочернему changeset. Источник: BF-1 Fix 1.
+- ✂️ **Exec в песочнице — межпроцессная пауза**: решение по exec принимается HOST-side (`dispatch_exec_decision`), а `run_agent_loop` крутится IN-CONTAINER; на время host-раздумий проксированный `dispatch` по act.sock блокирует in-container backstop-`wall_clock` (авторитетный лимит — host podman pause/kill, но in-container backstop всё же тикает). Чтобы вычесть и это, host должен репортить длительность паузы в ответе прокси, а in-container `ProxyActuator` — аккумулировать в свой `paused_nanos` (кросс-процессный контракт). Отложено как заметно больший дифф вне корня BF-1. Триггер: exec-changeset'ы с длинными host-раздумьями под коротким wall_clock. Источник: BF-1 Fix 1.
+
 ## 🐞 Известные баги (к фазе ручного тестирования)
 
 | Баг | Что известно / диагностика | Статус |

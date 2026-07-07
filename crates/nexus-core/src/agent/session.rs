@@ -27,12 +27,14 @@
 //! [`ForwardingEventSink`]-обёртку над тем же форвардером. Так потребитель видит единый порядок.
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::actuator::{
-    ActionDispatcher, AuditSink, DecisionSource, DispatchPolicy, EventSink, GatedToolCtx,
-    NoteCreateTool, NoteEditTool, SetFrontmatterTool, SkillSaveCtx, SkillSaveTool,
+    ActionDispatcher, AuditSink, BatchDecision, DecisionSource, DispatchPolicy, EventSink,
+    GatedToolCtx, NoteCreateTool, NoteEditTool, ProposalBatch, SetFrontmatterTool, SkillSaveCtx,
+    SkillSaveTool,
 };
 use crate::ai::tools::ToolCapableProvider;
 use crate::ai::{injection_marker, ChatMessage, ContextBudget, QwenTokenizer};
@@ -66,6 +68,33 @@ struct ForwardingEventSink(Arc<dyn AgentEventForwarder>);
 impl EventSink for ForwardingEventSink {
     fn emit(&self, event: AgentEvent) {
         self.0.forward(&event);
+    }
+}
+
+/// **Fix BF-1 №1 — учёт «времени на паузе» у гейта.** Декоратор [`DecisionSource`]: замеряет, сколько
+/// прогон БЛОКИРОВАЛСЯ на ожидании человеческого решения (`decide().await`), и аккумулирует наносекунды
+/// в общий `paused_nanos`. [`run_agent_loop`] ВЫЧИТАЕТ это время из wall_clock-возраста прогона — раздумья
+/// человека у changeset-гейта НЕ жгут бюджет (иначе «Подтвердить» после >5 мин раздумий = мгновенный
+/// «бюджет исчерпан (WallClock)»). Прозрачен для РЕШЕНИЯ (просто прокси `inner.decide`), поэтому
+/// fail-closed-семантика источника (пропуск айтема = Reject, закрытый канал = reject_all) не меняется.
+/// Покрывает ВСЕ in-process пути гейта, идущие через ОДИН `decide()` каноничного `run_proposal_round`:
+/// note-changeset ([`GatedToolCtx`]) и `skill.save` ([`SkillSaveCtx`]). Вычитается ТОЛЬКО длительность
+/// блокировки на `decide` — kill-switch (пауза агента) и Cancelled НЕ затрагиваются.
+struct PauseAccountingDecision {
+    inner: Arc<dyn DecisionSource>,
+    paused_nanos: Arc<AtomicU64>,
+}
+
+#[async_trait::async_trait]
+impl DecisionSource for PauseAccountingDecision {
+    async fn decide(&self, batch: &ProposalBatch) -> BatchDecision {
+        let t0 = Instant::now();
+        let decision = self.inner.decide(batch).await;
+        // Насыщающее приведение u128→u64: реальная пауза человека (минуты) не приближается к переполнению
+        // u64-наносекунд (~584 года), но перестраховываемся, чтобы `as u64` не завернулось молча.
+        let elapsed = u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.paused_nanos.fetch_add(elapsed, Ordering::Relaxed);
+        decision
     }
 }
 
@@ -219,6 +248,16 @@ pub async fn run_agent_session(
     let budget = ContextBudget::from_context_window(spec.context_window);
     let tk = QwenTokenizer::embedded();
 
+    // Fix BF-1 №1: per-run счётчик «времени на паузе» у гейта. Гейт актуатора получает decision_source,
+    // ОБЁРНУТЫЙ в [`PauseAccountingDecision`] (копит наносекунды блокировки на `decide()` сюда), а цикл
+    // получает `&paused_nanos` и вычитает это время из wall_clock. Делегирование/research отдают ДЕТЯМ
+    // НЕобёрнутый `deps.decision_source` — ребёнок заводит СВОЙ счётчик в собственном `run_agent_session`.
+    let paused_nanos = Arc::new(AtomicU64::new(0));
+    let gate_decision: Arc<dyn DecisionSource> = Arc::new(PauseAccountingDecision {
+        inner: deps.decision_source.clone(),
+        paused_nanos: paused_nanos.clone(),
+    });
+
     // Реестр: дефолт-OFF → ПУСТОЙ реестр записи (B7: debug-стабы echo/noop вычищены из прод-пути —
     // модель не видит пустышек в списке инструментов; read-only skills/web добавляются НИЖЕ независимо
     // от флага); ВКЛ → гейтнутые актуаторы за
@@ -261,20 +300,23 @@ pub async fn run_agent_session(
                         ledger.clone(),
                         spec.run_id,
                         policy.clone(),
-                        deps.decision_source.clone(),
+                        // Fix BF-1 №1: гейт навыка на том же pause-accounting-источнике, что note-гейт.
+                        gate_decision.clone(),
                         events.clone(),
                         Some(deps.writer.clone()),
                     );
                     reg.insert(Arc::new(SkillSaveTool::new(Arc::new(skill_ctx))));
                 }
             }
-            // decision_source КЛОНИРУЕМ (не move) — он ещё нужен для `SubagentContext` делегирования ниже.
+            // Fix BF-1 №1: note-гейт получает pause-accounting-обёртку (раздумья человека не жгут бюджет).
+            // `deps.decision_source` (НЕобёрнутый) остаётся для `SubagentContext` делегирования ниже —
+            // ребёнок заводит собственный счётчик пауз в своём `run_agent_session`.
             Arc::new(GatedToolCtx::new(
                 spec.canon_root.clone(),
                 ledger,
                 spec.run_id,
                 policy,
-                deps.decision_source.clone(),
+                gate_decision.clone(),
                 events,
             ))
         };
@@ -334,6 +376,8 @@ pub async fn run_agent_session(
     let mut on_event = |e: AgentEvent| deps.forwarder.forward(&e);
 
     // KILL-SWITCH (AGENT-5, чек-пойнт #2): `paused` в цикл — пауза мид-ран остановит на границе хода.
+    // Fix BF-1 №1: `&paused_nanos` — то же время, что копит pause-accounting-обёртка гейта; цикл вычитает
+    // его из wall_clock (ожидание решения человека не жжёт бюджет прогона).
     run_agent_loop(
         deps.provider,
         &registry,
@@ -343,6 +387,7 @@ pub async fn run_agent_session(
         &tk,
         deps.cancel,
         deps.paused,
+        &paused_nanos,
         RunCtx::run(spec.run_id),
         &mut on_event,
     )
