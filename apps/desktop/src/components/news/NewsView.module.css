@@ -643,6 +643,22 @@
 .errBanner svg {
   color: var(--color-danger);
 }
+/* NB-1: мягкое «похоже, зависло» — предупреждающий (не опасный) тон, отдельно от errBanner. */
+.stuckBanner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border-radius: var(--radius-md);
+  background: oklch(0.8 0.13 75 / 0.1);
+  border: 1px solid color-mix(in oklch, var(--color-warning) 30%, transparent);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  margin-bottom: var(--space-4);
+}
+.stuckBanner svg {
+  color: var(--color-warning);
+}
 
 /* ── reader статьи (NF-6, финальная итерация макета) ── */
 .reader {

@@ -39,14 +39,40 @@ export function bridge<T>(
   return isTauri() ? invoke<T>(cmd, args) : mock();
 }
 
+// ── Мок-шина событий (вне Tauri): позволяет мок-бэкенду (`lib/mock/*`) эмитить те же события,
+// что нативный слой (`news:progress`, `jobs:changed`), в браузер-превью и vitest — иначе живые
+// сигналы прогона были бы мёртвым кодом, а зелёные тесты врали (mock-must-match-backend / MEM-5).
+// Пусто по умолчанию (никто не эмитит → поведение как прежний no-op). ─────────────────────────────
+const mockSubscribers = new Map<string, Set<(payload: unknown) => void>>();
+
 /**
- * Мост событийной подписки: в Tauri — `listen(event)` с колбэком на payload, вне Tauri — no-op
- * (мок-бэкенд событий не эмитит; возвращаемая «отписка» — пустышка). Возвращает функцию отписки.
+ * Мост событийной подписки: в Tauri — `listen(event)` с колбэком на payload, вне Tauri —
+ * регистрация в мок-шине (мок-бэкенд может эмитить через `mockEmit`). Возвращает функцию отписки.
  */
 export async function subscribe<P>(
   event: string,
   cb: (payload: P) => void,
 ): Promise<() => void> {
-  if (!isTauri()) return () => {};
+  if (!isTauri()) {
+    const cbAny = cb as (payload: unknown) => void;
+    let set = mockSubscribers.get(event);
+    if (!set) {
+      set = new Set();
+      mockSubscribers.set(event, set);
+    }
+    set.add(cbAny);
+    return () => {
+      mockSubscribers.get(event)?.delete(cbAny);
+    };
+  }
   return listen<P>(event, (e) => cb(e.payload));
+}
+
+/**
+ * Эмит события в мок-шину (только вне Tauri; зовут мок-бэкенды `lib/mock/*`). Зеркалит `app.emit`
+ * нативного слоя: доставляет `payload` всем подписчикам события. В Tauri — no-op (события шлёт Rust).
+ */
+export function mockEmit(event: string, payload?: unknown): void {
+  if (isTauri()) return;
+  mockSubscribers.get(event)?.forEach((cb) => cb(payload));
 }

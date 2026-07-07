@@ -17,6 +17,9 @@ function resetStore() {
     unreadOnly: false,
     loading: true,
     refreshing: false,
+    stage: null,
+    stuck: false,
+    died: null,
     error: null,
     notice: null,
   });
@@ -134,6 +137,9 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     const before = await tauriApi.news.getConfig();
     await tauriApi.news.setConfig({ ...before, enabled: false });
     const spy = vi.spyOn(tauriApi.news, 'setConfig');
+    // NB-1: детерминизм — не гоняем таймерную симуляцию мок-прогона (её эмиты `news:progress` иначе
+    // могли бы долетать в последующие тесты); цель теста — запись конфига и переход CTA→лента.
+    const refreshSpy = vi.spyOn(tauriApi.news, 'refresh').mockResolvedValue(true);
 
     render(<NewsView />);
     expect(await screen.findByText(/лента ai-новостей|ai news feed/i)).toBeInTheDocument();
@@ -147,6 +153,7 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     // CTA уступает место ленте.
     expect(await screen.findByText(/сводка дня|daily digest/i)).toBeInTheDocument();
     spy.mockRestore();
+    refreshSpy.mockRestore();
   });
 
   // NF-6: клик по заголовку открывает reader (статья помечена прочитанной), приходит полный
@@ -372,6 +379,73 @@ describe('NewsView (NF-5, спека docs/specs/news-feed.md)', () => {
     render(<NewsView />);
     await screen.findByText(/сводка дня|daily digest/i);
     expect(screen.queryByText(/Анализатор новостей недоступен|News analyzer unavailable/)).toBeNull();
+    spy.mockRestore();
+  });
+
+  // NB-1: живой этап прогона поверх ленты — при refreshing показан этап со счётчиком.
+  it('живой прогон: этап LLM со счётчиком виден при refreshing', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+    useNewsStore.setState({ refreshing: true, stage: { stage: 'llm', done: 12, total: 40 } });
+    expect(await screen.findByText(/Анализирую записи|Analyzing entries/)).toBeInTheDocument();
+    expect(screen.getByText(/12\/40/)).toBeInTheDocument();
+  });
+
+  // NB-1 (главная жалоба): прогресс встал > порога → мягкое «похоже, зависло» (не ошибка),
+  // отвечает на «долгая обработка или что-то сломалось?».
+  it('зависание: refreshing+stuck → мягкий баннер «похоже, зависло»', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+    useNewsStore.setState({ refreshing: true, stuck: true });
+    const banner = await screen.findByText(/похоже, процесс завис|the run looks stuck/i);
+    expect(banner).toBeInTheDocument();
+    // Это статус-предупреждение (role=status), а НЕ ошибка (role=alert).
+    expect(banner.closest('[role="status"]')).not.toBeNull();
+  });
+
+  // NB-1: прогон УМЕР (dead) → честная ошибка ЭТАПА (на чём встало + причина), а не вечное «Собираю…».
+  it('смерть прогона: баннер называет этап и причину из last_error', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+    useNewsStore.setState({
+      refreshing: false,
+      died: { stage: 'llm', reason: 'connection refused (192.168.1.104:8084)' },
+    });
+    // Этап («анализ записей») + причина в одном alert-баннере.
+    const banner = await screen.findByText(/анализ записей|analyzing entries/i);
+    expect(screen.getByText(/connection refused/)).toBeInTheDocument();
+    // Это ОШИБКА (role=alert) — симметрия с мягким stuck (role=status), ревью NB-1.
+    expect(banner.closest('[role="alert"]')).not.toBeNull();
+  });
+
+  // NB-1: причина не записана (last_error=null) → подсказка «см. Диагностику», без пустого баннера.
+  it('смерть прогона без причины: фолбэк «причина не записана»', async () => {
+    render(<NewsView />);
+    await screen.findByText(/сводка дня|daily digest/i);
+    useNewsStore.setState({ refreshing: false, died: { stage: null, reason: null } });
+    expect(
+      await screen.findByText(/причина не записана|reason not recorded/i),
+    ).toBeInTheDocument();
+  });
+
+  // NB-1: died не дублирует W-2-баннер llmDown — при активном llmError died уступает (иной путь).
+  it('смерть + llmDown вместе: показываем W-2-баннер, died не дублирует', async () => {
+    const run = {
+      runAt: 1_700_000_000,
+      digestRu: '',
+      itemsNew: 0,
+      sourcesOk: 1,
+      sourcesTotal: 1,
+      llmFailed: 5,
+      errors: [],
+      llmDown: { endpoint: 'http://10.0.0.7:8084', partial: false },
+    };
+    const spy = vi.spyOn(tauriApi.news, 'page').mockResolvedValue({ items: [], topics: [], run });
+    render(<NewsView />);
+    await screen.findByText(/Анализатор новостей недоступен|News analyzer unavailable/);
+    useNewsStore.setState({ died: { stage: 'llm', reason: 'connection refused' } });
+    // W-2-баннер остаётся; отдельного «Прогон прервался…» нет (died уступил llmError).
+    expect(screen.queryByText(/Прогон прервался|The run stopped/i)).toBeNull();
     spy.mockRestore();
   });
 
