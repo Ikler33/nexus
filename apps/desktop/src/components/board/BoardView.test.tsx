@@ -114,16 +114,20 @@ describe('BoardView DnD (BOARD-5 — optimistic + rollback, §14.6)', () => {
     expect(screen.getByRole('heading', { name: /Board/i })).toBeInTheDocument();
   });
 
-  it('NB-2: Escape во время перетаскивания отменяет ход — setFrontmatterField НЕ вызван', async () => {
+  it('NB-2: Escape во время перетаскивания отменяет ход — ПОСЛЕДУЮЩИЙ drop = no-op', async () => {
     const setFm = vi.spyOn(tauriApi.vault, 'setFrontmatterField');
     render(<BoardView />);
     const card = (await screen.findByText('Task T')).closest('button')!;
 
     fireEvent.dragStart(card, { dataTransfer: dt() });
-    // Escape отменяет drag (сбрасывает dragRef + dropCol — ход не случится).
+    // Escape сбрасывает dragRef → drop ПОСЛЕ Escape обязан быть no-op. Без drop тест был бы
+    // тавтологичен: «ничего не переехало» истинно и при удалённом хендлере (adversarial-ревью MAJOR).
     fireEvent.keyDown(window, { key: 'Escape' });
-    // Карточка остаётся в «To do» — no-op, статус не менялся.
+    fireEvent.drop(column(/In progress/i), { dataTransfer: dt() });
+
+    // Карточка НЕ переехала: статус не писался, осталась в «To do».
     expect(within(column(/To do/i)).getByText('Task T')).toBeInTheDocument();
+    expect(within(column(/In progress/i)).queryByText('Task T')).toBeNull();
     expect(setFm).not.toHaveBeenCalled();
   });
 

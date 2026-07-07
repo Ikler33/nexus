@@ -16,18 +16,36 @@ HTML5 DnD внутри страницы мёртв; jsdom-тесты это не
 (`onDragDropEvent`/`tauri://drag*`) в кодовой базе нигде не используется — отключение безопасно.
 ⚠️ На будущее: если понадобится перетаскивание ФАЙЛОВ из Finder — делать через DOM
 `dataTransfer.files` (работает при `dragDropEnabled: false`), НЕ через tauri-событие file-drop.
-Дополнительно добавлен хендлер `keydown Escape` в `BoardView`: сбрасывает `dragRef` и подсветку
-целевой колонки, отменяя текущее перетаскивание без изменений (недостающий UX-кейс BOARD-5;
-кросс-колоночный DnD, optimistic + rollback, busy-гард — были в коде ранее и корректны).
+
+Сопутствующее (следствия `dragDropEnabled: false`, adversarial-ревью среза):
+
+- **Глобальный гард файловых дропов** (`lib/file-drop-guard.ts`, установка из `main.tsx`): без
+  нативного file-drop дроп файла из Finder вне DOM-drop-зон уходил бы в дефолт WebKit — навигацию
+  webview на `file://` с потерей SPA-состояния без «назад». Гард гасит default только для drag'ов
+  с `types: Files`; внутренние DnD (карточки CARD_MIME, вкладки TAB_MIME) не задевает.
+- **Молчаливые активации**: вместе с DnD доски оживают ещё два спавших под перехватом DnD —
+  перетаскивание вкладок между группами редактора (`GroupPane`, TAB_MIME) и drag-drop картинок в
+  редактор (`imagePaste`/IMG-1) — теперь drag-события доходят до DOM.
+- **imagePaste: не-image файловый дроп глотается**: иначе встроенный drop CodeMirror вставил бы
+  СОДЕРЖИМОЕ файла как текст (для бинарника — мусор в заметке). Не-файловые дропы (текст/выделение)
+  и не-image paste — штатно, как раньше.
+- **Escape-отмена перетаскивания** в `BoardView` — safety-net на случай пропавшего `dragend`
+  (штатную системную отмену drag'а уже покрывал существующий `onDragEnd={clearDrag}`); с
+  Esc-дисциплиной (`defaultPrevented`-гард + `preventDefault` при срабатывании — не каскадирует в
+  reading/оверлей-хендлеры, прецедент P0-3).
 
 **NB-3** — тоггл «Скрыть выполненные» (`board.hideDone`, localStorage key
 `nexus.board.hideDone.v1`). Нажатие скрывает все `doneLike`-колонки в канбан-вью и
-`doneLike`-карточки в list-вью; повторное нажатие возвращает их. Настройка переживает перезапуск
-(localStorage, тот же механизм, что VIEW-1 `viewMode`). Кнопка со значком Eye/EyeOff в
-`headActions`, `aria-pressed` для a11y.
+`doneLike`-карточки в list-вью (фильтр по единому `normalizeStatus`-set — канбан и список не
+расходятся на регистр-дублях конфига); повторное нажатие возвращает их. Настройка переживает
+перезапуск (localStorage, тот же механизм, что VIEW-1 `viewMode`). Кнопка со значком Eye/EyeOff в
+`headActions`, `aria-pressed` для a11y. Осознанные решения: счётчик задач в шапке при включённом
+тоггле продолжает считать скрытые (показывает объём vault, не вью); открытый peek на done-карточке
+при включении тоггла остаётся открытым.
 
-Изменённые файлы: `tauri.conf.json`, `BoardView.tsx`, `BoardView.module.css`, `en.json`,
-`ru.json`, `BoardView.test.tsx` (+6 тестов: 1 Escape-отмена + 5 hideDone).
+Изменённые файлы: `tauri.conf.json`, `main.tsx`, `lib/file-drop-guard.ts` (новый),
+`lib/editor/imagePaste.ts`, `BoardView.tsx`, `BoardView.module.css`, `en.json`, `ru.json`,
+тесты: `BoardView.test.tsx` (+6: 1 Escape-отмена + 5 hideDone), `file-drop-guard.test.ts` (+4).
 
 ### Добавлено · NB-1 — живой статус прогона ленты новостей («долго» vs «зависло» vs «упало»)
 

@@ -26,6 +26,7 @@ import {
   groupIntoColumns,
   isOverdue,
   knownPriority,
+  normalizeStatus,
   OTHER_COLUMN_ID,
   type PlanBucket,
   planDay,
@@ -200,11 +201,15 @@ export function BoardView() {
     return () => window.removeEventListener('focus', onFocus);
   }, [load]);
 
-  // NB-2: отмена DnD по Escape — сбрасываем dragRef + подсветку цели, browser снимет ghost сам.
-  // Refs и stable setters не меняются → пустой dep-массив безопасен (нет stale-closure).
+  // NB-2: safety-net отмены DnD по Escape — сбрасываем dragRef + подсветку цели. Системная отмена
+  // drag'а штатно приходит через onDragEnd={clearDrag}; этот хендлер страхует случай пропавшего
+  // dragend. Esc-дисциплина (прецедент P0-3): уважаем чужой preventDefault и гасим свой — Esc не
+  // каскадирует в reading/оверлей-хендлеры. Refs/stable setters не меняются → пустые deps безопасны.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === 'Escape' && dragRef.current) {
+        e.preventDefault();
         dragRef.current = null;
         setDropCol(null);
       }
@@ -233,25 +238,18 @@ export function BoardView() {
         config!.columns.map((c) => c.id),
       ).map((col) => ({ ...col, cards: applyOrder(col.cards, config!.order[col.id]) }))
     : [];
-  // NB-3: «Скрыть выполненные» — фильтруем done-like колонки (конфиг.doneLike) + карточки для list-вью.
-  // OTHER_COLUMN_ID не в config.columns → cfg=undefined → !cfg?.doneLike = true → всегда показывается.
-  const visibleColumns =
-    hideDone && config
-      ? columns.filter((col) => {
-          const cfg = config.columns.find((c) => c.id === col.id);
-          return !cfg?.doneLike;
-        })
-      : columns;
-  // Карточки для list-вью: при hideDone — скрываем карточки с done-like статусом.
-  const visibleCards =
-    hideDone && config
-      ? (data?.cards ?? []).filter((card) => {
-          const cfg = config.columns.find(
-            (c) => c.id.toLowerCase() === card.status.trim().toLowerCase(),
-          );
-          return !cfg?.doneLike;
-        })
-      : (data?.cards ?? []);
+  // NB-3: «Скрыть выполненные» — done-like ключи нормализованы ОДНИМ set'ом (normalizeStatus, как
+  // groupIntoColumns/filterStuck): канбан-колонки и list-карточки фильтруются одинаково, регистр-дубли
+  // конфига не расходятся. OTHER_COLUMN_ID в set не попадает → «Прочее» всегда видима (задачи не теряются).
+  const doneLikeIds = new Set(
+    (config?.columns ?? []).filter((c) => c.doneLike).map((c) => normalizeStatus(c.id)),
+  );
+  const visibleColumns = hideDone
+    ? columns.filter((col) => !doneLikeIds.has(normalizeStatus(col.id)))
+    : columns;
+  const visibleCards = hideDone
+    ? (data?.cards ?? []).filter((card) => !doneLikeIds.has(normalizeStatus(card.status)))
+    : (data?.cards ?? []);
 
   // Карточка в превью (если открыта и ещё существует — иначе панель просто не рендерится, напр. после удаления).
   const peekCard = peekPath ? (data?.cards.find((c) => c.path === peekPath) ?? null) : null;
