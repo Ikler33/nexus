@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### Изменено · F-8b — миграция episodic-sync App.tsx → `ctx.events` (закрыт хвост коннектора)
+
+**Файлы:** `apps/desktop/src/App.tsx`, `apps/desktop/src/lib/connector/modules/episodes.ts`
+(+ `episodes.test.ts`), `docs/dev/connector.md`.
+
+**Контекст:** F-8 отложил перевод фича-`useEffect` App.tsx на подписки модулей через `ctx.events`
+(deferral: `goals-reload / digest-refetch / contradictions-refetch / episodic-sync`). F-10b закрыл
+первые три вместе с вырезом оверлеев. Остаток — **episodic-sync**.
+
+**Сделано:** эффект `episode.getEnabled()` → фронт-pref `aiEpisodicMemory` (по смене vault) перенесён из
+App.tsx в `modules/episodes.ts` через `ctx.events.on('vault:opened')` (+`ctx.api.episode`) — фича
+«Эпизоды» вырезана (F-10b), эффект уехал к владельцу-модулю. Поведение сохранено: `vault:opened` =
+window-событие `vault:switched` (`vault.openVault`), диспатчится УЖЕ ПОСЛЕ переключения бэка; фетч не
+зависит от фронт-root, pref — фронтовый.
+
+**Тайминг (документируется, behavior-preserving):** прежний App-эффект `[vaultRoot]` вешался ПОСЛЕ
+маунта тела App (после `set({info})`/онбординга); подписка модуля активна с импорта → ловит событие
+раньше (до `set`). Безопасно: бэк уже на новом vault, pref до конца онбординга не читается, `getEnabled`
+идемпотентен (StrictMode dev и так двоил прежний эффект).
+
+**Осознанно ОСТАВЛЕНО ядром** (не цель F-8b — см. `docs/dev/connector.md` «F-8b»):
+`chat.hydrate(vaultRoot)` (нужен новый root аргументом — `vault:opened` без payload и до `set({info})`
+дал бы старый root; не был в списке отложенного) и `aiFeatures.sync()` (кросс-фичный тоггл-стор
+insights=Home + contradictions, атомарный dual-fetch под общим seq-гардом, без единого владельца-модуля).
+
+**Гейт:** tsc ✓ / eslint ✓ / vitest ✓ / e2e 28 ✓ / check-module-boundary ✓.
+
 ### Безопасность · Закрытие RUSTSEC-долга (quick-xml 0.41, crossbeam-epoch 0.9.20)
 
 **Файлы:** `Cargo.toml`, `Cargo.lock`, `deny.toml`, `apps/desktop/src-tauri/src/news/parse.rs`,
