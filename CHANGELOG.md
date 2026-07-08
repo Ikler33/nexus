@@ -6,6 +6,40 @@
 
 ## [Unreleased]
 
+### Изменено · R-13d — вынос `mod tests` net/mod.rs → `net/tests.rs` (byte-identical, 1522→658)
+
+**ФИНАЛ волны R-13** (после a: job 2011→446, b: skills 1866→796, c: exec_host 1530→764 — все APPROVE).
+Thermo-смелл — `crates/nexus-core/src/net/mod.rs` 1522 строки, **SECURITY-чувствительная зона**
+(egress-контроль ядра: `GuardedClient`/`EgressPolicy`/allow-list хостов/fail-closed сеть агента).
+**ЧИСТЫЙ move-only распил, поведение не меняется** (зеркалит R-13a/b/c): инлайн-`mod tests`
+(866 строк — 57% файла) вынесен в подмодуль `net/tests.rs` (mod.rs в каталоге `net/` ⇒ `tests.rs`
+рядом), объявлен `#[cfg(test)] mod tests;` (конвенция `session/tests.rs`, `job/tests.rs`). Прод-код
+(`EgressFeature`/`EgressPolicy`/`RunCtx`/`EgressAudit`/`GuardedClient`, строки 1–656) —
+**байт-в-байт неизменен** (diff прод-префикса пуст). Прод 658 строк < 1000 ⇒ дальнейшее дробление не
+требуется. Тело тестов — токен-идентично: единственная не-whitespace правка на все 863 строки =
+`cargo fmt` схлопнул сигнатуру `durable_rows` в одну строку после dedent (влезла в 100 колонок на
+нулевом отступе) — канон fmt, не семантика.
+
+- **Security-инварианты НЕ тронуты** (структура, не логика — в байт-идентичном прод-префиксе):
+  порядок рубежей `EgressPolicy::check` (1 cloud-metadata безусловно → 2 offline-kill-switch публичных
+  хостов → 3 per-feature opt-in → 4а web-класс `deny_private` → 4б allowlist из явных `ai.*`-хостов);
+  **fail-closed** (пустой allowlist режет публичные хосты; poisoned-lock → `unwrap_or(false)`; отказ
+  типизирован ДО сокета/DNS); `redirect=none` в `core_client_builder` (анти-SSRF, AC-EGR-7); DNS-rebind
+  резолв-гард (`authorize`→`check_resolved_ips`), не зависящий от `web_allow_public`; `RunCtx` без
+  `Default` (явный grep-аудируемый выбор run-context); WEB-FETCH-PUBLIC (owner-gated) сохраняет все
+  прочие рубежи. Тесты `core_client_does_not_follow_redirects`,
+  `guarded_does_not_follow_redirect_to_metadata`, DNS-rebind/allowlist/kill-switch — зелёные без правок
+  ассертов.
+- **Доказательство move-only:** (1) `diff` прод-префикса (стр. 1–656) orig↔new — пуст; (2) round-trip
+  reindent: re-indent `net/tests.rs` + обёртка `mod tests {…}` воспроизводит исходный тест-блок
+  (стр. 657–1522) **байт-в-байт**; (3) единственное расхождение dedent↔`rustfmt` = fmt-схлоп сигнатуры
+  `durable_rows` выше; (4) счётчики `#[test]`/`#[tokio::test]` = 7/18 (25) до и после; (5) pub-API grep
+  прод-региона — 42 = 42, идентичен; (6) в диффе только `net/mod.rs` (M) + `net/tests.rs` (новый).
+- **Кандидаты дедупов (НЕ трогал — скоуп move-only):** тест-хелперы-близнецы `guarded`/`guarded_with_ips`
+  (различаются только резолвером — `SystemResolver` vs `FixedResolver`, напрашивается один параметризуемый
+  билдер); `serve_once` — локальный одноразовый TCP-мок, дублирует стиль прежнего `ai/mod.rs` (кандидат в
+  общий тест-хелпер сети).
+
 ### Изменено · R-13c — вынос `mod tests` sandbox/exec_host.rs → `exec_host/tests.rs` (byte-identical)
 
 Стадия R-13 серии (образец R-6a/R-13a-b): **ЧИСТЫЙ механический перенос, оракул НЕ меняется**
