@@ -257,6 +257,10 @@ fn parse_raw_finding(cleaned: &str) -> Option<RawFinding> {
 }
 
 /// Обрезать до `max` СИМВОЛОВ (не байт — UTF-8-safe).
+///
+/// ⚠️ НЕ то же, что [`crate::util::truncate_chars`] — здесь БЕЗ эллипсиса «…», намеренно
+/// (усечённый контент страницы не должен получать маркер обрезки). Ложный близнец по имени —
+/// не сливать с каноном.
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }

@@ -46,6 +46,8 @@ pub mod scheduler;
 /// Нейтральные типы границы инструментов (`Tool`/`ToolSpec`/`ToolCall`/`ToolError`) — R-1: общие для
 /// agent/actuator/ai, без рёбер actuator→agent и ai→agent; `agent::tool` реэкспортирует.
 pub mod tool_types;
+/// Мелкие переиспользуемые утилиты ядра (R-13g): канон `truncate_chars` (был 3× байт-идентичным).
+mod util;
 /// Vault: ленивый листинг + канонизация путей (анти-traversal).
 pub mod vault;
 /// Векторный ANN-индекс (usearch HNSW) — §6.1/§6.2.

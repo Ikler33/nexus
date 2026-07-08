@@ -39,6 +39,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::parser::split_frontmatter;
+use crate::util::truncate_chars;
 
 pub mod capability;
 pub mod curator;
@@ -217,18 +218,6 @@ pub const CATALOG_MAX_ENTRIES: usize = 50;
 /// Максимум символов `description` каждого пункта меню (tier-1). Длинное (возможно враждебное)
 /// описание обрезается по границе символа — пункт остаётся опознаваемым, но не раздувает контекст.
 pub const CATALOG_DESC_MAX_CHARS: usize = 200;
-
-/// Обрезает строку по СИМВОЛАМ (UTF-8-безопасно, не по байтам) с «…», если длиннее `max`. Зеркалит
-/// `ai::chat::truncate_chars` (тот приватен модулю) — здесь нужен для tier-1-бюджета меню.
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max).collect();
-        out.push('…');
-        out
-    }
-}
 
 /// Сворачивает управляющие символы (вкл. `\n`/`\r`/`\t`) в пробел — пункт tier-1-меню остаётся
 /// ОДНОЙ строкой. Недоверенное многострочное `description` иначе «рвало» бы формат меню (контент

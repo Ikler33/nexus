@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::util::truncate_chars;
+
 /// Один tool_call в сообщении роли `assistant` (OpenAI wire-shape). AGENT-1: цикл дописывает
 /// `assistant{tool_calls}` ПЕРЕД tool-результатами, чтобы массив сообщений был строго спек-совместим
 /// (call↔result коррелируют по `id`). `arguments` — СЫРОЙ JSON-текст, как его вернула модель.
@@ -250,17 +252,6 @@ pub fn build_memory_block(snippets: &[(String, String)], marker: &str) -> Option
 /// MEM-10: кап длины факта при ИНЪЕКЦИИ (символы). Снижает шум в контексте от длинного
 /// импортированного факта; в БД/панели факт остаётся целым. Курируемые факты обычно короче.
 const MEM_FACT_INJECT_MAX_CHARS: usize = 280;
-
-/// Обрезает строку по СИМВОЛАМ (UTF-8-безопасно, не по байтам) с «…», если длиннее `max`.
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max).collect();
-        out.push('…');
-        out
-    }
-}
 
 /// Блок «память агента» (MEM, D2) — курируемые ЯВНЫЕ ФАКТЫ о пользователе/проектах (пины + top-k
 /// близких), отдельный канал от N4b (память переписки). Возвращает текст, который вызывающий

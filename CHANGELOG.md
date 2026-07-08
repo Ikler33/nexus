@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Изменено · R-13g (часть 1) — прод-дедуп `truncate_chars` в единый канон
+
+**Файлы:** `crates/nexus-core/src/util.rs` (новый), `crates/nexus-core/src/lib.rs`,
+`crates/nexus-core/src/{ai/chat.rs, episode/mod.rs, skills/mod.rs}`,
+`crates/nexus-core/src/agent/research/worker.rs`.
+
+**Контекст:** волна R-13 нашла `fn truncate_chars(s, max) -> String` продублированной **3× байт-идентично**
+(`take(max)` + `push('…')` при усечении) в `ai::chat`, `episode`, `skills`.
+
+**Сделано:** канон вынесен в новый крейт-приватный модуль `crate::util` (`pub(crate) fn truncate_chars`,
+тело байт-идентично прежним копиям — доказано md5 `c84515d…` по всем трём). Три копии заменены на
+`use crate::util::truncate_chars;`. Юнит-тест `ai::chat::…::truncate_chars_caps_long_utf8` сохранён
+(теперь проверяет канон через реэкспорт) + добавлен прямой тест канона в `util`.
+
+**НЕ тронут ложный близнец:** `agent::research::worker::truncate_chars` — `take(max).collect()` **БЕЗ**
+эллипсиса, иная семантика; оставлен как есть, добавлен doc-коммент о намеренном отличии от канона.
+
+**Гейт:** cargo fmt ✓ / clippy -p nexus-core --all-targets -D warnings ✓ / truncate-тесты ✓.
+
 ### Документация · F-9b — i18n per-module namespace: рассмотрено, ОТЛОЖЕНО (analysis-driven, нулевой дифф кода)
 
 **Файлы:** `docs/dev/connector.md` (новая «### F-9b»), `docs/dev/i18n.md`, `docs/BACKLOG.md` (нет
