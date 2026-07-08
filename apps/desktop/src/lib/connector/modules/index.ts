@@ -11,6 +11,7 @@
 import { modules } from '../module-manager';
 import { agentModule } from './agent';
 import { boardModule } from './board';
+import { chatModule } from './chat';
 import { contradictionsModule } from './contradictions';
 import { digestModule } from './digest';
 import { episodesModule } from './episodes';
@@ -34,6 +35,9 @@ export function activateModules(): void {
   // F-11: вью-модуль «Агент» (Castor) — вырезан из core-views+commands-core через `ctx.views`+
   // `ctx.commands` (самая связанная фича; стейт видимости/seed остаётся ядром — ui-стор).
   modules.register(agentModule);
+  // F-12: панель-модуль «AI-панель» (chat/AiPanel) — вырезан из App.tsx+commands-core через НОВЫЙ
+  // реестр `ctx.panels` (панель тела: side/bottom/overlay) + `ctx.commands`. ФИНАЛ модуляризации фронта.
+  modules.register(chatModule);
   // F-10b: оверлей-модули (вырезаны из core-overlays через `ctx.overlays`).
   modules.register(goalsModule);
   modules.register(memoryModule);

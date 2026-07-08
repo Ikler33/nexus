@@ -48,13 +48,6 @@ const CROSS_IMPORT_WHITELIST = [
     allow: ['editor'],
   },
   {
-    // InspectorRail показывает chat/SuggestView (похожие заметки/предложения) — вросшая
-    // editor↔chat нить, рубится в F-X.
-    files: 'src/components/editor/InspectorRail.tsx',
-    zone: 'editor',
-    allow: ['chat'],
-  },
-  {
     // Workspace-панель хостит редакторную начинку (Editor/FileViewer/InlineAIBar/InspectorRail/
     // MentionsBar/TagSuggest/MarkdownPreviewHandle) — вросшая композиция, рубится в F-X.
     files: 'src/components/workspace/GroupPane.tsx',
@@ -134,6 +127,7 @@ const MODULE_FEATURES = [
   'sync', // F-10c (оверлей-модуль; вырезан НАЧИСТО — ConflictResolver вынесен в components/common)
   'graph', // F-10d (оверлей-модуль, mount:'appBody'; GraphLayer-слой в graph-зоне)
   'agent', // F-11 (вью-модуль «Агент»/Castor; стейт видимости/seed остаётся ядром — ui-стор)
+  'chat', // F-12 (панель-модуль «AI-панель»; НОВЫЙ реестр `panels`; видимость/позиция — ядро ui/prefs)
 ];
 
 // Явные исключения границы модулей (аналог CROSS_IMPORT_WHITELIST для F-1): если shared-компонент

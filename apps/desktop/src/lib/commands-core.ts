@@ -379,17 +379,8 @@ export function registerCoreCommands(): Disposable {
     // `ctx.commands` (id → `tasks:view.tasks`, source=plugin, хоткей ⌘⇧K сохранён). Ядро её не объявляет.
     // view.inbox — вырезана в модуль `connector/modules/inbox` (F-10b): регистрируется через
     // `ctx.commands` (id → `inbox:view.inbox`, source=plugin). Ядро её больше не объявляет.
-    commands.register({
-      id: 'view.chat',
-      title: 'AI chat',
-      titleKey: 'commands.view.chat',
-      source: 'core',
-      defaultKey: 'mod+j',
-      run: () => {
-        useUIStore.getState().setAiTab('chat');
-        useUIStore.getState().openChat();
-      },
-    }),
+    // view.chat — вырезана в модуль `connector/modules/chat` (F-12): регистрируется через
+    // `ctx.commands` (id → `chat:view.chat`, source=plugin, хоткей ⌘J сохранён). Ядро её не объявляет.
     // view.memory — вырезана в модуль `connector/modules/memory` (F-10b): регистрируется через
     // `ctx.commands` (id → `memory:view.memory`, source=plugin). Ядро её больше не объявляет.
     commands.register({

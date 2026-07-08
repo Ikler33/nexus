@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
-import './lib/connector/modules'; // F-9..F-11: регистрирует+активирует модули-вклады (news/board/оверлеи/sync/graph/agent) до рендера
+import './lib/connector/modules'; // F-9..F-12: регистрирует+активирует модули-вклады (news/board/оверлеи/sync/graph/agent/chat) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
@@ -18,7 +18,7 @@ import { SelfCheck } from './components/chrome/SelfCheck';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { MainViewOutlet } from './components/workspace/MainViewOutlet';
 import { OverlayOutlet } from './components/workspace/OverlayOutlet';
-import { AiPanel } from './components/chat/AiPanel';
+import { AiPanelOutlet } from './components/workspace/AiPanelOutlet';
 import { CommandPalette } from './components/command/CommandPalette';
 import { QuickCapture } from './components/command/QuickCapture';
 import { TemplatePicker } from './components/command/TemplatePicker';
@@ -30,6 +30,8 @@ import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
 // Панели грузятся лениво (плагины — iframe-демо).
+// (F-12: AI-панель (chat/AiPanel) вырезана в модуль `connector/modules/chat` — приходит через реестр
+//  `panels`/AiPanelOutlet; App owns видимость/позицию/скрим (ядро-chrome), но не импортит components/chat.)
 // (F-11: ленивая AgentView живёт в модуле `connector/modules/agent` — main-вью резолвит MainViewOutlet.)
 // (F-10c: SyncPanel вырезан в модуль `connector/modules/sync` — приходит через OverlayOutlet.)
 // (F-10d: Граф — тяжёлый d3-force/louvain §10 — вырезан в модуль `connector/modules/graph`; ленивый
@@ -214,10 +216,14 @@ export function App() {
                 per-contribution ErrorBoundary (падение вью → плашка, app жив). */}
             <MainViewOutlet />
           </main>
-          {aiSide && <AiPanel />}
+          {/* F-12: AI-панель (chat) вырезана в модуль `connector/modules/chat` — компонент приходит
+              из реестра `panels` через AiPanelOutlet (per-contribution ErrorBoundary). App owns
+              видимость (`aiVisible`) + позицию (`variant` из pref `aiLayout`) + рефлоу грида/скрим
+              (ядро-chrome); App больше НЕ импортирует `components/chat`. Поведение идентично. */}
+          {aiSide && <AiPanelOutlet variant="side" />}
           {aiBottom && (
             <div className={styles.aiBottom}>
-              <AiPanel variant="bottom" />
+              <AiPanelOutlet variant="bottom" />
             </div>
           )}
           {aiOverlay && (
@@ -227,7 +233,7 @@ export function App() {
                 if (e.target === e.currentTarget) closeChat();
               }}
             >
-              <AiPanel variant="overlay" />
+              <AiPanelOutlet variant="overlay" />
             </div>
           )}
           {/* F-10d: оверлеи mount:'appBody' (единственный — Граф) — из реестра `overlays` через

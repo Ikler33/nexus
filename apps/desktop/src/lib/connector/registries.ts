@@ -7,6 +7,8 @@
 import type {
   OverlayContribution,
   OverlaysRegistry,
+  PanelContribution,
+  PanelsRegistry,
   SettingsContribution,
   SettingsRegistry,
   ViewContribution,
@@ -79,6 +81,29 @@ class OverlayRegistryImpl implements OverlaysRegistry {
   }
 }
 
+class PanelRegistryImpl implements PanelsRegistry {
+  private map = new Map<string, PanelContribution>();
+
+  register(panel: PanelContribution): Disposable {
+    this.map.set(panel.id, panel);
+    return { dispose: () => this.map.delete(panel.id) };
+  }
+
+  get(id: string): PanelContribution | undefined {
+    return this.map.get(id);
+  }
+
+  /** Все панели детерминированно (по вставке — сортировка не нужна, в проде один вклад). */
+  list(): PanelContribution[] {
+    return [...this.map.values()];
+  }
+
+  /** Только для тестов: полный сброс. */
+  _reset(): void {
+    this.map.clear();
+  }
+}
+
 /** Глобальный реестр main-вью (питает MainViewOutlet + ActivityBar). */
 export const viewRegistry = new ViewRegistryImpl();
 
@@ -87,3 +112,6 @@ export const settingsRegistry = new SettingsRegistryImpl();
 
 /** Глобальный реестр оверлеев (F-8c — питает OverlayOutlet: goals/memory/…/contradictions). */
 export const overlayRegistry = new OverlayRegistryImpl();
+
+/** Глобальный реестр workspace-панелей (F-12 — питает AiPanelOutlet; в проде один вклад: chat). */
+export const panelRegistry = new PanelRegistryImpl();

@@ -1,8 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  getCachedQuestions,
-  setCachedQuestions,
-} from '../components/chat/startingQuestionsCache';
 import { VAULT_SWITCHED_EVENT } from '../lib/app-events';
 import { tauriApi, type FileEntry } from '../lib/tauri-api';
 import { flattenVisible, useVaultStore } from './vault';
@@ -56,12 +52,13 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
     expect(s.childrenByPath['']?.length ?? 0).toBeGreaterThan(0);
   });
 
-  // F-1 характеризация: смена vault → кэш стартовых вопросов чата сброшен. Раньше — прямой вызов
-  // clearStartingQuestionsCache из openVault (инверсия stores→components), теперь — window-событие
-  // VAULT_SWITCHED_EVENT; поведение идентично (dispatchEvent синхронен). Импорт кэша здесь же
-  // регистрирует его модульную подписку — тест проверяет проводку конец-в-конец.
-  it('смена vault сбрасывает кэш стартовых вопросов чата (vault:switched)', async () => {
-    setCachedQuestions('Notes/Welcome.md', ['q1', 'q2']);
+  // F-1/F-12 характеризация ВАЛТ-СТОРОНЫ контракта: смена vault эмитит РОВНО ОДНО window-событие
+  // VAULT_SWITCHED_EVENT. Раньше openVault звал clearStartingQuestionsCache напрямую (инверсия
+  // stores→components/chat); теперь vault лишь эмитит событие, а чат-кэш чистит себя сам (F-1).
+  // Чат-сторона (событие → сброс кэша) характеризована В ЧАТ-ЗОНЕ
+  // (`components/chat/startingQuestionsCache.test.ts`) — так тест ядра НЕ импортирует components/chat
+  // (граница F-1b: chat ∈ MODULE_FEATURES с F-12; ядро ⇏ модуль). Контракт покрыт с обеих сторон.
+  it('смена vault эмитит ровно одно событие vault:switched (сброс чат-кэша — на стороне чата)', async () => {
     const seen = vi.fn();
     window.addEventListener(VAULT_SWITCHED_EVENT, seen);
     try {
@@ -70,7 +67,6 @@ describe('vault store (Ф0-3/Ф0-9)', () => {
       window.removeEventListener(VAULT_SWITCHED_EVENT, seen);
     }
     expect(seen).toHaveBeenCalledTimes(1); // vault-сторона эмитит ровно одно событие
-    expect(getCachedQuestions('Notes/Welcome.md')).toBeUndefined(); // чат-сторона сбросила кэш
   });
 
   it('toggleDir лениво грузит детей и раскрывает', async () => {

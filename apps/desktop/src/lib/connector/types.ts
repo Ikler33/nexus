@@ -112,6 +112,38 @@ export interface OverlayContribution {
   mount?: OverlayMount;
 }
 
+/**
+ * Точка стыковки workspace-панели в теле оболочки (F-12, МИНИМАЛЬНО — НЕ универсальная dock-система,
+ * YAGNI). Панель докается в `.appBody` в одной из ТРЁХ позиций (pref `aiLayout`, ядро-chrome):
+ * - `'side'` — колонка сбоку от редактора (рефлоу грида `.appBody`, НЕ float);
+ * - `'bottom'` — панель снизу (рефлоу грида);
+ * - `'overlay'` — плавающая панель поверх тела со скримом.
+ * Ровно те три, что уже принимает `AiPanel` (`variant`). Позицию/видимость выбирает ЯДРО (App),
+ * компонент даёт модуль — см. `PanelContribution` и docs/dev/connector.md «### F-12».
+ */
+export type PanelPlacement = 'side' | 'bottom' | 'overlay';
+
+/**
+ * Вклад «workspace-панель» (реестр `panels`, F-12 — легализация хардкода App.tsx `import { AiPanel }`
+ * + 3-вариантный рендер). НЕ полноэкранная вью (`views`: взаимоисключаемый `mainView`) и НЕ оверлей
+ * (`overlays`: единый `isOpen`-селектор поверх `UIState`, `<Component/>` без пропов): панель СОСУЩЕСТВУЕТ
+ * с main-вью «Редактор», её позиция ведётся pref `aiLayout` (3 варианта `PanelPlacement`), а видимость —
+ * составным ядровым выражением (`chatOpen && !reading && mainView==='editor'`, ui+derived) + рефлоу грида
+ * `.appBody` и CSS-переменные размера. Всё это — ядро-chrome (как `mount`/позиционирование у оверлея);
+ * модуль даёт ТОЛЬКО компонент. Питает `AiPanelOutlet` (рендер через per-contribution ErrorBoundary).
+ */
+export interface PanelContribution {
+  /** Идентификатор панели (ключ реестра, `key` ErrorBoundary). */
+  id: string;
+  /** i18n-ключ имени панели (плашка ErrorBoundary «модуль X упал»). */
+  titleKey: string;
+  /**
+   * React-компонент панели, принимающий позицию докинга (`variant`). Рендерится через ErrorBoundary
+   * в `AiPanelOutlet`; App передаёт `variant` из pref `aiLayout` (ядро-chrome).
+   */
+  component: ComponentType<{ variant?: PanelPlacement }>;
+}
+
 /** Реестр команд — тонкая обёртка над `commands-core`; префиксует id → `${moduleId}:${id}`. */
 export interface CommandsRegistry {
   register(cmd: Command): Disposable;
@@ -137,6 +169,13 @@ export interface OverlaysRegistry {
   get(id: string): OverlayContribution | undefined;
 }
 
+/** Реестр workspace-панелей (F-12 — питает AiPanelOutlet; в проде один вклад — chat/AiPanel). */
+export interface PanelsRegistry {
+  register(panel: PanelContribution): Disposable;
+  list(): PanelContribution[];
+  get(id: string): PanelContribution | undefined;
+}
+
 /** Подписки на lifecycle-события ядра (window/доменные, НЕ новая шина). */
 export interface EventsRegistry {
   on(event: CoreEvent, cb: () => void): Disposable;
@@ -155,6 +194,8 @@ export interface ModuleContext {
   settings: SettingsRegistry;
   /** Реестр оверлеев (F-8c): модуль регистрирует плавающую/модальную панель — вырезание F-10b. */
   overlays: OverlaysRegistry;
+  /** Реестр workspace-панелей (F-12): модуль регистрирует докаемую панель тела (chat/AiPanel). */
+  panels: PanelsRegistry;
   events: EventsRegistry;
   /** Типизированный доступ к нативному слою (lib/api F-2), прокинут как есть. */
   api: TauriApi;

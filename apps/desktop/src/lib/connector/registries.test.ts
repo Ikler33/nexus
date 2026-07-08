@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import './core-views'; // сайд-эффект: регистрирует ядровые вью (для проверки легализации)
-import { settingsRegistry, viewRegistry } from './registries';
-import type { SettingsContribution, ViewContribution } from './types';
+import { panelRegistry, settingsRegistry, viewRegistry } from './registries';
+import type { PanelContribution, SettingsContribution, ViewContribution } from './types';
 
 /**
  * Реестры вкладов коннектора (F-8): register/get/list-детерминизм/dispose/идемпотентность. Ядровые
@@ -26,6 +26,10 @@ function view(id: string, order: number): ViewContribution {
 
 function section(id: string, order: number): SettingsContribution {
   return { id, titleKey: `t.${id}`, icon: nullComp, order, component: nullComp };
+}
+
+function panel(id: string): PanelContribution {
+  return { id, titleKey: `t.${id}`, component: nullComp };
 }
 
 describe('viewRegistry (F-8)', () => {
@@ -74,6 +78,28 @@ describe('viewRegistry (F-8)', () => {
     // Editor — дефолт-вью, не в ActivityBar; остальные — в ActivityBar.
     expect(viewRegistry.get('editor')?.activityBar).toBe(false);
     expect(viewRegistry.get('home')?.activityBar).toBe(true);
+  });
+});
+
+describe('panelRegistry (F-12)', () => {
+  it('register → get возвращает вклад; list содержит его; dispose удаляет', () => {
+    const d = panelRegistry.register(panel('t:chat'));
+    expect(panelRegistry.get('t:chat')?.titleKey).toBe('t.t:chat');
+    expect(panelRegistry.list().map((p) => p.id)).toContain('t:chat');
+    d.dispose();
+    expect(panelRegistry.get('t:chat')).toBeUndefined();
+    expect(panelRegistry.list().some((p) => p.id === 't:chat')).toBe(false);
+  });
+
+  it('идемпотентность: повторная регистрация того же id заменяет, не дублирует', () => {
+    const d1 = panelRegistry.register(panel('t:dup'));
+    const d2 = panelRegistry.register({ ...panel('t:dup'), titleKey: 't.replaced' });
+    const dups = panelRegistry.list().filter((p) => p.id === 't:dup');
+    expect(dups).toHaveLength(1);
+    expect(dups[0].titleKey).toBe('t.replaced');
+    d1.dispose();
+    d2.dispose();
+    expect(panelRegistry.get('t:dup')).toBeUndefined();
   });
 });
 
