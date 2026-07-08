@@ -11,7 +11,9 @@
 Последний вырез серии F (13-й и финальный модуль): панель Чат/Castor (`components/chat/AiPanel`)
 вырезана из ядра в модуль `lib/connector/modules/chat.ts`. Ядро (App.tsx + commands-core) больше НЕ
 импортирует `components/chat` — вклад идёт через **НОВЫЙ реестр `panels`** + `ctx.commands`. Строго
-behavior-preserving. После F-12 ВСЕ фронт-фичи — модули на коннекторе v0.
+behavior-preserving. После F-12 все фичи «вокруг ядра» — модули на коннекторе v0 (13). Ядром
+остаются по решению владельца: home/today (ядровые main-вью в core-views, наравне с editor) и
+plugins (инфраструктура plugin-host, см. F-10c).
 
 - **Тип вклада — НОВЫЙ реестр `panels` (не views/overlays), обоснованно.** AI-панель сосуществует с
   вью «Редактор» (не `views`: те взаимоисключаемы через `mainView`) и не является обычным оверлеем (не

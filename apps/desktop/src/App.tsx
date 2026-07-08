@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
-import './lib/connector/modules'; // F-9..F-11: регистрирует+активирует модули-вклады (news/board/оверлеи/sync/graph/agent) до рендера
+import './lib/connector/modules'; // F-9..F-12: регистрирует+активирует модули-вклады (news/board/оверлеи/sync/graph/agent/chat) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';

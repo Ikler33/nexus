@@ -186,7 +186,9 @@ F-11 вырезал `agent` (вкладка Castor) в модуль `connector/m
 
 F-12 вырезал `chat` (панель Чат/Castor `components/chat/AiPanel`) в модуль `connector/modules/chat.ts`
 через **НОВЫЙ реестр `panels`** + `ctx.commands`. Ядро (App.tsx + commands-core) больше НЕ импортирует
-`components/chat`. Это ПОСЛЕДНИЙ вырез — все фронт-фичи теперь модули.
+`components/chat`. Это ПОСЛЕДНИЙ вырез — все фичи «вокруг ядра» теперь модули (13). Ядром остаются
+по решению владельца: home/today (ядровые main-вью в core-views, наравне с editor) и plugins
+(инфраструктура plugin-host, см. F-10c).
 
 **Почему НОВЫЙ реестр (а не `views`/`overlays`) — обоснование типа вклада:** AI-панель не ложится ни
 на один существующий реестр:

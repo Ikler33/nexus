@@ -15,7 +15,8 @@ import { ErrorBoundary } from '../common/ErrorBoundary';
  * Так App больше НЕ импортирует `components/chat` (граница F-1b), а модуль даёт лишь компонент.
  *
  * В проде реестр содержит РОВНО один вклад (chat/AiPanel); `list()` (не `get(id)`) — чтобы outlet не
- * знал конкретного id панели (реестр отдаёт вклады как ссылки; сторонний модуль может дать свою панель).
+ * знал конкретного id панели (реестр отдаёт вклады как ссылки). Слот single-purpose: видимость общая
+ * (chat-стейт ядра) — вклады рендерятся списком внутри уже открытого слота, своей видимости у них нет.
  */
 export function AiPanelOutlet({ variant }: { variant: PanelPlacement }) {
   const { t } = useTranslation();
