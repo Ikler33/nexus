@@ -2,7 +2,7 @@ import { useEffect, useState, type ComponentType } from 'react';
 import { Lightbulb, Link2, List, ScrollText, X } from 'lucide-react';
 import { OrbitIcon } from '../common/BrandGlyphs';
 import { useTranslation } from 'react-i18next';
-import { SuggestView } from '../chat/SuggestView';
+import { SuggestView } from './SuggestView';
 import { useUIStore } from '../../stores/ui';
 import { BacklinksBar } from './BacklinksBar';
 import { NoteSummary } from './NoteSummary';

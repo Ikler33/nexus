@@ -48,13 +48,6 @@ const CROSS_IMPORT_WHITELIST = [
     allow: ['editor'],
   },
   {
-    // InspectorRail показывает chat/SuggestView (похожие заметки/предложения) — вросшая
-    // editor↔chat нить, рубится в F-X.
-    files: 'src/components/editor/InspectorRail.tsx',
-    zone: 'editor',
-    allow: ['chat'],
-  },
-  {
     // Workspace-панель хостит редакторную начинку (Editor/FileViewer/InlineAIBar/InspectorRail/
     // MentionsBar/TagSuggest/MarkdownPreviewHandle) — вросшая композиция, рубится в F-X.
     files: 'src/components/workspace/GroupPane.tsx',
