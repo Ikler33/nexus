@@ -91,19 +91,17 @@ export function App() {
   const vaultRoot = info?.root ?? null;
   useEffect(() => {
     useChatStore.getState().hydrate(vaultRoot);
-    // EP-3 (ревью): `episodic.enabled` живёт в БД vault (едет с vault), это ИСТОЧНИК ИСТИНЫ. Синхронизируем
-    // фронт-pref `aiEpisodicMemory` (= отображение тоггла + per-call флаг чата) от бэка при открытии vault.
-    // Иначе на другой машине / после очистки localStorage тоггл показывал бы OFF, а фоновая генерация шла
-    // (нарушение privacy-default). Best-effort: нет vault/ошибка → оставляем pref как есть.
-    if (vaultRoot) {
-      void tauriApi.episode
-        .getEnabled()
-        .then((on) => usePrefsStore.getState().setAiEpisodicMemory(on))
-        .catch(() => {});
-      // Тогглы «Инсайты»/«Поиск противоречий» — тоже persisted в БД vault (источник истины), грузим
-      // от бэка при открытии (privacy-default, как эпизоды). Стор не лезет в localStorage.
-      void useAiFeaturesStore.getState().sync();
-    }
+    // F-8b (хвост коннектора): episodic-sync (`episode.getEnabled` → pref `aiEpisodicMemory`) переехал в
+    // модуль `connector/modules/episodes` (через `ctx.events.on('vault:opened')`) — фича «Эпизоды»
+    // вырезана (F-10b), эффект уехал к своему владельцу-модулю. Тайминг сдвинут чуть раньше (событие на
+    // `openVault` до `set({info})`; бэк уже на новом vault, pref фронтовый) — behavior-preserving (см.
+    // connector.md «F-8b»).
+    // Тогглы «Инсайты»/«Поиск противоречий» (aiFeatures) — persisted в БД vault (источник истины), грузим
+    // от бэка при открытии (privacy-default, как эпизоды). ОСТАЮТСЯ ядром: aiFeatures — ОБЩИЙ кросс-фичный
+    // тоггл-стор (insights=Home + contradictions), атомарный dual-fetch с seq-гардом и БЕЗ единого
+    // владельца-модуля (Home не модуль) → F-8b мигрирует лишь эффект фичи с ЕДИНЫМ вырезанным владельцем.
+    // Стор не лезет в localStorage. Best-effort: нет vault → пропускаем.
+    if (vaultRoot) void useAiFeaturesStore.getState().sync();
   }, [vaultRoot]);
 
   // F-10b: живой пересчёт «Целей» по `vault:changed` (ADR-007 S8, AC-GP-3) переехал в модуль
