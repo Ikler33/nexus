@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Изменено · R-13b — skills/mod.rs распил: тесты в подмодуль (1866→796)
+
+Стадия R-13b серии R (thermo-смелл — `crates/nexus-core/src/skills/mod.rs` 1866 строк). **Move-only, behavior-preserving.** Тот же паттерн, что R-13a (`agent/job.rs`) и прецеденты `agent/session.rs`→`session/tests.rs`: инлайновый `#[cfg(test)] mod tests { … }` вынесен в файл-сосед `skills/tests.rs`, подключён `#[cfg(test)] mod tests;`. Semantics скилл-инфраструктуры (SKILL.md-реестр/discovery/parse/validate/vendor-lock, tier/trust) НЕ тронута.
+
+- **Вынос 57 `#[test]` в `skills/tests.rs` (1069 строк):** содержимое инлайн-модуля дедентнуто на 4 пробела и rustfmt-нормализовано. Прод-часть `skills/mod.rs` (795 строк кода) осталась **байт-в-байт** — вся production-логика (типы `Skill`/`SkillCatalog`/`SkillError`, `discover_skills`/`parse_skill`/`validate_name`/`parse_capabilities_field`/`validate_vendored`, хелперы `truncate_chars`/`collapse_controls`/`is_safe_path_component`/`sha256_hex`/`display_path`) неизменна; изменилась только строка `mod tests {` → `mod tests;` (+ `#[cfg(test)]`).
+- **Доказательство move-only:** (1) прод-префикс (стр. 1-795) — `diff` против HEAD пуст; (2) `tests.rs == rustfmt(dedent(тело-исходника))` — воспроизведено детерминированно, diff пуст (ноль ручных правок); единственное не-whitespace-изменение rustfmt — снятие избыточных фигурных скобок вокруг однострочного замыкания `|| { panic!(…) } → || panic!(…)` (semantics-preserving); (3) счётчики: 57 `#[test]` / 0 `#[tokio::test]` до и после; (4) pub-API `skills/mod.rs` — `diff` пуст. Инвариант B6/B7 «пустой реестр при ВЫКЛ актуаторе» живёт в `agent/session.rs` (не в skills), byte-identity прод-части skills его тем более не затрагивает.
+- **Дедуп-кандидат (только в отчёт, НЕ сделано):** `fn truncate_chars(s,max)` дублируется 3× байт-идентично (`skills/mod.rs`, `episode/mod.rs`, `ai/chat.rs`, все с многоточием-эллипсисом); 4-я копия `agent/research/worker.rs` — ОДНОИМЁННАЯ, но иная семантика (`take(max).collect()` без эллипсиса) → консолидировать с осторожностью, не сливать вслепую.
+- Гейт: `cargo fmt --check` / `clippy --workspace --all-targets -D warnings` / `test --workspace` — зелёные; `skills::tests::` 57/57 passed; `#[ignore]`-литерал не вводился. Размер: mod.rs 1866→796, +tests.rs 1069.
+
 ### Изменено · R-13a — вынос `mod tests` job.rs → `job/tests.rs` (byte-identical, 2011→446)
 
 Стадия R-13 REFACTOR-PLAN (thermo-смелл — `crates/nexus-core/src/agent/job.rs` 2011 строк, последний
