@@ -6,6 +6,35 @@
 
 ## [Unreleased]
 
+### Изменено · R-13a — вынос `mod tests` job.rs → `job/tests.rs` (byte-identical, 2011→446)
+
+Стадия R-13 REFACTOR-PLAN (thermo-смелл — `crates/nexus-core/src/agent/job.rs` 2011 строк, последний
+монолит >2000 после серии R: orchestrate 2518→499, agentd 2120→703, chat 2019→1190, session 1146→350).
+**ЧИСТЫЙ move-only распил, поведение не меняется** (зеркалит R-6a/R-5b/session): инлайн-`mod tests`
+(1564 строки — 78% файла) вынесен в подмодуль `agent/job/tests.rs`, объявлен `#[cfg(test)] mod tests;`
+(конвенция `session/tests.rs`). Прод-код (`AgentRunHandler`/`drive`/`handle`/`enqueue_agent_run`,
+строки 1–444) — **байт-в-байт неизменен** (diff пуст). Тело тестов — токен-идентично: единственная
+не-whitespace правка на все 1564 строки = `cargo fmt` схлопнул сигнатуру `handler_with_skills` в одну
+строку после dedent (убрал избыточную trailing-comma) — канон fmt, не семантика.
+
+- **Инварианты клейма/retry НЕ тронуты** (структура, не логика): воркер клеймит ДЖОБЫ через
+  `scheduler::claim_next`/`run_due` (не сканит `agent_runs`) — код `handle`/`drive` в неизменном
+  прод-префиксе; retry/replay-семантика (run-level идемпотентность на терминале, `bump_step`,
+  `PausePolicy::Requeue`→`requeue_to_queued`+пере-кью, kill-switch чек-пойнты #1/#2/#3) — тоже в
+  байт-идентичном префиксе. Тесты `replay_already_done_no_double_apply`,
+  `paused_actuator_run_writes_nothing_and_requeues`, `crash_recovery_requeues_stale_run…`,
+  `run_due_defers_agent_run_under_interactive` — зелёные без правок ассертов.
+- **Доказательство move-only:** (1) `diff` прод-префикса (стр. 1–444) orig↔new — пуст; (2) токенизация
+  тела тестов (`grep -oE '\S+'`) orig↔`job/tests.rs` — 1 блок расхождения (fmt-схлоп сигнатуры выше);
+  (3) реконструкция модуля из кусков + `rustfmt` обеих сторон — идентично (кроме 4-пробельного
+  indentation-wobble rustfmt на 2 over-long assert-строках = его собственная не-идемпотентность).
+- **Кандидаты дедупов на R-13a-b (НЕ трогал — скоуп move-only):** 6 `handler_*`-билдеров
+  (`handler`/`handler_paused`/`handler_with_memory`/`handler_with_actuator`/`handler_with_actuator_paused`/
+  `handler_with_skills`) — почти идентичные 16-аргументные вызовы `AgentRunHandler::new`, различаются
+  1–3 полями (билдер-паттерн/`Default`-база напрашивается); 4 инлайн-провайдера
+  (`PanicProvider`×2/`PanicIfCalled`) — троекратный клон одного паникующего `ToolCapableProvider`
+  (общий тест-хелпер); `CapturingProvider`×2 (recall/no-memory тесты) — близнецы.
+
 ### Исправлено · NB-4 — `is_kind_busy`-футган в digest/contradictions (вечный «Генерирую…»/«Ищу…»)
 
 Диагноз: `digest` и `contradictions` — recurring-kinds (DAY_SECS = 86400 с). После каждого
