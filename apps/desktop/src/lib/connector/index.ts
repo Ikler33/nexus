@@ -14,12 +14,15 @@ export type {
   OverlayContribution,
   OverlayMount,
   OverlaysRegistry,
+  PanelContribution,
+  PanelPlacement,
+  PanelsRegistry,
   SettingsContribution,
   SettingsRegistry,
   ViewContribution,
   ViewsRegistry,
 } from './types';
-export { overlayRegistry, settingsRegistry, viewRegistry } from './registries';
+export { overlayRegistry, panelRegistry, settingsRegistry, viewRegistry } from './registries';
 export { modules } from './module-manager';
 export { onCoreEvent } from './events';
 export { registerCoreViews } from './core-views';

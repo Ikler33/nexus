@@ -117,6 +117,7 @@ const COMMAND_ID_ALIASES: Record<string, string> = {
   'view.sync': 'sync:view.sync', // F-10c (оверлей-модуль)
   'view.graph': 'graph:view.graph', // F-10d (оверлей-модуль, mount:'appBody')
   'view.agent': 'agent:view.agent', // F-11 (вью-модуль «Агент»/Castor)
+  'view.chat': 'chat:view.chat', // F-12 (панель-модуль «AI-панель»/chat)
 };
 
 class CommandRegistry {

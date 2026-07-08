@@ -127,6 +127,7 @@ const MODULE_FEATURES = [
   'sync', // F-10c (оверлей-модуль; вырезан НАЧИСТО — ConflictResolver вынесен в components/common)
   'graph', // F-10d (оверлей-модуль, mount:'appBody'; GraphLayer-слой в graph-зоне)
   'agent', // F-11 (вью-модуль «Агент»/Castor; стейт видимости/seed остаётся ядром — ui-стор)
+  'chat', // F-12 (панель-модуль «AI-панель»; НОВЫЙ реестр `panels`; видимость/позиция — ядро ui/prefs)
 ];
 
 // Явные исключения границы модулей (аналог CROSS_IMPORT_WHITELIST для F-1): если shared-компонент

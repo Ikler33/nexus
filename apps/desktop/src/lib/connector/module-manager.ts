@@ -10,12 +10,13 @@
 import { commands } from '../commands';
 import { tauriApi } from '../tauri-api';
 import { onCoreEvent } from './events';
-import { overlayRegistry, settingsRegistry, viewRegistry } from './registries';
+import { overlayRegistry, panelRegistry, settingsRegistry, viewRegistry } from './registries';
 import type {
   Disposable,
   ModuleContext,
   NexusModule,
   OverlayContribution,
+  PanelContribution,
   SettingsContribution,
   ViewContribution,
 } from './types';
@@ -50,6 +51,11 @@ function buildContext(moduleId: string, subs: Disposable[]): ModuleContext {
       register: (overlay: OverlayContribution) => track(subs, overlayRegistry.register(overlay)),
       list: () => overlayRegistry.list(),
       get: (id: string) => overlayRegistry.get(id),
+    },
+    panels: {
+      register: (panel: PanelContribution) => track(subs, panelRegistry.register(panel)),
+      list: () => panelRegistry.list(),
+      get: (id: string) => panelRegistry.get(id),
     },
     events: {
       on: (event, cb) => track(subs, onCoreEvent(event, cb)),

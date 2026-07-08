@@ -113,10 +113,11 @@ AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
 активации (= порядок регистрации). `modules.disposeAll()` снимает все вклады всех модулей.
 Единая точка регистрации прод-модулей — `connector/modules/index.ts` (`activateModules()`,
-импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 12 модулей:** `news` (F-9,
+импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 13 модулей:** `news` (F-9,
 вью-модуль) + `board` (F-10c, вью-модуль) + 7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/
 digest/contradictions) + `sync` (F-10c, оверлей-модуль) + `graph` (F-10d, оверлей-модуль, mount:'appBody')
-+ `agent` (F-11, вью-модуль «Агент»/Castor — самая связанная фича, см. «### F-11» ниже).
++ `agent` (F-11, вью-модуль «Агент»/Castor — самая связанная фича, см. «### F-11» ниже) + `chat` (F-12,
+панель-модуль «AI-панель» на НОВОМ реестре `panels` — ФИНАЛ модуляризации фронта, см. «### F-12» ниже).
 Новый модуль — строкой в `activateModules` + строкой в `MODULE_FEATURES` (eslint.config.js, граница F-1b).
 Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
 
@@ -181,6 +182,68 @@ F-11 вырезал `agent` (вкладка Castor) в модуль `connector/m
   компонент); `DeadJobsModal`-знание job-kind'ов агента — строковый kind ядровой jobs-инфраструктуры.
   Все трогают ui/data-стор, а НЕ `components/agent` → инвариант держится.
 
+### F-12: «AI-панель» (chat) — 13-й модуль, панель-модуль (ФИНАЛ модуляризации фронта)
+
+F-12 вырезал `chat` (панель Чат/Castor `components/chat/AiPanel`) в модуль `connector/modules/chat.ts`
+через **НОВЫЙ реестр `panels`** + `ctx.commands`. Ядро (App.tsx + commands-core) больше НЕ импортирует
+`components/chat`. Это ПОСЛЕДНИЙ вырез — все фронт-фичи теперь модули.
+
+**Почему НОВЫЙ реестр (а не `views`/`overlays`) — обоснование типа вклада:** AI-панель не ложится ни
+на один существующий реестр:
+- НЕ `views` (main-вью): `views` взаимоисключаемы через `mainView`-enum; AI-панель **сосуществует** с
+  вью «Редактор» (рендерится рядом с `MainViewOutlet` внутри `.appBody`).
+- НЕ `overlays`: оверлей — плавающая панель с ОДНИМ `isOpen(UIState)`-селектором и `<Component/>` без
+  пропов. AI-панель: (1) докается в теле в **ТРЁХ позициях** (pref `aiLayout`: side/bottom/overlay =
+  `PanelPlacement`) — нужен проп `variant`; (2) `side`/`bottom` **рефлоуят грид `.appBody`** (`.withChat`/
+  `.withChatBottom`), это НЕ float; (3) видимость — **составное ядровое** выражение (`chatOpen && !reading
+  && mainView==='editor'`), а позиция/размер — из **prefs** (не `UIState`, который только и видит
+  overlay-`isOpen`). Шоехорнить это в `OverlayContribution` = раздуть чистую оверлей-абстракцию понятиями
+  variant/pref/layout-reflow, нужными ТОЛЬКО чату (анти-YAGNI).
+
+Поэтому — по прецеденту **F-8c** (7 оверлеев не легли на 5 реестров v0 → добавлен РОВНО overlay-реестр,
+без preview/inspector/statusBar «заодно») — добавлен **РОВНО минимальный `panels`-слот**: одна docked-
+панель тела, без обобщений. Не «универсальная dock-система» (YAGNI).
+
+Шаблон панель-модуля:
+1. **`panels`-реестр** (`registries.ts` `PanelRegistryImpl` + `panelRegistry`; тип `PanelContribution
+   { id, titleKey, component: ComponentType<{variant?: PanelPlacement}> }` + `PanelsRegistry`;
+   `ctx.panels` в `ModuleContext`/`module-manager`). Map-реестр по образцу `overlays` (register/list/get,
+   идемпотентность, dispose). `PanelPlacement = 'side'|'bottom'|'overlay'` — ровно три `variant`, что уже
+   принимает `AiPanel`.
+2. **`AiPanelOutlet`** (`components/workspace/AiPanelOutlet.tsx`, по образцу `OverlayOutlet`): рендерит
+   `panelRegistry.list()` в позиции `variant` через per-contribution **ErrorBoundary** (падение панели →
+   плашка, app жив). НЕ импортирует `components/chat` — компонент приходит из реестра как ссылка.
+3. **Манифест** `connector/modules/chat.ts`: `ctx.panels.register({ id:'chat', titleKey:'chrome.aiPanel',
+   component: AiPanel })` (AiPanel — ЕАГЕРНЫЙ импорт, как раньше в App.tsx) + `ctx.commands.register({
+   id:'view.chat', defaultKey:'mod+j', run:()=>{ setAiTab('chat'); openChat() } })`. id команды →
+   `chat:view.chat`, source=plugin; пара `view.chat`→`chat:view.chat` в `COMMAND_ID_ALIASES` (⌘J сохранён).
+4. Строка в `connector/modules/index.ts` + `chat` в `MODULE_FEATURES` (eslint.config.js, F-1b).
+
+**ПАТТЕРН (как news/board/оверлеи F-10b/agent F-11): ВИДИМОСТЬ и ПОЗИЦИЯ — ЯДРО-chrome, модуль даёт
+компонент.** App вычисляет `aiVisible`/`aiSide`/`aiBottom`/`aiOverlay` (ui+prefs), ставит скрим/рефлоу
+грида/CSS-переменные размера и передаёт `variant` в `AiPanelOutlet` — ровно как `mount`/позиционирование
+оверлея есть ядро. Стейт `chatOpen` + `open/close/toggleChat` + `aiTab`/`setAiTab` остаются в ui-сторе;
+titlebar-чекбокс «AI-панель» зовёт `toggleChat()` ui-стора (ядро-chrome).
+
+**Оставлено ядро-chrome / вне скоупа (обосновано):** (1) **`stores/chat.ts`** остаётся в `stores/` как
+data-слой — его легально импортируют ЯДРО (App-hydrate) и ИНЫЕ фичи (Home/Today/Episodes: quick-capture в
+чат). Это СТОР, а не `components/chat`; инвариант выреза — про компонент-зону (как `stores/news`/
+`stores/agent`; **отличие от agent:** `stores/chat` шире используется ядром/фичами — это легально, стор —
+чистый data-лист). (2) titlebar-чекбокс «AI-панель» + `aiTab`/`aiLayout`-настройки в общей ai-секции
+SettingsView — трогают ui/prefs, не компонент. (3) `AgentTab` (внутри chat) зовёт `openAgent()` ui-стора
+(стейт, не импорт `components/agent`) — F-11-контракт сохранён; `components/chat` ⇎ `components/agent`
+(F-1b стережёт обе стороны). (4) Rust/tauri-команды чата — вырезается только фронт.
+
+**Швы, разведённые ДО выреза (F-12 «перепроверь»):** (а) reverse-edge `stores/vault →
+startingQuestionsCache` — runtime уже инвертирован в F-1 (vault эмитит `VAULT_SWITCHED_EVENT`, кэш чистит
+себя сам); оставался только тест ядра `vault.test.ts`, импортировавший чат-кэш → расщеплён по сторонам
+(vault тестирует эмит, чат-зона — сброс). (б) `MermaidDiagram` — уже в `components/common` с F-1 (chat
+импортит оттуда). (в) `editor/InspectorRail → chat/SuggestView` — `SuggestView` (+`useRelationExplanations`)
+использовался ТОЛЬКО из editor («переехал из AI-панели в инспектор», Hermes-6) → перенесён `git mv`
+chat→**editor** (единственный потребитель, не genuinely-shared → не в common); запись InspectorRail→chat
+убрана из `CROSS_IMPORT_WHITELIST`. После — `components/editor ⇏ components/chat`, чат-зона содержит только
+чат.
+
 ### ErrorBoundary per-contribution
 `components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`), оверлей
 (`OverlayOutlet`, F-8c) и секция настроек (`SettingsSectionOutlet`) оборачивается React-ErrorBoundary:
@@ -195,6 +258,7 @@ F-11 вырезал `agent` (вкладка Castor) в модуль `connector/m
 | commands  | `commands-core` + `commands` registry    | `ctx.commands` — та же registry, id в namespace |
 | views     | тернарник App.tsx + хардкод ActivityBar  | `viewRegistry` (core-views) → MainViewOutlet + ActivityBar |
 | overlays  | 7 хардкод-строк `{xOpen && <Panel/>}` + `{graphOpen && <div.graphLayer><GraphView/></div>}` App.tsx | `overlayRegistry` → OverlayOutlet (`mount` app/appBody, F-10d); 9 оверлей-модулей `ctx.overlays` (7 F-10b + sync F-10c + graph F-10d appBody; core-overlays удалён) |
+| panels    | `import { AiPanel }` + 3-вариантный `{aiSide && <AiPanel/>}`/`{aiBottom…}`/`{aiOverlay…}` App.tsx | `panelRegistry` → AiPanelOutlet (F-12); модуль `chat` через `ctx.panels`; App owns видимость/`variant`/скрим (ядро-chrome) |
 | settings  | массив `SECTIONS` в SettingsView         | `settingsRegistry` → нав + SettingsSectionOutlet |
 | events    | россыпь `useEffect` + window/tauri        | `onCoreEvent` (обёртка тех же каналов)          |
 | api       | `tauriApi`                                | `ctx.api` (тот же объект)                        |
@@ -265,8 +329,8 @@ F-11 вырезал `agent` (вкладка Castor) в модуль `connector/m
 сломалась бы). F-1b **закрепил инвариант в eslint** (`apps/desktop/eslint.config.js`, блок F-1b —
 рядом с F-1 «фича не импортирует фичу»).
 
-**Что стережёт правило** (`MODULE_FEATURES` = список вырезанных модулей; сейчас 12:
-`news, goals, memory, episodes, tasks, inbox, digest, contradictions, board, sync, graph, agent`).
+**Что стережёт правило** (`MODULE_FEATURES` = список вырезанных модулей; сейчас 13:
+`news, goals, memory, episodes, tasks, inbox, digest, contradictions, board, sync, graph, agent, chat`).
 Для каждого модуля есть ПАРА изолированных зон: UI `src/components/<mod>/**` и манифест
 `src/lib/connector/modules/<mod>.ts`.
 Запрещено импортировать эту пару откуда-либо, **КРОМЕ**:
@@ -299,8 +363,8 @@ F-11 вырезал `agent` (вкладка Castor) в модуль `connector/m
 двух срезов). Импорт `components/<mod>` из компонент-зоны при этом ловится F-1 (кросс-фича), а из
 ядра/манифеста — F-1b; непокрыт только «компонент-зона → чужой манифест». Риск низкий: манифесты не
 тянут чужие манифесты (правило 3), а ни одна вырезанная компонент-зона чужой манифест не тянет (F-11
-вырезал `agent`; остаётся `chat` — F-12). Закрытие потребовало бы влить F-1b-баны манифестов в
-F-1-хелпер (смешение концернов двух срезов) — отложено до появления реального кейса.
+вырезал `agent`, F-12 — `chat`; серия F завершена, все фронт-фичи — модули). Закрытие потребовало бы
+влить F-1b-баны манифестов в F-1-хелпер (смешение концернов двух срезов) — отложено до реального кейса.
 
 **Исключения** (`MODULE_BOUNDARY_EXCEPTIONS` в eslint.config.js): пусто — F-9/F-10b вырезали модули
 начисто. Если shared-компонент ЧЕСТНО нужен ядру — документируй файл там (аналог

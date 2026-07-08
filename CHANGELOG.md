@@ -6,6 +6,47 @@
 
 ## [Unreleased]
 
+### Изменено · F-12 — «AI-панель» (chat) вырезана из ядра в модуль (ФИНАЛ модуляризации фронта)
+
+Последний вырез серии F (13-й и финальный модуль): панель Чат/Castor (`components/chat/AiPanel`)
+вырезана из ядра в модуль `lib/connector/modules/chat.ts`. Ядро (App.tsx + commands-core) больше НЕ
+импортирует `components/chat` — вклад идёт через **НОВЫЙ реестр `panels`** + `ctx.commands`. Строго
+behavior-preserving. После F-12 ВСЕ фронт-фичи — модули на коннекторе v0.
+
+- **Тип вклада — НОВЫЙ реестр `panels` (не views/overlays), обоснованно.** AI-панель сосуществует с
+  вью «Редактор» (не `views`: те взаимоисключаемы через `mainView`) и не является обычным оверлеем (не
+  `overlays`: докается в теле в ТРЁХ позициях `aiLayout` side/bottom/overlay с пропом `variant`;
+  `side`/`bottom` рефлоуят грид `.appBody`; видимость — составное ядровое `chatOpen && !reading &&
+  mainView==='editor'`, позиция/размер из prefs, не из `UIState`). Шоехорнить это в `OverlayContribution`
+  = раздуть чистую оверлей-абстракцию понятиями variant/pref/layout (анти-YAGNI). По прецеденту F-8c
+  (overlay-реестр под 7 оверлеев) добавлен РОВНО минимальный `panels`-слот: `PanelContribution
+  {id,titleKey,component}` + `panelRegistry` (Map, как overlays) + `ctx.panels` + `AiPanelOutlet`
+  (`components/workspace/`, рендер через per-contribution ErrorBoundary). `PanelPlacement =
+  'side'|'bottom'|'overlay'`.
+- **Команда `view.chat` → `chat:view.chat`** (source=plugin): удалена из `commands-core`, регистрируется
+  модулем; хоткей ⌘J сохранён (defaultKey). Пара `view.chat`→`chat:view.chat` добавлена в
+  `COMMAND_ID_ALIASES` (`lib/commands.ts`) — ручной хоткей юзера на старый id ремапится.
+- **Стейт остаётся ЯДРОМ** (паттерн news/board/F-10b/agent): видимость (`chatOpen`) + `open/close/
+  toggleChat` + `aiTab`/`setAiTab` в ui-сторе; позиция/размер (`aiLayout`/`aiPanelW/H`) в prefs. App owns
+  видимость+`variant`+скрим+рефлоу грида (ядро-chrome), передаёт `variant` в `AiPanelOutlet`. Titlebar-
+  чекбокс «AI-панель» зовёт `toggleChat()`. `stores/chat.ts` остаётся в `stores/` как data-слой — его
+  легально импортируют ядро (App-hydrate) и иные фичи (Home/Today/Episodes: quick-capture в чат); это
+  СТОР, не `components/chat` (инвариант выреза — про компонент-зону).
+- **Швы, разведённые до выреза (перепроверка):** (а) reverse-edge `stores/vault →
+  startingQuestionsCache` runtime уже инвертирован в F-1 (событие `vault:switched`, кэш чистит себя сам);
+  оставался тест ядра `vault.test.ts` — расщеплён по сторонам (vault тестирует эмит, чат-зона — сброс),
+  ядро больше не импортит чат-кэш. (б) `MermaidDiagram` уже в `components/common` (F-1). (в)
+  `editor/InspectorRail → chat/SuggestView`: `SuggestView` (+`useRelationExplanations`) используется
+  ТОЛЬКО из editor («переехал из AI-панели в инспектор», Hermes-6) → перенесён `git mv` chat→**editor**
+  (единственный потребитель); запись InspectorRail→chat убрана из `CROSS_IMPORT_WHITELIST`. После:
+  `components/editor ⇏ components/chat`.
+- **CI-граница (F-1b):** `chat` добавлен в `MODULE_FEATURES` (eslint.config.js) — импорт
+  `components/chat`/манифеста из ядра/чужого модуля = красный CI. grep-инварианты «ядро ⇏
+  components/chat» и (регрессия) «ядро ⇏ components/agent» пусты; `check-module-boundary` (позитив+негатив)
+  зелёный.
+- **НЕ тронуто (вне скоупа):** `components/chat` ⇎ `components/agent` (AgentTab зовёт `openAgent()`
+  ui-стора — стейт, не импорт; F-11-контракт сохранён); Rust/tauri-команды чата (вырезается только фронт).
+
 ### Изменено · F-11 — «Агент» (Castor) вырезан из ядра в модуль коннектора
 
 Завершение модуляризации (12-й модуль на коннекторе v0): вкладка Агента (Castor) вырезана из ядра в
