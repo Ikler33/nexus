@@ -30,6 +30,11 @@ export interface QueueJob {
  */
 export const READY_SLACK_MS = 5_000;
 
+/** Единственный источник ready-семантики: `running` ИЛИ `pending` с наступившим (±слак) `run_at`. */
+function readyNow(j: QueueJob, now: number): boolean {
+  return j.state === 'running' || j.runAt * 1000 <= now + READY_SLACK_MS;
+}
+
 /**
  * Есть ли в очереди ГОТОВАЯ (работает сейчас или вот-вот стартует) джоба указанного `kind`?
  *
@@ -48,7 +53,7 @@ export const READY_SLACK_MS = 5_000;
  */
 export function isJobReady(kind: string, active: QueueJob[], now: number): boolean {
   return active.some(
-    (j) => j.kind === kind && (j.state === 'running' || j.runAt * 1000 <= now + READY_SLACK_MS),
+    (j) => j.kind === kind && readyNow(j, now),
   );
 }
 
@@ -67,5 +72,5 @@ export function selectCurrentRun(
 ): QueueJob | undefined {
   const news = active.filter((j) => j.kind === 'newsfeed');
   if (trackedId !== null) return news.find((j) => j.id === trackedId);
-  return news.find((j) => j.state === 'running' || j.runAt * 1000 <= now + READY_SLACK_MS);
+  return news.find((j) => readyNow(j, now));
 }
