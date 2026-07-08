@@ -42,7 +42,9 @@ usearch = "2"
 getrandom = "0.2"
 # Лента новостей (NF-1, docs/specs/news-feed.md): низкоуровневый XML-токенизатор для RSS/Atom
 # (CDATA/энтити/неймспейсы руками ненадёжно); нормализация фидов — своя, мини-парсер-подход.
-quick-xml = "0.37"
+# 0.41: фикс RUSTSEC-2026-0194/0195 (O(N²)-атрибуты / неограниченная память xmlns — DoS).
+# С 0.38 сущности внутри Text приходят отдельными Event::GeneralRef (см. news/parse.rs).
+quick-xml = "0.41"
 # Реальный BPE-токенайзер для оценки бюджета контекста LLM (P0-c): встроенный `tokenizer.json`
 # задеплоенной модели (Qwen3.6-27B). default-features=false + onig — БЕЗ http/hf-hub/rustls: ни
 # reqwest, ни hyper в дерево зависимостей не приходят (egress-chokepoint цел, AC-EGR-1; см.
