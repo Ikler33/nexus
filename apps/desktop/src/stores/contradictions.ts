@@ -2,12 +2,19 @@ import { create } from 'zustand';
 
 import type { Contradiction } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
+import { isJobReady } from '../lib/jobs';
 
 /**
  * «Поиск противоречий» (#vision, спека `docs/specs/contradictions.md`): найденные пары конфликтующих
  * заметок. Поиск асинхронен (фоновая джоба планировщика): `generate()` ставит её в очередь, готовый
  * результат прилетает через `load()` по событию `jobs:changed` (см. App). `generating` снимается, когда
  * приходит набор с другим `createdAt`, чем был на момент клика (baseline).
+ *
+ * ⚠️ NB-4: `contradictions` — recurring-kind (раз/сутки). После завершения прогона воркер НЕМЕДЛЕННО
+ * ставит следующий `pending` «на завтра» (reschedule_if_absent). Поэтому `jobActive('contradictions')`
+ * (Rust `is_kind_busy`) в steady state всегда возвращал `true` → вечный «Ищу…» при сбое.
+ * Фикс: `isJobReady` (ready-семантика, зеркало Rust `has_ready_job`) — только running/pending
+ * с наступившим run_at считается текущим прогоном.
  */
 interface ContradictionsState {
   items: Contradiction[];
@@ -37,8 +44,10 @@ export const useContradictionsStore = create<ContradictionsState>((set, get) => 
       let stillGenerating = generating;
       if (generating) {
         const gotNew = stamp(items) !== baseline;
-        // Завершилось: новый прогон ИЛИ джоба больше не активна (упала/таймаут) → гасим «Ищу…».
-        if (gotNew || !(await tauriApi.scheduler.jobActive('contradictions'))) {
+        // Завершилось: новый прогон ИЛИ нет ГОТОВОЙ джобы (running/pending с наступившим run_at).
+        // NB-4: НЕ jobActive — он считает и «завтрашнюю» recurring-pending «занятой» → вечный спиннер.
+        const activeList = await tauriApi.scheduler.activeJobs();
+        if (gotNew || !isJobReady('contradictions', activeList, Date.now())) {
           stillGenerating = false;
         }
       }

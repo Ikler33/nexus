@@ -7,6 +7,9 @@ import {
   type NewsRun,
   type NewsSource,
 } from '../lib/tauri-api';
+import { type QueueJob, selectCurrentRun } from '../lib/jobs';
+// Реэкспорт для обратной совместимости (news.test.ts импортирует из './news').
+export { selectCurrentRun, type QueueJob } from '../lib/jobs';
 
 /**
  * Состояние страницы «Новости» (NF-5, спека `docs/specs/news-feed.md`). Данные — целиком
@@ -97,20 +100,8 @@ const STUCK_MS = 120_000;
 /** Гистерезис stuck (MINOR-1 ревью): подряд stuck-тиков до показа баннера — каденс этапов
  *  121–125с не мерцает предупреждением. */
 const STUCK_TICKS = 2;
-/** Зазор «pending вот-вот стартует» при выборе текущего прогона (только вперёд, в БУДУЩЕЕ):
- *  джоба, чей run_at наступает в пределах ближайшего опроса, уже считается текущей. */
-const CURRENT_RUN_SLACK_MS = POLL_MS;
-
 // ── Чистая склейка со снапшотом очереди (тестируется на реалистичных снапшотах, ревью NB-1) ────
-
-/** Мини-форма активной джобы (структурное подмножество `ActiveJob`) — вход чистых функций. */
-export interface QueueJob {
-  id: number;
-  kind: string;
-  state: 'running' | 'pending';
-  /** Unix-СЕКУНДЫ (как в `ActiveJob`). */
-  runAt: number;
-}
+// QueueJob и selectCurrentRun перемещены в lib/jobs.ts (NB-4); реэкспортируются выше.
 
 /** Мини-форма dead-джобы (структурное подмножество `DeadJob`). */
 export interface QueueDead {
@@ -119,22 +110,6 @@ export interface QueueDead {
   lastError: string | null;
   /** Unix-СЕКУНДЫ (как в `DeadJob`). */
   updatedAt: number;
-}
-
-/**
- * NB-1 (CRITICAL-1/2): выбирает из очереди джобу ТЕКУЩЕГО прогона новостей, отфильтровывая
- * «завтрашнюю» recurring-pending (у неё run_at в будущем). Семантика зеркалит Rust `has_ready_job`:
- * `running` ИЛИ `pending` с наступившим (± ближайший опрос) `run_at`. Если прогон уже отслеживается
- * (`trackedId`), держимся ЕГО id — так ретрай-бэкофф (pending с run_at в будущем) не теряется.
- */
-export function selectCurrentRun(
-  active: QueueJob[],
-  trackedId: number | null,
-  now: number,
-): QueueJob | undefined {
-  const news = active.filter((j) => j.kind === 'newsfeed');
-  if (trackedId !== null) return news.find((j) => j.id === trackedId);
-  return news.find((j) => j.state === 'running' || j.runAt * 1000 <= now + CURRENT_RUN_SLACK_MS);
 }
 
 /**

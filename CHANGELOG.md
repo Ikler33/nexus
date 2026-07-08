@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### Исправлено · NB-4 — `is_kind_busy`-футган в digest/contradictions (вечный «Генерирую…»/«Ищу…»)
+
+Диагноз: `digest` и `contradictions` — recurring-kinds (DAY_SECS = 86400 с). После каждого
+успешного или неудачного прогона воркер сразу ставит следующий `pending` «на завтра»
+(`reschedule_if_absent`, scheduler.rs). `jobActive(kind)` (Rust `is_kind_busy`) считал и эту
+«завтрашнюю» джобу «занятой» → в `load()` условие `!jobActive` никогда не срабатывало при
+сбое → `generating` оставался `true` вечно (спиннер кнопки не гас).
+
+Аналогичный класс бага был у `newsfeed` — исправлен в NB-1 (`selectCurrentRun` / ready-семантика).
+
+- **`lib/jobs.ts` (новый общий модуль):** `isJobReady(kind, active, now)` — ready-семантика,
+  зеркало Rust `has_ready_job`: `running` ИЛИ `pending` с наступившим `run_at` (± 5 с слак).
+  «Завтрашняя» recurring-pending (`run_at + 86400`) фильтр не проходит.
+  Также сюда перемещены из `stores/news.ts`: `QueueJob` interface, `selectCurrentRun` (backward
+  compat: обе реэкспортируются из `news.ts`).
+- **`stores/digest.ts`:** `jobActive('digest')` → `activeJobs()` + `isJobReady('digest', …)`.
+- **`stores/contradictions.ts`:** `jobActive('contradictions')` → `activeJobs()` + `isJobReady('contradictions', …)`.
+- **Тесты (регрессионные, по образцу NB-1):**
+  - `lib/jobs.test.ts`: `isJobReady` (8 кейсов) + `selectCurrentRun` (5 кейсов).
+  - `stores/digest.test.ts`: 5 кейсов, в т.ч. КРИТИЧЕСКИЙ «steady state → generating=false».
+  - `stores/contradictions.test.ts`: 6 кейсов, в т.ч. КРИТИЧЕСКИЙ + кейс `baseline=null`.
+- **Rust не тронут** (Tauri-команды без изменений; фикс — исключительно фронтовой).
+- Гейт: `tsc`, `eslint`, `vitest` — зелёные.
+
 ### Изменено · F-12 — «AI-панель» (chat) вырезана из ядра в модуль (ФИНАЛ модуляризации фронта)
 
 Последний вырез серии F (13-й и финальный модуль): панель Чат/Castor (`components/chat/AiPanel`)

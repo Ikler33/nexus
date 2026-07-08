@@ -2,12 +2,19 @@ import { create } from 'zustand';
 
 import type { Digest } from '../lib/tauri-api';
 import { tauriApi } from '../lib/tauri-api';
+import { isJobReady } from '../lib/jobs';
 
 /**
  * «Дайджест изменений» (#35, ADR-007 slice 4): последний LLM-дайджест недавно изменённых заметок.
  * Генерация асинхронна (джоба планировщика): `generate()` ставит её в очередь, а готовый результат
  * прилетает через `load()` по событию `jobs:changed` (см. App). `generating` снимается, когда из БД
  * приходит дайджест свежее того, что был на момент клика (baseline).
+ *
+ * ⚠️ NB-4: `digest` — recurring-kind (раз/сутки). После завершения прогона воркер НЕМЕДЛЕННО
+ * ставит следующий `pending` «на завтра» (reschedule_if_absent). Поэтому `jobActive('digest')`
+ * (Rust `is_kind_busy`) в steady state всегда возвращал `true` → вечный «Генерирую…» при сбое.
+ * Фикс: `isJobReady` (ready-семантика, зеркало Rust `has_ready_job`) — только running/pending
+ * с наступившим run_at считается текущим прогоном.
  */
 interface DigestState {
   latest: Digest | null;
@@ -38,9 +45,11 @@ export const useDigestStore = create<DigestState>((set, get) => ({
       let stillGenerating = generating;
       if (generating) {
         const gotNew = latest != null && latest.createdAt !== baseline;
-        // Завершилось: либо пришёл свежий дайджест, либо джоба больше не активна (упала/таймаут/no-op)
-        // — гасим «Генерирю…», чтобы кнопка не висела вечно при сбое (а не только при успехе).
-        if (gotNew || !(await tauriApi.scheduler.jobActive('digest'))) stillGenerating = false;
+        // Завершилось: либо пришёл свежий дайджест, либо нет ГОТОВОЙ джобы (running/pending с
+        // наступившим run_at) — гасим «Генерирую…», чтобы кнопка не висела вечно при сбое.
+        // NB-4: НЕ jobActive — он считает и «завтрашнюю» recurring-pending «занятой» → вечный спиннер.
+        const activeList = await tauriApi.scheduler.activeJobs();
+        if (gotNew || !isJobReady('digest', activeList, Date.now())) stillGenerating = false;
       }
       set({ latest, loading: false, generating: stillGenerating });
     } catch {
