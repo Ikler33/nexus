@@ -48,6 +48,13 @@ fn parse_xml(
     };
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(false);
+    // Голый `&` (без `;`) в тексте — норма для неряшливых RSS (URL с `?x=1&y=2`, «News & Views»
+    // на уровне канала). quick-xml ≥0.38 валидирует ссылки-на-сущности во ВСЕХ text-узлах уже на
+    // read_event (0.37 сканил только при unescape() захватываемых полей item'а) — без флага такой фид
+    // умирал бы ЦЕЛИКОМ (IllFormed(UnclosedReference)). С флагом голый `&` приходит обычным
+    // Text-событием с литеральным `&`. Осознанное улучшение availability vs 0.37: до миграции
+    // сырой `&` в захватываемом поле тоже ронял фид (см. пин-тест + CHANGELOG).
+    reader.config_mut().allow_dangling_amp = true;
 
     let mut out = Vec::new();
     let mut in_item = false;
@@ -106,9 +113,13 @@ fn parse_xml(
             // Сущность внутри активного поля (`&amp;` в url Хабра, `&lt;`/`&gt;` в escaped-HTML
             // Atom-контента и т.п.): quick-xml ≥0.38 отдаёт её отдельным событием с ИМЕНЕМ
             // сущности (без `&`/`;`). Восстанавливаем `&name;` и декодируем ТЕМ ЖЕ
-            // `decode_entities`, что и остальной конвейер выжимки — поле (title/link/date/desc)
-            // получается идентичным доминграционному `unescape()` (semantics-preserving,
-            // предопределённые lt/gt/amp/quot/apos + числовые; неизвестные остаются как есть).
+            // `decode_entities`, что и остальной конвейер выжимки. Семантика vs 0.37-`unescape()`:
+            // на ВАЛИДНЫХ предопределённых (lt/gt/amp/quot/apos) и числовых сущностях итог
+            // идентичен; НЕВАЛИДНЫЕ по XML, ронявшие до миграции ВЕСЬ фид ошибкой парсинга,
+            // теперь мягко проходят правилами выжимки (`&unknown;`/out-of-range — литералом,
+            // `&nbsp;` — пробелом, `&#X26;` — декодом) — осознанный availability-выигрыш,
+            // см. пин-тест. `&#0;`/`&#x0;` (NUL) decode_entities отвергает литералом (до
+            // миграции NUL в полях был недостижим — unescape() его отвергал; сохраняем).
             Ok(Event::GeneralRef(r)) => {
                 if let Some(f) = field {
                     let name = r.decode().map_err(|e| NewsError::Parse(e.to_string()))?;
@@ -345,7 +356,11 @@ pub(crate) fn decode_entities(s: &str) -> String {
                 .or_else(|| ent.strip_prefix("#X"))
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
                 .or_else(|| ent.strip_prefix('#').and_then(|d| d.parse().ok()))
-                .and_then(char::from_u32),
+                .and_then(char::from_u32)
+                // NUL отвергаем (→ литерал `&#0;`, как невалидные): XML запрещает `&#0;`, а с
+                // миграцией на quick-xml 0.41 эта ветка стала достижима для ПОЛЕЙ фида, включая
+                // url (GeneralRef-arm parse_xml); до миграции unescape() отвергал NUL целиком.
+                .filter(|&c| c != '\0'),
         };
         match decoded {
             Some(c) => {
@@ -633,5 +648,59 @@ mod tests {
         // `&lt;p&gt;…&lt;/p&gt;` → `<p>…</p>` (снят тегами); `&amp;amp;`→`&amp;`→`&`;
         // `&amp;lt;ok&amp;gt;`→`&lt;ok&gt;`→строка «<ok>» (второй слой энтити выжимки).
         assert_eq!(a[0].excerpt, "A & B <ok>");
+
+        // Числовые char-ref'ы в text-узле тоже приходят GeneralRef'ом ("#38"/"#x26") и
+        // декодируются как при 0.37-unescape(); `&unknown;` — литералом (см. ниже).
+        let num = r#"<rss><channel><item>
+            <title>A &#38; B &#x26; C</title>
+            <link>https://e.com/n</link>
+        </item></channel></rss>"#;
+        let e = parse_feed(FeedKind::Rss, "s", num).unwrap();
+        assert_eq!(e[0].title, "A & B & C", "числовые dec/hex развёрнуты");
+    }
+
+    /// Пин availability-семантики quick-xml 0.41 (осознанные УЛУЧШЕНИЯ vs 0.37, не тихий дрейф):
+    /// (1) голый `&` (без `;`) где угодно — channel-уровень, значение captured-поля, сырой
+    /// URL с `?x=1&y=2` — больше НЕ роняет фид целиком (`allow_dangling_amp=true`; в 0.37
+    /// сырой `&` внутри захватываемого поля тоже был фатален — unescape() падал);
+    /// (2) неизвестная сущность `&unknown;` в поле — литералом, фид жив (в 0.37 — фатально).
+    #[test]
+    fn dangling_amp_and_unknown_entities_keep_feed_alive() {
+        let rss = r#"<rss><channel>
+            <title>News & Views</title>
+            <category>AI & ML</category>
+            <item>
+                <title>Q &unknown; A & B</title>
+                <link>https://e.com/a?x=1&y=2</link>
+                <pubDate>Tue, 10 Jun 2026 08:00:00 GMT</pubDate>
+            </item>
+        </channel></rss>"#;
+        let e = parse_feed(FeedKind::Rss, "s", rss).unwrap();
+        assert_eq!(e.len(), 1, "фид с голыми & жив целиком");
+        assert_eq!(
+            e[0].url, "https://e.com/a?x=1&y=2",
+            "сырой & в url — литералом (до миграции РОНЯЛ фид)"
+        );
+        assert_eq!(
+            e[0].title, "Q &unknown; A & B",
+            "unknown-сущность и голый & — литералами, без потери текста"
+        );
+    }
+
+    /// `&#0;`/`&#x0;` (NUL): decode_entities отвергает литералом — NUL не должен попадать в
+    /// поля записи (включая url), как и до миграции (0.37-unescape() отвергал NUL фатально;
+    /// теперь — мягкий литерал, содержимое поля без управляющего символа).
+    #[test]
+    fn nul_char_refs_are_rejected_as_literals() {
+        assert_eq!(decode_entities("a&#0;b"), "a&#0;b", "dec NUL — литерал");
+        assert_eq!(decode_entities("a&#x0;b"), "a&#x0;b", "hex NUL — литерал");
+        // Достижимость через поля фида (GeneralRef-arm): NUL-байта в url нет.
+        let rss = r#"<rss><channel><item>
+            <title>T</title>
+            <link>https://e.com/p&#0;q</link>
+        </item></channel></rss>"#;
+        let e = parse_feed(FeedKind::Rss, "s", rss).unwrap();
+        assert!(!e[0].url.contains('\0'), "NUL не просочился в url");
+        assert_eq!(e[0].url, "https://e.com/p&#0;q");
     }
 }

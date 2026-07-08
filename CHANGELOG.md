@@ -8,20 +8,38 @@
 
 ### Безопасность · Закрытие RUSTSEC-долга (quick-xml 0.41, crossbeam-epoch 0.9.20)
 
-**Файлы:** `Cargo.toml`, `Cargo.lock`, `deny.toml`, `apps/desktop/src-tauri/src/news/parse.rs`
+**Файлы:** `Cargo.toml`, `Cargo.lock`, `deny.toml`, `apps/desktop/src-tauri/src/news/parse.rs`,
+`apps/desktop/src-tauri/src/news/fetch.rs` (попутный фикс комментариев body-cap 2→4 МБ)
 
 **RUSTSEC-2026-0194/0195 (quick-xml < 0.41 — DoS: O(N²)-атрибуты / неограниченная память xmlns).**
 Прямой путь закрыт: `nexus-desktop` мигрирован с quick-xml 0.37 на **0.41**. API-брейки и починка
-(semantics-preserving, экспозиция — парсинг УДАЛЁННЫХ RSS/Atom):
+(semantics-preserving на валидном входе, экспозиция — парсинг УДАЛЁННЫХ RSS/Atom):
 - **Text-события больше не разворачивают сущности** (breaking с 0.38): `&amp;`/`&lt;`/… приходят
   отдельными `Event::GeneralRef`. Добавлен GeneralRef-arm: имя сущности восстанавливается в `&name;`
-  и декодируется тем же `decode_entities`, что и остальной конвейер выжимки → поле (title/link/desc)
-  собирается байт-в-байт как раньше при `unescape()`. `Event::Text` → `t.decode()` (только charset).
+  и декодируется тем же `decode_entities`, что и остальной конвейер выжимки. Семантика: на ВАЛИДНЫХ
+  предопределённых (lt/gt/amp/quot/apos) и числовых сущностях итог идентичен доминграционному
+  `unescape()`; невалидные по XML (`&unknown;`, `&nbsp;`, `&#X26;`, out-of-range), ронявшие до
+  миграции ВЕСЬ фид ошибкой парсинга, теперь мягко проходят правилами выжимки
+  (литерал/пробел/декод соответственно) — **осознанный availability-выигрыш**, не тихий дрейф.
+  `Event::Text` → `t.decode()` (только charset).
+- **Голый `&` (без `;`) больше не фатален для фида** — `allow_dangling_amp = true`: quick-xml ≥0.38
+  валидирует ссылки-на-сущности во ВСЕХ text-узлах уже на read_event (0.37 — только при
+  `unescape()` захватываемых полей item'а) → без флага неряшливый реальный RSS (channel-level
+  `<title>News & Views</title>`, `<category>AI & ML</category>`, сырой `&` в guid/link-URL)
+  умирал бы целиком. С флагом голый `&` идёт литеральным текстом. Осознанное УЛУЧШЕНИЕ
+  availability: до миграции сырой `&` в захватываемом поле (`<link>a?x=1&y=2</link>`) тоже
+  РОНЯЛ фид — теперь парсится (пин-тест).
+- **`&#0;`/`&#x0;` (NUL) отвергаются в `decode_entities`** (проходят литералом, как невалидные):
+  с миграцией числовая ветка стала достижима для полей записи, включая url (до миграции
+  `unescape()` отвергал NUL фатально — NUL в полях был недостижим; свойство сохранено, но мягко).
+  Функция общая с `html_to_text`/`news::article` — их тесты прошли без изменений поведения.
 - `Attribute::unescape_value()` (deprecated в 0.40) → `normalized_value(XmlVersion::Implicit1_0)`
   (XML 1.0 — фиды; для href/rel без внутренних пробелов итог тот же).
 - `config_mut().trim_text(false)` и `BytesCData::into_inner()` — без изменений.
-- Тесты `news/parse.rs` зелёные **без правок ассертов**; добавлен регресс-тест
-  `entities_in_text_nodes_decode_like_pre_migration` (пин GeneralRef-семантики в url и escaped-HTML).
+- Тесты `news/parse.rs` зелёные **без правок ассертов**; добавлены регресс-тесты:
+  `entities_in_text_nodes_decode_like_pre_migration` (GeneralRef-семантика в url/escaped-HTML +
+  числовые `&#38;`/`&#x26;`), `dangling_amp_and_unknown_entities_keep_feed_alive` (голый `&`
+  везде + `&unknown;` — фид жив), `nul_char_refs_are_rejected_as_literals` (NUL не в полях).
 - Транзитивная quick-xml **0.39.4 через plist ← tauri 2.11.2 ОСТАЁТСЯ** (локальные .plist, не удалённый
   XML) — ignore сужен до этого пути, ждём апстрим-бамп tauri.
 
@@ -31,7 +49,7 @@ rayon ← tokenizers; `cargo update -p crossbeam-epoch` → **0.9.20** (patched 
 
 **deny.toml:** снят ignore 0204; 0194/0195 оставлены с уточнёнными (transitive-only) комментариями.
 **Гейт:** `cargo deny check` ✓ (advisories/bans/licenses/sources ok) · `cargo fmt --all --check` ✓ ·
-`cargo clippy --workspace --all-targets -D warnings` ✓ · `cargo test --workspace` ✓ (news 59/59, из них
+`cargo clippy --workspace --all-targets -D warnings` ✓ · `cargo test --workspace` ✓ (news 61/61, из них
 e2e-пайплайн; 1 ignored = live-LLM). Cargo.lock-дифф: только crossbeam-epoch 0.9.18→0.9.20 и
 quick-xml 0.37.5→0.41.0 (транзитивная 0.39.4 сохранена).
 
