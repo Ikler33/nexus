@@ -17,21 +17,16 @@ yanked = "deny"
 unmaintained = "workspace"
 # Точечные исключения известных адвизори — добавлять ТОЛЬКО с обоснованием (no silent caps).
 # RUSTSEC-2026-0194/0195 (quick-xml < 0.41: O(N²)-атрибуты / неограниченная память xmlns — DoS-класс).
-# Два пути в дереве: (1) ПРЯМАЯ quick-xml 0.37.5 в nexus-desktop (news/parse.rs, парсит УДАЛЁННЫЕ
-# RSS/Atom — экспозиция реальная, но ограничена DoS'ом и size-капами net-слоя) → чинится миграцией
-# на 0.41 ОТДЕЛЬНЫМ срезом, задача в BACKLOG (снять ignore при мерже миграции); (2) транзитивная
-# 0.39.4 через plist←tauri 2.11.2 (локальные plist, риск минимальный) → ждём апстрим-бампа tauri.
-# Ignore временный и осознанный: разблокирует CI (упал бы на любом PR после публикации адвизори
-# 2026-07-02), НЕ отменяет фикс.
-# RUSTSEC-2026-0204 (crossbeam-epoch: invalid pointer deref в `fmt::Pointer` impl для Atomic/Shared,
-# только при Debug-форматировании УЖЕ невалидного указателя — мы такого не делаем). Глубоко транзитивная:
-# crossbeam-epoch←crossbeam-deque←rayon-core←rayon←rayon-cond←tokenizers←nexus-core (токенизатор эмбеддингов),
-# вне нашего контроля — ждём апстрим-бампа rayon/crossbeam. Опубликовано ~2026-07-07, падает любой PR (как
-# quick-xml ранее). Ignore временный/осознанный (снять при бампе rayon); задача в BACKLOG.
+# ПРЯМОЙ путь ЗАКРЫТ: nexus-desktop мигрирован на quick-xml 0.41 (news/parse.rs — сущности теперь
+# приходят Event::GeneralRef, семантика парсинга RSS/Atom сохранена; см. CHANGELOG). ОСТАЁТСЯ ТОЛЬКО
+# транзитивная quick-xml 0.39.4 через plist v1.9.0 ← tauri 2.11.2 (`cargo tree -p quick-xml@0.39.4 -i`):
+# tauri парсит локальные .plist (Info.plist сборки/бандла), НЕ удалённый недоверенный XML — экспозиция
+# DoS минимальна. Своего кода на этом пути нет — ждём апстрим-бампа plist/tauri на quick-xml 0.41.
+# Ignore узкий/осознанный, снять при апстрим-бампе tauri. Проверено 2026-07-09 (advisory всё ещё
+# срабатывает только на 0.39.4; на 0.41 — нет).
 ignore = [
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml<0.41 DoS; прямой путь чинится миграцией на 0.41 (BACKLOG), транзитивный plist←tauri ждёт апстрим" },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml<0.41 DoS; прямой путь чинится миграцией на 0.41 (BACKLOG), транзитивный plist←tauri ждёт апстрим" },
-    { id = "RUSTSEC-2026-0204", reason = "crossbeam-epoch fmt::Pointer invalid-deref (Debug-only edge); транзитивная rayon←tokenizers, ждём апстрим-бамп (BACKLOG); экспозиция минимальна" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml<0.41 DoS; прямой путь закрыт (мигрирован на 0.41); остаётся ТОЛЬКО транзитивная 0.39.4 via plist←tauri (локальные plist) — ждём апстрим-бамп tauri. Проверено 2026-07-09" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml<0.41 DoS; прямой путь закрыт (мигрирован на 0.41); остаётся ТОЛЬКО транзитивная 0.39.4 via plist←tauri (локальные plist) — ждём апстрим-бамп tauri. Проверено 2026-07-09" },
 ]
 
 [licenses]

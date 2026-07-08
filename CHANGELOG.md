@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+### Безопасность · Закрытие RUSTSEC-долга (quick-xml 0.41, crossbeam-epoch 0.9.20)
+
+**Файлы:** `Cargo.toml`, `Cargo.lock`, `deny.toml`, `apps/desktop/src-tauri/src/news/parse.rs`
+
+**RUSTSEC-2026-0194/0195 (quick-xml < 0.41 — DoS: O(N²)-атрибуты / неограниченная память xmlns).**
+Прямой путь закрыт: `nexus-desktop` мигрирован с quick-xml 0.37 на **0.41**. API-брейки и починка
+(semantics-preserving, экспозиция — парсинг УДАЛЁННЫХ RSS/Atom):
+- **Text-события больше не разворачивают сущности** (breaking с 0.38): `&amp;`/`&lt;`/… приходят
+  отдельными `Event::GeneralRef`. Добавлен GeneralRef-arm: имя сущности восстанавливается в `&name;`
+  и декодируется тем же `decode_entities`, что и остальной конвейер выжимки → поле (title/link/desc)
+  собирается байт-в-байт как раньше при `unescape()`. `Event::Text` → `t.decode()` (только charset).
+- `Attribute::unescape_value()` (deprecated в 0.40) → `normalized_value(XmlVersion::Implicit1_0)`
+  (XML 1.0 — фиды; для href/rel без внутренних пробелов итог тот же).
+- `config_mut().trim_text(false)` и `BytesCData::into_inner()` — без изменений.
+- Тесты `news/parse.rs` зелёные **без правок ассертов**; добавлен регресс-тест
+  `entities_in_text_nodes_decode_like_pre_migration` (пин GeneralRef-семантики в url и escaped-HTML).
+- Транзитивная quick-xml **0.39.4 через plist ← tauri 2.11.2 ОСТАЁТСЯ** (локальные .plist, не удалённый
+  XML) — ignore сужен до этого пути, ждём апстрим-бамп tauri.
+
+**RUSTSEC-2026-0204 (crossbeam-epoch — invalid pointer deref в `fmt::Pointer`).** Транзитивная
+rayon ← tokenizers; `cargo update -p crossbeam-epoch` → **0.9.20** (patched `>= 0.9.20`). Advisory
+ушла, ignore снят.
+
+**deny.toml:** снят ignore 0204; 0194/0195 оставлены с уточнёнными (transitive-only) комментариями.
+**Гейт:** `cargo deny check` ✓ (advisories/bans/licenses/sources ok) · `cargo fmt --all --check` ✓ ·
+`cargo clippy --workspace --all-targets -D warnings` ✓ · `cargo test --workspace` ✓ (news 59/59, из них
+e2e-пайплайн; 1 ignored = live-LLM). Cargo.lock-дифф: только crossbeam-epoch 0.9.18→0.9.20 и
+quick-xml 0.37.5→0.41.0 (транзитивная 0.39.4 сохранена).
+
+---
+
 ### Исправлено · Анти-флейк GroupPane.test.tsx — 2-й заход (режим отказа иной чем #499)
 
 **Файл:** `apps/desktop/src/components/workspace/GroupPane.test.tsx`

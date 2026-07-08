@@ -95,7 +95,24 @@ fn parse_xml(
             }
             Ok(Event::Text(t)) => {
                 if let Some(f) = field {
-                    let s = t.unescape().map_err(|e| NewsError::Parse(e.to_string()))?;
+                    // quick-xml ≥0.38 не разворачивает сущности внутри Text — только декодирует
+                    // байты (здесь UTF-8, вход `from_str`). Сами сущности приходят отдельными
+                    // GeneralRef-событиями (ниже), так что поле собирается тем же итогом, что
+                    // давал `unescape()` до миграции.
+                    let s = t.decode().map_err(|e| NewsError::Parse(e.to_string()))?;
+                    push_field(f, &s, &mut title, &mut link, &mut date, &mut desc);
+                }
+            }
+            // Сущность внутри активного поля (`&amp;` в url Хабра, `&lt;`/`&gt;` в escaped-HTML
+            // Atom-контента и т.п.): quick-xml ≥0.38 отдаёт её отдельным событием с ИМЕНЕМ
+            // сущности (без `&`/`;`). Восстанавливаем `&name;` и декодируем ТЕМ ЖЕ
+            // `decode_entities`, что и остальной конвейер выжимки — поле (title/link/date/desc)
+            // получается идентичным доминграционному `unescape()` (semantics-preserving,
+            // предопределённые lt/gt/amp/quot/apos + числовые; неизвестные остаются как есть).
+            Ok(Event::GeneralRef(r)) => {
+                if let Some(f) = field {
+                    let name = r.decode().map_err(|e| NewsError::Parse(e.to_string()))?;
+                    let s = decode_entities(&format!("&{name};"));
                     push_field(f, &s, &mut title, &mut link, &mut date, &mut desc);
                 }
             }
@@ -170,7 +187,14 @@ fn attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.as_ref() == key)
-        .and_then(|a| a.unescape_value().ok().map(|v| v.into_owned()))
+        // 0.40 переименовал `unescape_value` → `normalized_value(version)` (XML attr-value
+        // normalization; для href/rel-значений без внутренних пробелов итог тот же). Фиды —
+        // XML 1.0 (`Implicit1_0` = дефолт); значения атрибутов у нас UTF-8 из `from_str`.
+        .and_then(|a| {
+            a.normalized_value(quick_xml::XmlVersion::default())
+                .ok()
+                .map(|v| v.into_owned())
+        })
 }
 
 // ── JSON (HF daily_papers / HN Algolia) ──────────────────────────────────────────────────────
@@ -577,5 +601,37 @@ mod tests {
         let long = html_to_text(&"я".repeat(600), 10);
         assert_eq!(long.chars().count(), 11, "10 символов + многоточие");
         assert!(long.ends_with('…'));
+    }
+
+    /// Регресс миграции quick-xml 0.41 (сущности в Text → отдельные `GeneralRef`): сущность
+    /// внутри НЕ-CDATA поля должна разворачиваться байт-в-байт как раньше. `&amp;` в `<link>`
+    /// RSS даёт литеральный `&` в url (не `&amp;`, не «склейку» с потерей символа), а
+    /// escaped-HTML в Atom-`<content>` — декодируется и чистится в plain-text выжимку.
+    #[test]
+    fn entities_in_text_nodes_decode_like_pre_migration() {
+        let rss = r#"<rss><channel><item>
+            <title>T&amp;C</title>
+            <link>https://e.com/a?x=1&amp;y=2&amp;z=3</link>
+            <pubDate>Tue, 10 Jun 2026 08:00:00 GMT</pubDate>
+        </item></channel></rss>"#;
+        let e = parse_feed(FeedKind::Rss, "s", rss).unwrap();
+        assert_eq!(
+            e[0].url, "https://e.com/a?x=1&y=2&z=3",
+            "amp в url развёрнут"
+        );
+        assert_eq!(e[0].title, "T&C", "amp в заголовке развёрнут");
+
+        let atom = concat!(
+            "<feed><entry><title>R</title>",
+            "<link href=\"https://e.com/x?a=1&amp;b=2\" rel=\"alternate\"/>",
+            "<updated>2026-06-10T08:00:00Z</updated>",
+            "<content type=\"html\">&lt;p&gt;A &amp;amp; B &amp;lt;ok&amp;gt;&lt;/p&gt;</content>",
+            "</entry></feed>"
+        );
+        let a = parse_feed(FeedKind::Atom, "s", atom).unwrap();
+        assert_eq!(a[0].url, "https://e.com/x?a=1&b=2", "amp в href развёрнут");
+        // `&lt;p&gt;…&lt;/p&gt;` → `<p>…</p>` (снят тегами); `&amp;amp;`→`&amp;`→`&`;
+        // `&amp;lt;ok&amp;gt;`→`&lt;ok&gt;`→строка «<ok>» (второй слой энтити выжимки).
+        assert_eq!(a[0].excerpt, "A & B <ok>");
     }
 }
