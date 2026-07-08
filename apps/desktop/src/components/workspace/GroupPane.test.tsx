@@ -132,8 +132,15 @@ describe('GroupPane jumpToHeading expand-then-scroll (S6-FIX2)', () => {
   const SRC = '## Раздел\n\n### Под\n\nтекст внутри';
 
   // jsdom не реализует scrollIntoView — ставим no-op стуб на прототип, чтобы его можно было шпионить.
+  // vi.useRealTimers() в beforeEach/afterEach — защита от утечки fake timers из других файлов:
+  // vitest запускает несколько файлов в одном воркере, и если предыдущий файл не отменил
+  // vi.useFakeTimers(), screen.findByRole (RTL-поллер на реальном setInterval) виснет.
   beforeEach(() => {
     if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
+    vi.useRealTimers(); // сброс утечших fake timers
+  });
+  afterEach(() => {
+    vi.useRealTimers(); // гарантия очистки, если тест кинул исключение до finally{}
   });
 
   // Открыть markdown-вкладку в режиме preview; дождаться ленивого MarkdownPreview.
@@ -158,19 +165,26 @@ describe('GroupPane jumpToHeading expand-then-scroll (S6-FIX2)', () => {
 
   it('цель в свёрнутой секции → scrollIntoView ОТЛОЖЕН до transitionend(grid-template-rows)', async () => {
     await setup();
-    // FLAKE-ФИКС (CI 2026-07-04): с реальными таймерами 350мс-фолбэк revealLine мог выстрелить на
-    // медленном раннере ДО ассерта «ещё не вызван» (окно между кликом и expect не ограничено).
-    // Fake timers дают детерминизм: rAF в jsdom реализован через setTimeout(16) и тоже фейковый —
-    // кадры и фолбэк двигаем ЯВНО. useRealTimers — в finally (иначе утечёт в соседние тесты).
+    const scrollSpy = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
+
+    // ANTI-FLAKE 2-й заход (CI 2026-07-07): новый режим отказа, иной чем #499.
+    // Суть: React 19 шедулит setState через MessageChannel (macrotask). Под нагрузкой
+    // (3× parallel CI) MessageChannel callback задерживается; act(async) и vi.waitFor
+    // ненадёжны под fake timers: MessageChannel не перехватывается заменой setTimeout.
+    //
+    // Фикс: сворачивание выполняется с РЕАЛЬНЫМИ таймерами; ждём коммита через
+    // screen.findByRole (RTL-поллер: реальный setInterval, timeout 1000мс, надёжен
+    // под любой нагрузкой). ПОСЛЕ того как DOM содержит «Развернуть секцию» (=collapsed),
+    // переключаемся на fake timers — они управляют только jumpToHeading (rAF + 350мс-фолбэк).
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
+    // «Развернуть секцию» — aria-label кнопки шеврона при collapsed=true.
+    await screen.findByRole('button', { name: 'Развернуть секцию' });
     vi.useFakeTimers();
     try {
-      const scrollSpy = vi.fn();
-      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
-      // Свернём секцию кликом по h2.
-      fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 }));
       // Прыжок к вложенному h3 «Под» (строка 3, скрыта в свёрнутом теле).
       clickOutline(/Под/);
-      // Первый кадр (rAF ≈ setTimeout(16)): scrollIntoView ещё НЕ вызван (ждём анимацию раскрытия).
+      // Первый кадр (rAF = fake setTimeout(0)): scrollIntoView ещё НЕ вызван (ждём анимацию раскрытия).
       act(() => {
         vi.advanceTimersByTime(20);
       });
@@ -209,21 +223,15 @@ describe('GroupPane jumpToHeading expand-then-scroll (S6-FIX2)', () => {
   });
 
   it('фолбэк-таймер: если transitionend не пришёл, scrollIntoView всё равно срабатывает (~350мс)', async () => {
+    await setup();
+    const scrollSpy = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
+
+    // Сворачиваем с реальными таймерами; ждём коммита через findByRole (надёжно под нагрузкой).
+    fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 })); // свернуть
+    await screen.findByRole('button', { name: 'Развернуть секцию' });
     vi.useFakeTimers();
     try {
-      vi.spyOn(tauriApi.vault, 'fileMtime').mockResolvedValue(0);
-      useWorkspaceStore.setState({
-        groups: [{ id: 'g0', tabs: ['A.md'], activeTab: 'A.md' }],
-        activeGroupId: 'g0',
-        buffers: { 'A.md': { path: 'A.md', doc: SRC, dirty: false, baseHash: '' } },
-        modes: { g0: 'preview' },
-      });
-      render(<GroupPane groupId="g0" />);
-      // Прокрутить микротаски/таймеры для резолва ленивого чанка.
-      await vi.waitFor(() => screen.getByRole('heading', { name: /Раздел/, level: 2 }));
-      const scrollSpy = vi.fn();
-      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scrollSpy);
-      fireEvent.click(screen.getByRole('heading', { name: /Раздел/, level: 2 })); // свернуть
       clickOutline(/Под/);
       // Прогнать rAF + фолбэк-таймер (transitionend НЕ диспатчим).
       act(() => {

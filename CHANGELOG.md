@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### Исправлено · Анти-флейк GroupPane.test.tsx — 2-й заход (режим отказа иной чем #499)
+
+**Файл:** `apps/desktop/src/components/workspace/GroupPane.test.tsx`
+**Контекст:** Тест `цель в свёрнутой секции → scrollIntoView ОТЛОЖЕН до transitionend` флейковал в CI
+на PR-ах без отношения к GroupPane (Rust-only диффы). Первый фикс (#499, коммит 91cfd2f) закрыл
+режим «350мс-фолбэк на медленном раннере»; семейство выжило.
+
+**Диагноз нового режима:** React 19 шедулит `setState` (`setCollapsedSecs` в `revealLine`) через
+`MessageChannel` (macrotask). В тест-коде два `fireEvent.click` шли подряд без барьера: клик по h2
+→ `toggle(secId)` → setState в очередь → клик по элементу оглавления → `jumpToHeading` →
+`revealLine` читает DOM. Коммит React не успевал: `section.classList.contains(.collapsed)` → `false`,
+`revealLine` возвращал `false`, брал немедленный путь `requestAnimationFrame(doScroll)`. С fake timers
+(rAF = setTimeout(0)) `vi.advanceTimersByTime(20)` стрелял `doScroll` → `scrollSpy` вызывался 1 раз
+→ `expect(scrollSpy).not.toHaveBeenCalled()` FAIL.
+
+Дополнительный режим под нагрузкой: другие файлы в том же vitest-воркере не отменяли
+`vi.useFakeTimers()` → `setInterval` (RTL-поллер `findByRole`) становился fake → setup-ожидание
+MarkdownPreview зависало.
+
+**Фиксы (только тест, компонент не тронут):**
+1. `describe`-уровень: `beforeEach/afterEach` с `vi.useRealTimers()` — защита от leaked fake timers
+   из других файлов (RTL нуждается в реальном `setInterval`).
+2. Тесты 1 и 3 (collapse-path): `fireEvent.click(h2)` + `await screen.findByRole('button', {name:'Развернуть секцию'})` перед `vi.useFakeTimers()` — RTL-поллер на реальных таймерах гарантирует,
+   что `.collapsed` в DOM до того, как `revealLine` читает classList.
+3. Тест 2 (expanded-path): без изменений (реальный rAF, нет collapse-race).
+4. Fake timers (`vi.useFakeTimers()`) остаются только для фазы jumpToHeading (rAF + 350мс-фолбэк)
+   с `try/finally` cleanup.
+
+**Гейт:** tsc ✓ / eslint ✓ / vitest 1471/1471 × 3 последовательных, 50× изолированный, 2× параллельный — 0 FAIL.
+
+---
+
 ### Изменено · R-13d — вынос `mod tests` net/mod.rs → `net/tests.rs` (byte-identical, 1522→658)
 
 **ФИНАЛ волны R-13** (после a: job 2011→446, b: skills 1866→796, c: exec_host 1530→764 — все APPROVE).
