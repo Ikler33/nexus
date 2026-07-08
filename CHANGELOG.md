@@ -38,6 +38,51 @@ MarkdownPreview зависало.
 
 ---
 
+### Изменено · R-13e — вынос `mod tests` acp/server.rs → `acp/server/tests.rs` (byte-identical, 1818→739)
+
+**Продолжение волны R-13** (после a: job 2011→446, b: skills 1866→796, c: exec_host 1530→764,
+d: net 1522→658 — все APPROVE). Thermo-смелл — `crates/nexus-core/src/agent/connect/acp/server.rs`
+1818 строк, **крупнейший файл после волны R-13a-d**; фасад ACP-**СЕРВЕРА** (`nexus acp`, ACP-2 merged
+ff5d74f): initialize/session.new/session.prompt поверх `run_agent_session`, `session/request_permission`
+к клиенту (fail-closed), default-OFF актуатор. **ЧИСТЫЙ move-only распил, поведение не меняется**
+(зеркалит R-13a/b/c/d): инлайн-`#[cfg(test)] mod tests` (1078 строк тела — 59% файла) вынесен в
+подмодуль `acp/server/tests.rs` (server.rs → каталог `server/` рядом), объявлен `#[cfg(test)] mod tests;`
+(конвенция `session/tests.rs`, `net/tests.rs`). Прод-код (строки 1–737: `AcpServerConfig`/`AcpSession`/
+`AcpServerState`, read-loop `serve_acp`/`handle_message`, drive-задача `drive_prompt`, форвардер
+`AcpForwarder` + мапперы `map_event_to_acp`/`acp_tool_kind_str`/`acp_plan_status`/`stopreason_from_outcome`,
+`AcpServerDecisionSource`/`proposal_to_permission_params`/`outcome_to_batch_decision`,
+`StdinStdoutTransport`) — **байт-в-байт неизменен** (diff прод-префикса пуст). Прод 739 строк < 1000 ⇒
+дальнейшее дробление на подмодули не требуется (стандарт серии).
+
+- **Fail-closed ACP-инварианты НЕ тронуты** (в байт-идентичном прод-префиксе — «by construction»):
+  (1) **default-OFF актуатор** — `actuator_enabled=false` ⇒ реестр записи пуст, `AcpServerDecisionSource`
+  не зовётся, эффект дефолтного `nexus acp` = только строка `agent_runs`; (2) **любой сбой решения по
+  `session/request_permission`** (send-fail / таймаут `PERMISSION_TIMEOUT=300s` / EOF-обрыв транспорта /
+  cancel / `Cancelled` / **неизвестная опция** / parse-miss) → `reject_all`, запись НЕ применяется;
+  (3) `--auto` авто-применяет ЛИШЬ Auto-тир (Confirm-тир и Auto-за-blast-cap идут в клиент); (4) второй
+  конкурентный `session/prompt` при активном → reject; (5) анти-DoS `MAX_PROMPT_BYTES=256 KiB` →
+  invalid_params; (6) PERM-id оффсет `1_000_000_000` (не пересекается с id клиента). Соответствующие тесты
+  (`permission_reject/cancelled/unknown_option/transport_close_*_rejects`, `auto_autonomy_applies_auto_tier_without_permission`,
+  `second_prompt_while_active_rejected`, `session_cancel_sets_flag_and_stops_turn`) — зелёные без правок ассертов.
+- **Доказательство move-only:** (1) `diff` прод-префикса (стр. 1–737) orig↔new — пуст; (2) round-trip
+  reindent: re-indent `acp/server/tests.rs` + обёртка `mod tests {…}` воспроизводит исходный тест-блок
+  (стр. 738–1818) **байт-в-байт** (проверено скриптом до `cargo fmt`); (3) единственное расхождение
+  dedent↔`rustfmt` = 2 whitespace-схлопа под 100 колонок после dedent (match-arm-гард
+  `RpcMessage::Request {…} if method == "session/request_permission" => {` и биндинг
+  `let provider: Arc<dyn ToolCapableProvider> = Arc::new(RecordingProvider {…});`) — канон fmt, не семантика;
+  (4) счётчики `#[test]`/`#[tokio::test]` = 9/18 (27) до и после; (5) pub-API прод-региона — 4 = 4,
+  grep-diff пуст (`AcpServerConfig`, поле `model`, `StdinStdoutTransport`, `StdinStdoutTransport::new`);
+  (6) в диффе только `acp/server.rs` (M) + `acp/server/tests.rs` (новый).
+- **Кандидаты дедупов (только в отчёт, НЕ трогал — скоуп move-only):** (a) `struct FakeProvider`
+  (FIFO-скриптованный fake `ToolCapableProvider`) дублируется в 4 тест-модулях —
+  `acp/server/tests.rs`, `agent/connect/client.rs`, `agent/connect/handler.rs`, `agent/session/tests.rs`;
+  (b) `async fn open_db() -> (TempDir, Database)` — идентичная сигнатура в тех же 4 модулях (+ иные вариации
+  в `search`/`vector`); оба — кандидаты в общий test-support-модуль ACP/agent (сливать осторожно: у
+  `FakeProvider` местами разнятся `model_id`/поведение потока).
+- Гейт: `cargo fmt --check` ✓ / `clippy --workspace --all-targets -D warnings` ✓ / `cargo test --workspace` ✓
+  (`acp::server::tests` 27/27; `acp_e2e` 1/1; `acp_server_e2e` 1/1); `#[ignore]`-литерал не вводился.
+  Размер: server.rs 1818→739, +server/tests.rs 1078.
+
 ### Изменено · R-13d — вынос `mod tests` net/mod.rs → `net/tests.rs` (byte-identical, 1522→658)
 
 **ФИНАЛ волны R-13** (после a: job 2011→446, b: skills 1866→796, c: exec_host 1530→764 — все APPROVE).
