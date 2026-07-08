@@ -379,14 +379,12 @@ mod tests {
     use crate::ai::{AiResult, ChatMessage};
     use crate::db::Database;
     use crate::net::RunCtx;
-    use std::collections::VecDeque;
-    use std::sync::Mutex as StdMutex;
     use std::time::Duration;
-    use tempfile::TempDir;
 
     use super::super::{channel_pair, dispatch, RpcMessage};
     use crate::agent::run_store::{STATUS_CANCELLED, STATUS_DONE, STATUS_ERROR};
     use crate::agent::runner::{BudgetKind, LoopOutcome};
+    use crate::agent::test_support::{open_db, FakeProvider};
 
     /// R-2 ХАРАКТЕРИЗАЦИЯ (фикстура «до/после» дедупа): полная таблица вариант → (статус, текст)
     /// ЭТОГО вызывателя (канон с параметрами хендлера: FinalizeError + «прогон отменён»), точным
@@ -440,44 +438,6 @@ mod tests {
                 "вариант: {outcome:?}"
             );
         }
-    }
-
-    /// Фейк tool-провайдер: скриптованная последовательность ходов (offline, как agent_loop_smoke).
-    struct FakeProvider {
-        turns: StdMutex<VecDeque<AiResult<ToolTurn>>>,
-    }
-    impl FakeProvider {
-        fn new(turns: Vec<AiResult<ToolTurn>>) -> Self {
-            Self {
-                turns: StdMutex::new(turns.into_iter().collect()),
-            }
-        }
-    }
-    #[async_trait]
-    impl ToolCapableProvider for FakeProvider {
-        async fn stream_chat_tools(
-            &self,
-            _messages: &[ChatMessage],
-            _tools: &[ToolSpec],
-            _on_token: &mut (dyn FnMut(String) + Send),
-            _cancel: &Arc<AtomicBool>,
-            _ctx: RunCtx,
-        ) -> AiResult<ToolTurn> {
-            self.turns
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Ok(ToolTurn::Final("(no more turns)".into())))
-        }
-        fn model_id(&self) -> &str {
-            "fake"
-        }
-    }
-
-    async fn open_db() -> (TempDir, Database) {
-        let dir = TempDir::new().unwrap();
-        let db = Database::open(dir.path().join("test.db")).await.unwrap();
-        (dir, db)
     }
 
     fn deps_with(

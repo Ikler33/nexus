@@ -165,54 +165,12 @@ mod tests {
     use super::*;
     use crate::agent::connect::handler::{ConnectAgentHandler, ConnectDeps};
     use crate::agent::connect::{channel_pair, dispatch, ChannelTransport};
-    use crate::agent::tool::{ToolCall, ToolSpec};
+    use crate::agent::test_support::{open_db, FakeProvider};
+    use crate::agent::tool::ToolCall;
     use crate::ai::tools::{ToolCapableProvider, ToolTurn};
-    use crate::ai::{AiResult, ChatMessage};
     use crate::db::Database;
-    use crate::net::RunCtx;
-    use std::collections::VecDeque;
     use std::sync::atomic::AtomicBool;
-    use std::sync::Mutex as StdMutex;
     use std::time::Duration;
-    use tempfile::TempDir;
-
-    /// Фейк tool-провайдер (offline): скриптованная очередь ходов — как в handler.rs-тестах.
-    struct FakeProvider {
-        turns: StdMutex<VecDeque<AiResult<ToolTurn>>>,
-    }
-    impl FakeProvider {
-        fn new(turns: Vec<AiResult<ToolTurn>>) -> Self {
-            Self {
-                turns: StdMutex::new(turns.into_iter().collect()),
-            }
-        }
-    }
-    #[async_trait::async_trait]
-    impl ToolCapableProvider for FakeProvider {
-        async fn stream_chat_tools(
-            &self,
-            _messages: &[ChatMessage],
-            _tools: &[ToolSpec],
-            _on_token: &mut (dyn FnMut(String) + Send),
-            _cancel: &Arc<AtomicBool>,
-            _ctx: RunCtx,
-        ) -> AiResult<ToolTurn> {
-            self.turns
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Ok(ToolTurn::Final("(no more turns)".into())))
-        }
-        fn model_id(&self) -> &str {
-            "fake"
-        }
-    }
-
-    async fn open_db() -> (TempDir, Database) {
-        let dir = TempDir::new().unwrap();
-        let db = Database::open(dir.path().join("test.db")).await.unwrap();
-        (dir, db)
-    }
 
     fn deps_with(
         provider: Arc<dyn ToolCapableProvider>,

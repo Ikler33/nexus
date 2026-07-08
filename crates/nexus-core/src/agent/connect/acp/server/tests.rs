@@ -8,9 +8,9 @@ use crate::db::Database;
 use crate::net::RunCtx;
 use std::collections::VecDeque;
 use std::sync::Mutex as StdMutex;
-use tempfile::TempDir;
 
 use super::super::super::{channel_pair, ChannelTransport};
+use crate::agent::test_support::open_db;
 
 // ── провайдеры (offline) ──
 
@@ -120,12 +120,6 @@ impl ToolCapableProvider for RecordingProvider {
 }
 
 // ── харнесс ──
-
-async fn open_db() -> (TempDir, Database) {
-    let dir = TempDir::new().unwrap();
-    let db = Database::open(dir.path().join("test.db")).await.unwrap();
-    (dir, db)
-}
 
 fn cfg_with(
     provider: Arc<dyn ToolCapableProvider>,

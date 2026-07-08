@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### Изменено · R-13g (часть 2) — тест-дедуп в `agent::test_support`
+
+**Файлы:** `crates/nexus-core/src/agent/test_support.rs` (новый, `#[cfg(test)]`), `agent/mod.rs`,
+`agent/connect/{handler.rs, client.rs, acp/server/tests.rs}`, `agent/session/tests.rs`.
+
+**Сделано:** новый крейт-приватный `#[cfg(test)] mod agent::test_support` с двумя канонами:
+- `open_db() -> (TempDir, Database)` — 4 байт-идентичные копии (`connect::handler`, `connect::client`,
+  `connect::acp::server::tests`, `session::tests`; последняя отличалась лишь `&`) → один хелпер;
+- плоский FIFO `FakeProvider` (без побочек) — 2 байт-идентичные копии (`connect::client`,
+  `connect::handler`) → один хелпер.
+
+Потребители переведены на `use crate::agent::test_support::…`; ассерты тестов НЕ менялись, счётчики
+не изменились (перемещение хелперов, не тестов).
+
+**Осознанно НЕ слито** (отчёт-честность > охват): `FakeProvider` в `session::tests` (поле `seen_tools`
++ `first_turn_tools()` — проверка состава реестра) и в `connect::acp::server` (эмитит токен на `Final`
+— доказательство `agent_message_chunk`) — иное поведение; `FakeProvider` в desktop `commands::agent`
+(другой крейт, `new`→`Arc<Self>`, дефолт `"ok"`); прочие `open_db` (`search`/`vector`/desktop —
+иные сигнатуры/3-кортеж); `exec_gate*` ×3 (разные типы возврата 2-/3-кортеж + policy-билдеры);
+`handler_*` ×6 (разные конфиги); `guarded`/`guarded_with_ips` (реальный vs мок-резолвер);
+`serve_once` (net параметризован строкой vs job фиксированный ответ, разные деревья).
+
+**Гейт:** cargo fmt ✓ / clippy --workspace --all-targets -D warnings ✓ / cargo test --workspace ✓.
+
 ### Изменено · R-13g (часть 1) — прод-дедуп `truncate_chars` в единый канон
 
 **Файлы:** `crates/nexus-core/src/util.rs` (новый), `crates/nexus-core/src/lib.rs`,
