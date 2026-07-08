@@ -1,36 +1,30 @@
 /**
  * Легализация main-вью ядра (F-8) через реестр `views` поверх mainView-enum F-4. Это НЕ модуль
  * (каркас) — ядровые вью регистрируются напрямую, как `registerCoreCommands` для команд. Питает
- * `MainViewOutlet` (App-lookup) и кнопки ActivityBar (home/today/agent). Редактор — дефолт-вью
- * (не в ActivityBar: вход через дерево/сайдбар). news (F-9) и board (F-10c) — уже НЕ здесь: вырезаны
- * в модули `connector/modules/{news,board}` и регистрируются через `ctx.views` (эталон вью-модуля).
+ * `MainViewOutlet` (App-lookup) и кнопки ActivityBar (home/today). Редактор — дефолт-вью
+ * (не в ActivityBar: вход через дерево/сайдбар). news (F-9), board (F-10c) и agent (F-11) — уже НЕ
+ * здесь: вырезаны в модули `connector/modules/{news,board,agent}` и регистрируются через `ctx.views`
+ * (эталон вью-модуля).
  *
  * Порядок/иконки/titleKey перенесены КАК ЕСТЬ из прежнего тернарника App.tsx и хардкода ActivityBar
  * (behavior-preserving). Нав-действия — существующие экшены ui-стора (openHome/… — не setMainView,
- * чтобы сохранить точную семантику, вкл. P0-3-фикс `() => openAgent()` без MouseEvent-seed).
+ * чтобы сохранить точную семантику).
  *
  * Регистрация — сайд-эффект при импорте (idempotent Map-реестр). App.tsx импортирует модуль ради
  * него, поэтому реестр заполнен до первого рендера ActivityBar/MainViewOutlet (в т.ч. в юнит-тестах,
  * рендерящих <App/> напрямую, минуя main.tsx).
  */
-import { lazy } from 'react';
 import { CalendarCheck, FileText, Home } from 'lucide-react';
-import { CometIcon } from '../../components/common/BrandGlyphs';
 import { HomeView } from '../../components/home/HomeView';
 import { TodayView } from '../../components/today/TodayView';
 import { EditorArea } from '../../components/workspace/EditorArea';
 import { useUIStore } from '../../stores/ui';
 import { viewRegistry } from './registries';
 
-// Вкладка Агента (UI-1) грузится лениво — как в прежнем App.tsx (`lazy(() => import(...).AgentView)`).
-const AgentView = lazy(() =>
-  import('../../components/agent/AgentView').then((m) => ({ default: m.AgentView })),
-);
-
 let registered = false;
 
-/** Регистрирует ядровые main-вью (home/today/agent) + редактор в реестр `views`. news (F-9) и
- *  board (F-10c) — отдельные модули, не здесь. Идемпотентно. */
+/** Регистрирует ядровые main-вью (home/today) + редактор в реестр `views`. news (F-9), board (F-10c)
+ *  и agent (F-11) — отдельные модули, не здесь. Идемпотентно. */
 export function registerCoreViews(): void {
   if (registered) return;
   registered = true;
@@ -60,21 +54,9 @@ export function registerCoreViews(): void {
   // прежнее место (сортировка по order → между «Сегодня»=20 и «Доска»=40).
   // board (order 40) — БОЛЬШЕ НЕ ядровая вью: вырезана в модуль `connector/modules/board` (F-10c).
   // Регистрируется через `ctx.views`; в ActivityBar встаёт между «Новости»=30 и «Агент»=50.
-  viewRegistry.register({
-    id: 'agent',
-    titleKey: 'commands.view.agent',
-    icon: CometIcon,
-    order: 50,
-    component: AgentView,
-    // AgentView — lazy(): явная Suspense-граница как в прежнем App.tsx (не полагаемся на неявную
-    // root-suspension React 19). Оживляет ветку MainViewOutlet `view.suspense ?…` (adversarial F-8).
-    suspense: true,
-    activityBar: true,
-    // P0-3-смоук: НЕ голая ссылка — onClick подставил бы MouseEvent в optional `seed` и `seed.trim()`
-    // бросил бы TypeError (кнопка Castor «мертвела»). Обёртка гасит аргумент.
-    activate: () => useUIStore.getState().openAgent(),
-    isActive: (v) => v === 'agent',
-  });
+  // agent (order 50) — БОЛЬШЕ НЕ ядровая вью: вырезана в модуль `connector/modules/agent` (F-11,
+  // самая связанная фича). Регистрируется через `ctx.views` (lazy AgentView + suspense) при активации
+  // модуля; в ActivityBar встаёт между «Доска»=40 и «Редактор»=100. Команда `view.agent` — там же.
   viewRegistry.register({
     id: 'editor',
     titleKey: 'commands.view.editor',

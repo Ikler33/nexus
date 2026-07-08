@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import './lib/connector/core-views'; // F-8: регистрирует ядровые main-вью в реестр `views` до рендера
-import './lib/connector/modules'; // F-9/F-10b/F-10c: регистрирует+активирует модули-вклады (news/board/оверлеи/sync) до рендера
+import './lib/connector/modules'; // F-9..F-11: регистрирует+активирует модули-вклады (news/board/оверлеи/sync/graph/agent) до рендера
 import { registerCoreCommands } from './lib/commands-core';
 import { useKeymap } from './hooks/useKeymap';
 import { tauriApi, isTauri } from './lib/tauri-api';
@@ -30,7 +30,7 @@ import { InlineAria } from './components/editor/InlineAria';
 import styles from './App.module.css';
 
 // Панели грузятся лениво (плагины — iframe-демо).
-// (Ленивая AgentView переехала в lib/connector/core-views — main-вью резолвит MainViewOutlet.)
+// (F-11: ленивая AgentView живёт в модуле `connector/modules/agent` — main-вью резолвит MainViewOutlet.)
 // (F-10c: SyncPanel вырезан в модуль `connector/modules/sync` — приходит через OverlayOutlet.)
 // (F-10d: Граф — тяжёлый d3-force/louvain §10 — вырезан в модуль `connector/modules/graph`; ленивый
 //  GraphView под Suspense живёт в graph-зоне `GraphLayer`, приходит через appBody-инстанс OverlayOutlet.)

@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### Изменено · F-11 — «Агент» (Castor) вырезан из ядра в модуль коннектора
+
+Завершение модуляризации (12-й модуль на коннекторе v0): вкладка Агента (Castor) вырезана из ядра в
+модуль `lib/connector/modules/agent.ts` — зеркало вью-модулей news (F-9) / board (F-10c). Владелец
+снял гейт после live-теста. Ядро (core-views + commands-core + App.tsx) больше НЕ импортирует
+`components/agent`; вклад идёт через `ctx.views` (main-вью + кнопка ActivityBar, order=50, lazy
+AgentView + Suspense) и `ctx.commands` (команда палитры). Строго behavior-preserving (самая связанная
+фича серии F): order/icon/titleKey/lazy-suspense/P0-3-обёртка `activate` перенесены КАК ЕСТЬ.
+
+- **Команда `view.agent` → `agent:view.agent`** (source=plugin): удалена из `commands-core`,
+  регистрируется модулем. Пара `view.agent`→`agent:view.agent` добавлена в `COMMAND_ID_ALIASES`
+  (`lib/commands.ts`) — ручной хоткей пользователя на старый id ремапится (иначе no-op).
+- **Стейт остаётся ЯДРОМ** (паттерн news/board/F-10b): видимость вью (`mainView`) +
+  `open/close/toggleAgent` и seed-handoff `pendingAgentSeed`/`consumeAgentSeed` (P1-11 «Быстрый старт»)
+  живут в ui-сторе. Контракт seed тест-покрыт, не тронут. `stores/agent.ts` (data/domain-слой) остаётся
+  в `stores/` — импортируется ТОЛЬКО из `components/agent` (как `stores/news.ts`); инвариант выреза —
+  про `components/agent`, не про data-слой.
+- **CI-граница (F-1b):** `agent` добавлен в `MODULE_FEATURES` (eslint.config.js) — импорт
+  `components/agent`/манифеста из ядра/чужого модуля = красный CI. grep-инвариант «ядро ⇏
+  components/agent» пуст.
+- **НЕ тронуто (вне скоупа):** titlebar-чекбокс «AI-панель» (это ЧАТ/AiPanel — F-12); секции агента в
+  ai-секции SettingsView (ядро-chrome); Rust/tauri-команды агента (вырезается только фронт).
+
 ### Исправлено/Добавлено · NB-2 + NB-3 — починка DnD доски (dragDropEnabled) + «Скрыть выполненные»
 
 **NB-2 — «карточки не перетаскиваются» (репорт владельца)**. Корень был ВНЕ DnD-хендлеров: HTML5

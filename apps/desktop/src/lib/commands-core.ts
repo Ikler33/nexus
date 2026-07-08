@@ -432,13 +432,8 @@ export function registerCoreCommands(): Disposable {
       source: 'core',
       run: () => useUIStore.getState().toggleToday(),
     }),
-    commands.register({
-      id: 'view.agent',
-      title: 'Agent',
-      titleKey: 'commands.view.agent',
-      source: 'core',
-      run: () => useUIStore.getState().toggleAgent(),
-    }),
+    // view.agent — вырезана в модуль `connector/modules/agent` (F-11): регистрируется через
+    // `ctx.commands` (id → `agent:view.agent`, source=plugin). Ядро её больше не объявляет.
     commands.register({
       id: 'vault.rescan',
       title: 'Reindex vault',
