@@ -138,6 +138,7 @@ fn cfg_with(
         overwrite_threshold: 64 * 1024,
         blast_cap: 16,
         context_window: Some(8192),
+        loop_bounds: crate::agent::LoopBounds::default(),
         model: "fake".into(),
     })
 }

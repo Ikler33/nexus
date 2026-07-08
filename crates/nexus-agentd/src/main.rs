@@ -220,6 +220,12 @@ async fn run() -> Result<(), String> {
         .as_ref()
         .and_then(|c| c.ai.chat.as_ref())
         .and_then(|c| c.context_window);
+    // BF-1 (хвост #519): границы прогона (`wall_clock`/`max_steps`) из `ai.agent_wall_clock_secs`/
+    // `ai.agent_max_steps` (оба опц., клампятся в AiConfig). Нет ключей → LoopBounds::default (байт-прежнее).
+    let agent_loop_bounds = local_cfg
+        .as_ref()
+        .map(|c| nexus_core::agent::LoopBounds::from_ai_config(&c.ai))
+        .unwrap_or_default();
 
     // Индексатор-фундамент. Десктоп тут спавнит watcher с Tauri-хуками (прогресс/файл-изменён); headless
     // конструирует Indexer (с RAG если есть эмбеддер/индекс), доказывая, что тип строится без Tauri.
@@ -400,6 +406,7 @@ async fn run() -> Result<(), String> {
         overwrite_threshold,
         blast_cap,
         agent_context_window,
+        agent_loop_bounds, // BF-1: границы прогона из конфига (те же, что у AgentRunHandler)
         &agent_skills,
         &agent_web,
         // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled, default false).
@@ -433,27 +440,31 @@ async fn run() -> Result<(), String> {
 
     registry.insert(
         nexus_core::agent::KIND_AGENT_RUN.to_string(),
-        Arc::new(nexus_core::agent::AgentRunHandler::new(
-            db.writer().clone(),
-            db.reader().clone(),
-            ai_client.clone(),
-            agent_context_window,
-            Some(agent_memory),
-            root.clone(),
-            actuator_enabled,
-            overwrite_threshold,
-            blast_cap,
-            decision_source,
-            agent_paused.clone(),
-            agent_skills,
-            agent_web,
-            // SL-7d: авторство навыков (skill.save) — owner-gated ai.skills.learning_enabled (default false).
-            skills_learning_enabled,
-            // SUB-3b-2b: делегирование (delegate.run) — owner-gated ai.delegation (default disabled).
-            agent_delegation.clone(),
-            // RES-5: deep-research (research.run) — owner-gated ai.research (default disabled).
-            agent_research.clone(),
-        )),
+        Arc::new(
+            nexus_core::agent::AgentRunHandler::new(
+                db.writer().clone(),
+                db.reader().clone(),
+                ai_client.clone(),
+                agent_context_window,
+                Some(agent_memory),
+                root.clone(),
+                actuator_enabled,
+                overwrite_threshold,
+                blast_cap,
+                decision_source,
+                agent_paused.clone(),
+                agent_skills,
+                agent_web,
+                // SL-7d: авторство навыков (skill.save) — owner-gated ai.skills.learning_enabled (default false).
+                skills_learning_enabled,
+                // SUB-3b-2b: делегирование (delegate.run) — owner-gated ai.delegation (default disabled).
+                agent_delegation.clone(),
+                // RES-5: deep-research (research.run) — owner-gated ai.research (default disabled).
+                agent_research.clone(),
+            )
+            // BF-1: границы прогона из конфига (builder — не раздуваем 16-местный new).
+            .with_loop_bounds(agent_loop_bounds),
+        ),
     );
     // SL-curator: фоновая гигиена жизненного цикла agent-навыков (active→stale→archive, ОБРАТИМО,
     // НИКОГДА не удаляет; GC лишь орфан-телеметрии). Регистрируем ТОЛЬКО при owner-gated

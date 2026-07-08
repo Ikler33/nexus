@@ -224,12 +224,16 @@ pub async fn run_agent_session(
     run_agent_session_bounded(spec, deps, role, LoopBounds::default()).await
 }
 
-/// Как [`run_agent_session`], но с ЯВНЫМИ [`LoopBounds`] (прод-путь всегда даёт
-/// [`LoopBounds::default`] через публичную обёртку — конфигурируемый wall_clock осознанно отложен, см.
-/// `docs/BACKLOG.md` §«Хвосты среза BF-1»). Тест-шов Fix BF-1 №1: session-тест с коротким `wall_clock`
-/// доказывает ПРОВОДКУ pause-accounting-декоратора (медленное решение у гейта не валит прогон по
-/// WallClock) — мутант «в гейт передан голый `deps.decision_source`» валит этот тест.
-pub(crate) async fn run_agent_session_bounded(
+/// Как [`run_agent_session`], но с ЯВНЫМИ [`LoopBounds`]. **BF-1 (хвост из #519): конфигурируемый
+/// `wall_clock`/`max_steps` прогона.** Config-вызыватели (desktop/agentd/cli/acp) резолвят границы из
+/// `ai.agent_wall_clock_secs`/`ai.agent_max_steps` через [`LoopBounds::from_ai_config`] и зовут ИМЕННО
+/// эту функцию; вызыватели без конфига (субагенты/smoke/eval) остаются на [`run_agent_session`] (дефолт).
+/// Границы пробрасываются в [`run_agent_loop`] И (для top-level) в капы дочернего делегирования/research
+/// (`bounds.wall_clock` → `register_delegation`/`register_research`) — точь-в-точь как и дефолт до BF-1.
+/// Также тест-шов Fix BF-1 №1: session-тест с коротким `wall_clock` доказывает ПРОВОДКУ
+/// pause-accounting-декоратора (медленное решение у гейта не валит прогон по WallClock) — мутант «в гейт
+/// передан голый `deps.decision_source`» валит этот тест.
+pub async fn run_agent_session_bounded(
     spec: &SessionSpec,
     deps: &SessionDeps<'_>,
     role: SessionRole<'_>,

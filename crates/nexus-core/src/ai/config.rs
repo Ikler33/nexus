@@ -61,6 +61,22 @@ pub struct AiConfig {
     #[serde(default)]
     pub agent_blast_radius_cap: Option<u32>,
 
+    /// **Конфигурируемый `wall_clock` прогона агента (хвост BF-1).** Стенной бюджет ВСЕГО прогона (сек):
+    /// ручка владельца на remaining-бюджет реального времени работы (BF-1 уже исключил время ожидания
+    /// человека у гейта). `None` (ДЕФОЛТ) → [`crate::agent::LoopBounds::default`] (300 с). Санитарный кламп
+    /// [`AiConfig::MIN_AGENT_WALL_CLOCK_SECS`]..[`AiConfig::MAX_AGENT_WALL_CLOCK_SECS`] применяет геттер
+    /// [`AiConfig::agent_wall_clock`]. Тип-толерантный десериализатор (см. [`de_tolerant_opt_u64`]):
+    /// мусорный тип (строка/булево/массив) → `None`, НЕ ошибка парса — не роняет `ai.chat`/`ai.embedding`.
+    #[serde(default, deserialize_with = "de_tolerant_opt_u64")]
+    pub agent_wall_clock_secs: Option<u64>,
+
+    /// **Конфигурируемый `max_steps` прогона агента (хвост BF-1).** Потолок ходов модели (анти-зацикливание).
+    /// `None` (ДЕФОЛТ) → [`crate::agent::LoopBounds::default`] (8). Идёт в паре с `agent_wall_clock_secs`:
+    /// длинный wall_clock без большего числа шагов — половина ручки. Кламп [`AiConfig::MIN_AGENT_MAX_STEPS`]
+    /// ..[`AiConfig::MAX_AGENT_MAX_STEPS`] в геттере [`AiConfig::agent_max_steps`]. Тип-толерантно (как выше).
+    #[serde(default, deserialize_with = "de_tolerant_opt_u64")]
+    pub agent_max_steps: Option<u64>,
+
     /// **SKILL-2: каталог скиллов (SKILL.md) для прогона агента.** Путь к каталогу со скиллами
     /// открытого стандарта SKILL.md (`<dir>/<skill>/SKILL.md`). `None` (ДЕФОЛТ) → агент работает БЕЗ
     /// скиллов (нет меню в контексте, нет `activate_skill`/`read_skill_resource` — поведение без
@@ -171,6 +187,20 @@ where
         }
         _ => None,
     }))
+}
+
+/// Тип-толерантный десериализатор `Option<u64>` (BF-1, для `ai.agent_wall_clock_secs`/`ai.agent_max_steps`):
+/// принимает ТОЛЬКО JSON-число, влезающее в `u64` (неотрицательное целое); любое иное — строка (в т.ч.
+/// `"42"`), булево, массив, объект, отрицательное или дробное — → `None`, НЕ ошибка парса. Та же
+/// data-loss-защита, что у [`de_tolerant_opt_string`]: мусорный `agent_wall_clock_secs` (ручная правка
+/// `local.json`) НЕ должен ронять весь [`LocalConfig::parse`] и терять `ai.chat`/`ai.embedding`.
+/// Санитарный кламп значения — НЕ здесь, а в геттерах [`AiConfig::agent_wall_clock`]/[`AiConfig::agent_max_steps`].
+fn de_tolerant_opt_u64<'de, D>(d: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|val| val.as_u64()))
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -378,6 +408,40 @@ impl AiConfig {
     /// Дефолт кэпа blast-radius прогона, если не задан в конфиге (консервативный — небольшая пачка
     /// авто-применений до форс-предложения).
     pub const DEFAULT_BLAST_RADIUS_CAP: u32 = 16;
+
+    /// Мин. `wall_clock` прогона (сек): меньше — прогон не успевает даже толком стартовать (cold-start
+    /// модели, первый ход) → бессмысленно/опасно. Значения ниже клампятся ВВЕРХ до этого порога.
+    pub const MIN_AGENT_WALL_CLOCK_SECS: u64 = 30;
+    /// Макс. `wall_clock` (сек, 24 ч): анти-опечатка (прогон длиннее суток — по сути демон, не «прогон»).
+    /// Не жёсткий предел продукта — санитарный потолок против `999999999`-подобных ляпов в `local.json`.
+    pub const MAX_AGENT_WALL_CLOCK_SECS: u64 = 86_400;
+    /// Мин. ходов модели (`0` шагов = прогон без единого хода — бессмысленно). Клампится вверх до 1.
+    pub const MIN_AGENT_MAX_STEPS: u64 = 1;
+    /// Макс. ходов (анти-опечатка; реальный потолок реального времени всё равно держит `wall_clock`).
+    pub const MAX_AGENT_MAX_STEPS: u64 = 10_000;
+
+    /// **BF-1: `wall_clock` прогона агента из конфига с САНИТАРНЫМ клампом** [`MIN_AGENT_WALL_CLOCK_SECS`]
+    /// ..[`MAX_AGENT_WALL_CLOCK_SECS`]. `None` (ключа нет / мусорный тип) → `None` — вызыватель берёт
+    /// дефолт [`crate::agent::LoopBounds::default`]. Кламп именно здесь (конфиг-слой): невалидно-малое/
+    /// большое чинится тихо, а не роняет прогон.
+    pub fn agent_wall_clock(&self) -> Option<Duration> {
+        self.agent_wall_clock_secs.map(|s| {
+            Duration::from_secs(s.clamp(
+                Self::MIN_AGENT_WALL_CLOCK_SECS,
+                Self::MAX_AGENT_WALL_CLOCK_SECS,
+            ))
+        })
+    }
+
+    /// **BF-1: `max_steps` прогона агента из конфига с клампом** [`MIN_AGENT_MAX_STEPS`]..[`MAX_AGENT_MAX_STEPS`].
+    /// `None` → `None` (вызыватель берёт дефолт). `usize::try_from` не может провалиться после клампа к
+    /// `MAX_AGENT_MAX_STEPS` (влезает в usize на всех целевых платформах), fallback — тот же потолок.
+    pub fn agent_max_steps(&self) -> Option<usize> {
+        self.agent_max_steps.map(|s| {
+            let clamped = s.clamp(Self::MIN_AGENT_MAX_STEPS, Self::MAX_AGENT_MAX_STEPS);
+            usize::try_from(clamped).unwrap_or(Self::MAX_AGENT_MAX_STEPS as usize)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1019,5 +1083,82 @@ mod tests {
             on.ai.research.max_urls_per_round, 3,
             "незаданный кап → дефолт, не 0"
         );
+    }
+
+    /// BF-1: `ai.agent_wall_clock_secs`/`ai.agent_max_steps` — по умолчанию None (вызыватель берёт
+    /// `LoopBounds::default`); валидные значения парсятся; геттеры КЛАМПЯТ [30..86400] с и [1..10000] шагов.
+    #[test]
+    fn bf1_agent_bounds_parse_clamp_and_defaults() {
+        // Нет ключей → геттеры None (дефолтный путь; байт-прежнее поведение у вызывателя).
+        let zc = LocalConfig::parse(r#"{"ai":{}}"#).unwrap();
+        assert!(zc.ai.agent_wall_clock_secs.is_none());
+        assert!(zc.ai.agent_max_steps.is_none());
+        assert!(zc.ai.agent_wall_clock().is_none());
+        assert!(zc.ai.agent_max_steps().is_none());
+
+        // Валидные значения в допустимом диапазоне — проходят как есть.
+        let ok = LocalConfig::parse(r#"{"ai":{"agent_wall_clock_secs":600,"agent_max_steps":20}}"#)
+            .unwrap();
+        assert_eq!(ok.ai.agent_wall_clock(), Some(Duration::from_secs(600)));
+        assert_eq!(ok.ai.agent_max_steps(), Some(20));
+
+        // Кламп ВНИЗ: слишком малый wall_clock (5с) → 30с; 0 шагов → 1.
+        let lo = LocalConfig::parse(r#"{"ai":{"agent_wall_clock_secs":5,"agent_max_steps":0}}"#)
+            .unwrap();
+        assert_eq!(
+            lo.ai.agent_wall_clock(),
+            Some(Duration::from_secs(AiConfig::MIN_AGENT_WALL_CLOCK_SECS))
+        );
+        assert_eq!(lo.ai.agent_max_steps(), Some(1));
+
+        // Кламп ВВЕРХ: абсурдно большие значения → потолки (анти-опечатка).
+        let hi = LocalConfig::parse(
+            r#"{"ai":{"agent_wall_clock_secs":999999999,"agent_max_steps":999999999}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hi.ai.agent_wall_clock(),
+            Some(Duration::from_secs(AiConfig::MAX_AGENT_WALL_CLOCK_SECS))
+        );
+        assert_eq!(
+            hi.ai.agent_max_steps(),
+            Some(AiConfig::MAX_AGENT_MAX_STEPS as usize)
+        );
+    }
+
+    /// BF-1 (data-loss-защита, прецедент CONN-1): МУСОРНЫЙ тип у `agent_wall_clock_secs`/`agent_max_steps`
+    /// — строка `"42"`, булево, массив, объект, отрицательное, дробное — НЕ роняет `LocalConfig::parse` и
+    /// НЕ теряет `ai.chat`: значение просто → `None` (→ дефолт у вызывателя). Голый `Option<u64>` ронял бы.
+    #[test]
+    fn bf1_agent_bounds_tolerant_garbage_survives() {
+        for bad in [
+            r#"{"ai":{"agent_wall_clock_secs":"42","chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_wall_clock_secs":true,"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_wall_clock_secs":[42],"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_wall_clock_secs":{"x":1},"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_wall_clock_secs":-5,"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_wall_clock_secs":30.5,"chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_max_steps":"8","chat":{"url":"http://h:8080"}}}"#,
+            r#"{"ai":{"agent_max_steps":["x"],"chat":{"url":"http://h:8080"}}}"#,
+        ] {
+            let cfg =
+                LocalConfig::parse(bad).unwrap_or_else(|e| panic!("parse упал на {bad}: {e}"));
+            assert!(
+                cfg.ai.agent_wall_clock().is_none() || cfg.ai.agent_max_steps().is_none(),
+                "мусорный тип → None: {bad}"
+            );
+            assert_eq!(
+                cfg.ai.chat.expect("ai.chat должен выжить").url,
+                "http://h:8080",
+                "мусорный agent-бюджет не роняет ai.chat: {bad}"
+            );
+        }
+
+        // Контроль: голое JSON-число ПРИНИМАЕТСЯ (не спутать «толерантность» с «игнорирую всё»).
+        let good =
+            LocalConfig::parse(r#"{"ai":{"agent_wall_clock_secs":42,"agent_max_steps":42}}"#)
+                .unwrap();
+        assert_eq!(good.ai.agent_wall_clock_secs, Some(42));
+        assert_eq!(good.ai.agent_max_steps, Some(42));
     }
 }

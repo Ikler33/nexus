@@ -886,3 +886,141 @@ async fn session_slow_gate_decision_does_not_burn_wall_clock() {
         "одобренная заметка должна быть записана"
     );
 }
+
+/// **BF-1 проброс: короткий wall_clock из ГРАНИЦ реально режет прогон через session-вход.** Все
+/// config-вызыватели (desktop/agentd/cli/acp) резолвят границы из конфига и идут через
+/// [`run_agent_session_bounded`] — тест доказывает, что переданные границы ДОСТИГАЮТ цикла: `wall_clock=0`
+/// → `BudgetExhausted{WallClock}` на ПЕРВОЙ же проверке (провайдер не вызван ни разу). По образцу
+/// `runner::loop_trips_wall_clock`, но на верхнем шве, которым пользуются все config-вызыватели.
+#[tokio::test]
+async fn session_bounded_short_wall_clock_trips_the_loop() {
+    use crate::agent::BudgetKind;
+    use std::time::Duration;
+
+    let (_dir, db) = open_db().await;
+    let provider = FakeProvider::new(vec![]); // НЕ должен быть вызван (wall_clock истёк до хода)
+    let fwd = Arc::new(CollectingForwarder::default());
+    let spec = SessionSpec {
+        run_id: 30,
+        task: "q".into(),
+        autonomy: None,
+        actuator_enabled: false,
+        overwrite_threshold: 100,
+        blast_cap: 10,
+        context_window: Some(4096),
+        canon_root: _dir.path().to_path_buf(),
+        history: Vec::new(),
+        skills_learning_enabled: false,
+    };
+    let paused = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let outcome = run_agent_session_bounded(
+        &spec,
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None,
+        },
+        LoopBounds {
+            max_steps: 5,
+            wall_clock: Duration::ZERO,
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            outcome,
+            LoopOutcome::BudgetExhausted {
+                kind: BudgetKind::WallClock,
+                ..
+            }
+        ),
+        "короткий wall_clock из границ обязан срезать прогон: {outcome:?}"
+    );
+    assert!(
+        provider.seen_tools.lock().unwrap().is_empty(),
+        "провайдер не должен вызываться (wall_clock истёк на первой границе)"
+    );
+}
+
+/// **BF-1 default-путь БАЙТ-ПРЕЖНИЙ:** [`run_agent_session`] (без границ) = [`LoopBounds::default`]
+/// (8 ходов). Провайдер всегда зовёт (при actuator OFF — несуществующий) инструмент → UnknownTool
+/// кормится обратно, цикл крутит РОВНО 8 ходов → `BudgetExhausted{Steps}`. Гард регрессии дефолта у
+/// не-config вызывателей (субагенты/smoke/eval остаются на `run_agent_session`).
+#[tokio::test]
+async fn session_default_bounds_run_hits_eight_steps() {
+    use crate::agent::BudgetKind;
+
+    let (_dir, db) = open_db().await;
+    let turns: Vec<AiResult<ToolTurn>> = (0..12)
+        .map(|i| {
+            Ok(ToolTurn::ToolCalls(vec![ToolCall {
+                id: format!("c{i}"),
+                name: "debug.echo".into(),
+                arguments: "{}".into(),
+            }]))
+        })
+        .collect();
+    let provider = FakeProvider::new(turns);
+    let fwd = Arc::new(CollectingForwarder::default());
+    let spec = SessionSpec {
+        run_id: 31,
+        task: "крутись".into(),
+        autonomy: None,
+        actuator_enabled: false,
+        overwrite_threshold: 100,
+        blast_cap: 10,
+        context_window: Some(4096),
+        canon_root: _dir.path().to_path_buf(),
+        history: Vec::new(),
+        skills_learning_enabled: false,
+    };
+    let paused = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let outcome = run_agent_session(
+        &spec,
+        &SessionDeps {
+            provider: &provider,
+            memory: None,
+            skills: None,
+            web: None,
+            decision_source: policy_default(),
+            writer: db.writer(),
+            reader: db.reader(),
+            paused: &paused,
+            cancel: &cancel,
+            forwarder: fwd.clone(),
+        },
+        SessionRole::TopLevel {
+            delegation: None,
+            research: None,
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            outcome,
+            LoopOutcome::BudgetExhausted {
+                kind: BudgetKind::Steps,
+                ..
+            }
+        ),
+        "дефолтный путь без конфига обязан упереться в Steps: {outcome:?}"
+    );
+    assert_eq!(
+        provider.seen_tools.lock().unwrap().len(),
+        8,
+        "дефолтный max_steps=8 — ровно 8 ходов модели (байт-прежнее поведение)"
+    );
+}
