@@ -14,7 +14,7 @@
 **Сделано:** новый крейт-приватный `#[cfg(test)] mod agent::test_support` с двумя канонами:
 - `open_db() -> (TempDir, Database)` — 4 байт-идентичные копии (`connect::handler`, `connect::client`,
   `connect::acp::server::tests`, `session::tests`; последняя отличалась лишь `&`) → один хелпер;
-- плоский FIFO `FakeProvider` (без побочек) — 2 байт-идентичные копии (`connect::client`,
+- плоский FIFO `FakeProvider` (без побочек) — 2 семантически идентичные (косметические расхождения только в doc-комменте и форме атрибута async_trait) копии (`connect::client`,
   `connect::handler`) → один хелпер.
 
 Потребители переведены на `use crate::agent::test_support::…`; ассерты тестов НЕ менялись, счётчики
