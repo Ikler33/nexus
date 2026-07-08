@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### Изменено · R-13c — вынос `mod tests` sandbox/exec_host.rs → `exec_host/tests.rs` (byte-identical)
+
+Стадия R-13 серии (образец R-6a/R-13a-b): **ЧИСТЫЙ механический перенос, оракул НЕ меняется**
+(dedent + fmt-reflow, ассерты байт-в-байт). Инлайн-`#[cfg(test)] mod tests` (768 строк) вынесен в
+подмодуль `sandbox/exec_host/tests.rs`, объявлен `#[cfg(test)] mod tests;` (зеркалит
+`agent/session/tests.rs`). **SECURITY-чувствительная зона** (host-exec FSM песочницы:
+fail-closed дени-путь, `PolicyDefault` DENY, host-authority exec-decision/`WireExecGo`,
+one-shot токены, финализация ledger, приватность хвостов) — прод-часть БАЙТ-ИДЕНТИЧНА
+by-construction (прод-префикс строк 1-762 неизменён; ни один инвариант/текст/тир/гейт не тронут).
+
+- **exec_host.rs 1530→764 строк**; прод <1000 → подмодули не дробятся (по стандарту серии).
+- **Доказательства move-only:** прод-префикс diff-пуст; `dedent(тело)` уже rustfmt-каноничен
+  (fmt-нейтрально); round-trip `reindent(tests.rs) == оригинальное тело` байт-в-байт; pub-API
+  grep-diff пуст; потребители не тронуты (`exec_host::tests` — приватный, никто не импортирует).
+- **Счётчик тестов:** 34 (11 `#[test]` + 23 `#[tokio::test]`) — паритет, все зелёные под новым
+  путём `sandbox::exec_host::tests::*`.
+- Гейт: `cargo fmt --check` · `clippy --workspace --all-targets -D warnings` · `cargo test --workspace` — зелёные.
+
 ### Изменено · R-13b — skills/mod.rs распил: тесты в подмодуль (1866→796)
 
 Стадия R-13b серии R (thermo-смелл — `crates/nexus-core/src/skills/mod.rs` 1866 строк). **Move-only, behavior-preserving.** Тот же паттерн, что R-13a (`agent/job.rs`) и прецеденты `agent/session.rs`→`session/tests.rs`: инлайновый `#[cfg(test)] mod tests { … }` вынесен в файл-сосед `skills/tests.rs`, подключён `#[cfg(test)] mod tests;`. Semantics скилл-инфраструктуры (SKILL.md-реестр/discovery/parse/validate/vendor-lock, tier/trust) НЕ тронута.
