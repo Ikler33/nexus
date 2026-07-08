@@ -6,6 +6,58 @@
 
 ## [Unreleased]
 
+### Изменено · R-13f — thermo-распил трёх desktop-командных файлов: тесты в подмодули (byte-identical)
+
+**Продолжение волны R-13** (после a: job 2011→446, b: skills 1866→796, c: exec_host 1530→764,
+d: net 1522→658, e: acp/server 1818→739 — все APPROVE 5/5). Thermo-смелл — три плоских набора
+`#[tauri::command]` в `apps/desktop/src-tauri/src/commands/` свыше 1000 строк каждый:
+`settings.rs` 1720, `vault.rs` 1705, `agent.rs` 1677. **ЧИСТЫЙ move-only распил, поведение не
+меняется** (зеркалит R-13a-e): в каждом файле инлайн-`#[cfg(test)] mod tests` вынесен в подмодуль
+`commands/<X>/tests.rs`, объявлен `#[cfg(test)] mod tests;` (конвенция `X.rs → X/tests.rs`).
+Прод-код каждого файла — **байт-в-байт неизменен** (diff прод-префикса пуст):
+
+- **settings.rs** 1720→994 (тест-тело 725 строк, 42%): DTO `EndpointDto`/`AgentConnectionDto`/
+  `AiConfigDto`/`AgentFlagsDto`/`SetAiResult`, команды `get_ai_config`/`set_ai_config`/
+  `set_agent_flags`/`set_agent_connection`/`test_agent_connection`/`test_ai_connection` + хелперы.
+- **vault.rs** 1705→1209 (тест-тело 495 строк, 29%): 18 команд `open_vault`/`rescan_vault`/`list_dir`/
+  `read_file`/`read_file_meta`/`file_hash`/`write_file`/`set_frontmatter_field`/`delete_path`/
+  `rename_path`/`list_versions`/`read_version`/`list_notes`/`resolve_note`/`list_tags`/`notes_by_tag`/
+  `notes_count`/`file_mtime` + `reconcile`-хелперы.
+- **agent.rs** 1677→1048 (тест-тело 628 строк, 37%): DTO `ApprovalDecision`/`HistoryMsg`/
+  `AgentSessionDto`/`PersistedStepDto`/`PersistedTurnDto`/`AgentSessionDataDto`/`SkillRowDto`/
+  `SkillListDto`, команды `agent_run`/`agent_approve`/`agent_pause`/`agent_resume`/`agent_cancel`/
+  `agent_undo`/`agent_sessions_list`/`agent_session_load`/`agent_list_skills`/`agent_skill_set_pinned`/
+  `agent_skill_set_archived`.
+
+Прод после выноса у vault/agent всё ещё > 1000, но это **регистрируемые плоские наборы
+`#[tauri::command]`** — дальнейшее дробление = правка регистраций команд (вне скоупа move-only,
+стандарт серии); settings 994 < 1000. На подмодули не дробим.
+
+- **Чувствительные места НЕ тронуты** (в байт-идентичных прод-префиксах — «by construction»):
+  agent.rs — `spawn`/`finish_in_store`/BF-1 терминальные события; settings.rs — `probe_endpoint`
+  IPv6-хинт (BF-1 3a), `set_agent_connection`/своп бэкенда (CONN-4); vault.rs — `open_vault`/
+  `reconcile` (R-3d), TCC-обработка.
+- **Доказательство move-only (на КАЖДЫЙ файл):** (1) `diff` прод-префикса orig↔new — пуст;
+  (2) round-trip reindent: re-indent `commands/<X>/tests.rs` + обёртка `mod tests {…}` воспроизводит
+  исходный тест-блок **байт-в-байт** (проверено скриптом до `cargo fmt`); (3) расхождение
+  dedent↔`rustfmt` — только settings.rs: 2 line-collapse под 100 колонок после dedent (method-chain
+  `.contains(…)` и сигнатура `fn flags(…)` со схлопом trailing-comma) — канон fmt, не семантика;
+  vault/agent tests.rs token-identical до/после fmt (0 fmt-hunks); (4) счётчики `#[test]`/`#[tokio::test]`
+  = settings 17/9, vault 3/14, agent 0/7 — до и после; (5) `#[tauri::command]` + pub-API grep-diff
+  пуст ×3; (6) в диффе только `<X>.rs` (M) + `<X>/tests.rs` (новые) ×3; `commands/mod.rs` не тронут.
+- **Кандидаты дедупов (только в отчёт, НЕ трогал — скоуп move-only):** (a) `struct FakeProvider` +
+  `impl ToolCapableProvider` в `commands/agent/tests.rs` дублирует одноимённый fake из R-13e-семейства
+  (`acp/server/tests.rs`, `agent/connect/client.rs`/`handler.rs`, `agent/session/tests.rs`) — кандидат
+  в общий test-support; (b) `async fn open_db()` встречается в `commands/agent/tests.rs` (→`(TempDir,
+  Database, PathBuf)`) и `commands/vault/tests.rs` (`open_db(&Path)→Database`) в разных сигнатурах —
+  вариации того же хелпера; (c) провайдер-бутстрап из config-JSON дублируется по смыслу:
+  `settings/tests.rs::hot_build` (`HotProviders`) ↔ `vault/tests.rs::build_current_way`/
+  `build_embedder_current_way` (`bootstrap::ProviderSet`) — кандидаты в общий provider-test-support
+  (сливать осторожно: разнятся возвращаемые типы/поведение fallback).
+- Гейт: `cargo fmt --check` ✓ / `clippy --workspace --all-targets -D warnings` ✓ /
+  `cargo test --workspace` ✓ (nexus_desktop_lib 242 passed/6 ignored; nexus_core 1125/20; nexus-cli 49;
+  nexus-agentd 19; acp_e2e 1; acp_server_e2e 1; git_sync 6 — 0 failed); ignore-атрибут не вводился.
+
 ### Изменено · F-8b — миграция episodic-sync App.tsx → `ctx.events` (закрыт хвост коннектора)
 
 **Файлы:** `apps/desktop/src/App.tsx`, `apps/desktop/src/lib/connector/modules/episodes.ts`
