@@ -9,6 +9,7 @@
  * `modules.disposeAll()` (тесты/HMR).
  */
 import { modules } from '../module-manager';
+import { agentModule } from './agent';
 import { boardModule } from './board';
 import { contradictionsModule } from './contradictions';
 import { digestModule } from './digest';
@@ -30,6 +31,9 @@ export function activateModules(): void {
   modules.register(newsModule);
   // F-10c: вью-модуль «Доска» (вырезан из core-views через `ctx.views`, как news).
   modules.register(boardModule);
+  // F-11: вью-модуль «Агент» (Castor) — вырезан из core-views+commands-core через `ctx.views`+
+  // `ctx.commands` (самая связанная фича; стейт видимости/seed остаётся ядром — ui-стор).
+  modules.register(agentModule);
   // F-10b: оверлей-модули (вырезаны из core-overlays через `ctx.overlays`).
   modules.register(goalsModule);
   modules.register(memoryModule);

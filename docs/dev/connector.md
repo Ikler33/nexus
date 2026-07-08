@@ -113,9 +113,10 @@ AI-инсайты-меню Titlebar (пункты digest/goals/contradictions, `
 `modules.register(m)` (одно место) + `modules.activateAll()` — **детерминированный** порядок
 активации (= порядок регистрации). `modules.disposeAll()` снимает все вклады всех модулей.
 Единая точка регистрации прод-модулей — `connector/modules/index.ts` (`activateModules()`,
-импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 11 модулей:** `news` (F-9,
+импортируется сайд-эффектом из `App.tsx`, как `core-views`). **В проде 12 модулей:** `news` (F-9,
 вью-модуль) + `board` (F-10c, вью-модуль) + 7 оверлей-модулей F-10b (goals/memory/episodes/tasks/inbox/
-digest/contradictions) + `sync` (F-10c, оверлей-модуль) + `graph` (F-10d, оверлей-модуль, mount:'appBody').
+digest/contradictions) + `sync` (F-10c, оверлей-модуль) + `graph` (F-10d, оверлей-модуль, mount:'appBody')
++ `agent` (F-11, вью-модуль «Агент»/Castor — самая связанная фича, см. «### F-11» ниже).
 Новый модуль — строкой в `activateModules` + строкой в `MODULE_FEATURES` (eslint.config.js, граница F-1b).
 Тест-модуль-заглушка (`isolation.test.tsx`) — для изоляции сбоев.
 
@@ -147,6 +148,38 @@ App.tsx ставит ДВА инстанса: `<OverlayOutlet />` на `.app` (8
 импортит `components/graph` (убран `lazy(()=>import(GraphView))`); граница держится eslint-ом F-1b (`graph`
 в `MODULE_FEATURES`). Стейт `graphOpen` + `open/close/toggleGraph` + Esc-прецедент остаются ядром (паттерн
 оверлей-модуля). Behavior-preserving: геометрия слоя (top=38/bottom=vh−26) и z-index идентичны прежним.
+
+### F-11: «Агент» (Castor) — 12-й модуль, вью-модуль (самая связанная фича)
+
+F-11 вырезал `agent` (вкладка Castor) в модуль `connector/modules/agent.ts` через `ctx.views`+
+`ctx.commands` — зеркало news/board (вью-модуль), НЕ оверлей. Владелец снял гейт после live-теста.
+Ядро (core-views + commands-core + App.tsx) больше НЕ импортирует `components/agent`. Behavior-preserving:
+
+- **Main-вью**: `ctx.views.register({ id:'agent', order:50, icon:CometIcon, component: lazy(AgentView),
+  suspense:true, activityBar:true, activate:()=>openAgent(), isActive:v=>v==='agent' })` — order/icon/
+  titleKey/lazy+suspense/P0-3-обёртка `activate` перенесены КАК ЕСТЬ из прежней записи core-views.
+  Ленивый `import('components/agent/AgentView')` **переехал из core-views В МАНИФЕСТ** — это и снимает
+  единственный ядро→`components/agent` импорт (grep-инвариант пуст).
+- **Команда палитры**: `ctx.commands.register({ id:'view.agent', run:()=>toggleAgent() })` — id
+  префиксуется → `agent:view.agent`, source=plugin (прежняя `view.agent` удалена из commands-core).
+  Пара `view.agent`→`agent:view.agent` в `COMMAND_ID_ALIASES` — ручной хоткей юзера на старый id
+  ремапится (иначе no-op). Секции настроек у agent НЕТ (настройки живут в ОБЩЕЙ ai-секции SettingsView).
+- **Стейт остаётся ЯДРОМ** (паттерн news/board/F-10b): `mainView` + `open/close/toggleAgent` **и
+  seed-handoff `pendingAgentSeed`/`consumeAgentSeed`** (P1-11 «Быстрый старт» Home → композер агента)
+  живут в ui-сторе. Модуль даёт лишь компонент + нав-действие + команду. Контракт seed тест-покрыт
+  (`stores/ui.test.ts`, `components/chat/AgentTab.test.tsx`, `AgentView.test.tsx`) — не тронут.
+- **`stores/agent.ts` — ОСТАЁТСЯ в `stores/`** как data/domain-слой (сессия/ходы/шаги/exec-граф/
+  changeset). Импортируется ТОЛЬКО из `components/agent/**` (как `stores/news.ts` — только из
+  `components/news`); инвариант выреза — про `components/agent`, а не про data-слой. Ко-локация под
+  agent-namespace — косметика вне скоупа v0. **НЕ ловит F-1b** (правило стережёт `components/<mod>`/
+  `modules/<mod>`, не `stores/<mod>`) — но это НЕ дыра: стор — чистый лист (тянет только zustand/
+  tauri-api), ядро его не импортирует (dead-to-core), а `components/agent` импортит его легально (фича→
+  свой data-слой). Точный аналог `stores/news.ts`.
+- **Оставлено ядро-chrome (обосновано, НЕ блокеры):** titlebar-чекбокс «AI-панель» (это ЧАТ/AiPanel,
+  НЕ AgentView — F-12); секции/тогглы агента в ai-секции SettingsView (тоггл фичи в ОБЩЕЙ секции, не
+  импорт AgentView); `components/chat/*` (AgentTab/AiPanel) зовут `openAgent()` ui-стора (стейт, не
+  компонент); `DeadJobsModal`-знание job-kind'ов агента — строковый kind ядровой jobs-инфраструктуры.
+  Все трогают ui/data-стор, а НЕ `components/agent` → инвариант держится.
 
 ### ErrorBoundary per-contribution
 `components/common/ErrorBoundary.tsx` — каждая зарегистрированная вью (`MainViewOutlet`), оверлей
@@ -232,9 +265,10 @@ App.tsx ставит ДВА инстанса: `<OverlayOutlet />` на `.app` (8
 сломалась бы). F-1b **закрепил инвариант в eslint** (`apps/desktop/eslint.config.js`, блок F-1b —
 рядом с F-1 «фича не импортирует фичу»).
 
-**Что стережёт правило** (`MODULE_FEATURES` = список вырезанных модулей; сейчас 8:
-`news, goals, memory, episodes, tasks, inbox, digest, contradictions`). Для каждого модуля есть ПАРА
-изолированных зон: UI `src/components/<mod>/**` и манифест `src/lib/connector/modules/<mod>.ts`.
+**Что стережёт правило** (`MODULE_FEATURES` = список вырезанных модулей; сейчас 12:
+`news, goals, memory, episodes, tasks, inbox, digest, contradictions, board, sync, graph, agent`).
+Для каждого модуля есть ПАРА изолированных зон: UI `src/components/<mod>/**` и манифест
+`src/lib/connector/modules/<mod>.ts`.
 Запрещено импортировать эту пару откуда-либо, **КРОМЕ**:
 - самой фичи (`components/<mod>/**` внутри себя — F-1 уже стережёт кросс-фичу);
 - её манифеста `modules/<mod>.ts` (+ его теста `<mod>.test.ts`) — единственная легальная точка, где
@@ -264,8 +298,8 @@ App.tsx ставит ДВА инстанса: `<OverlayOutlet />` на `.app` (8
 `src/components/**` (там правит F-1, чей `no-restricted-imports` нельзя дополнить без слияния правил
 двух срезов). Импорт `components/<mod>` из компонент-зоны при этом ловится F-1 (кросс-фича), а из
 ядра/манифеста — F-1b; непокрыт только «компонент-зона → чужой манифест». Риск низкий: манифесты не
-тянут чужие манифесты (правило 3), а вырезанных компонент-зон, которым бы мог понадобиться чужой
-манифест, нет — `agent`/`chat` ещё не модули. Закрытие потребовало бы влить F-1b-баны манифестов в
+тянут чужие манифесты (правило 3), а ни одна вырезанная компонент-зона чужой манифест не тянет (F-11
+вырезал `agent`; остаётся `chat` — F-12). Закрытие потребовало бы влить F-1b-баны манифестов в
 F-1-хелпер (смешение концернов двух срезов) — отложено до появления реального кейса.
 
 **Исключения** (`MODULE_BOUNDARY_EXCEPTIONS` в eslint.config.js): пусто — F-9/F-10b вырезали модули
