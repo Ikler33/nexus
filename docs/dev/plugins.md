@@ -30,13 +30,22 @@
 > Identity плагина и capability-токен проверяются РАНТАЙМОМ по порту (§7.9), не из payload (Ф2-2).
 
 ## Брокер, host-сторона (Ф2-2a/2-2b, `broker.rs`) — §7.4/§7.9
-`PluginBroker { sessions: HashMap<CapToken, PluginSession>, audit: AuditLog }`:
+`PluginBroker { sessions: HashMap<CapToken, PluginSession>, audit: Arc<AuditLog> }`:
 - **identity по capability-токену** (`open_session(session) -> CapToken`): токен = 32 случайных байта
   в hex (`getrandom`, неугадываем, §7.9) — IPC-эквивалент порт-идентичности. Права берутся из сессии
   ТОКЕНА, а не из payload → закрывает confused-deputy/laundering (плагин A не предъявит токен B).
-- `authorize(&token, req)`: токен→сессия (нет → `UnknownSession`, fail-closed) → `Permissions::check`
-  → запись в **audit** (и успех, и отказ). `handle(&token, req, &mut dyn HostDispatch)` = authorize → dispatch.
-- **`AuditLog`** — только добавление (неотключаемый); `revoke(&token)` мгновенно инвалидирует сессию.
+- `authorize(&token, req) -> (Result, AuditEntry)`: токен→сессия (нет → `UnknownSession`, fail-closed) →
+  `Permissions::check` → запись **синхронно в in-memory audit** + возврат её КОПИИ вызывающему для durable-
+  персиста (см. ниже). `handle(&token, req, &mut dyn HostDispatch)` = authorize → dispatch (in-process,
+  без durable — durable-путь на `plugin_invoke`).
+- **`AuditLog` — durable append-only (PLUG-1, зеркало `net::EgressAudit`).** Два слоя: in-memory
+  `Mutex<Vec<AuditEntry>>` + durable `writer: Mutex<Option<WriteActor>>` (сток `plugin_audit`, миграция
+  029). `set_writer` — в `open_vault` после открытия БД (брокер строится в `AppState::new` ДО vault); при
+  переоткрытии vault сток свапается. **Запись ВНЕ std-лока брокера:** `authorize` под локом строит запись
+  и пишет её in-memory; `plugin_invoke` клонирует `Arc<AuditLog>`, ОТПУСКАЕТ лок, затем
+  `record_durable(entry).await` (write-before-act — и allow, и deny ПЕРЕД host-I/O) → durable-I/O не держит
+  std-лок брокера через `.await`. Чистить нельзя by design (нет DELETE/UPDATE-пути). `revoke(&token)`
+  мгновенно инвалидирует сессию. Чтение UI — `recent_audit(reader, limit)` (обратно-хронологически).
 - Реальный I/O (vault/ai) — за трейтом `HostDispatch` (через `vault::resolve_vault_path` + db/ai).
 > На фронте каждому плагину — один `MessagePort` (§7.5); хост-релей привязывает к порту правильный
 > токен и передаёт его в Tauri-вызов.
@@ -52,6 +61,9 @@
 > Брокер в `AppState` (`std::Mutex<PluginBroker>`). End-to-end через эти команды проверяется фронтом (ниже).
 - `plugin_close_session(token)` → `broker.revoke` (мгновенный отзыв токена при размонтировании плагина —
   иначе сессии копятся; идемпотентно).
+- `list_plugin_audit(limit)` → `Vec<PluginAuditRecord>` (PLUG-1): последние `limit` durable-записей
+  `plugin_audit` обратно-хронологически (`ORDER BY id DESC`, лимит зажат `1..=AUDIT_MAX_LIMIT=500`). Читает
+  из БД (не in-memory Vec) → история переживает рестарт. UI «Журнал доступа» (PluginsPanel) на нём.
 - **AI host-API (Ф2-3, право `ai:embed`):** `ai.embed` (текст→вектор) и `ai.searchSemantic` (запрос→
   гибридный поиск по vault, топ-8) — текст/запрос в `content`. `plugin_invoke` снимает
   `reader/vectors/embedder` из `VaultContext` под read-локом и отпускает его ДО сети (как `search_content`);

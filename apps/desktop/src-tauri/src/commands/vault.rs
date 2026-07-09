@@ -33,6 +33,13 @@ pub async fn open_vault(
     // vault). С этого момента весь реальный эгресс (chat/embed/probe) durable-аудитится write-before-act.
     state.egress_audit.set_writer(db.writer().clone());
 
+    // PLUG-1 (THREAT_MODEL T1): durable-сток audit capability-брокера плагинов — так же ПОСЛЕ открытия
+    // БД (брокер строится в AppState::new ДО vault). Каждый brokered-вызов плагина durable-аудитится
+    // write-before-act, история переживает рестарт. Переоткрытие vault свапает сток на новую БД.
+    if let Ok(broker) = state.plugins.lock() {
+        broker.set_writer(db.writer().clone());
+    }
+
     let info = VaultInfo {
         root: root.to_string_lossy().into_owned(),
         name: vault::vault_name(&root),

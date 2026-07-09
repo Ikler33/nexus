@@ -7,9 +7,12 @@ mod broker;
 mod manage;
 mod permission;
 pub use broker::{
-    AuditEntry, AuditLog, BrokerError, CapToken, HostDispatch, PluginBroker, PluginSession,
+    AuditEntry, AuditLog, BrokerError, CapToken, HostDispatch, PluginAuditRecord, PluginBroker,
+    PluginSession,
 };
-pub use manage::{clear_settings, disabled_dirs, is_enabled, set_enabled};
+pub use manage::{
+    clear_settings, disabled_dirs, is_enabled, recent_audit, set_enabled, AUDIT_MAX_LIMIT,
+};
 pub use permission::{blocks_cloud_metadata, is_private_host, ApiRequest, Denied, Permissions};
 
 use std::fmt;

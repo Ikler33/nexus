@@ -6,6 +6,41 @@
 
 ## [Unreleased]
 
+### Безопасность · PLUG-1: durable audit-лог capability-брокера плагинов (THREAT_MODEL T1)
+
+Первый срез плагин-эпика (владелец: «фундамент, без исполнения стороннего кода»). До PLUG-1 брокер
+(`plugin/broker.rs`) писал audit только в память (`AuditLog` — `Vec<AuditEntry>`) и терял историю при
+дропе брокера/рестарте — это блокировало включение недоверенной плагин-экосистемы (пробел T1/§3
+THREAT_MODEL). Закрыто durable-персистом, зеркалящим `net::EgressAudit`.
+
+- **🔴 Durable append-only audit брокера (`plugin_audit`, миграция 029).** `AuditLog` переписан по
+  образцу `EgressAudit`: **два слоя** — in-memory `Mutex<Vec<AuditEntry>>` (снимки/pre-vault/тесты) +
+  durable опциональный `WriteActor`-сток (`writer: Mutex<Option<WriteActor>>`), выставляемый через
+  `set_writer` ПОСЛЕ открытия vault-БД (брокер строится в `AppState::new` ДО vault). Схема таблицы:
+  `{plugin_id, method, target, allowed, denied_reason, created_at}` + `idx_plugin_audit_created`.
+  Append-only by design (нет DELETE/UPDATE-пути) — журнал подотчётности, не кэш. Бонус-контейнмент:
+  `.nexus/nexus.db` автоматически вне glob-скоупов плагинов (anti-traversal permission.rs) → журнал
+  недоступен плагину бесплатно.
+- **Durable-запись ВНЕ std-лока брокера.** Раньше `AuditLog::record` вызывался под `state.plugins.lock()`
+  (std::Mutex) — синхронный durable-I/O под этим локом заблокировал бы брокер на каждый вызов. Как
+  `EgressAudit`: `authorize` под локом лишь строит запись + пишет её in-memory синхронно и возвращает
+  копию вызывающему; `plugin_invoke` клонирует `Arc<AuditLog>` под локом, **отпускает лок**, затем
+  `record_durable(entry).await` (write-before-act: и allow, и deny durable-записываются ПЕРЕД host-I/O).
+  std-лок брокера не держится через `.await` (структурная гарантия: `record_durable` — метод на
+  `Arc<AuditLog>`, не на `&mut PluginBroker`).
+- **Vault-switch свапает сток.** `set_writer` под `Mutex<Option<WriteActor>>` — переоткрытие vault
+  (десктоп) свапает durable-сток на новую БД (как `EgressAudit`).
+- **Фронт: «Журнал доступа» читает durable-историю.** Новая команда `list_plugin_audit(limit)` →
+  `Vec<PluginAuditRecord>` (обратно-хронологически, лимит зажат `1..=500`). PluginsPanel-вкладка «Журнал
+  доступа» переключена с in-session `PluginCall` (iframe) на durable-историю из БД (переживает рестарт);
+  показывает allow/deny + причину отказа. Мок-паритет (урок MEM-5): browser-мок `list_plugin_audit`
+  зеркалит контракт — `invoke` append-only-пишет исход авторизации, `auditLog` отдаёт свежие первыми.
+- **Честно:** конструктор `AuditLog`/сигнатура `PluginBroker::authorize` ИЗМЕНЕНЫ (не «API не меняется» —
+  это была ошибка плана): `authorize` теперь возвращает `(Result, AuditEntry)`.
+- Тесты: Rust-юниты (durable-персист + append-only порядок + чтение истории + vault-switch свапает сток +
+  структурный аргумент «запись вне std-лока» + pre-vault in-memory-only) + миграция-тест 029 (старая БД
+  v28 → доводка) + vitest (журнал показывает durable allow+deny) + мок-паритет.
+
 ### Безопасность · Плагин-песочница: контейнмент fetch-класса egress iframe + строже валидатор каталога (security-хардининг)
 
 Две живые дыры плагин-песочницы (adversarial-критика плана плагин-эпика), закрытые независимо от судьбы

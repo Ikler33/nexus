@@ -5,7 +5,40 @@
 
 use std::collections::HashSet;
 
+use super::broker::PluginAuditRecord;
 use crate::db::{DbResult, ReadPool, WriteActor};
+
+/// Потолок числа строк durable-audit, возвращаемых за один запрос UI (защита от нагрузки при
+/// раздутом журнале; append-only растёт, но панель показывает лишь недавнее). Команда принимает
+/// свой `limit`, но не выше этого потолка.
+pub const AUDIT_MAX_LIMIT: usize = 500;
+
+/// Последние `limit` durable-записей брокер-audit (`plugin_audit`) — обратно-хронологически (свежие
+/// первыми), для UI «Журнал доступа» (PLUG-1). `limit` зажимается в `1..=AUDIT_MAX_LIMIT`. Читает из
+/// БД (не in-memory Vec брокера): durable-история переживает рестарт.
+pub async fn recent_audit(reader: &ReadPool, limit: usize) -> DbResult<Vec<PluginAuditRecord>> {
+    let limit = limit.clamp(1, AUDIT_MAX_LIMIT) as i64;
+    reader
+        .query(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT id, plugin_id, method, target, allowed, denied_reason, created_at \
+                 FROM plugin_audit ORDER BY id DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map([limit], |r| {
+                Ok(PluginAuditRecord {
+                    id: r.get(0)?,
+                    plugin_id: r.get(1)?,
+                    method: r.get(2)?,
+                    target: r.get(3)?,
+                    allowed: r.get::<_, i64>(4)? != 0,
+                    denied_reason: r.get(5)?,
+                    created_at: r.get(6)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await
+}
 
 /// Ключ настройки «включён» для плагина в каталоге `dir`.
 fn enabled_key(dir: &str) -> String {

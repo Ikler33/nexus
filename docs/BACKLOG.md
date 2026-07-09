@@ -76,7 +76,7 @@
 | multi-channel-шлюзы · email · deep-research · voice STT/TTS · cookbook hw-model-manager | post-1.0 | hermes/odysseus |
 
 ### Owner-gated security (после PROD-v1)
-- 🔒 **Фаза 2 — sandbox**: rootless Podman `--network=none` + GuardedProxy (AF_UNIX) + control-plane + MCP-lite. Пререквизиты: durable plugin-audit + agent_proposals.
+- 🔒 **Фаза 2 — sandbox**: rootless Podman `--network=none` + GuardedProxy (AF_UNIX) + control-plane + MCP-lite. Пререквизиты: ~~durable plugin-audit~~ (✅ PLUG-1, миграция 029 `plugin_audit`) + durable agent_proposals (остаётся).
 - 🔒 **Фаза 3 — host-actuator**: shell/process/git ActionTargets в песочнице. Гейт: THREAT_MODEL принят + env-scrub реализован + `shell_enable` config.
 
 ### Хвосты среза BF-1 (wall-clock / гейт, 2026-07-08)

@@ -64,6 +64,47 @@ describe('mock capability-брокер (превью)', () => {
     );
   });
 
+  // ── Durable-журнал доступа (PLUG-1, зеркало backend plugin_audit / list_plugin_audit) ──
+
+  it('auditLog: каждый invoke append-only-записывается (allow+deny), свежие первыми', async () => {
+    const token = await plugins.openSession('hello');
+    // allow (read **), allow (write Notes/**), deny (write вне scope).
+    await plugins.invoke(token, 'vault.readFile', 'Projects/Roadmap.md');
+    await plugins.invoke(token, 'vault.writeFile', 'Notes/Idea.md', 'x');
+    await expect(
+      plugins.invoke(token, 'vault.writeFile', 'README.md', 'x'),
+    ).rejects.toThrow();
+
+    const log = await plugins.auditLog(100);
+    expect(log).toHaveLength(3);
+    // Свежие первыми (как ORDER BY id DESC): последний вызов (deny на README.md) — первым.
+    expect(log[0]).toMatchObject({
+      method: 'vault.writeFile',
+      target: 'README.md',
+      allowed: false,
+      pluginId: 'hello-reader',
+    });
+    expect(log[0].deniedReason).toBeTruthy();
+    // Старейший (read Roadmap) — последним, allowed, без причины отказа.
+    expect(log[2]).toMatchObject({
+      method: 'vault.readFile',
+      target: 'Projects/Roadmap.md',
+      allowed: true,
+      deniedReason: null,
+    });
+    // Монотонность id (append-only): свежая запись — больший id.
+    expect(log[0].id).toBeGreaterThan(log[2].id);
+  });
+
+  it('auditLog: limit зажимается и отдаёт только последние N', async () => {
+    const token = await plugins.openSession('hello');
+    await plugins.invoke(token, 'vault.listFiles', '');
+    await plugins.invoke(token, 'vault.listFiles', '');
+    await plugins.invoke(token, 'vault.listFiles', '');
+    const log = await plugins.auditLog(2);
+    expect(log).toHaveLength(2); // только 2 свежайших
+  });
+
   // ── Управление (enable/disable/remove) — зеркало backend-контракта ──
 
   it('setEnabled выключает: list.enabled=false, openSession отказывает; включение восстанавливает', async () => {

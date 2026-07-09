@@ -223,6 +223,13 @@ const MIGRATIONS: &[Migration] = &[
         rebuild_fts: false, // nullable-колонка типизированного домена отката (R-12b), производных не трогает
         rebuild_chat_fts: false,
     },
+    Migration {
+        version: 29,
+        name: "plugin_audit",
+        sql: include_str!("migrations/029_plugin_audit.sql"),
+        rebuild_fts: false, // durable capability-broker audit (PLUG-1, T1): журнал подотчётности, заметочных производных не трогает
+        rebuild_chat_fts: false,
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
@@ -451,6 +458,55 @@ mod tests {
         let mut fresh = Connection::open_in_memory().unwrap();
         apply(&mut fresh).unwrap();
         assert_eq!(user_version(&fresh).unwrap(), i64::from(latest_version()));
+    }
+
+    /// PLUG-1: миграция 029 (`plugin_audit`) доводит «старую» БД (схема v28, БЕЗ таблицы) до latest —
+    /// новая таблица создаётся, старые данные целы, append-only INSERT работает. Симулирует открытие
+    /// БД, поднятой прошлым приложением (durable plugin-audit не существовал), новым.
+    #[test]
+    fn migration_029_plugin_audit_creates_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // «Старая» БД: доводим схему только до v28 (plugin_audit ещё нет).
+        apply_through(&mut conn, 28);
+        assert_eq!(user_version(&conn).unwrap(), 28);
+        // Таблицы plugin_audit ещё нет.
+        let has_table = |c: &Connection| -> i64 {
+            c.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='plugin_audit'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(has_table(&conn), 0, "до 029 таблицы plugin_audit нет");
+
+        // Доводим до latest (включая 029) — как открытие старой БД новым приложением.
+        apply(&mut conn).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), i64::from(latest_version()));
+        assert_eq!(has_table(&conn), 1, "029 создала таблицу plugin_audit");
+
+        // Append-only INSERT (как durable record_durable) работает; строки читаются обратно.
+        conn.execute(
+            "INSERT INTO plugin_audit(plugin_id,method,target,allowed,denied_reason,created_at) \
+             VALUES('p.demo','vault.readFile','Notes/a.md',1,NULL,100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO plugin_audit(plugin_id,method,target,allowed,denied_reason,created_at) \
+             VALUES('p.demo','vault.readFile','Secrets/x.md',0,'путь вне scope: Secrets/x.md',101)",
+            [],
+        )
+        .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM plugin_audit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "обе записи durable-персистятся append-only");
+
+        // Свежая БД с нуля тоже доходит до latest (таблица есть сразу).
+        let mut fresh = Connection::open_in_memory().unwrap();
+        apply(&mut fresh).unwrap();
+        assert_eq!(has_table(&fresh), 1, "свежая БД имеет plugin_audit");
     }
 
     /// Аудит: БД новее приложения (downgrade) → явный отказ, а не тихий приём (иначе операции по
