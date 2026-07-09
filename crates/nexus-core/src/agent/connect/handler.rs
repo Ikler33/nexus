@@ -39,7 +39,7 @@ use super::super::finish::{outcome_to_finish, CancelWording, PausePolicy};
 use super::super::memory::AgentMemory;
 use super::super::run_store;
 use super::super::session::{
-    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+    run_agent_session_bounded, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
 };
 use super::super::skill_tools::SkillContext;
 use super::super::web_tools::WebToolsConfig;
@@ -86,6 +86,10 @@ pub struct ConnectDeps {
     pub blast_cap: u32,
     /// Окно контекста модели (токены) из конфига; `None` → дефолт `ContextBudget`.
     pub context_window: Option<usize>,
+    /// **BF-1 (хвост #519): границы прогона** (`wall_clock`/`max_steps`) из `ai.agent_wall_clock_secs`/
+    /// `ai.agent_max_steps` (резолв [`crate::agent::LoopBounds::from_ai_config`]). Нет конфиг-ключей →
+    /// [`crate::agent::LoopBounds::default`] (300 с / 8 ходов), поведение без регрессии.
+    pub loop_bounds: crate::agent::LoopBounds,
     /// Контекст скиллов (SKILL-2); `None` → без меню/инструментов скиллов.
     pub skills: Option<SkillContext>,
     /// **SELF-LEARNING SL-7d, OWNER-GATED, default false** (`ai.skills.learning_enabled`). `true` +
@@ -254,7 +258,7 @@ impl ConnectHandler for ConnectAgentHandler {
                         provider: deps.provider.clone(),
                         config: deps.delegation.clone(),
                     });
-            let outcome = run_agent_session(
+            let outcome = run_agent_session_bounded(
                 &spec,
                 &SessionDeps {
                     provider: deps.provider.as_ref(),
@@ -274,6 +278,8 @@ impl ConnectHandler for ConnectAgentHandler {
                     // RES-5: research.run (default-OFF; регистрируется при всех условиях).
                     research: Some(&deps.research),
                 },
+                // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps).
+                deps.loop_bounds,
             )
             .await;
             // Терминал по канону R-2 (как desktop `finish_in_store`: single-spawn, пауза → error,
@@ -467,6 +473,7 @@ mod tests {
             overwrite_threshold: 64 * 1024,
             blast_cap: 16,
             context_window: Some(32768),
+            loop_bounds: crate::agent::LoopBounds::default(),
             skills: None,
             web: None,
             skills_learning_enabled: false,
@@ -1077,6 +1084,7 @@ mod tests {
             overwrite_threshold: 64 * 1024,
             blast_cap: 16,
             context_window: Some(32768),
+            loop_bounds: crate::agent::LoopBounds::default(),
             skills: Some(skills),
             web: None,
             skills_learning_enabled: false,

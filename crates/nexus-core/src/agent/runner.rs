@@ -29,7 +29,7 @@ use super::event::AgentEvent;
 use super::registry::ToolRegistry;
 
 /// Границы цикла (помимо токен-бюджета, который приходит из [`ContextBudget`]).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoopBounds {
     /// Максимум ходов модели (анти-зацикливание). Достигнут → [`BudgetKind::Steps`].
     pub max_steps: usize,
@@ -44,6 +44,30 @@ impl Default for LoopBounds {
             max_steps: 8,
             wall_clock: Duration::from_secs(300),
         }
+    }
+}
+
+impl LoopBounds {
+    /// **BF-1: границы из опциональных оверрайдов конфига поверх [`LoopBounds::default`].** Заданное поле
+    /// заменяет свой дефолт, `None` оставляет дефолт (частичный оверрайд — только wall_clock ИЛИ только
+    /// max_steps — корректен). Санитарный кламп значений — на стороне конфига
+    /// ([`crate::ai::AiConfig::agent_wall_clock`]/[`crate::ai::AiConfig::agent_max_steps`]); здесь только
+    /// подстановка (принимаем уже-валидные `Duration`/`usize`, поэтому тест-путь может дать и «сырое» малое).
+    pub fn from_overrides(wall_clock: Option<Duration>, max_steps: Option<usize>) -> Self {
+        let d = Self::default();
+        Self {
+            max_steps: max_steps.unwrap_or(d.max_steps),
+            wall_clock: wall_clock.unwrap_or(d.wall_clock),
+        }
+    }
+
+    /// **BF-1: границы прогона агента из `ai.*` конфига.** Читает `ai.agent_wall_clock_secs`/
+    /// `ai.agent_max_steps` (оба опциональны, тип-толерантны, клампятся в [`crate::ai::AiConfig`]) поверх
+    /// [`LoopBounds::default`]. Оба ключа отсутствуют → результат БАЙТ-В-БАЙТ [`LoopBounds::default`]
+    /// (нулевая регрессия у config-вызывателей: desktop/agentd/cli/acp). Единый источник резолва конфиг→
+    /// границы — вызывается композиционными корнями (не дублируется по вызывателям).
+    pub fn from_ai_config(cfg: &crate::ai::AiConfig) -> Self {
+        Self::from_overrides(cfg.agent_wall_clock(), cfg.agent_max_steps())
     }
 }
 
@@ -662,6 +686,47 @@ mod tests {
             }
         ));
         assert_eq!(*provider.calls_seen.lock().unwrap(), 0);
+    }
+
+    /// **BF-1: резолв конфиг→[`LoopBounds`].** (1) `from_overrides(None, None)` и пустой конфиг
+    /// (`from_ai_config`) дают БАЙТ-В-БАЙТ [`LoopBounds::default`] (нулевая регрессия дефолтного пути).
+    /// (2) частичный оверрайд заменяет только заданное поле. (3) `from_ai_config` тянет клампнутые значения
+    /// из `ai.*` (5с → 30с минимум).
+    #[test]
+    fn loop_bounds_from_config_defaults_overrides_and_clamp() {
+        use crate::ai::AiConfig;
+
+        // (1) Пусто → дефолт (оба пути).
+        assert_eq!(
+            LoopBounds::from_overrides(None, None),
+            LoopBounds::default()
+        );
+        assert_eq!(
+            LoopBounds::from_ai_config(&AiConfig::default()),
+            LoopBounds::default(),
+            "нет ключей конфига → границы байт-в-байт дефолтные (нулевая регрессия)"
+        );
+
+        // (2) Частичный оверрайд: только wall_clock / только max_steps.
+        let only_wc = LoopBounds::from_overrides(Some(Duration::from_secs(600)), None);
+        assert_eq!(only_wc.wall_clock, Duration::from_secs(600));
+        assert_eq!(only_wc.max_steps, LoopBounds::default().max_steps);
+        let only_steps = LoopBounds::from_overrides(None, Some(3));
+        assert_eq!(only_steps.max_steps, 3);
+        assert_eq!(only_steps.wall_clock, LoopBounds::default().wall_clock);
+
+        // (3) from_ai_config тянет клампнутые значения (5с < min → 30с; 20 шагов как есть).
+        let cfg = AiConfig {
+            agent_wall_clock_secs: Some(5),
+            agent_max_steps: Some(20),
+            ..Default::default()
+        };
+        let b = LoopBounds::from_ai_config(&cfg);
+        assert_eq!(
+            b.wall_clock,
+            Duration::from_secs(AiConfig::MIN_AGENT_WALL_CLOCK_SECS)
+        );
+        assert_eq!(b.max_steps, 20);
     }
 
     /// Ошибка инструмента (неизвестное имя) → ToolResult{is_error} скормлен обратно, цикл НЕ падает,

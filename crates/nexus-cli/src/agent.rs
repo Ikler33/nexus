@@ -116,6 +116,9 @@ pub(crate) struct Deps {
     pub(crate) canon_root: PathBuf,
     pub(crate) model: String,
     pub(crate) context_window: Option<usize>,
+    /// BF-1 (хвост #519): границы прогона (`wall_clock`/`max_steps`) из `ai.agent_wall_clock_secs`/
+    /// `ai.agent_max_steps`. Нет ключей → `LoopBounds::default` (байт-прежнее).
+    pub(crate) loop_bounds: nexus_core::agent::LoopBounds,
 }
 
 /// Исход одного хода. `run_id` — для `/undo` и истории; `done` — терминал `done` (иначе cancelled/error).
@@ -169,12 +172,15 @@ pub(crate) async fn build_deps(root: PathBuf) -> Result<Deps, String> {
         .and_then(|c| c.model.clone())
         .unwrap_or_else(|| "chat".into());
     let context_window = chat.and_then(|c| c.context_window);
+    // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps; клампятся в AiConfig).
+    let loop_bounds = nexus_core::agent::LoopBounds::from_ai_config(&cfg.ai);
     Ok(Deps {
         db,
         provider,
         canon_root: root,
         model,
         context_window,
+        loop_bounds,
     })
 }
 
@@ -220,7 +226,9 @@ async fn run_turn(
     decision: Arc<dyn nexus_core::actuator::DecisionSource>,
 ) -> Result<TurnOutcome, String> {
     use nexus_core::actuator::OVERWRITE_THRESHOLD;
-    use nexus_core::agent::{run_agent_session, run_store, SessionDeps, SessionRole, SessionSpec};
+    use nexus_core::agent::{
+        run_agent_session_bounded, run_store, SessionDeps, SessionRole, SessionSpec,
+    };
     use nexus_core::ai::AiConfig;
 
     // NB: создаём строку `agent_runs` БЕЗ джобы `KIND_AGENT_RUN` → осиротевшая `queued`-строка (Ctrl-C
@@ -246,7 +254,7 @@ async fn run_turn(
     let cancel = Arc::new(AtomicBool::new(false));
     let forwarder: Arc<dyn AgentEventForwarder> = Arc::new(StdoutForwarder::new());
 
-    let outcome = run_agent_session(
+    let outcome = run_agent_session_bounded(
         &spec,
         &SessionDeps {
             provider: deps.provider.as_ref(),
@@ -264,6 +272,8 @@ async fn run_turn(
             delegation: None,
             research: None,
         },
+        // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps).
+        deps.loop_bounds,
     )
     .await;
 

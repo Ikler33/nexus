@@ -89,6 +89,8 @@ async fn run_acp(root: PathBuf, actuator: bool, auto: bool) -> Result<(), String
         overwrite_threshold: OVERWRITE_THRESHOLD,
         blast_cap: AiConfig::DEFAULT_BLAST_RADIUS_CAP,
         context_window: deps.context_window,
+        // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps).
+        loop_bounds: deps.loop_bounds,
         model: deps.model,
     };
     serve_acp(Arc::new(StdinStdoutTransport::new()), Arc::new(cfg)).await;

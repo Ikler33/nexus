@@ -147,11 +147,12 @@ async fn drive_run_streams_toolcall_result_final_in_order() {
         64 * 1024,
         16,
         Some(32768),
-        None,         // web (AGENT-0.2): тест без веб-инструментов
-        Some(skills), // skills: живой read-only тул (B7: стабов нет)
-        false,        // skills_learning_enabled
-        None,         // delegation (W-24)
-        None,         // research (W-25)
+        LoopBounds::default(), // BF-1: границы прогона (тест — дефолт)
+        None,                  // web (AGENT-0.2): тест без веб-инструментов
+        Some(skills),          // skills: живой read-only тул (B7: стабов нет)
+        false,                 // skills_learning_enabled
+        None,                  // delegation (W-24)
+        None,                  // research (W-25)
         Arc::new(decision),
         empty_memory(&db),
         canon,
@@ -226,6 +227,7 @@ async fn drive_run_accumulates_and_persists_turn_for_history() {
         64 * 1024,
         16,
         Some(32768),
+        LoopBounds::default(), // BF-1: границы прогона (тест — дефолт)
         None,
         Some(skills), // живой read-only тул для успешного шага (B7: стабов нет)
         false,
@@ -312,11 +314,12 @@ async fn drive_run_without_provider_streams_error() {
         64 * 1024,
         16,
         Some(32768),
-        None,  // web (AGENT-0.2): тест без веб-инструментов
-        None,  // skills (AGENT-0.2): тест без навыков
-        false, // skills_learning_enabled
-        None,  // delegation (W-24)
-        None,  // research (W-25)
+        LoopBounds::default(), // BF-1: границы прогона (тест — дефолт)
+        None,                  // web (AGENT-0.2): тест без веб-инструментов
+        None,                  // skills (AGENT-0.2): тест без навыков
+        false,                 // skills_learning_enabled
+        None,                  // delegation (W-24)
+        None,                  // research (W-25)
         Arc::new(decision),
         empty_memory(&db),
         canon,
@@ -396,11 +399,12 @@ async fn approve_applies_confirm_item() {
         64 * 1024,
         16,
         Some(32768),
-        None,  // web (AGENT-0.2): тест без веб-инструментов
-        None,  // skills (AGENT-0.2): тест без навыков
-        false, // skills_learning_enabled
-        None,  // delegation (W-24)
-        None,  // research (W-25)
+        LoopBounds::default(), // BF-1: границы прогона (тест — дефолт)
+        None,                  // web (AGENT-0.2): тест без веб-инструментов
+        None,                  // skills (AGENT-0.2): тест без навыков
+        false,                 // skills_learning_enabled
+        None,                  // delegation (W-24)
+        None,                  // research (W-25)
         decision,
         empty_memory(&db),
         canon.clone(),
@@ -472,6 +476,7 @@ async fn approve_then_undo_reverts_write_e2e() {
         64 * 1024,
         16,
         Some(32768),
+        LoopBounds::default(), // BF-1: границы прогона (тест — дефолт)
         None,
         None,
         false,
@@ -535,11 +540,12 @@ async fn no_approve_is_fail_closed_not_applied() {
         64 * 1024,
         16,
         Some(32768),
-        None,  // web (AGENT-0.2): тест без веб-инструментов
-        None,  // skills (AGENT-0.2): тест без навыков
-        false, // skills_learning_enabled
-        None,  // delegation (W-24)
-        None,  // research (W-25)
+        LoopBounds::default(), // BF-1: границы прогона (тест — дефолт)
+        None,                  // web (AGENT-0.2): тест без веб-инструментов
+        None,                  // skills (AGENT-0.2): тест без навыков
+        false,                 // skills_learning_enabled
+        None,                  // delegation (W-24)
+        None,                  // research (W-25)
         decision,
         empty_memory(&db),
         canon.clone(),

@@ -47,8 +47,9 @@ use nexus_core::actuator::{
 };
 use nexus_core::agent::run_store::PersistStep;
 use nexus_core::agent::{
-    run_agent_session, run_store, AgentEvent, AgentEventForwarder, AgentMemory, DelegationDeps,
-    LoopOutcome, SessionDeps, SessionRole, SessionSpec, VaultAgentMemory,
+    run_agent_session_bounded, run_store, AgentEvent, AgentEventForwarder, AgentMemory,
+    DelegationDeps, LoopBounds, LoopOutcome, SessionDeps, SessionRole, SessionSpec,
+    VaultAgentMemory,
 };
 use nexus_core::ai::ChatMessage;
 
@@ -326,6 +327,12 @@ pub(crate) async fn run_impl(
         .as_ref()
         .and_then(|c| c.ai.chat.as_ref())
         .and_then(|c| c.context_window);
+    // BF-1 (хвост #519): границы прогона (wall_clock/max_steps) из ai.agent_wall_clock_secs/
+    // ai.agent_max_steps (клампятся в AiConfig). Нет конфига/ключей → LoopBounds::default (байт-прежнее).
+    let loop_bounds = cfg
+        .as_ref()
+        .map(|c| LoopBounds::from_ai_config(&c.ai))
+        .unwrap_or_default();
 
     // AGENT-0.2: веб-инструменты агента (web.search/web.fetch). ВКЛ только при `ai.web.enabled` И
     // непустом url. Default-OFF: нет секции / enabled=false / пустой url → None (агент без веб, без
@@ -484,6 +491,7 @@ pub(crate) async fn run_impl(
             overwrite_threshold,
             blast_cap,
             context_window,
+            loop_bounds,
             agent_web,
             agent_skills,
             skills_learning_enabled,
@@ -783,6 +791,8 @@ async fn drive_run(
     overwrite_threshold: usize,
     blast_cap: u32,
     context_window: Option<usize>,
+    // BF-1 (хвост #519): границы прогона (wall_clock/max_steps) из ai.agent_wall_clock_secs/ai.agent_max_steps.
+    loop_bounds: LoopBounds,
     web: Option<nexus_core::agent::WebToolsConfig>,
     skills: Option<nexus_core::agent::SkillContext>,
     skills_learning_enabled: bool,
@@ -838,7 +848,7 @@ async fn drive_run(
         // SL-7: авторство навыков (skill.save) — только при ai.skills.learning_enabled (AGENT-0.2).
         skills_learning_enabled,
     };
-    run_agent_session(
+    run_agent_session_bounded(
         &spec,
         &SessionDeps {
             provider: provider.as_ref(),
@@ -861,6 +871,8 @@ async fn drive_run(
             // W-25: owner-gated deep-research (ai.research, default-OFF).
             research: research.as_ref(),
         },
+        // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps).
+        loop_bounds,
     )
     .await
 }

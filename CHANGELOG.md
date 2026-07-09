@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### Добавлено · BF-1 (хвост): конфигурируемый `wall_clock`/`max_steps` прогона агента
+
+**Файлы:** `crates/nexus-core/src/ai/config.rs`, `crates/nexus-core/src/agent/runner.rs`,
+`crates/nexus-core/src/agent/session.rs` (+`session/tests.rs`), `crates/nexus-core/src/agent/job.rs`,
+`crates/nexus-core/src/agent/connect/handler.rs` + `acp/server.rs`, `crates/nexus-agentd/src/main.rs` +
+`connect.rs`, `crates/nexus-cli/src/agent.rs` + `acp.rs`, `apps/desktop/src-tauri/src/commands/agent.rs`,
+`docs/CONFIGURATION-REFERENCE.md`, `docs/BACKLOG.md`.
+
+**Контекст:** хвост, отложенный из #519. До этого `LoopBounds` прогона были жёстко зашиты
+(300 с / 8 ходов), десктоп/agentd/cli/acp не давали владельцу ручку на бюджет. BF-1 уже исключил время
+ожидания решения человека у гейта из `wall_clock` — теперь владелец конфигурирует остаток.
+
+**Сделано:** два опциональных ключа `.nexus/local.json` — `ai.agent_wall_clock_secs` (u64, дефолт 300) и
+`ai.agent_max_steps` (u64, дефолт 8). **Тип-толерантный парс** (`de_tolerant_opt_u64`, прецедент CONN-1):
+мусорный тип (строка/булево/массив/объект/дробное/отрицательное) → `None`→дефолт, НЕ роняет весь
+`local.json` (не теряется `ai.chat`/`ai.embedding`). **Санитарный кламп** в `AiConfig`: wall_clock 30..86400 с,
+max_steps 1..10000. Резолв конфиг→границы одной точкой `LoopBounds::from_ai_config` (+ `from_overrides`);
+проброс через ПУБЛИЧНЫЙ `run_agent_session_bounded` во всех вызывателях, строящих прогон из `local.json`
+(десктоп-чат, безголовый `agentd` scheduler+AF_UNIX-коннектор, `nexus agent`, `nexus acp`). Вызыватели без
+конфига (субагенты, smoke, eval, sandbox-child) остаются на дефолте — поведение байт-в-байт прежнее.
+
+**Тесты:** толерантный парс (все мусорные формы + контроль голого числа), кламп вниз/вверх, резолв
+конфиг→`LoopBounds` (+ пустой конфиг == `LoopBounds::default`), проброс режет прогон через session-вход
+(`wall_clock=0` → `WallClock`), дефолтный путь без конфига упирается ровно в 8 ходов.
+
 ### Изменено · R-13g (часть 2) — тест-дедуп в `agent::test_support`
 
 **Файлы:** `crates/nexus-core/src/agent/test_support.rs` (новый, `#[cfg(test)]`), `agent/mod.rs`,

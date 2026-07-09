@@ -41,8 +41,9 @@ use super::event::AgentEvent;
 use super::finish::{outcome_to_finish, CancelWording, PausePolicy, RunFinish};
 use super::memory::AgentMemory;
 use super::run_store::{self, STATUS_ERROR};
+use super::runner::LoopBounds;
 use super::session::{
-    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+    run_agent_session_bounded, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
 };
 use super::skill_tools::SkillContext;
 use super::web_tools::WebToolsConfig;
@@ -139,6 +140,11 @@ pub struct AgentRunHandler {
     /// (3) пробрасывается в [`DispatchPolicy`] актуатора (НЕ пишет под паузой). Триггер — agentd
     /// (персист `agent.json` + рантайм-Arc); UI-кнопка — UI-1.
     agent_paused: Arc<AtomicBool>,
+    /// **BF-1 (хвост #519): границы прогона** (`wall_clock`/`max_steps`) из `ai.agent_wall_clock_secs`/
+    /// `ai.agent_max_steps`. Дефолт [`LoopBounds::default`] (300 с / 8 ходов) — конструктор ставит его,
+    /// agentd переопределяет через [`AgentRunHandler::with_loop_bounds`]. Отсутствие конфиг-ключей →
+    /// байт-прежнее поведение.
+    loop_bounds: LoopBounds,
 }
 
 impl AgentRunHandler {
@@ -192,7 +198,19 @@ impl AgentRunHandler {
             skills_learning_enabled,
             delegation,
             research,
+            // BF-1: дефолтные границы; agentd переопределяет через with_loop_bounds (конфиг-ключи).
+            loop_bounds: LoopBounds::default(),
         }
+    }
+
+    /// **BF-1 (хвост #519): переопределить границы прогона** (`wall_clock`/`max_steps`) из конфига. agentd
+    /// зовёт это с [`LoopBounds::from_ai_config`] (`ai.agent_wall_clock_secs`/`ai.agent_max_steps`).
+    /// НЕ вызвано → [`LoopBounds::default`] из конструктора (нулевая регрессия). Builder-стиль (а не
+    /// ещё-один-аргумент в уже-16-местный `new`), чтобы тестовые вызыватели не трогать.
+    #[must_use]
+    pub fn with_loop_bounds(mut self, bounds: LoopBounds) -> Self {
+        self.loop_bounds = bounds;
+        self
     }
 
     /// Клон process-global kill-switch (AGENT-5) для рантайм-триггера/наблюдения проводкой (agentd
@@ -296,7 +314,7 @@ impl AgentRunHandler {
                     provider: provider.clone(),
                     config: self.delegation.clone(),
                 });
-        let outcome = run_agent_session(
+        let outcome = run_agent_session_bounded(
             &spec,
             &SessionDeps {
                 provider: provider.as_ref(),
@@ -315,6 +333,8 @@ impl AgentRunHandler {
                 // RES-5: research.run (default-OFF; регистрируется лишь при всех условиях).
                 research: Some(&self.research),
             },
+            // BF-1: границы из конфига (`ai.agent_wall_clock_secs`/`ai.agent_max_steps`); дефолт если не задан.
+            self.loop_bounds,
         )
         .await;
 

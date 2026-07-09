@@ -41,7 +41,7 @@ use super::super::super::finish::{outcome_to_finish, CancelWording, PausePolicy}
 use super::super::super::run_store;
 use super::super::super::runner::{BudgetKind, LoopOutcome};
 use super::super::super::session::{
-    run_agent_session, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
+    run_agent_session_bounded, AgentEventForwarder, SessionDeps, SessionRole, SessionSpec,
 };
 use super::super::{
     acp_tool_kind, framing, RpcError, RpcMessage, Transport, TransportError, EVENT_CHANNEL_CAP,
@@ -82,6 +82,10 @@ pub struct AcpServerConfig {
     pub blast_cap: u32,
     /// Окно контекста модели (токены) из конфига; `None` → дефолт `ContextBudget`.
     pub context_window: Option<usize>,
+    /// **BF-1 (хвост #519): границы прогона** (`wall_clock`/`max_steps`) из `ai.agent_wall_clock_secs`/
+    /// `ai.agent_max_steps` (резолв [`crate::agent::LoopBounds::from_ai_config`]). Нет ключей →
+    /// [`crate::agent::LoopBounds::default`] (без регрессии).
+    pub loop_bounds: crate::agent::LoopBounds,
     /// Имя модели (для строки `agent_runs`).
     pub model: String,
 }
@@ -350,7 +354,7 @@ async fn drive_prompt(
     let paused = Arc::new(AtomicBool::new(false));
     let _ = run_store::mark_running(&cfg.writer, run_id).await;
 
-    let outcome = run_agent_session(
+    let outcome = run_agent_session_bounded(
         &spec,
         &SessionDeps {
             provider: cfg.provider.as_ref(),
@@ -368,6 +372,8 @@ async fn drive_prompt(
             delegation: None, // slice-1
             research: None,   // slice-1
         },
+        // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps).
+        cfg.loop_bounds,
     )
     .await;
 

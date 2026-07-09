@@ -26,6 +26,7 @@ pub(crate) fn maybe_spawn_connect_server(
     overwrite_threshold: usize,
     blast_cap: u32,
     context_window: Option<usize>,
+    loop_bounds: nexus_core::agent::LoopBounds,
     skills: &Option<nexus_core::agent::SkillContext>,
     web: &Option<nexus_core::agent::WebToolsConfig>,
     skills_learning_enabled: bool,
@@ -55,6 +56,7 @@ pub(crate) fn maybe_spawn_connect_server(
         overwrite_threshold,
         blast_cap,
         context_window,
+        loop_bounds, // BF-1: границы прогона из конфига (ai.agent_wall_clock_secs/ai.agent_max_steps)
         skills: skills.clone(),
         web: web.clone(), // EGR-AGENT-2: те же веб-инструменты, что у scheduler-AgentRunHandler
         skills_learning_enabled, // SL-7d: owner-gated авторство навыков (ai.skills.learning_enabled)

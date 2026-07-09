@@ -189,6 +189,7 @@ mod tests {
             overwrite_threshold: 64 * 1024,
             blast_cap: 16,
             context_window: Some(32768),
+            loop_bounds: crate::agent::LoopBounds::default(),
             skills: None,
             web: None,
             skills_learning_enabled: false,
