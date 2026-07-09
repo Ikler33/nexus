@@ -159,12 +159,14 @@ describe('plugin-host транспорт (attachPlugin)', () => {
  * `sendBeacon` на внешний хост из iframe открыты). Live-энфорсмент проверяется в реальном Tauri-app.
  */
 describe('plugin CSP egress-контейнмент (T2)', () => {
-  it('PLUGIN_CSP: connect/img/media/font/form/frame/base = none; script+style unsafe-inline', () => {
+  it('PLUGIN_CSP: connect/img/media/font/form/frame/base/navigate = none; script+style unsafe-inline', () => {
     expect(PLUGIN_CSP).toBe(
       "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
         "connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; " +
-        "form-action 'none'; frame-src 'none'; base-uri 'none'",
+        "form-action 'none'; frame-src 'none'; base-uri 'none'; navigate-to 'none'",
     );
+    // navigate-to — ненадёжный (WKWebView) первый слой против navigation-egress (location.href).
+    expect(PLUGIN_CSP).toContain("navigate-to 'none'");
   });
 
   it('withPluginCsp: CSP-meta вставлен ПЕРВЫМ тегом в <head>', () => {

