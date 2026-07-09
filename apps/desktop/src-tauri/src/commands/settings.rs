@@ -783,20 +783,34 @@ pub async fn set_agent_connection(
 }
 
 /// CONN-4: классификация сокета ДО connect (внятная диагностика). Чистая — тестируется без демона.
+/// Логика «нет файла vs не-сокет» — ЕДИНЫЙ канон ядра [`nexus_core::agent::connect::classify_socket`];
+/// здесь только БАЙТ-ПРЕЖНИЙ desktop-текст (ключ `ai.connection.socket`) по вердикту.
 #[cfg(unix)]
 fn classify_socket(path: &std::path::Path) -> Result<(), String> {
-    use std::os::unix::fs::FileTypeExt;
-    match std::fs::symlink_metadata(path) {
-        Ok(m) if !m.file_type().is_socket() => Err(format!(
+    use nexus_core::agent::connect::{classify_socket as core_classify, SocketDiag};
+    match core_classify(path) {
+        SocketDiag::NotSocket => Err(format!(
             "путь {} существует, но это НЕ сокет (проверь ai.connection.socket)",
             path.display()
         )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
+        SocketDiag::Missing => Err(format!(
             "agentd не запущен? сокет {} не найден",
             path.display()
         )),
-        _ => Ok(()),
+        SocketDiag::Usable => Ok(()),
     }
+}
+
+/// CONN-4: байт-прежнее сообщение ошибки пробы `initialize` для desktop test-connection (см.
+/// [`nexus_core::agent::connect::probe_initialize`]). Ok-ветка (строка версии) остаётся на call-site.
+#[cfg(unix)]
+fn probe_local_err(err: nexus_core::agent::connect::ProbeError) -> AppError {
+    use nexus_core::agent::connect::ProbeError;
+    AppError::Msg(match err {
+        ProbeError::Message(m) => m,
+        ProbeError::Rpc(e) => format!("agentd ответил ошибкой: {}", e.message),
+        ProbeError::Unexpected(other) => format!("неожиданный ответ: {other:?}"),
+    })
 }
 
 /// CONN-4/ACP-1b: проверка связи с агент-бэкендом. Ветвится по `ai.connection.mode()`:
@@ -822,7 +836,7 @@ pub async fn test_agent_connection(state: State<'_, AppState>) -> AppResult<Stri
 /// CONN-4: проба локального agentd по AF_UNIX (`initialize`). Лёгкая: без read-loop/forward-таска.
 #[cfg(unix)]
 async fn probe_local_socket(cfg: &LocalConfig, root: &std::path::Path) -> AppResult<String> {
-    use nexus_core::agent::connect::{connect_unix, RpcMessage, Transport};
+    use nexus_core::agent::connect::{connect_unix, probe_initialize};
     let socket = cfg
         .ai
         .connection
@@ -834,30 +848,11 @@ async fn probe_local_socket(cfg: &LocalConfig, root: &std::path::Path) -> AppRes
     let transport = connect_unix(&socket)
         .await
         .map_err(|e| AppError::Msg(format!("agent недоступен на {}: {e}", socket.display())))?;
-    transport
-        .send(RpcMessage::request(
-            1,
-            "initialize",
-            serde_json::json!({ "supportedVersions": ["1.0"] }),
-        ))
+    // Handshake-проба (`initialize` → версия) — ЕДИНЫЙ канон ядра; байт-прежний desktop-текст ошибки
+    // маппит `probe_local_err`, версию отдаём как есть.
+    probe_initialize(&transport, std::time::Duration::from_secs(5))
         .await
-        .map_err(|_| AppError::Msg("не удалось отправить initialize (сокет закрылся)".into()))?;
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), transport.recv())
-        .await
-        .map_err(|_| AppError::Msg("таймаут ответа initialize".into()))?
-        .ok_or_else(|| AppError::Msg("сокет закрыт без ответа".into()))?;
-    match resp {
-        RpcMessage::Response { result: Ok(v), .. } => Ok(v
-            .get("version")
-            .and_then(|x| x.as_str())
-            .unwrap_or("?")
-            .to_string()),
-        RpcMessage::Response { result: Err(e), .. } => Err(AppError::Msg(format!(
-            "agentd ответил ошибкой: {}",
-            e.message
-        ))),
-        other => Err(AppError::Msg(format!("неожиданный ответ: {other:?}"))),
-    }
+        .map_err(probe_local_err)
 }
 
 /// CONN-4: на не-Unix локальный коннектор (AF_UNIX) недоступен — структурно.

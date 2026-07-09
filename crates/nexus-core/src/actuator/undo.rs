@@ -35,7 +35,7 @@ use std::path::Path;
 
 use super::apply::{confine_for_overwrite, AuditSink};
 use super::audit;
-use super::UndoHandle;
+use super::{UndoDomain, UndoHandle};
 
 /// Статус отката ОДНОГО действия (per-action исход). Толерантно к частичному провалу: `undo_run` собирает
 /// эти статусы и НЕ прерывается на первом сбое.
@@ -132,7 +132,7 @@ impl UndoOutcome {
 
 /// Шов исполнения exec-undo (SANDBOX-6c-3e): откат GitOp = САМ мутирующий GitOp, поэтому он RE-ENTER'ит
 /// тот же host/exec путь (classify→decide→approve→mint-token→in-container execute→report), НЕ
-/// привилегированный спец-путь. Для строки [`UndoHandle::ExecGitRef`] [`undo_run_with_driver`] ре-валидирует
+/// привилегированный спец-путь. Для строки [`UndoHandle::ExecGitRef`] [`undo_run`] (с `driver` в [`UndoOpts`]) ре-валидирует
 /// `reference` host-side ([`crate::sandbox::exec_host::is_git_sha`]) и зовёт [`UndoExecDriver::undo_gitref`].
 /// Прод-impl (6c-3d `SandboxUndoExecDriver`) гоняет ОДИН полный цикл в `--network=none` контейнере под тем
 /// же гейтом: `git reset --hard` классифицируется Confirm-НИКОГДА-Auto ⇒ под headless PolicyDefault
@@ -147,61 +147,83 @@ pub trait UndoExecDriver: Send + Sync {
     async fn undo_gitref(&self, reference: &str) -> UndoStatus;
 }
 
+/// Опции отката прогона (R-12b): факультативные параметры [`undo_run`] сверх обязательных
+/// `run_id`/`canon_root`/`ledger`. `Default` (== `UndoOpts::new()`) = ПРЕЖНЕЕ vault-only поведение
+/// (skills_root=None, driver=None): exec-GitOp откат остаётся `Deferred`, строки навыков — Failed
+/// (fail-closed). Билдер (`with_skills_root`/`with_driver`) добавляет ровно то, что нужно вызывателю —
+/// вместо трёх врапперов с разными наборами None-хвостов (`undo_run`/`undo_run_full`/`undo_run_with_driver`).
+#[derive(Default, Clone, Copy)]
+pub struct UndoOpts<'a> {
+    /// Корень навыков (SL-7c): строки навыков (`tool_name="skill_save"`) откатываются ПОД ним (НЕ vault
+    /// `canon_root`). `None` ⇒ строка навыка не откатывается (Failed «skills_root не задан» — fail-closed:
+    /// не угадываем корень). Прод-вызыватель (SL-7d/handler) подставляет канонизированный skills_root.
+    pub skills_root: Option<&'a Path>,
+    /// Драйвер exec-undo (SANDBOX-6c-3e): `Some` ⇒ exec-GitOp откат исполняется реально (синтезированный
+    /// `git reset --hard <ref>` через песочницу под host-апрувом); `None` ⇒ `Deferred` surfacing (байт-в-байт
+    /// как 6c-2h). Композиционный корень (agentd `--sandbox-undo`, 6c-3d) подставляет прод-драйвер.
+    pub driver: Option<&'a dyn UndoExecDriver>,
+}
+
+impl<'a> UndoOpts<'a> {
+    /// vault-only опции по умолчанию (без skills_root/driver) — прежнее поведение `undo_run`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// SL-7c: задать корень навыков для отката строк `skill_save` (иначе они fail-closed Failed).
+    pub fn with_skills_root(mut self, skills_root: &'a Path) -> Self {
+        self.skills_root = Some(skills_root);
+        self
+    }
+
+    /// SANDBOX-6c-3e: задать драйвер реального exec-GitOp отката (иначе exec-GitOp остаётся Deferred).
+    pub fn with_driver(mut self, driver: &'a dyn UndoExecDriver) -> Self {
+        self.driver = Some(driver);
+        self
+    }
+}
+
 /// Откатить прогон `run_id`: пройти его применённые действия NEWEST-FIRST и восстановить каждое через его
 /// [`UndoHandle`]. `canon_root` ОБЯЗАН быть уже канонизированным корнем vault (предусловие рубежа записи).
-/// БЕЗ exec-undo драйвера (exec-GitOp откат остаётся `Deferred` — vault-only поведение); exec-undo —
-/// [`undo_run_with_driver`].
+/// Факультативы (skills_root навыков, exec-undo драйвер) — через [`UndoOpts`]: `UndoOpts::new()` даёт
+/// прежнее vault-only поведение (exec-GitOp откат остаётся `Deferred`, строки навыков — fail-closed Failed).
 ///
 /// Reverse-order критичен: две правки одной заметки v0→v1→v2 откатываются v2 (снапшот=v1) ЗАТЕМ v1
 /// (снапшот=v0) → итог v0. Откатив сначала старейшее, мы бы получили v1, а не v0.
 ///
 /// Идемпотентен: повторный вызов видит пустой набор (откаченные строки в state `undone`, фильтр
 /// [`audit::actions_for_undo`] их не вернёт) → no-op. Толерантен к частичному провалу: один сбойный откат
-/// не прерывает остальные — собираем все исходы в [`UndoOutcome`].
-pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> UndoOutcome {
-    undo_run_inner(run_id, canon_root, None, ledger, None).await
-}
-
-/// SELF-LEARNING SL-7c: как [`undo_run_with_driver`], но с `skills_root` для отката строк навыков
-/// (`tool_name="skill_save"`): их `Snapshot`/`Trash` восстанавливаются ПОД skills_root (НЕ vault
-/// canon_root). `skills_root=None` ⇒ строка навыка не откатывается (Failed «skills_root не задан» —
-/// fail-closed: не угадываем корень). Не-навыковые строки всегда идут под `canon_root`. Прод-вызыватель
-/// (SL-7d/handler) подставляет канонизированный skills_root; vault-only вызыватели зовут [`undo_run`].
-pub async fn undo_run_full(
-    run_id: i64,
-    canon_root: &Path,
-    skills_root: Option<&Path>,
-    ledger: &AuditSink,
-    driver: Option<&dyn UndoExecDriver>,
-) -> UndoOutcome {
-    undo_run_inner(run_id, canon_root, skills_root, ledger, driver).await
-}
-
-/// Как [`undo_run`], но с опциональным [`UndoExecDriver`] (SANDBOX-6c-3e): `Some` ⇒ exec-GitOp откат
-/// исполняется реально (синтезированный `git reset --hard <ref>` через песочницу под host-апрувом); `None` ⇒
-/// `Deferred` surfacing (байт-в-байт как 6c-2h). Композиционный корень (agentd `--sandbox-undo`, 6c-3d)
-/// подставляет прод-драйвер; vault-only вызыватели зовут [`undo_run`]. `reference` ре-валидируется host-side
-/// ([`crate::sandbox::exec_host::is_git_sha`]) ПЕРЕД вызовом драйвера (инъекц-/мусор-ref ⇒ драйвер НЕ зовём).
-pub async fn undo_run_with_driver(
+/// не прерывает остальные — собираем все исходы в [`UndoOutcome`]. `driver.reference` ре-валидируется
+/// host-side ([`crate::sandbox::exec_host::is_git_sha`]) ПЕРЕД вызовом (инъекц-/мусор-ref ⇒ драйвер НЕ зовём).
+pub async fn undo_run(
     run_id: i64,
     canon_root: &Path,
     ledger: &AuditSink,
-    driver: Option<&dyn UndoExecDriver>,
+    opts: UndoOpts<'_>,
 ) -> UndoOutcome {
-    undo_run_inner(run_id, canon_root, None, ledger, driver).await
+    undo_run_inner(run_id, canon_root, opts.skills_root, ledger, opts.driver).await
 }
 
-/// Выбор корня отката строки по её `tool_name`: навык (`skill_save`) → skills_root (если задан), иначе
-/// vault `canon_root`. SL-7c: навыки живут вне vault, их Snapshot/Trash восстанавливаются под skills_root.
+/// Выбор корня отката строки по её ТИПИЗИРОВАННОМУ домену (R-12b): [`UndoDomain::Vault`] → vault
+/// `canon_root`; [`UndoDomain::Skill`] → skills_root (если задан). SL-7c: навыки живут вне vault, их
+/// Snapshot/Trash восстанавливаются под skills_root.
+///
+/// **Обратная совместимость.** Домен читается из ledger-поля `undo_domain`; для строк БЕЗ него (записаны
+/// до R-12b) ИЛИ с битым значением — [`UndoDomain::from_tool_name`] (skill_save → Skill, иначе Vault),
+/// ТОЧНОЕ зеркало прежней `tool_name`-эвристики → исторические ledger'ы читаются один-в-один.
 fn undo_root_for<'a>(
-    tool_name: &str,
+    row: &audit::ActionRow,
     canon_root: &'a Path,
     skills_root: Option<&'a Path>,
 ) -> Option<&'a Path> {
-    if tool_name == "skill_save" {
-        skills_root
-    } else {
-        Some(canon_root)
+    let domain = row
+        .undo_domain
+        .as_deref()
+        .and_then(UndoDomain::parse)
+        .unwrap_or_else(|| UndoDomain::from_tool_name(&row.tool_name));
+    match domain {
+        UndoDomain::Vault => Some(canon_root),
+        UndoDomain::Skill => skills_root,
     }
 }
 
@@ -238,8 +260,9 @@ async fn undo_run_inner(
 
         // (status, drifted): restore-снапшота сообщает дрейф (current != pre-edit ⇒ вероятная правка
         // человека); uncreate/битый хэндл дрейфа не несут (false).
-        // SL-7c: корень отката зависит от tool_name (навык → skills_root, заметка → canon_root).
-        let row_root = undo_root_for(&row.tool_name, canon_root, skills_root);
+        // R-12b: корень отката зависит от ТИПИЗИРОВАННОГО домена строки (undo_domain, tool_name-fallback
+        // для старых): навык (Skill) → skills_root, заметка (Vault) → canon_root.
+        let row_root = undo_root_for(&row, canon_root, skills_root);
         let (status, drifted) = match handle {
             Some(UndoHandle::Snapshot { rel, ts }) => match row_root {
                 Some(root) => restore_snapshot(root, &rel, ts as u64).await,
@@ -549,7 +572,7 @@ mod tests {
         apply_ok(&action, 1, &root, &sink).await;
         assert_eq!(read(&root, "Notes/E.md"), "EDITED", "правка применилась");
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 1, "ровно одно действие откачено");
         assert!(outcome.fully_undone());
         assert_eq!(
@@ -581,7 +604,7 @@ mod tests {
         );
 
         // Откат прогона агента: контракт — вернуть к пред-edit (v0).
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 1, "edit откачен");
         assert!(outcome.fully_undone());
 
@@ -613,7 +636,7 @@ mod tests {
         apply_ok(&action, 1, &root, &sink).await;
         assert!(abs_of(&root, "Notes/New.md").exists(), "файл создан");
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 1);
         assert!(
             !abs_of(&root, "Notes/New.md").exists(),
@@ -639,7 +662,7 @@ mod tests {
         apply_ok(&Action::note_edit("R.md", "v2"), 1, &root, &sink).await;
         assert_eq!(read(&root, "R.md"), "v2");
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 2, "оба edit'а откачены");
         // Порядок отката — newest-first: первым в списке v2-правка (её снапшот = v1), затем v1 (снапшот=v0).
         assert_eq!(outcome.actions.len(), 2);
@@ -662,11 +685,11 @@ mod tests {
         write_existing(&root, "I.md", "BEFORE");
         apply_ok(&Action::note_edit("I.md", "AFTER"), 1, &root, &sink).await;
 
-        let first = undo_run(1, &root, &sink).await;
+        let first = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(first.restored(), 1);
         assert_eq!(read(&root, "I.md"), "BEFORE");
 
-        let second = undo_run(1, &root, &sink).await;
+        let second = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert!(
             second.actions.is_empty(),
             "повторный undo_run — пустой набор (всё уже undone), no-op"
@@ -723,7 +746,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.actions.len(), 2);
         assert_eq!(outcome.restored(), 1, "валидное A откачено");
         assert_eq!(outcome.failed(), 1, "битое B отчиталось провалом");
@@ -867,12 +890,13 @@ mod tests {
             Some(audit::UndoCols {
                 kind: UNDO_EXEC_GITREF.to_string(),
                 reference: "cafebabe".into(),
+                domain: None,
             }),
         )
         .await
         .unwrap();
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.actions.len(), 1);
         assert_eq!(outcome.deferred(), 1, "exec-GitOp откат отложен");
         assert_eq!(outcome.failed(), 0, "deferred — НЕ провал");
@@ -917,6 +941,7 @@ mod tests {
             Some(audit::UndoCols {
                 kind: UNDO_EXEC_GITREF.to_string(),
                 reference: reference.into(),
+                domain: None,
             }),
         )
         .await
@@ -969,7 +994,7 @@ mod tests {
     async fn exec_gitref_with_no_driver_still_deferred() {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
-        let outcome = undo_run_with_driver(1, &root, &sink, None).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.deferred(), 1);
         assert_eq!(state_of(&sink, "g").await, "executed", "None ⇒ не undone");
     }
@@ -980,7 +1005,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
         let (driver, called) = mock_driver(UndoStatus::Restored);
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert!(
             called.load(std::sync::atomic::Ordering::SeqCst),
             "драйвер вызван"
@@ -1000,7 +1025,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
         let (driver, _c) = mock_driver(UndoStatus::Deferred("апрув отклонён".into()));
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert_eq!(outcome.deferred(), 1);
         assert_eq!(outcome.failed(), 0, "deferred — НЕ провал");
         assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
@@ -1012,7 +1037,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
         let (driver, _c) = mock_driver(UndoStatus::Failed("reset exit 1".into()));
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert_eq!(outcome.failed(), 1);
         assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
     }
@@ -1024,7 +1049,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "HEAD; rm -rf ~").await;
         let (driver, called) = mock_driver(UndoStatus::Restored);
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert!(
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "инъекц-ref → драйвер НЕ вызван (fail-closed)"
@@ -1052,7 +1077,7 @@ mod tests {
             .await
             .unwrap();
         let (driver, called) = mock_driver(UndoStatus::Restored);
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert!(
             outcome.actions.is_empty(),
             "shell без undo-хэндла — не в наборе отката"
@@ -1063,7 +1088,7 @@ mod tests {
         );
     }
 
-    // ── SL-7c: откат навыков (skills_root-rooted Snapshot/Trash через undo_run_full) ─────────────
+    // ── SL-7c: откат навыков (skills_root-rooted Snapshot/Trash через undo_run + UndoOpts::with_skills_root) ─────────────
     const VALID_SKILL: &str = "---\nname: s\ndescription: d\n---\nBODY";
 
     /// Канонизированный отдельный skills_root внутри temp (НЕ vault canon_root).
@@ -1082,7 +1107,7 @@ mod tests {
         );
     }
 
-    /// CREATE навыка → undo_run_full (skills_root) уносит файл в корзину (откат create).
+    /// CREATE навыка → undo_run с UndoOpts::with_skills_root уносит файл в корзину (откат create).
     #[tokio::test]
     async fn skill_create_then_undo_uncreates() {
         let (_d, root, sink) = setup().await;
@@ -1096,7 +1121,13 @@ mod tests {
         .await;
         assert!(skills_root.join("s/SKILL.md").exists(), "навык создан");
 
-        let outcome = undo_run_full(1, &root, Some(&skills_root), &sink, None).await;
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
         assert_eq!(outcome.restored(), 1, "create навыка откачен");
         assert!(
             !skills_root.join("s/SKILL.md").exists(),
@@ -1104,7 +1135,7 @@ mod tests {
         );
     }
 
-    /// OVERWRITE навыка → undo_run_full восстанавливает ПРЕД-контент под skills_root.
+    /// OVERWRITE навыка → undo_run (UndoOpts::with_skills_root) восстанавливает ПРЕД-контент под skills_root.
     #[tokio::test]
     async fn skill_overwrite_then_undo_restores_prior() {
         let (_d, root, sink) = setup().await;
@@ -1127,7 +1158,13 @@ mod tests {
             "перезаписан"
         );
 
-        let outcome = undo_run_full(1, &root, Some(&skills_root), &sink, None).await;
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
         assert_eq!(outcome.restored(), 1, "overwrite навыка откачен");
         assert_eq!(
             fs::read_to_string(&abs).unwrap(),
@@ -1137,7 +1174,7 @@ mod tests {
     }
 
     /// FAIL-CLOSED: строка навыка, но undo_run (vault-only, без skills_root) → Failed, файл НЕ тронут
-    /// (не угадываем корень). Восстановить можно только через undo_run_full со skills_root.
+    /// (не угадываем корень). Восстановить можно только через undo_run с UndoOpts::with_skills_root.
     #[tokio::test]
     async fn skill_undo_without_skills_root_fails_closed() {
         let (_d, root, sink) = setup().await;
@@ -1151,7 +1188,7 @@ mod tests {
         .await;
 
         // undo_run НЕ знает skills_root → навык откатить нечем.
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.failed(), 1, "без skills_root навык → Failed");
         assert_eq!(outcome.restored(), 0);
         assert!(
@@ -1164,12 +1201,181 @@ mod tests {
     #[tokio::test]
     async fn undo_run_empty_for_run_without_actions() {
         let (_d, root, sink) = setup().await;
-        let outcome = undo_run(999, &root, &sink).await;
+        let outcome = undo_run(999, &root, &sink, UndoOpts::new()).await;
         assert!(outcome.actions.is_empty());
         assert!(
             outcome.fully_undone(),
             "пустой откат — полностью откачен (нечего откатывать)"
         );
         assert_eq!(outcome.restored(), 0);
+    }
+
+    // ── R-12b: типизированный домен корня (undo_domain) + обратная совместимость ────────────────────
+
+    /// R-12b: СВЕЖИЕ строки несут ТИПИЗИРОВАННЫЙ домен в ledger — навык → `"skill"`, заметка → `"vault"`.
+    /// Доказывает, что apply проставляет `undo_domain` по своей spec (SKILL_SPEC=Skill, NOTE_SPEC=Vault).
+    #[tokio::test]
+    async fn fresh_rows_persist_typed_domain() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        // Навык → домен "skill".
+        apply_skill_ok(
+            &Action::skill_save("s/S.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+        let srows = audit::actions_for_undo(&sink.reader_handle(), 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            srows[0].undo_domain.as_deref(),
+            Some("skill"),
+            "свежий навык → undo_domain=skill"
+        );
+        // Заметка → домен "vault".
+        write_existing(&root, "N.md", "v0");
+        apply_ok(&Action::note_edit("N.md", "v1"), 2, &root, &sink).await;
+        let nrows = audit::actions_for_undo(&sink.reader_handle(), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            nrows[0].undo_domain.as_deref(),
+            Some("vault"),
+            "свежая заметка → undo_domain=vault"
+        );
+    }
+
+    /// R-12b (ревью MINOR-2): юниты на ветвление `undo_root_for` — пинят fallback при БИТОМ домене
+    /// (мутация `parse → Some(Vault) для unknown` ловится) и приоритет typed над tool_name (в прод-путях
+    /// рассинхрон недостижим — тест фиксирует fail-closed-направление на случай тампера БД).
+    #[test]
+    fn undo_root_for_garbage_domain_falls_back_and_typed_wins() {
+        let canon = Path::new("/canon");
+        let skills = Path::new("/skills");
+        let mut row = audit::ActionRow {
+            id: 1,
+            run_id: 1,
+            idempotency_key: String::new(),
+            tool_name: "skill_save".into(),
+            target_rel: None,
+            risk_tier: "auto".into(),
+            state: "executed".into(),
+            content_hash: None,
+            undo_kind: Some("snapshot".into()),
+            undo_ref: None,
+            undo_domain: Some("garbage".into()),
+            outcome: None,
+            diff_summary: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        // Битый домен → parse=None → fallback по tool_name: skill_save → Skill-root (НЕ canon!).
+        assert_eq!(
+            undo_root_for(&row, canon, Some(skills)),
+            Some(skills),
+            "битый undo_domain обязан падать в tool_name-fallback"
+        );
+        // Typed wins: явный домен 'vault' сильнее tool_name='skill_save' (достижимо только тампером БД;
+        // fail-closed-направление — запись уходит в canon_root, не в чужой skills-корень).
+        row.undo_domain = Some("vault".into());
+        assert_eq!(undo_root_for(&row, canon, Some(skills)), Some(canon));
+        // И симметрично: домен 'skill' при vault-only вызывателе (skills_root=None) → None → Failed.
+        row.undo_domain = Some("skill".into());
+        assert_eq!(undo_root_for(&row, canon, None), None);
+    }
+
+    /// R-12b ОБРАТНАЯ СОВМЕСТИМОСТЬ (обязательный тест на ИСТОРИЧЕСКОМ ФИКСТУРЕ): строка навыка,
+    /// записанная ДО R-12b (поля `undo_domain` не было → NULL), откатывается ПРАВИЛЬНО через
+    /// `tool_name`-fallback (`skill_save` → Skill → skills_root). Симулируем старую строку, ЗАНУЛИВ
+    /// колонку у реально применённого навыка (её on-disk состояние совпадает со старым форматом).
+    #[tokio::test]
+    async fn old_row_without_undo_domain_falls_back_to_tool_name() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        apply_skill_ok(
+            &Action::skill_save("s/SKILL.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+        assert!(skills_root.join("s/SKILL.md").exists(), "навык создан");
+
+        // ИСТОРИЧЕСКИЙ ФИКСТУР: зануляем undo_domain — как будто строку записал бинарь ДО миграции 028
+        // (колонки не было → NULL). Прогон helper'а below падает при добавлении новых столбцов — точечно.
+        sink.writer_handle()
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE agent_actions SET undo_domain=NULL WHERE run_id=1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let rows = audit::actions_for_undo(&sink.reader_handle(), 1)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].undo_domain.is_none(),
+            "фикстур: undo_domain NULL (старый формат до R-12b)"
+        );
+        assert_eq!(rows[0].tool_name, "skill_save", "строка навыка");
+
+        // Откат: несмотря на NULL-домен, fallback по tool_name даёт Skill → skills_root → файл унесён.
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
+        assert_eq!(
+            outcome.restored(),
+            1,
+            "старый навык откачен через tool_name-fallback (undo_domain NULL)"
+        );
+        assert!(
+            !skills_root.join("s/SKILL.md").exists(),
+            "файл унесён из skills_root — fallback выбрал ПРАВИЛЬНЫЙ корень для исторической строки"
+        );
+    }
+
+    /// R-12b: ЗАЩИТА fallback'а — старая строка ЗАМЕТКИ (undo_domain NULL, tool_name=note_edit) идёт под
+    /// canon_root (Vault), НЕ под skills_root. Доказывает, что fallback не «всё в skills».
+    #[tokio::test]
+    async fn old_note_row_without_domain_restores_under_canon_root() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        write_existing(&root, "N.md", "ORIGINAL");
+        apply_ok(&Action::note_edit("N.md", "EDITED"), 1, &root, &sink).await;
+        // Зануляем домен (историческая строка).
+        sink.writer_handle()
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE agent_actions SET undo_domain=NULL WHERE run_id=1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        // Даже со skills_root в опциях заметка откатывается под canon_root (Vault-fallback).
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
+        assert_eq!(outcome.restored(), 1, "старая заметка откачена");
+        assert_eq!(
+            read(&root, "N.md"),
+            "ORIGINAL",
+            "восстановлена под canon_root (Vault-fallback), не под skills_root"
+        );
     }
 }

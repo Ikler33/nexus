@@ -1,0 +1,12 @@
+-- Schema v28 (R-12b): типизированный ДОМЕН КОРНЯ отката строки actuator-ledger. Раньше выбор корня
+-- восстановления Snapshot/Trash (`undo_run`) шёл строковой эвристикой `tool_name == "skill_save"`
+-- (навык → skills_root, иначе → vault canon_root). Теперь домен пишется ЯВНО отдельным полем
+-- `undo_domain` (дискриминант `vault`/`skill`), а откат читает его типизированно (`UndoDomain`).
+--
+-- ОБРАТНАЯ СОВМЕСТИМОСТЬ (обязательна — ledger append-only, старые строки не переписываются): колонка
+-- nullable, все существующие `finish` до R-12b НЕ перечисляют `undo_domain` в UPDATE → у старых строк
+-- значение NULL. Читатель (`actuator::undo::undo_root_for`) для NULL/битого значения падает на
+-- `UndoDomain::from_tool_name` — ТОЧНОЕ зеркало прежней `tool_name`-эвристики, поэтому исторические
+-- ledger'ы (и exec-GitOp строки, у которых fs-домена нет) читаются один-в-один. Индекса не требует
+-- (домен читается только вместе со строкой отбора `actions_for_undo`, не как ключ выборки).
+ALTER TABLE agent_actions ADD COLUMN undo_domain TEXT;

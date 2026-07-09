@@ -216,6 +216,13 @@ const MIGRATIONS: &[Migration] = &[
         rebuild_fts: false, // nullable-колонка структурного LLM-down-сигнала (B12), производных не трогает
         rebuild_chat_fts: false,
     },
+    Migration {
+        version: 28,
+        name: "agent_actions_undo_domain",
+        sql: include_str!("migrations/028_agent_actions_undo_domain.sql"),
+        rebuild_fts: false, // nullable-колонка типизированного домена отката (R-12b), производных не трогает
+        rebuild_chat_fts: false,
+    },
 ];
 
 /// Версия схемы, на которую рассчитан этот билд (максимальная из [`MIGRATIONS`]).
@@ -374,6 +381,76 @@ mod tests {
         assert_eq!(v, i64::from(latest_version()));
         apply(&mut conn).unwrap();
         assert_eq!(user_version(&conn).unwrap(), v, "повторный apply — no-op");
+    }
+
+    /// Пошагово применяет миграции с `version <= target` (для симуляции «БД, поднятой старым
+    /// приложением» — до конкретной версии схемы). Зеркалит тело [`apply`] без потолка/хуков.
+    fn apply_through(conn: &mut Connection, target: u32) {
+        for m in MIGRATIONS {
+            if m.version > target {
+                break;
+            }
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(m.sql).unwrap();
+            tx.pragma_update(None, "user_version", m.version).unwrap();
+            tx.commit().unwrap();
+        }
+    }
+
+    /// R-12b: миграция 028 (`undo_domain`) ОБРАТНО-СОВМЕСТИМА. «Старая» БД (схема v27, БЕЗ колонки) со
+    /// строкой `agent_actions` после доводки до latest получает `undo_domain=NULL` (строка читается,
+    /// не теряется); «свежая» вставка С колонкой работает — обе БД жизнеспособны.
+    #[test]
+    fn migration_028_undo_domain_back_compat() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // «Старая» БД: доводим схему только до v27 (undo_domain ещё нет) и вставляем строку действия.
+        apply_through(&mut conn, 27);
+        assert_eq!(user_version(&conn).unwrap(), 27);
+        conn.execute(
+            "INSERT INTO agent_actions(run_id,idempotency_key,tool_name,risk_tier,state,created_at,updated_at) \
+             VALUES(1,'old-k','skill_save','auto','executed',1,1)",
+            [],
+        )
+        .unwrap();
+
+        // Доводим до latest (включая 028) — как открытие старой БД новым приложением.
+        apply(&mut conn).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), i64::from(latest_version()));
+
+        // Старая строка теперь имеет undo_domain=NULL (читается, не потеряна).
+        let old_dom: Option<String> = conn
+            .query_row(
+                "SELECT undo_domain FROM agent_actions WHERE idempotency_key='old-k'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(old_dom.is_none(), "старая строка: undo_domain NULL");
+
+        // Свежая вставка С колонкой (как пишет finish после R-12b) работает.
+        conn.execute(
+            "INSERT INTO agent_actions(run_id,idempotency_key,tool_name,risk_tier,state,undo_domain,created_at,updated_at) \
+             VALUES(2,'new-k','note_edit','auto','executed','vault',1,1)",
+            [],
+        )
+        .unwrap();
+        let new_dom: Option<String> = conn
+            .query_row(
+                "SELECT undo_domain FROM agent_actions WHERE idempotency_key='new-k'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            new_dom.as_deref(),
+            Some("vault"),
+            "свежая строка: undo_domain=vault"
+        );
+
+        // Свежая БД с нуля тоже доходит до latest (колонка есть сразу).
+        let mut fresh = Connection::open_in_memory().unwrap();
+        apply(&mut fresh).unwrap();
+        assert_eq!(user_version(&fresh).unwrap(), i64::from(latest_version()));
     }
 
     /// Аудит: БД новее приложения (downgrade) → явный отказ, а не тихий приём (иначе операции по

@@ -507,7 +507,13 @@ async fn approve_then_undo_reverts_write_e2e() {
 
     // Этап 2: UNDO прогона (зеркало agent_undo: AuditSink над тем же writer/reader) → файл откатан.
     let ledger = nexus_core::actuator::AuditSink::new(db.writer().clone(), db.reader().clone());
-    let undone = nexus_core::actuator::undo_run(run_id, &canon, &ledger).await;
+    let undone = nexus_core::actuator::undo_run(
+        run_id,
+        &canon,
+        &ledger,
+        nexus_core::actuator::UndoOpts::new(),
+    )
+    .await;
     assert!(undone.restored() >= 1, "undo восстановил ≥1 действие");
     assert!(
         !canon.join("Notes/E2E.md").exists(),

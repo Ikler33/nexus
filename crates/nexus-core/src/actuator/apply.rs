@@ -54,7 +54,7 @@ use super::audit::{
     self, canonical_args, idempotency_key, ActionEntry, ReplayDecision, STATE_EXECUTING,
     STATE_FAILED,
 };
-use super::UndoHandle;
+use super::{UndoDomain, UndoHandle};
 
 /// Хэндл к idempotency-ledger (`agent_actions`) для apply — тонкая обёртка над аудированными свободными
 /// функциями [`super::audit`] (record_before/finish/replay_decision/lookup). Держит клон-хэндлы writer'а
@@ -375,6 +375,10 @@ struct ConfinedWriteSpec {
     build_write: fn(&Action, &str) -> Result<Vec<u8>, String>,
     /// Резюме успеха (Рубеж 7) для tool-результата/ledger-outcome. Аргументы: action, rel, is_create.
     success_summary: fn(&Action, &str, bool) -> String,
+    /// R-12b: домен корня отката для строк ЭТОГО пути (записывается в `undo_domain` при finish). Заметка —
+    /// [`UndoDomain::Vault`] (canon_root), навык — [`UndoDomain::Skill`] (skills_root). Типизирует прежнюю
+    /// строковую эвристику `tool_name=="skill_save"` явным ledger-полем.
+    domain: UndoDomain,
 }
 
 fn note_is_create(action: &Action, _current_none: bool) -> bool {
@@ -485,6 +489,7 @@ const NOTE_SPEC: ConfinedWriteSpec = ConfinedWriteSpec {
     snapshot_fail_msg: note_snapshot_fail,
     build_write: note_build_write,
     success_summary: note_success_summary,
+    domain: UndoDomain::Vault,
 };
 
 /// Спека навыка: skills_root; create-vs-overwrite по наличию файла; existence-вердикта НЕТ.
@@ -495,6 +500,7 @@ const SKILL_SPEC: ConfinedWriteSpec = ConfinedWriteSpec {
     snapshot_fail_msg: skill_snapshot_fail,
     build_write: skill_build_write,
     success_summary: skill_success_summary,
+    domain: UndoDomain::Skill,
 };
 
 /// ЯДРО безопасной записи в конфайнед-корень: рубежи 2-7 в СТРОГОМ, ЕДИНСТВЕННОМ порядке (нарушить
@@ -689,8 +695,12 @@ async fn apply_confined_write(
     match write_result {
         Ok(()) => {
             let summary = (spec.success_summary)(action, &rel, is_create);
+            // R-12b: домен корня отката — из spec (заметка → Vault, навык → Skill). Проставляем ЗДЕСЬ
+            // (call-site apply знает домен; to_cols домен-агностичен) → колонка `undo_domain` строки.
+            let mut cols = undo.to_cols();
+            cols.domain = Some(spec.domain);
             let _ = ledger
-                .finish(&key, audit::STATE_EXECUTED, &summary, Some(undo.to_cols()))
+                .finish(&key, audit::STATE_EXECUTED, &summary, Some(cols))
                 .await;
             ApplyOutcome::Executed { summary, undo }
         }

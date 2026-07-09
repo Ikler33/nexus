@@ -873,9 +873,43 @@ fn run_cmds_strict(cmds: &[Vec<String>]) -> Result<(), String> {
 
 // ── status ────────────────────────────────────────────────────────────────────────────────────────
 
+/// CONN-4: байт-прежнее сообщение диагностики сокета для `nexus status` по вердикту канона
+/// [`classify_socket`]. `None` — путь пригоден (проба продолжается). Тексты специфичны для CLI
+/// (упоминают флаг `--socket` и `nexus deploy local --apply`) — потому маппинг ЗДЕСЬ, не в ядре.
+#[cfg(unix)]
+fn status_socket_diag_err(
+    diag: nexus_core::agent::connect::SocketDiag,
+    socket: &Path,
+) -> Option<String> {
+    use nexus_core::agent::connect::SocketDiag;
+    match diag {
+        SocketDiag::NotSocket => Some(format!(
+            "путь {} существует, но это НЕ сокет (мисконфиг --socket?)",
+            socket.display()
+        )),
+        SocketDiag::Missing => Some(format!(
+            "сокет {} не найден — сервис не запущен? (`nexus deploy local --apply`)",
+            socket.display()
+        )),
+        SocketDiag::Usable => None,
+    }
+}
+
+/// CONN-4: байт-прежнее сообщение ошибки пробы `initialize` для `nexus status` (см.
+/// [`nexus_core::agent::connect::probe_initialize`]). Ok-ветка (println версии) остаётся на call-site.
+#[cfg(unix)]
+fn status_probe_err(err: nexus_core::agent::connect::ProbeError) -> String {
+    use nexus_core::agent::connect::ProbeError;
+    match err {
+        ProbeError::Message(m) => m,
+        ProbeError::Rpc(e) => format!("агент ответил ошибкой: {} ({})", e.message, e.code),
+        ProbeError::Unexpected(other) => format!("неожиданный ответ: {other:?}"),
+    }
+}
+
 #[cfg(unix)]
 fn cmd_status(flags: &[&str]) -> Result<(), String> {
-    use nexus_core::agent::connect::{connect_unix, RpcMessage, Transport};
+    use nexus_core::agent::connect::{classify_socket, connect_unix, probe_initialize};
     use std::time::Duration;
 
     let socket = match flag(flags, "--socket") {
@@ -890,22 +924,10 @@ fn cmd_status(flags: &[&str]) -> Result<(), String> {
     };
     println!("socket: {}", socket.display());
 
-    // Внятная диагностика ДО connect: нет файла (сервис не запущен) vs не-сокет (мисконфиг).
-    use std::os::unix::fs::FileTypeExt;
-    match std::fs::symlink_metadata(&socket) {
-        Ok(m) if !m.file_type().is_socket() => {
-            return Err(format!(
-                "путь {} существует, но это НЕ сокет (мисконфиг --socket?)",
-                socket.display()
-            ))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!(
-                "сокет {} не найден — сервис не запущен? (`nexus deploy local --apply`)",
-                socket.display()
-            ))
-        }
-        _ => {}
+    // Внятная диагностика ДО connect: нет файла (сервис не запущен) vs не-сокет (мисконфиг) — ЕДИНАЯ
+    // классификация в ядре (`classify_socket`), байт-прежний текст маппится тут (`status_socket_diag_err`).
+    if let Some(e) = status_socket_diag_err(classify_socket(&socket), &socket) {
+        return Err(e);
     }
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
@@ -919,28 +941,12 @@ fn cmd_status(flags: &[&str]) -> Result<(), String> {
             ))
             }
         };
-        transport
-            .send(RpcMessage::request(
-                1,
-                "initialize",
-                serde_json::json!({ "supportedVersions": ["1.0"] }),
-            ))
-            .await
-            .map_err(|_| "не удалось отправить initialize (сокет закрылся)".to_string())?;
-        let resp = tokio::time::timeout(Duration::from_secs(5), transport.recv())
-            .await
-            .map_err(|_| "таймаут ответа initialize".to_string())?
-            .ok_or_else(|| "сокет закрыт без ответа".to_string())?;
-        match resp {
-            RpcMessage::Response { result: Ok(v), .. } => {
-                let ver = v.get("version").and_then(|x| x.as_str()).unwrap_or("?");
+        match probe_initialize(&transport, Duration::from_secs(5)).await {
+            Ok(ver) => {
                 println!("✓ агент ДОСТУПЕН, протокол v{ver}");
                 Ok(())
             }
-            RpcMessage::Response { result: Err(e), .. } => {
-                Err(format!("агент ответил ошибкой: {} ({})", e.message, e.code))
-            }
-            other => Err(format!("неожиданный ответ: {other:?}")),
+            Err(e) => Err(status_probe_err(e)),
         }
     })
 }
@@ -985,6 +991,43 @@ mod tests {
     fn path_chars_rejects_control() {
         assert!(validate_path_chars(Path::new("/ok/path"), "x").is_ok());
         assert!(validate_path_chars(Path::new("/bad\npath"), "x").is_err());
+    }
+
+    // CONN-4/R-12b: характеризация БАЙТ-ПРЕЖНИХ текстов `nexus status` после дедупа socket-диагностики
+    // (канон `classify_socket`/`probe_initialize` в ядре; тексты — тут). Пинят точные строки.
+    #[cfg(unix)]
+    #[test]
+    fn status_socket_diag_messages_byte_exact() {
+        use nexus_core::agent::connect::SocketDiag;
+        let p = Path::new("/v/.nexus/agentd.sock");
+        assert_eq!(
+            status_socket_diag_err(SocketDiag::NotSocket, p).unwrap(),
+            "путь /v/.nexus/agentd.sock существует, но это НЕ сокет (мисконфиг --socket?)"
+        );
+        assert_eq!(
+            status_socket_diag_err(SocketDiag::Missing, p).unwrap(),
+            "сокет /v/.nexus/agentd.sock не найден — сервис не запущен? (`nexus deploy local --apply`)"
+        );
+        assert!(status_socket_diag_err(SocketDiag::Usable, p).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_probe_err_messages_byte_exact() {
+        use nexus_core::agent::connect::{ProbeError, RpcError, RpcMessage};
+        assert_eq!(
+            status_probe_err(ProbeError::Message("таймаут ответа initialize".to_string())),
+            "таймаут ответа initialize"
+        );
+        assert_eq!(
+            status_probe_err(ProbeError::Rpc(RpcError::version_incompatible())),
+            "агент ответил ошибкой: protocol version incompatible (-32001)"
+        );
+        let other = RpcMessage::notification("agent/event", serde_json::json!({"type": "final"}));
+        assert_eq!(
+            status_probe_err(ProbeError::Unexpected(other.clone())),
+            format!("неожиданный ответ: {other:?}")
+        );
     }
 
     #[test]

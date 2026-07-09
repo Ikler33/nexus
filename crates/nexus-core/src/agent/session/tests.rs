@@ -783,7 +783,8 @@ async fn live_actuator_create_and_undo_on_rig() {
 
     // Undo восстанавливает (файл был создан → undo удаляет).
     let ledger = AuditSink::new(db.writer().clone(), db.reader().clone());
-    let undo = crate::actuator::undo_run(run_id, &canon, &ledger).await;
+    let undo =
+        crate::actuator::undo_run(run_id, &canon, &ledger, crate::actuator::UndoOpts::new()).await;
     eprintln!("LIVE undo restored={}", undo.restored());
     assert!(undo.restored() >= 1, "undo должен откатить >=1 действие");
     assert!(!path.exists(), "undo должен удалить созданную заметку");

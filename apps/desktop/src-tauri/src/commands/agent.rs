@@ -663,7 +663,7 @@ pub(crate) async fn undo_impl(state: &AppState, run_id: i64) -> AppResult<usize>
     };
     // ledger-обёртка над тем же writer/reader, что и прогон — undo_run читает executed-строки прогона.
     let ledger = AuditSink::new(writer, reader);
-    let outcome = actuator::undo_run(run_id, &canon_root, &ledger).await;
+    let outcome = actuator::undo_run(run_id, &canon_root, &ledger, actuator::UndoOpts::new()).await;
     Ok(outcome.restored())
 }
 

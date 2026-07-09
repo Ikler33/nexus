@@ -127,7 +127,7 @@ pub struct SessionSpec {
     pub canon_root: PathBuf,
     /// **SELF-LEARNING SL-7d, OWNER-GATED, default false** (`ai.skills.learning_enabled`). `true` И
     /// `actuator_enabled` И сконфигурированный skills-каталог (`skills=Some`) → регистрируется `skill.save`
-    /// (агент авторствует навыки через гейт Confirm-never-Auto) + откат прогона идёт `undo_run_full` со
+    /// (агент авторствует навыки через гейт Confirm-never-Auto) + откат прогона идёт `undo_run` (UndoOpts::with_skills_root) со
     /// skills_root. `false` → инструмента нет, classify режет `SkillSave` HardBlocked (поведение без регрессии).
     pub skills_learning_enabled: bool,
 }

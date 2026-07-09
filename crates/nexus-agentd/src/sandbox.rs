@@ -251,8 +251,8 @@ fn parse_sandbox_undo_args(args: &[String]) -> Result<SandboxUndoArgs, String> {
 /// остаётся честным `Deferred` (не `Failed`), с подсказкой какие флаги включить.
 pub(crate) async fn run_sandbox_undo() -> Result<i32, String> {
     use nexus_core::actuator::{
-        undo_run_with_driver, ApproveAll, AuditSink, DecisionSource, DispatchPolicy, PolicyDefault,
-        TracingEventSink, OVERWRITE_THRESHOLD,
+        undo_run, ApproveAll, AuditSink, DecisionSource, DispatchPolicy, PolicyDefault,
+        TracingEventSink, UndoOpts, OVERWRITE_THRESHOLD,
     };
     use nexus_core::actuator::{EventSink, UndoExecDriver};
     use nexus_core::sandbox::exec_undo::{PodmanGitResetRunner, SandboxUndoExecDriver};
@@ -306,7 +306,13 @@ pub(crate) async fn run_sandbox_undo() -> Result<i32, String> {
         "sandbox-undo: старт отката прогона"
     );
     let driver_ref: &dyn UndoExecDriver = &driver;
-    let outcome = undo_run_with_driver(parsed.run_id, &root, &ledger, Some(driver_ref)).await;
+    let outcome = undo_run(
+        parsed.run_id,
+        &root,
+        &ledger,
+        UndoOpts::new().with_driver(driver_ref),
+    )
+    .await;
     tracing::info!(
         restored = outcome.restored(),
         deferred = outcome.deferred(),

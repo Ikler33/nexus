@@ -168,7 +168,26 @@ mod connected {
     use tokio::sync::Mutex;
 
     use crate::error::AppError;
-    use nexus_core::agent::connect::{connect_unix, ConnectClient, UndoResult};
+    use nexus_core::agent::connect::{
+        classify_socket, connect_unix, ConnectClient, SocketDiag, UndoResult,
+    };
+
+    /// CONN-4: байт-прежнее сообщение диагностики сокета для lazy-connect бэкенда по вердикту канона
+    /// [`classify_socket`]. `None` — путь пригоден (connect продолжается). Тексты специфичны для
+    /// backend (`ai.connection.socket`, `nexus deploy local --apply`) — маппинг здесь, не в ядре.
+    fn connect_socket_diag_err(diag: SocketDiag, socket: &std::path::Path) -> Option<String> {
+        match diag {
+            SocketDiag::NotSocket => Some(format!(
+                "{}: путь существует, но это НЕ сокет (проверь ai.connection.socket)",
+                socket.display()
+            )),
+            SocketDiag::Missing => Some(format!(
+                "agentd не запущен? сокет {} не найден (`nexus deploy local --apply`)",
+                socket.display()
+            )),
+            SocketDiag::Usable => None,
+        }
+    }
 
     /// Текущий канал событий активного прогона (форвард-таск шлёт сюда).
     type SharedChannel = Arc<Mutex<Option<Channel<AgentStreamEvent>>>>;
@@ -203,21 +222,10 @@ mod connected {
         /// Открывает соединение + handshake. Внятная диагностика (зеркало `nexus status`): нет файла →
         /// «демон не запущен»; не-сокет → мисконфиг. Никогда не паникует.
         async fn connect(&self) -> AppResult<ConnState> {
-            use std::os::unix::fs::FileTypeExt;
-            match std::fs::symlink_metadata(&self.socket) {
-                Ok(m) if !m.file_type().is_socket() => {
-                    return Err(AppError::Msg(format!(
-                        "{}: путь существует, но это НЕ сокет (проверь ai.connection.socket)",
-                        self.socket.display()
-                    )))
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(AppError::Msg(format!(
-                        "agentd не запущен? сокет {} не найден (`nexus deploy local --apply`)",
-                        self.socket.display()
-                    )))
-                }
-                _ => {}
+            // Внятная диагностика (зеркало `nexus status`) — ЕДИНАЯ классификация в ядре
+            // (`classify_socket`), байт-прежний backend-текст маппит `connect_socket_diag_err`.
+            if let Some(e) = connect_socket_diag_err(classify_socket(&self.socket), &self.socket) {
+                return Err(AppError::Msg(e));
             }
             let transport = connect_unix(&self.socket).await.map_err(|e| {
                 AppError::Msg(format!(
@@ -418,6 +426,29 @@ mod connected {
             let u: UndoResult = serde_json::from_value(res)
                 .map_err(|_| AppError::Msg("agent/undo: некорректный результат".into()))?;
             Ok(u.restored as usize)
+        }
+    }
+
+    // CONN-4/R-12b: характеризация БАЙТ-ПРЕЖНИХ backend-текстов диагностики сокета после дедупа
+    // (канон `classify_socket` в ядре; тексты — тут). Пинят точные строки. В КОНЦЕ модуля
+    // (clippy::items_after_test_module: за тест-модулем не должно быть прод-элементов).
+    #[cfg(test)]
+    mod diag_tests {
+        use super::{connect_socket_diag_err, SocketDiag};
+        use std::path::Path;
+
+        #[test]
+        fn connect_socket_diag_messages_byte_exact() {
+            let p = Path::new("/v/.nexus/agentd.sock");
+            assert_eq!(
+                connect_socket_diag_err(SocketDiag::NotSocket, p).unwrap(),
+                "/v/.nexus/agentd.sock: путь существует, но это НЕ сокет (проверь ai.connection.socket)"
+            );
+            assert_eq!(
+                connect_socket_diag_err(SocketDiag::Missing, p).unwrap(),
+                "agentd не запущен? сокет /v/.nexus/agentd.sock не найден (`nexus deploy local --apply`)"
+            );
+            assert!(connect_socket_diag_err(SocketDiag::Usable, p).is_none());
         }
     }
 }
