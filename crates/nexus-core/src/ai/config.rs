@@ -1143,10 +1143,19 @@ mod tests {
         ] {
             let cfg =
                 LocalConfig::parse(bad).unwrap_or_else(|e| panic!("parse упал на {bad}: {e}"));
-            assert!(
-                cfg.ai.agent_wall_clock().is_none() || cfg.ai.agent_max_steps().is_none(),
-                "мусорный тип → None: {bad}"
-            );
+            // Ревью R-13g-волны: per-key ассерты (не `||`) — иначе кейсы max_steps «страховались бы»
+            // тривиальным None соседнего отсутствующего ключа и мутант «нетолерантный max_steps» выживал.
+            if bad.contains("agent_wall_clock_secs") {
+                assert!(
+                    cfg.ai.agent_wall_clock().is_none(),
+                    "мусорный wall_clock → None: {bad}"
+                );
+            } else {
+                assert!(
+                    cfg.ai.agent_max_steps().is_none(),
+                    "мусорный max_steps → None: {bad}"
+                );
+            }
             assert_eq!(
                 cfg.ai.chat.expect("ai.chat должен выжить").url,
                 "http://h:8080",
