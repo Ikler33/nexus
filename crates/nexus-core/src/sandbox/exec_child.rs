@@ -271,6 +271,15 @@ mod tests {
         ExecCwd::ScratchTmpfs { rel: rel.into() }
     }
 
+    /// Анти-флейк: wall-clock-кэп для «мгновенных» реальных бинарей (`env`/`echo`/`false`/`head`) —
+    /// он ловит ЗАВИСАНИЕ, а не скорость. Прежние 5с мигали (`real_env_clear_proven`, 2× за сутки)
+    /// под полной параллельной нагрузкой (`cargo test --workspace` + clippy): fork/exec + pipe + wait
+    /// реального процесса под perf-давлением выходили за кэп → ложный `timed_out` → красный ассерт.
+    /// 30с на порядки выше честного пути (~0.02с в изоляции) и по-прежнему жёстко ловит регресс-
+    /// зависание. НЕ применять к тестам, где таймаут — часть семантики (150/250мс + elapsed-границы).
+    #[cfg(unix)]
+    const HANG_GUARD_MS: u64 = 30_000;
+
     /// Первый существующий путь из кандидатов (macOS=/usr/bin/false, Linux=/bin/false и т.п. различаются).
     #[cfg(unix)]
     fn first_existing(cands: &[&'static str]) -> &'static str {
@@ -382,7 +391,7 @@ mod tests {
         let echo = first_existing(&["/bin/echo", "/usr/bin/echo"]);
         let r = RealExecRunner
             .run(
-                &go(vec![echo, "hi"], vec![], scratch(""), 65536, 5000),
+                &go(vec![echo, "hi"], vec![], scratch(""), 65536, HANG_GUARD_MS),
                 Path::new("/tmp"),
                 Path::new("/tmp"),
             )
@@ -398,7 +407,7 @@ mod tests {
         let false_bin = first_existing(&["/bin/false", "/usr/bin/false"]);
         let r = RealExecRunner
             .run(
-                &go(vec![false_bin], vec![], scratch(""), 1024, 5000),
+                &go(vec![false_bin], vec![], scratch(""), 1024, HANG_GUARD_MS),
                 Path::new("/tmp"),
                 Path::new("/tmp"),
             )
@@ -419,7 +428,7 @@ mod tests {
                     vec![("ONLY_VAR", "1")],
                     scratch(""),
                     65536,
-                    5000,
+                    HANG_GUARD_MS,
                 ),
                 Path::new("/tmp"),
                 Path::new("/tmp"),
@@ -488,7 +497,7 @@ mod tests {
                     vec![],
                     scratch(""),
                     cap,
-                    5000,
+                    HANG_GUARD_MS,
                 ),
                 Path::new("/tmp"),
                 Path::new("/tmp"),
@@ -535,7 +544,7 @@ mod tests {
                     vec![],
                     scratch(""),
                     1024,
-                    5000,
+                    HANG_GUARD_MS,
                 ),
                 Path::new("/tmp"),
                 Path::new("/tmp"),
