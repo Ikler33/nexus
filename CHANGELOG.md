@@ -6,6 +6,36 @@
 
 ## [Unreleased]
 
+### Исправлено · анти-флейк `sandbox::exec_child` — hang-guard-таймаут 5с→30с (мгновенные реальные бинари)
+
+**Файл:** `crates/nexus-core/src/sandbox/exec_child.rs` (только `mod tests`; прод-код не тронут).
+
+**Причина (честно):** `real_env_clear_proven` мигал по таймауту (2× за сутки в отчётах агентов) под
+полной параллельной нагрузкой (`cargo test --workspace` + одновременный clippy): тест спавнит реальный
+`/usr/bin/env` с `timeout_ms=5000`, кэп оборачивает весь путь fork/exec→pipe-чтение→wait; под
+perf-давлением сатурированной машины 5с реального wall-clock не хватало → ложный `timed_out`
+(`exit_code=-1`, пустой stdout) → красный exit-ассерт. В изоляции тест идёт ~0.02с. Ничего тоньше
+(pipe-буферы/порты/reaping) не замешано: вывод `env` крошечный, оба потока читаются конкурентно,
+`wait()` внутри таймаут-фьючи + `kill_on_drop`.
+
+**Фикс:** таймаут здесь — детектор ЗАВИСАНИЯ, а не ассерт скорости → поднят до именованной константы
+`HANG_GUARD_MS = 30_000` для всех 5 тестов класса «мгновенный бинарь» (`real_runs_trivial_argv`,
+`real_nonzero_exit_propagates`, `real_env_clear_proven`, `real_large_output_capped`,
+`real_missing_binary_is_launch_failure`) — на порядки выше честного пути, регресс-зависание ловится
+по-прежнему. Тесты с СЕМАНТИЧЕСКИМ таймаутом (150/250мс + elapsed-границы:
+`real_timeout_kills_and_flags`, `real_forking_grandchild_holds_pipe_returns_at_timeout`) намеренно
+НЕ тронуты — там границы load-bearing. Без retry-обёрток и без выключения теста: security-ассерт
+INV-ENV-FAILCLOSED не ослаблен ни на байт.
+
+**Доказательства:** мутационная проверка — `env_clear()` временно выключен → тест красный ровно на
+ассерте «host-секрет НЕ утёк» (`NEXUS_FAKE_SECRET=leaked` виден в выводе ребёнка) → возвращён →
+зелёный. Изолированный тест 50× подряд — 0 фейлов; 3 полных `cargo test --workspace` под параллельной
+clippy-нагрузкой (отдельный target-dir, честная конкуренция за CPU) — 0 фейлов.
+
+- Гейт: `cargo fmt --all --check` ✅ / `clippy --workspace --all-targets -D warnings` ✅ /
+  `test --workspace` ✅ ×3 (nexus-core 1139 + 20 ignored, agentd 19, cli 51, desktop 247 + 6 ignored,
+  git_sync 6, acp_e2e 1, acp_server_e2e 1 — 0 failed); ignore-паритет цел (атрибут не вводился).
+
 ### Изменено · R-12b — хвост R-12: socket-диагностика ×3→1 + undo UndoOpts/типизированный домен (миграция 028)
 
 Закрыты ОБА отложенных из R-12 пункта (см. блок «ОТЛОЖЕНО в R-12b» ниже). **Behavior-preserving**
