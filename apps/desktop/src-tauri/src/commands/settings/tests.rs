@@ -293,12 +293,52 @@ async fn probe_acp_ssh_without_host_errors() {
 }
 
 /// CONN-4: `classify_socket` без демона → внятная «не запущен» ошибка (не паника, не connect).
+/// R-12b: БАЙТ-ПРЕЖНИЙ desktop-текст после дедупа диагностики (канон `classify_socket` в ядре).
 #[cfg(unix)]
 #[test]
 fn classify_socket_not_found_is_clear_error() {
     let missing = std::path::Path::new("/tmp/nexus-conn4-nope-12345.sock");
     let e = classify_socket(missing).unwrap_err();
     assert!(e.contains("не запущен"), "got: {e}");
+    assert_eq!(
+        e,
+        "agentd не запущен? сокет /tmp/nexus-conn4-nope-12345.sock не найден"
+    );
+    // Не-сокет (обычный файл) → мисконфиг-текст с ключом ai.connection.socket.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("plain.txt");
+    std::fs::write(&file, b"x").unwrap();
+    assert_eq!(
+        classify_socket(&file).unwrap_err(),
+        format!(
+            "путь {} существует, но это НЕ сокет (проверь ai.connection.socket)",
+            file.display()
+        )
+    );
+}
+
+/// CONN-4/R-12b: `probe_local_err` пинит БАЙТ-ПРЕЖНИЕ desktop-тексты ошибок пробы `initialize`.
+#[cfg(unix)]
+#[test]
+fn probe_local_err_messages_byte_exact() {
+    use nexus_core::agent::connect::{ProbeError, RpcError, RpcMessage};
+    let msg = |e: ProbeError| match probe_local_err(e) {
+        crate::error::AppError::Msg(m) => m,
+        other => panic!("ждали AppError::Msg, получили {other:?}"),
+    };
+    assert_eq!(
+        msg(ProbeError::Message("сокет закрыт без ответа".to_string())),
+        "сокет закрыт без ответа"
+    );
+    assert_eq!(
+        msg(ProbeError::Rpc(RpcError::version_incompatible())),
+        "agentd ответил ошибкой: protocol version incompatible"
+    );
+    let other = RpcMessage::notification("agent/event", serde_json::json!({"type": "final"}));
+    assert_eq!(
+        msg(ProbeError::Unexpected(other.clone())),
+        format!("неожиданный ответ: {other:?}")
+    );
 }
 
 /// AGENT-0.6: `apply_agent_flags` пишет `ai.agent_actuator_enabled` (мастер-свитч записи агента),

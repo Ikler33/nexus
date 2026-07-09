@@ -27,7 +27,7 @@ use tokio::sync::Mutex;
 
 use super::framing;
 use super::handler::{ConnectAgentHandler, ConnectDeps};
-use super::{dispatch, RpcMessage, Transport, TransportError};
+use super::{dispatch, RpcError, RpcMessage, Transport, TransportError};
 
 /// Потолок backoff accept-loop при повторных ошибках `accept` (анти-spin при исчерпании fd).
 const ACCEPT_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(5);
@@ -201,6 +201,81 @@ pub async fn connect_unix(path: impl AsRef<Path>) -> std::io::Result<AfUnixTrans
     Ok(AfUnixTransport::new(stream))
 }
 
+/// Диагностический вердикт пути сокета коннектора ДО `connect` (CONN-4/P0b). ЕДИНАЯ классификация
+/// для клиентских потребителей — CLI (`nexus status`), desktop test-connection и lazy-connect
+/// бэкенда: отличить «сервис не запущен» (файла нет) от «мисконфиг» (по пути НЕ сокет) до попытки
+/// соединения. UX-СООБЩЕНИЕ канон НЕ формирует — тексты контекстно-зависимы (флаг `--socket` у CLI,
+/// ключ `ai.connection.socket` у desktop), вызыватель форматирует свой БАЙТ-ПРЕЖНИЙ текст по вердикту.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketDiag {
+    /// Путь — сокет ЛИБО метаданные не читаются (ошибка НЕ `NotFound`) → `connect` сам разберётся
+    /// (не блокируем диагностикой — прежнее поведение `_ => Ok`).
+    Usable,
+    /// Путь существует, но это НЕ сокет (вероятный мисконфиг пути сокета).
+    NotSocket,
+    /// Файла сокета по пути нет (сервис/демон, вероятно, не запущен).
+    Missing,
+}
+
+/// Классифицирует путь сокета ДО `connect` (см. [`SocketDiag`]). ЕДИНЫЙ источник диагностики
+/// «нет файла vs не-сокет» для всех клиентских потребителей коннектора — снят тройной дубль
+/// разбора `symlink_metadata` (CLI `cmd_status` / desktop `classify_socket` / desktop backend `connect`).
+pub fn classify_socket(path: &Path) -> SocketDiag {
+    use std::os::unix::fs::FileTypeExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if !m.file_type().is_socket() => SocketDiag::NotSocket,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SocketDiag::Missing,
+        _ => SocketDiag::Usable,
+    }
+}
+
+/// Ошибка клиентской пробы [`probe_initialize`]. Разделяет ОБЩИЕ (байт-идентичные у всех
+/// потребителей) диагностические тексты от контекстных, которые форматирует вызыватель.
+#[derive(Debug)]
+pub enum ProbeError {
+    /// Готовое внятное сообщение (не удалось отправить `initialize` / таймаут / закрыто без ответа) —
+    /// байт-идентично у CLI и desktop, поэтому его несёт сам канон.
+    Message(String),
+    /// agentd ответил RPC-ошибкой — вызыватель формирует свой текст из полей (`message`/`code`).
+    Rpc(RpcError),
+    /// Ответ не является `Response` (протокол-аномалия) — вызыватель форматирует `{other:?}`.
+    Unexpected(RpcMessage),
+}
+
+/// Клиентская проба agentd: `initialize` по УЖЕ подключённому транспорту → строка версии протокола
+/// (`version` из результата, либо `"?"`). ЕДИНАЯ реализация handshake-пробы для CLI (`nexus status`) и
+/// desktop test-connection — снят дубль `send → recv(timeout) → parse`. Тексты send-fail/timeout/
+/// closed БАЙТ-ИДЕНТИЧНЫ у обоих потребителей (их несёт канон через [`ProbeError::Message`]); connect
+/// и формат RPC-ошибки/неожиданного ответа — за вызывателем (тексты различны).
+pub async fn probe_initialize<T: Transport + ?Sized>(
+    transport: &T,
+    timeout: std::time::Duration,
+) -> Result<String, ProbeError> {
+    transport
+        .send(RpcMessage::request(
+            1,
+            "initialize",
+            serde_json::json!({ "supportedVersions": ["1.0"] }),
+        ))
+        .await
+        .map_err(|_| {
+            ProbeError::Message("не удалось отправить initialize (сокет закрылся)".to_string())
+        })?;
+    let resp = tokio::time::timeout(timeout, transport.recv())
+        .await
+        .map_err(|_| ProbeError::Message("таймаут ответа initialize".to_string()))?
+        .ok_or_else(|| ProbeError::Message("сокет закрыт без ответа".to_string()))?;
+    match resp {
+        RpcMessage::Response { result: Ok(v), .. } => Ok(v
+            .get("version")
+            .and_then(|x| x.as_str())
+            .unwrap_or("?")
+            .to_string()),
+        RpcMessage::Response { result: Err(e), .. } => Err(ProbeError::Rpc(e)),
+        other => Err(ProbeError::Unexpected(other)),
+    }
+}
+
 /// Биндит сокет по пути (удаляя stale-файл прошлого запуска) и обслуживает подключения навсегда.
 /// **default-OFF на уровне вызывающего** (agentd стартует это лишь при заданном `NEXUS_AGENTD_CONNECT_SOCKET`).
 /// `expected_uid` — ожидаемый peer-uid оператора для T8-гейта accept'а (см. [`serve_unix`] / [`operator_uid`]).
@@ -313,6 +388,89 @@ mod tests {
             ta.recv().await.is_none(),
             "кадр > капа → recv None (анти-OOM)"
         );
+    }
+
+    /// CONN-4 канон: [`classify_socket`] различает сокет / НЕ-сокет / отсутствующий путь. Это ЕДИНАЯ
+    /// диагностика «нет файла vs не-сокет», через которую роутятся CLI и оба desktop-потребителя.
+    #[tokio::test]
+    async fn classify_socket_distinguishes_socket_file_missing() {
+        let dir = TempDir::new().unwrap();
+        // Реальный сокет (bind) → Usable.
+        let sock = dir.path().join("real.sock");
+        let _listener = UnixListener::bind(&sock).unwrap();
+        assert_eq!(classify_socket(&sock), SocketDiag::Usable, "сокет → Usable");
+        // Обычный файл → NotSocket (мисконфиг).
+        let file = dir.path().join("plain.txt");
+        std::fs::write(&file, b"not a socket").unwrap();
+        assert_eq!(
+            classify_socket(&file),
+            SocketDiag::NotSocket,
+            "обычный файл → NotSocket"
+        );
+        // Отсутствующий путь → Missing (сервис не запущен).
+        assert_eq!(
+            classify_socket(&dir.path().join("gone.sock")),
+            SocketDiag::Missing,
+            "нет файла → Missing"
+        );
+    }
+
+    /// CONN-4 канон: [`probe_initialize`] шлёт `initialize` и извлекает `version` из ответа. Мок-пир
+    /// на второй половине пары отвечает Response с версией — проба возвращает её строкой.
+    #[tokio::test]
+    async fn probe_initialize_returns_version_from_response() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let client = AfUnixTransport::new(a);
+        let server = AfUnixTransport::new(b);
+        // Мок-agentd: принять initialize-request, ответить версией «1.0».
+        let srv = tokio::spawn(async move {
+            let msg = server.recv().await.unwrap();
+            let id = match msg {
+                RpcMessage::Request { id, method, .. } => {
+                    assert_eq!(method, "initialize");
+                    id
+                }
+                other => panic!("ждали initialize-Request, получили {other:?}"),
+            };
+            server
+                .send(RpcMessage::Response {
+                    id,
+                    result: Ok(serde_json::json!({ "version": "1.0" })),
+                })
+                .await
+                .unwrap();
+        });
+        let ver = probe_initialize(&client, std::time::Duration::from_secs(5))
+            .await
+            .expect("проба успешна");
+        assert_eq!(ver, "1.0", "версия извлечена из ответа");
+        srv.await.unwrap();
+    }
+
+    /// CONN-4 канон: RPC-ошибка ответа → [`ProbeError::Rpc`] (вызыватель форматирует свой текст).
+    #[tokio::test]
+    async fn probe_initialize_surfaces_rpc_error() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let client = AfUnixTransport::new(a);
+        let server = AfUnixTransport::new(b);
+        let srv = tokio::spawn(async move {
+            let id = match server.recv().await.unwrap() {
+                RpcMessage::Request { id, .. } => id,
+                other => panic!("ждали Request, получили {other:?}"),
+            };
+            server
+                .send(RpcMessage::Response {
+                    id,
+                    result: Err(RpcError::version_incompatible()),
+                })
+                .await
+                .unwrap();
+        });
+        match probe_initialize(&client, std::time::Duration::from_secs(5)).await {
+            Err(ProbeError::Rpc(e)) => assert_eq!(e, RpcError::version_incompatible()),
+            _ => panic!("ждали ProbeError::Rpc, получили результат иного вида"),
+        }
+        srv.await.unwrap();
     }
 
     /// `prepare_socket_path`: НЕ-сокет по пути (мисконфиг) → отказ, чужой файл НЕ удалён.
