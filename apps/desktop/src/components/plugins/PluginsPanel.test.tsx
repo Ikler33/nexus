@@ -79,7 +79,7 @@ describe('PluginsPanel (QASR-views, макет plugins.jsx)', () => {
       .invoke(token, 'vault.writeFile', 'README.md', 'x')
       .catch(() => undefined); // deny (вне scope)
 
-    render(<PluginsPanel />);
+    const { container } = render(<PluginsPanel />);
     await screen.findByText('Hello Reader (demo)');
     fireEvent.click(screen.getByRole('button', { name: /журнал доступа|access log/i }));
 
@@ -87,5 +87,11 @@ describe('PluginsPanel (QASR-views, макет plugins.jsx)', () => {
     expect(await screen.findByText('vault.readFile')).toBeInTheDocument();
     expect(screen.getByText('README.md')).toBeInTheDocument();
     expect(screen.getByText(/vault:write/i)).toBeInTheDocument(); // текст причины отказа
+
+    // Метка времени durable-записи рендерится (PLUG-1 Fix 3): <time> с ISO-dateTime на каждую запись.
+    const times = container.querySelectorAll('time[datetime]');
+    expect(times.length).toBe(2); // по одной на allow+deny
+    expect(times[0].getAttribute('datetime')).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(times[0].textContent?.trim().length ?? 0).toBeGreaterThan(0);
   });
 });

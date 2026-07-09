@@ -24,5 +24,7 @@ CREATE TABLE plugin_audit (
     denied_reason TEXT,                        -- текст Denied при отказе; NULL при успехе
     created_at    INTEGER NOT NULL             -- unix-сек метки записи
 );
--- Хронологический срез журнала (последние N вызовов) — основной паттерн чтения UI «Журнал доступа».
-CREATE INDEX idx_plugin_audit_created ON plugin_audit(created_at DESC);
+-- Индекса НЕТ намеренно: горячий запрос UI — `ORDER BY id DESC LIMIT N` (id = INTEGER PRIMARY KEY =
+-- rowid), которому служит встроенный B-tree первичного ключа. Отдельный индекс по created_at не нужен
+-- (запрос по нему не идёт) и лишь тормозил бы append-INSERT. created_at — для отображения/сортировки
+-- на клиенте (id монотонен по времени в пределах одной БД).

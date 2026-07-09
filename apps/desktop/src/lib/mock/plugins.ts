@@ -198,7 +198,10 @@ export async function invoke(
   content?: string,
 ): Promise<unknown> {
   const s = sessions.get(token);
-  // Цель audit-записи: path (vault-методы) или URL (net.fetch) — как Rust `req.path.or(req.host)`.
+  // Цель audit-записи = `path`. Для vault-методов это ПАРИТЕТНО бэку (Rust `req.path.or(req.host)` →
+  // path). РАСХОЖДЕНИЕ только для `net.fetch`: бэк пишет ХОСТ (req.host = parsed URL host), а мок здесь
+  // пишет полный URL (path). Не чиним намеренно: audit-parity-тест на net.fetch отсутствует, а
+  // vault-методы (единственные с parity-тестами) совпадают. Если такой тест появится — писать сюда host.
   const target = path ?? null;
   const pluginId = s?.id ?? '<unknown>';
   try {

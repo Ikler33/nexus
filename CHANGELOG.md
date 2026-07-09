@@ -17,7 +17,8 @@ THREAT_MODEL). Закрыто durable-персистом, зеркалящим `
   образцу `EgressAudit`: **два слоя** — in-memory `Mutex<Vec<AuditEntry>>` (снимки/pre-vault/тесты) +
   durable опциональный `WriteActor`-сток (`writer: Mutex<Option<WriteActor>>`), выставляемый через
   `set_writer` ПОСЛЕ открытия vault-БД (брокер строится в `AppState::new` ДО vault). Схема таблицы:
-  `{plugin_id, method, target, allowed, denied_reason, created_at}` + `idx_plugin_audit_created`.
+  `{plugin_id, method, target, allowed, denied_reason, created_at}` (без отдельного индекса: горячий
+  запрос `ORDER BY id DESC LIMIT N` служится B-tree первичного ключа).
   Append-only by design (нет DELETE/UPDATE-пути) — журнал подотчётности, не кэш. Бонус-контейнмент:
   `.nexus/nexus.db` автоматически вне glob-скоупов плагинов (anti-traversal permission.rs) → журнал
   недоступен плагину бесплатно.
@@ -39,7 +40,16 @@ THREAT_MODEL). Закрыто durable-персистом, зеркалящим `
   это была ошибка плана): `authorize` теперь возвращает `(Result, AuditEntry)`.
 - Тесты: Rust-юниты (durable-персист + append-only порядок + чтение истории + vault-switch свапает сток +
   структурный аргумент «запись вне std-лока» + pre-vault in-memory-only) + миграция-тест 029 (старая БД
-  v28 → доводка) + vitest (журнал показывает durable allow+deny) + мок-паритет.
+  v28 → доводка) + vitest (журнал показывает durable allow+deny + метку времени) + мок-паритет.
+- **Доработки по ревью (APPROVE-с-фиксами):** (1) введён `Denied::SessionNotFound` — durable-audit для
+  отозванного токена пишет РЕАЛЬНУЮ причину «сессия не найдена…», а не врущее «неизвестный метод»
+  (согласовано с `BrokerError::UnknownSession` Display и мок-текстом); (2) `authorize` упрощён — один
+  lookup сессии (bind-once, мёртвая ветка убрана, behavior byte-same); (3) UI «Журнал доступа» рендерит
+  **метку времени** записи (`<time>` в локальном формате как DigestPanel); (4) i18n `auditEmpty`/`auditSub`
+  переформулированы под durable-семантику (ru+en); (5) индекс `idx_plugin_audit_created` УБРАН из миграции
+  029 (горячий запрос `ORDER BY id DESC LIMIT N` служится B-tree PK — отдельный индекс не служил запросу и
+  тормозил INSERT); (6) задокументировано расхождение мок-target для `net.fetch` (мок пишет URL, бэк —
+  host; vault-методы паритетны, net.fetch-parity-теста нет).
 
 ### Безопасность · Плагин-песочница: контейнмент fetch-класса egress iframe + строже валидатор каталога (security-хардининг)
 

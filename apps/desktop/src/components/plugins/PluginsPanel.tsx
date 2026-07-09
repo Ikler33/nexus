@@ -24,6 +24,16 @@ import styles from "./PluginsPanel.module.css";
 /** Нав-вкладки менеджера (макет plugins.jsx): установленные + журнал доступа. */
 type Nav = "installed" | "audit";
 
+/** Unix-секунды → локальная дата-время (короткий формат, как DigestPanel/NewsDiagnostics). */
+function fmtTime(ts: number, locale: string): string {
+  return new Date(ts * 1000).toLocaleString(locale, {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /** Персист consent-решений (DP-8): dir → разрешено. Отзыв — сброс записи. */
 const CONSENT_KEY = "nexus.plugin.consent.v1";
 
@@ -63,7 +73,7 @@ function needsConsent(p: PluginInfo): boolean {
  * поэтому соответствующих контролов в UI нет (это feature-work, не дизайн-слой).
  */
 export function PluginsPanel() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const closePlugins = useUIStore((s) => s.closePlugins);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [nav, setNav] = useState<Nav>("installed");
@@ -385,6 +395,12 @@ export function PluginsPanel() {
                           {c.deniedReason}
                         </span>
                       )}
+                      <time
+                        className={styles.auditTime}
+                        dateTime={new Date(c.createdAt * 1000).toISOString()}
+                      >
+                        {fmtTime(c.createdAt, i18n.language)}
+                      </time>
                     </li>
                   ))}
                 </ul>

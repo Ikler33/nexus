@@ -275,21 +275,23 @@ impl PluginBroker {
         token: &CapToken,
         req: &ApiRequest,
     ) -> (Result<(), BrokerError>, AuditEntry) {
+        // Один lookup сессии (без мутации/await между — не TOCTOU): `None` → отозванный/неизвестный
+        // токен с СЕМАНТИЧЕСКИ ВЕРНОЙ причиной `SessionNotFound` (durable-audit не врёт «неизвестный
+        // метод»); `Some` → id сессии + scoped-проверка прав.
         let (id, decision) = match self.sessions.get(token) {
-            None => (
-                "<unknown>".to_string(),
-                Err(Denied::UnknownMethod(req.method.to_string())),
-            ),
+            None => ("<unknown>".to_string(), Err(Denied::SessionNotFound)),
             Some(s) => (s.id.clone(), s.permissions.check(req)),
         };
         let entry = AuditEntry::from_decision(&id, req, &decision);
         // In-memory — синхронно, ПОД std-локом брокера (запись короткая, без await): снимки/тесты
         // видят авторизацию сразу. Durable-персист — вызывающим, УЖЕ вне лока (см. докстринг).
         self.audit.record_in_memory(entry.clone());
-        let result = match self.sessions.get(token) {
-            None => Err(BrokerError::UnknownSession),
-            Some(_) => decision.map_err(BrokerError::Denied),
-        };
+        // `SessionNotFound` → `UnknownSession` (сохраняем прежний внешний тип ошибки); прочие
+        // отказы → `Denied`. `decision` уже несёт верную причину и в audit-записи выше.
+        let result = decision.map_err(|d| match d {
+            Denied::SessionNotFound => BrokerError::UnknownSession,
+            other => BrokerError::Denied(other),
+        });
         (result, entry)
     }
 
@@ -343,9 +345,22 @@ mod tests {
         let mut b = PluginBroker::new();
         let bogus = b.open_session(session("x", r#"{}"#));
         b.revoke(&bogus); // токен больше не валиден
-        let (r, _entry) = b.authorize(&bogus, &read("Notes/a.md"));
+        let (r, entry) = b.authorize(&bogus, &read("Notes/a.md"));
         assert_eq!(r, Err(BrokerError::UnknownSession));
-        assert!(!b.audit().entries().last().unwrap().allowed);
+        let logged = b.audit().entries();
+        let last = logged.last().unwrap();
+        assert!(!last.allowed);
+        // Audit НЕ врёт «неизвестный метод» для отозванного токена: причина — про СЕССИЮ (SessionNotFound).
+        let reason = entry.denied_reason.as_deref().unwrap();
+        assert_eq!(reason, last.denied_reason.as_deref().unwrap());
+        assert!(
+            reason.contains("сессия"),
+            "denied_reason должен отражать реальную причину (сессия), не метод: {reason:?}"
+        );
+        assert!(
+            !reason.contains("метод"),
+            "denied_reason НЕ должен врать «неизвестный метод»: {reason:?}"
+        );
     }
 
     #[test]
