@@ -85,7 +85,7 @@ export type { Digest } from './api/digest/types';
 export type { ActiveJob, DeadJob, JobCounts } from './api/scheduler/types';
 export type { Contradiction } from './api/contradictions/types';
 export type { InlineMode, InlineStreamEvent } from './api/inline/types';
-export type { PermissionChip, PluginInfo } from './api/plugins/types';
+export type { PermissionChip, PluginAuditRecord, PluginInfo } from './api/plugins/types';
 export type {
   GitChangeKind,
   GitCommitOutcome,

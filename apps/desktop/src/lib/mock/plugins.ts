@@ -1,4 +1,4 @@
-import type { PluginInfo } from '../tauri-api';
+import type { PluginAuditRecord, PluginInfo } from '../tauri-api';
 import * as vault from './vault';
 
 /**
@@ -34,6 +34,7 @@ const MANIFESTS: Record<string, MockManifest> = {
 };
 
 interface MockSession {
+  id: string;
   read: string[];
   write: string[];
   ui: string[];
@@ -46,6 +47,33 @@ let seq = 0;
 /** Состояние управления (зеркало backend `plugins.<dir>.enabled` + remove-в-корзину). */
 const disabled = new Set<string>();
 const removed = new Set<string>();
+
+/**
+ * Durable-журнал доступа брокера (зеркало Rust `plugin_audit`, PLUG-1): каждый `invoke` append-only
+ * записывает исход авторизации (allow/deny) — так превью/тесты видят РЕАЛЬНУЮ durable-историю
+ * (mock-must-match-backend, урок MEM-5). Свежие первыми при чтении (как `ORDER BY id DESC` на бэке).
+ */
+const auditRecords: PluginAuditRecord[] = [];
+let auditSeq = 0;
+
+/** Пишет запись в мок-журнал доступа (append-only, как backend record_durable). */
+function recordAudit(
+  pluginId: string,
+  method: string,
+  target: string | null,
+  allowed: boolean,
+  deniedReason: string | null,
+): void {
+  auditRecords.push({
+    id: ++auditSeq,
+    pluginId,
+    method,
+    target,
+    allowed,
+    deniedReason,
+    createdAt: Math.floor(Date.now() / 1000),
+  });
+}
 
 // ─── glob (сегментный, зеркало Rust `glob_match`: `**`=0..N сегментов, `*`=в пределах сегмента) ───
 
@@ -118,6 +146,18 @@ export function __resetForTests(): void {
   disabled.clear();
   removed.clear();
   sessions.clear();
+  auditRecords.length = 0;
+  auditSeq = 0;
+}
+
+/**
+ * Durable-журнал доступа брокера (PLUG-1): последние `limit` записей, свежие первыми (как backend
+ * `list_plugin_audit` → `ORDER BY id DESC LIMIT`). Персист «переживает» в пределах сессии страницы —
+ * достаточно, чтобы превью/тесты видели реальную историю allow/deny.
+ */
+export async function auditLog(limit: number): Promise<PluginAuditRecord[]> {
+  const n = Math.max(1, Math.min(limit, 500));
+  return auditRecords.slice(-n).reverse();
 }
 
 export async function setEnabled(dir: string, on: boolean): Promise<void> {
@@ -136,7 +176,14 @@ export async function openSession(dir: string): Promise<string> {
   // Зеркалит backend-гард: выключенный плагин не открывает сессию.
   if (disabled.has(dir)) throw new Error(`плагин выключен: ${dir}`);
   const token = `mock-tok-${++seq}`;
-  sessions.set(token, { read: m.read, write: m.write, ui: m.ui, ai: m.ai, net: m.net });
+  sessions.set(token, {
+    id: m.id,
+    read: m.read,
+    write: m.write,
+    ui: m.ui,
+    ai: m.ai,
+    net: m.net,
+  });
   return token;
 }
 
@@ -151,6 +198,31 @@ export async function invoke(
   content?: string,
 ): Promise<unknown> {
   const s = sessions.get(token);
+  // Цель audit-записи = `path`. Для vault-методов это ПАРИТЕТНО бэку (Rust `req.path.or(req.host)` →
+  // path). РАСХОЖДЕНИЕ только для `net.fetch`: бэк пишет ХОСТ (req.host = parsed URL host), а мок здесь
+  // пишет полный URL (path). Не чиним намеренно: audit-parity-тест на net.fetch отсутствует, а
+  // vault-методы (единственные с parity-тестами) совпадают. Если такой тест появится — писать сюда host.
+  const target = path ?? null;
+  const pluginId = s?.id ?? '<unknown>';
+  try {
+    const out = await invokeInner(s, method, path, content);
+    // Durable-audit allow (write-before-act паритет: запись на КАЖДЫЙ авторизованный вызов).
+    recordAudit(pluginId, method, target, true, null);
+    return out;
+  } catch (e) {
+    // Durable-audit deny — исход отказа тоже персистится (как backend на обоих путях).
+    recordAudit(pluginId, method, target, false, e instanceof Error ? e.message : String(e));
+    throw e;
+  }
+}
+
+/** Внутренняя логика авторизации+dispatch мока (без audit-обёртки). */
+async function invokeInner(
+  s: MockSession | undefined,
+  method: string,
+  path?: string,
+  content?: string,
+): Promise<unknown> {
   if (!s) throw new Error('сессия не найдена (отозвана?)');
 
   switch (method) {

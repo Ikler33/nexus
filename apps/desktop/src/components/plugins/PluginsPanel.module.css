@@ -553,6 +553,27 @@
   white-space: nowrap;
 }
 
+/* Причина отказа (deny) — приглушённая, курсивом; гибкое место перед меткой времени. */
+.deniedReason {
+  color: var(--color-danger, var(--color-text-muted));
+  font-size: 0.85em;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Метка времени durable-записи — у правого края строки журнала (PLUG-1). */
+.auditTime {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding-left: var(--space-2, 8px);
+  color: var(--color-text-muted);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ── consent-sheet (overlays the panel) ── */
 .consentScrim {
   position: absolute;

@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::ai::EmbeddingProvider;
 use crate::error::{AppError, AppResult};
-use crate::plugin::{self, ApiRequest, CapToken, PluginInfo, PluginSession};
+use crate::plugin::{self, ApiRequest, CapToken, PluginAuditRecord, PluginInfo, PluginSession};
 use crate::search;
 use crate::state::AppState;
 use crate::vault;
@@ -163,6 +163,18 @@ pub async fn plugin_close_session(state: State<'_, AppState>, token: String) -> 
     Ok(())
 }
 
+/// Durable-журнал доступа брокера (PLUG-1, THREAT_MODEL T1): последние `limit` записей `plugin_audit`
+/// обратно-хронологически (свежие первыми). Читает из БД (не in-memory Vec брокера) → история
+/// переживает рестарт. `limit` зажимается в `1..=AUDIT_MAX_LIMIT` на бэке. Пустой vault → пустой список.
+#[tauri::command]
+pub async fn list_plugin_audit(
+    state: State<'_, AppState>,
+    limit: usize,
+) -> AppResult<Vec<PluginAuditRecord>> {
+    let reader = state.vault().await?.db.reader().clone();
+    Ok(plugin::recent_audit(&reader, limit).await?)
+}
+
 /// Host-функция плагина через брокер (§7.4): авторизация по токену + scoped-проверка + audit, затем
 /// dispatch. Методы: `vault.readFile`/`listFiles` (`vault:read`), `vault.writeFile` (`vault:write`),
 /// `ui.*` (только авторизация — регистрацию делает фронт), `ai.embed`/`ai.searchSemantic` (`ai:embed`),
@@ -187,21 +199,29 @@ pub async fn plugin_invoke(
         None
     };
 
-    // Авторизация (синхронно, под локом) → достаём vault_root, лок отпускаем до async I/O.
-    let vault_root = {
+    // Авторизация (синхронно, под std-локом брокера) → достаём решение, audit-запись, vault_root и
+    // `Arc<AuditLog>`; лок ОТПУСКАЕМ до любого `.await` (durable-I/O не под локом брокера — зеркало
+    // EgressAudit). `authorize` пишет запись в in-memory синхронно и возвращает её копию для durable.
+    let (auth_result, audit_entry, audit_log, vault_root) = {
         let mut broker = state.plugins.lock().map_err(|_| "broker lock")?;
         let req = ApiRequest {
             method: &method,
             path: path.as_deref(),
             host: net_host.as_deref(),
         };
-        broker.authorize(&token, &req).map_err(|e| e.to_string())?;
-        broker
-            .session(&token)
-            .ok_or("сессия не найдена")?
-            .vault_root
-            .clone()
+        let (result, entry) = broker.authorize(&token, &req);
+        // vault_root нужен только на успешном пути; на отказе сессии может не быть — не трогаем.
+        let vault_root = broker.session(&token).map(|s| s.vault_root.clone());
+        (result, entry, broker.audit_log(), vault_root)
     };
+
+    // Durable-персист audit (write-before-act, вне std-лока брокера): и allow, и deny. THREAT_MODEL T1
+    // — история переживает рестарт. Ждём коммит ПЕРЕД возвратом решения и ПЕРЕД любым host-I/O.
+    audit_log.record_durable(audit_entry).await;
+
+    // Решение авторизации: отказ → возврат ошибки (уже durable-записан выше).
+    auth_result.map_err(|e| e.to_string())?;
+    let vault_root = vault_root.ok_or("сессия не найдена")?;
 
     // `ui.*` — только авторизация (фактическую регистрацию делает фронт-реестр команд); host-I/O нет.
     if method.starts_with("ui.") {
@@ -577,7 +597,7 @@ mod tests {
                 path,
                 host: None,
             };
-            broker.authorize(token, &req).map_err(|e| e.to_string())?;
+            broker.authorize(token, &req).0.map_err(|e| e.to_string())?;
             dispatch_vault(root, method, path, content).await
         }
 

@@ -1,9 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import * as mockPlugins from '../../lib/mock/plugins';
 import { PluginsPanel } from './PluginsPanel';
 
 beforeEach(() => {
+  mockPlugins.__resetForTests(); // изоляция durable-мок-журнала между тестами
   try {
     localStorage.removeItem('nexus.plugin.consent.v1');
   } catch {
@@ -65,5 +67,31 @@ describe('PluginsPanel (QASR-views, макет plugins.jsx)', () => {
     expect(
       await screen.findByText(/каждый брокер-вызов|every plugin broker call/i),
     ).toBeInTheDocument();
+  });
+
+  // PLUG-1: журнал доступа читает DURABLE-историю (list_plugin_audit), а не только in-session вызовы —
+  // предзаполненные записи (пережившие «рестарт») видны при открытии вкладки.
+  it('журнал доступа показывает durable-записи (allow+deny) из list_plugin_audit', async () => {
+    // Сеем durable-мок-журнал как будто вызовы были в прошлой сессии (пережили рестарт).
+    const token = await mockPlugins.openSession('hello');
+    await mockPlugins.invoke(token, 'vault.readFile', 'Projects/Roadmap.md'); // allow
+    await mockPlugins
+      .invoke(token, 'vault.writeFile', 'README.md', 'x')
+      .catch(() => undefined); // deny (вне scope)
+
+    const { container } = render(<PluginsPanel />);
+    await screen.findByText('Hello Reader (demo)');
+    fireEvent.click(screen.getByRole('button', { name: /журнал доступа|access log/i }));
+
+    // Durable-записи видны: метод allow-вызова и цель deny-вызова + причина отказа.
+    expect(await screen.findByText('vault.readFile')).toBeInTheDocument();
+    expect(screen.getByText('README.md')).toBeInTheDocument();
+    expect(screen.getByText(/vault:write/i)).toBeInTheDocument(); // текст причины отказа
+
+    // Метка времени durable-записи рендерится (PLUG-1 Fix 3): <time> с ISO-dateTime на каждую запись.
+    const times = container.querySelectorAll('time[datetime]');
+    expect(times.length).toBe(2); // по одной на allow+deny
+    expect(times[0].getAttribute('datetime')).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(times[0].textContent?.trim().length ?? 0).toBeGreaterThan(0);
   });
 });

@@ -69,6 +69,10 @@ pub enum Denied {
     UnknownMethod(String),
     /// Метод требует аргумент (path/host), которого нет.
     MissingArg(&'static str),
+    /// Токен не привязан к сессии (неизвестный/отозванный плагин) — fail-closed. Отдельно от
+    /// `UnknownMethod`, чтобы durable-audit писал РЕАЛЬНУЮ причину отказа (не врал «неизвестный метод»
+    /// для отозванного токена). Согласован с `BrokerError::UnknownSession` Display и мок-текстом.
+    SessionNotFound,
 }
 
 impl std::fmt::Display for Denied {
@@ -80,6 +84,7 @@ impl std::fmt::Display for Denied {
             Denied::PathEscape(p) => write!(f, "выход за пределы vault: {p}"),
             Denied::UnknownMethod(m) => write!(f, "неизвестный метод: {m}"),
             Denied::MissingArg(a) => write!(f, "нет аргумента: {a}"),
+            Denied::SessionNotFound => write!(f, "сессия не найдена (токен невалиден/отозван)"),
         }
     }
 }

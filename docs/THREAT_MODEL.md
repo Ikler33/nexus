@@ -19,7 +19,7 @@
 - ✅ Capability-broker: идентичность по токену, не по запросу; scoped-проверка fail-closed (`plugin/broker.rs`, `plugin/permission.rs`). Skills: `granted = declared ∩ policy`, forced base `{VaultRead, VaultWrite}`; опасные капы (Shell/WebFetch/WebPost/HostProcess) **НЕ грантятся** в текущей фазе — declared advisory, не grant (`skills/capability.rs`).
 - ✅ Path-scope + symlink-guards (`resolve_vault_path`, `resolve_plugin_dir` — canonicalize + containment).
 - ✅ Скилл НЕ может сам объявить капабилити: `skill.save` пишет во frontmatter только `name`/`description` (агент не выражает `capabilities`); тело SKILL.md — проза, структурно инертная (см. T11).
-- ⚠ Plugin-audit пока in-memory (`plugin/broker.rs AuditLog` — `Vec<AuditEntry>`, теряется при дропе брокера) → durable-хранилище ОБЯЗАТЕЛЬНО перед включением недоверенной плагин-экосистемы (сейчас плагины in-process/оператор-курируемые).
+- ✅ **Plugin-audit DURABLE (PLUG-1, миграция 029 `plugin_audit`).** Брокерский `AuditLog` (`plugin/broker.rs`) переписан по образцу `net::EgressAudit`: два слоя — in-memory `Mutex<Vec<AuditEntry>>` (снимки/pre-vault/тесты) + durable append-only `WriteActor`-сток (`writer: Mutex<Option<WriteActor>>`), выставляемый `set_writer` в `open_vault` ПОСЛЕ открытия vault-БД (брокер строится в `AppState::new` ДО vault). Каждый brokered-вызов (allow И deny) durable-записывается **write-before-act** ПЕРЕД host-I/O; чистить нельзя by design (нет DELETE/UPDATE-пути — инвариант как AC-EGR-4). Durable-запись выполняется ВНЕ std-лока брокера (`authorize` под локом строит запись, вызывающий клонирует `Arc<AuditLog>`, отпускает лок, затем `record_durable().await` — std-лок не держится через `.await`). Vault-switch свапает сток на новую БД. UI «Журнал доступа» (PluginsPanel) читает durable-историю (`list_plugin_audit`), пережившую рестарт. Бонус-контейнмент: `.nexus/nexus.db` вне glob-скоупов плагинов (anti-traversal permission.rs) → журнал недоступен плагину. Это закрывает durable-пререквизит недоверенной плагин-экосистемы (сейчас плагины in-process/оператор-курируемые).
 
 ### T2 — SSRF / DNS-rebind (эгресс на внутренние сервисы / metadata)
 - ✅ Единственный outlet `net::GuardedClient`; `net/resolve.rs check_resolved_ips`: metadata (169.254.169.254 / IMDS-v6) + link-local (169.254/16, fe80::/10) блок **ВСЕГДА**; private/loopback/ULA/CGNAT блок при `deny_private` (web/agent/research-классы). LAN-LLM (chat/embed) жив при `deny_private=false`.
@@ -103,7 +103,7 @@
 
 ## 3. Известные пробелы (осознанные)
 - In-process эвристики (approval/redaction/fencing) НЕ являются containment против adversarial-LLM для in-process vault-операций — реальная изоляция есть только для **exec** (контейнер, T7). Будущее ужесточение: microVM (Firecracker/gVisor) вместо rootless-Podman.
-- Plugin-audit + pending-proposals не durable (пререквизит широкого использования плагинов).
+- Plugin-audit DURABLE (PLUG-1, `plugin_audit` — миграция 029, зеркало `EgressAudit`); **pending-proposals** брокера пока не durable (остаточный пререквизит широкого использования плагинов).
 - `env_passthrough` из скиллов пока пуст; при включении нужен veto опасных динамлинкер-имён (T3).
 - Sandbox-exec: containment Tier-2 валидирован на боевом Podman; ждёт прод-проводки коннектора + live-exec-цикла (T7, §4).
 - Backup-импорт доверяет `created_by` из файла (телеметрия-only, blast-radius ограничен; T12); подпись бэкапа — на будущее.

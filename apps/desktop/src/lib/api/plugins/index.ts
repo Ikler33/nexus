@@ -1,6 +1,9 @@
 import * as mockPlugins from '../../mock/plugins';
 import { bridge } from '../bridge';
-import type { PluginInfo } from './types';
+import type { PluginAuditRecord, PluginInfo } from './types';
+
+/** Дефолтный лимит durable-журнала доступа для UI (бэк зажимает в 1..=AUDIT_MAX_LIMIT=500). */
+const AUDIT_DEFAULT_LIMIT = 100;
 
 /**
  * Plugins-домен (F-2d): установленные плагины vault (`.nexus/plugins/*`) — список со статусом
@@ -40,4 +43,14 @@ export const plugins = {
   /** Закрывает сессию плагина (отзыв токена в брокере). Зовётся при размонтировании плагина. */
   closeSession: (token: string): Promise<void> =>
     bridge<void>('plugin_close_session', { token }, () => mockPlugins.closeSession(token)),
+
+  /**
+   * Durable-журнал доступа брокера (PLUG-1, THREAT_MODEL T1): последние `limit` записей из БД
+   * (`plugin_audit`), обратно-хронологически (свежие первыми). История переживает рестарт — в отличие
+   * от in-session `PluginCall` от iframe. Вне Tauri — мок.
+   */
+  auditLog: (limit: number = AUDIT_DEFAULT_LIMIT): Promise<PluginAuditRecord[]> =>
+    bridge<PluginAuditRecord[]>('list_plugin_audit', { limit }, () =>
+      mockPlugins.auditLog(limit),
+    ),
 };
