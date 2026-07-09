@@ -35,7 +35,7 @@ use std::path::Path;
 
 use super::apply::{confine_for_overwrite, AuditSink};
 use super::audit;
-use super::UndoHandle;
+use super::{UndoDomain, UndoHandle};
 
 /// Статус отката ОДНОГО действия (per-action исход). Толерантно к частичному провалу: `undo_run` собирает
 /// эти статусы и НЕ прерывается на первом сбое.
@@ -204,17 +204,26 @@ pub async fn undo_run(
     undo_run_inner(run_id, canon_root, opts.skills_root, ledger, opts.driver).await
 }
 
-/// Выбор корня отката строки по её `tool_name`: навык (`skill_save`) → skills_root (если задан), иначе
-/// vault `canon_root`. SL-7c: навыки живут вне vault, их Snapshot/Trash восстанавливаются под skills_root.
+/// Выбор корня отката строки по её ТИПИЗИРОВАННОМУ домену (R-12b): [`UndoDomain::Vault`] → vault
+/// `canon_root`; [`UndoDomain::Skill`] → skills_root (если задан). SL-7c: навыки живут вне vault, их
+/// Snapshot/Trash восстанавливаются под skills_root.
+///
+/// **Обратная совместимость.** Домен читается из ledger-поля `undo_domain`; для строк БЕЗ него (записаны
+/// до R-12b) ИЛИ с битым значением — [`UndoDomain::from_tool_name`] (skill_save → Skill, иначе Vault),
+/// ТОЧНОЕ зеркало прежней `tool_name`-эвристики → исторические ledger'ы читаются один-в-один.
 fn undo_root_for<'a>(
-    tool_name: &str,
+    row: &audit::ActionRow,
     canon_root: &'a Path,
     skills_root: Option<&'a Path>,
 ) -> Option<&'a Path> {
-    if tool_name == "skill_save" {
-        skills_root
-    } else {
-        Some(canon_root)
+    let domain = row
+        .undo_domain
+        .as_deref()
+        .and_then(UndoDomain::parse)
+        .unwrap_or_else(|| UndoDomain::from_tool_name(&row.tool_name));
+    match domain {
+        UndoDomain::Vault => Some(canon_root),
+        UndoDomain::Skill => skills_root,
     }
 }
 
@@ -251,8 +260,9 @@ async fn undo_run_inner(
 
         // (status, drifted): restore-снапшота сообщает дрейф (current != pre-edit ⇒ вероятная правка
         // человека); uncreate/битый хэндл дрейфа не несут (false).
-        // SL-7c: корень отката зависит от tool_name (навык → skills_root, заметка → canon_root).
-        let row_root = undo_root_for(&row.tool_name, canon_root, skills_root);
+        // R-12b: корень отката зависит от ТИПИЗИРОВАННОГО домена строки (undo_domain, tool_name-fallback
+        // для старых): навык (Skill) → skills_root, заметка (Vault) → canon_root.
+        let row_root = undo_root_for(&row, canon_root, skills_root);
         let (status, drifted) = match handle {
             Some(UndoHandle::Snapshot { rel, ts }) => match row_root {
                 Some(root) => restore_snapshot(root, &rel, ts as u64).await,
@@ -880,6 +890,7 @@ mod tests {
             Some(audit::UndoCols {
                 kind: UNDO_EXEC_GITREF.to_string(),
                 reference: "cafebabe".into(),
+                domain: None,
             }),
         )
         .await
@@ -930,6 +941,7 @@ mod tests {
             Some(audit::UndoCols {
                 kind: UNDO_EXEC_GITREF.to_string(),
                 reference: reference.into(),
+                domain: None,
             }),
         )
         .await
@@ -1196,5 +1208,135 @@ mod tests {
             "пустой откат — полностью откачен (нечего откатывать)"
         );
         assert_eq!(outcome.restored(), 0);
+    }
+
+    // ── R-12b: типизированный домен корня (undo_domain) + обратная совместимость ────────────────────
+
+    /// R-12b: СВЕЖИЕ строки несут ТИПИЗИРОВАННЫЙ домен в ledger — навык → `"skill"`, заметка → `"vault"`.
+    /// Доказывает, что apply проставляет `undo_domain` по своей spec (SKILL_SPEC=Skill, NOTE_SPEC=Vault).
+    #[tokio::test]
+    async fn fresh_rows_persist_typed_domain() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        // Навык → домен "skill".
+        apply_skill_ok(
+            &Action::skill_save("s/S.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+        let srows = audit::actions_for_undo(&sink.reader_handle(), 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            srows[0].undo_domain.as_deref(),
+            Some("skill"),
+            "свежий навык → undo_domain=skill"
+        );
+        // Заметка → домен "vault".
+        write_existing(&root, "N.md", "v0");
+        apply_ok(&Action::note_edit("N.md", "v1"), 2, &root, &sink).await;
+        let nrows = audit::actions_for_undo(&sink.reader_handle(), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            nrows[0].undo_domain.as_deref(),
+            Some("vault"),
+            "свежая заметка → undo_domain=vault"
+        );
+    }
+
+    /// R-12b ОБРАТНАЯ СОВМЕСТИМОСТЬ (обязательный тест на ИСТОРИЧЕСКОМ ФИКСТУРЕ): строка навыка,
+    /// записанная ДО R-12b (поля `undo_domain` не было → NULL), откатывается ПРАВИЛЬНО через
+    /// `tool_name`-fallback (`skill_save` → Skill → skills_root). Симулируем старую строку, ЗАНУЛИВ
+    /// колонку у реально применённого навыка (её on-disk состояние совпадает со старым форматом).
+    #[tokio::test]
+    async fn old_row_without_undo_domain_falls_back_to_tool_name() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        apply_skill_ok(
+            &Action::skill_save("s/SKILL.md", VALID_SKILL),
+            1,
+            &skills_root,
+            &sink,
+        )
+        .await;
+        assert!(skills_root.join("s/SKILL.md").exists(), "навык создан");
+
+        // ИСТОРИЧЕСКИЙ ФИКСТУР: зануляем undo_domain — как будто строку записал бинарь ДО миграции 028
+        // (колонки не было → NULL). Прогон helper'а below падает при добавлении новых столбцов — точечно.
+        sink.writer_handle()
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE agent_actions SET undo_domain=NULL WHERE run_id=1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let rows = audit::actions_for_undo(&sink.reader_handle(), 1)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].undo_domain.is_none(),
+            "фикстур: undo_domain NULL (старый формат до R-12b)"
+        );
+        assert_eq!(rows[0].tool_name, "skill_save", "строка навыка");
+
+        // Откат: несмотря на NULL-домен, fallback по tool_name даёт Skill → skills_root → файл унесён.
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
+        assert_eq!(
+            outcome.restored(),
+            1,
+            "старый навык откачен через tool_name-fallback (undo_domain NULL)"
+        );
+        assert!(
+            !skills_root.join("s/SKILL.md").exists(),
+            "файл унесён из skills_root — fallback выбрал ПРАВИЛЬНЫЙ корень для исторической строки"
+        );
+    }
+
+    /// R-12b: ЗАЩИТА fallback'а — старая строка ЗАМЕТКИ (undo_domain NULL, tool_name=note_edit) идёт под
+    /// canon_root (Vault), НЕ под skills_root. Доказывает, что fallback не «всё в skills».
+    #[tokio::test]
+    async fn old_note_row_without_domain_restores_under_canon_root() {
+        let (_d, root, sink) = setup().await;
+        let skills_root = mk_skills_root(&root);
+        write_existing(&root, "N.md", "ORIGINAL");
+        apply_ok(&Action::note_edit("N.md", "EDITED"), 1, &root, &sink).await;
+        // Зануляем домен (историческая строка).
+        sink.writer_handle()
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE agent_actions SET undo_domain=NULL WHERE run_id=1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        // Даже со skills_root в опциях заметка откатывается под canon_root (Vault-fallback).
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
+        assert_eq!(outcome.restored(), 1, "старая заметка откачена");
+        assert_eq!(
+            read(&root, "N.md"),
+            "ORIGINAL",
+            "восстановлена под canon_root (Vault-fallback), не под skills_root"
+        );
     }
 }

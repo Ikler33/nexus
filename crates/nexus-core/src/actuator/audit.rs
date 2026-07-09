@@ -159,6 +159,10 @@ pub struct ActionRow {
     pub content_hash: Option<String>,
     pub undo_kind: Option<String>,
     pub undo_ref: Option<String>,
+    /// R-12b: типизированный домен корня отката (`vault`/`skill`, см. [`super::UndoDomain`]). `None` —
+    /// строка записана до R-12b ИЛИ exec-GitOp (fs-домена нет); читатель падает на `tool_name`-fallback.
+    /// В SELECT'ах выбирается ПОСЛЕДНЕЙ колонкой (индекс 14 в [`row_to_action`]).
+    pub undo_domain: Option<String>,
     pub outcome: Option<String>,
     pub diff_summary: Option<String>,
     pub created_at: i64,
@@ -185,11 +189,15 @@ pub enum ReplayDecision {
     CrashedMidExecute(Box<ActionRow>),
 }
 
-/// Сериализация UndoHandle в (kind, ref) для хранения в ledger. Зеркало в [`super::UndoHandle`].
+/// Сериализация UndoHandle в (kind, ref) + ДОМЕН корня для хранения в ledger. Зеркало в [`super::UndoHandle`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoCols {
     pub kind: String,
     pub reference: String,
+    /// R-12b: типизированный домен корня отката ([`super::UndoDomain`]) → колонка `undo_domain`. `None`
+    /// ⇒ поле пишется NULL (exec-строки без fs-домена / до проставления вызывателем); читатель падает на
+    /// `tool_name`-fallback. Проставляется на call-site apply (по `ConfinedWriteSpec`), НЕ в `to_cols`.
+    pub domain: Option<super::UndoDomain>,
 }
 
 /// Стабильная канонизация аргументов действия для idempotency_key. КРИТИЧНО детерминирована: тот же
@@ -268,16 +276,21 @@ pub async fn finish(
     undo: Option<UndoCols>,
 ) -> DbResult<bool> {
     let (key, state, outcome) = (key.to_string(), state.to_string(), outcome.to_string());
-    let (undo_kind, undo_ref) = match undo {
-        Some(u) => (Some(u.kind), Some(u.reference)),
-        None => (None, None),
+    // R-12b: undo → (kind, ref, domain). domain=None ⇒ колонка NULL (читатель падёт на tool_name-fallback).
+    let (undo_kind, undo_ref, undo_domain) = match undo {
+        Some(u) => (
+            Some(u.kind),
+            Some(u.reference),
+            u.domain.map(|d| d.as_str().to_string()),
+        ),
+        None => (None, None, None),
     };
     writer
         .transaction(move |tx| {
             let n = tx.execute(
-                "UPDATE agent_actions SET state=?2, outcome=?3, undo_kind=?4, undo_ref=?5, updated_at=?6 \
+                "UPDATE agent_actions SET state=?2, outcome=?3, undo_kind=?4, undo_ref=?5, undo_domain=?7, updated_at=?6 \
                  WHERE idempotency_key=?1 AND outcome IS NULL",
-                params![key, state, outcome, undo_kind, undo_ref, now_secs()],
+                params![key, state, outcome, undo_kind, undo_ref, now_secs(), undo_domain],
             )?;
             Ok(n > 0)
         })
@@ -355,7 +368,7 @@ pub async fn lookup(reader: &ReadPool, key: &str) -> DbResult<Option<ActionRow>>
         .query(move |c| {
             c.query_row(
                 "SELECT id,run_id,idempotency_key,tool_name,target_rel,risk_tier,state,content_hash,\
-                 undo_kind,undo_ref,outcome,diff_summary,created_at,updated_at \
+                 undo_kind,undo_ref,outcome,diff_summary,created_at,updated_at,undo_domain \
                  FROM agent_actions WHERE idempotency_key=?1",
                 [key],
                 row_to_action,
@@ -398,7 +411,7 @@ pub async fn actions_for_undo(reader: &ReadPool, run_id: i64) -> DbResult<Vec<Ac
         .query(move |c| {
             let mut stmt = c.prepare(
                 "SELECT id,run_id,idempotency_key,tool_name,target_rel,risk_tier,state,content_hash,\
-                 undo_kind,undo_ref,outcome,diff_summary,created_at,updated_at \
+                 undo_kind,undo_ref,outcome,diff_summary,created_at,updated_at,undo_domain \
                  FROM agent_actions \
                  WHERE run_id=?1 AND state='executed' AND undo_kind IS NOT NULL \
                  ORDER BY id DESC",
@@ -464,6 +477,9 @@ fn row_to_action(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
         diff_summary: r.get(11)?,
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
+        // R-12b: undo_domain выбирается ПОСЛЕДНЕЙ колонкой (индекс 14) — так индексы 0..13 не сдвинулись
+        // (append-only колонка миграции 028; старые строки → NULL → tool_name-fallback у читателя).
+        undo_domain: r.get(14)?,
     })
 }
 
@@ -776,6 +792,7 @@ mod tests {
         let undo = UndoCols {
             kind: "snapshot".to_string(),
             reference: "1700000000".to_string(),
+            domain: Some(super::super::UndoDomain::Vault),
         };
         finish(db.writer(), "u", STATE_EXECUTED, "ok", Some(undo))
             .await
@@ -912,6 +929,7 @@ mod tests {
         let snap = |ts: &str| UndoCols {
             kind: "snapshot".to_string(),
             reference: ts.to_string(),
+            domain: Some(super::super::UndoDomain::Vault),
         };
         // Прогон 1: два откатываемых действия (a — раньше, b — позже).
         executed_with_undo(&db, 1, "a", snap("100")).await;
@@ -950,6 +968,7 @@ mod tests {
         let undo = UndoCols {
             kind: "trash".to_string(),
             reference: "Notes/N.md".to_string(),
+            domain: Some(super::super::UndoDomain::Skill),
         };
         executed_with_undo(&db, 1, "k", undo).await;
 

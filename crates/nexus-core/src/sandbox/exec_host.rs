@@ -725,6 +725,9 @@ impl ExecBackend for DispatchExecBackend {
             (true, Some(r)) if is_git_sha(r) => Some(UndoCols {
                 kind: UNDO_EXEC_GITREF.to_string(),
                 reference: r.to_string(),
+                // exec-GitOp: fs-домена нет (откат — git reset драйвером, не restore под vault/skills_root).
+                // NULL ⇒ читатель падёт на tool_name-fallback (git_op → Vault; root ExecGitRef не консультирует).
+                domain: None,
             }),
             _ => None,
         };

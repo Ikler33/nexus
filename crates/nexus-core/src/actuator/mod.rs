@@ -208,19 +208,25 @@ pub const UNDO_EXEC_GITREF: &str = "exec_gitref";
 impl UndoHandle {
     /// Сериализация в (kind, ref) для хранения в ledger. `ref` для Snapshot — `ts` (строкой), для Trash —
     /// `trash_rel`. (rel у Snapshot хранится отдельно как `target_rel` строки действия — не дублируем.)
+    /// `domain` НЕ задаётся здесь (`None`): [`UndoHandle`] домен-агностичен (Snapshot/Trash несут и
+    /// vault, и навыки), домен известен ТОЛЬКО на call-site apply (по `ConfinedWriteSpec`). Вызыватель
+    /// проставляет `domain` перед [`audit::finish`]; персист-путь exec оставляет `None` (домена нет).
     pub fn to_cols(&self) -> UndoCols {
         match self {
             UndoHandle::Snapshot { ts, .. } => UndoCols {
                 kind: UNDO_SNAPSHOT.to_string(),
                 reference: ts.to_string(),
+                domain: None,
             },
             UndoHandle::Trash { trash_rel } => UndoCols {
                 kind: UNDO_TRASH.to_string(),
                 reference: trash_rel.clone(),
+                domain: None,
             },
             UndoHandle::ExecGitRef { reference } => UndoCols {
                 kind: UNDO_EXEC_GITREF.to_string(),
                 reference: reference.clone(),
+                domain: None,
             },
         }
     }
@@ -243,6 +249,57 @@ impl UndoHandle {
                 reference: reference.to_string(),
             }),
             _ => None,
+        }
+    }
+}
+
+/// Типизированный ДОМЕН КОРНЯ отката строки ledger (R-12b): под каким корнем восстанавливаются её
+/// Snapshot/Trash. Заменяет прежнюю строковую эвристику `tool_name == "skill_save"` явным ledger-полем
+/// `agent_actions.undo_domain` (миграция 028). Сериализуется как стабильный дискриминант `vault`/`skill`.
+///
+/// **Обратная совместимость.** Поле nullable: строки, записанные ДО R-12b (и exec-GitOp строки, у которых
+/// fs-домена нет — их откат идёт git-reset'ом драйвера, не restore'ом), несут `undo_domain=NULL`. Читатель
+/// ([`super::undo`]) для NULL падает на [`UndoDomain::from_tool_name`] — ТОЧНОЕ зеркало прежней эвристики,
+/// поэтому исторические ledger'ы читаются один-в-один.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoDomain {
+    /// Vault-заметки: Snapshot/Trash восстанавливаются под `canon_root`.
+    Vault,
+    /// Навыки (SL-7c): Snapshot/Trash восстанавливаются под `skills_root` (навыки живут вне vault).
+    Skill,
+}
+
+/// Стабильные дискриминанты [`UndoDomain`] для ledger-колонки `undo_domain` — единый источник строк.
+pub const UNDO_DOMAIN_VAULT: &str = "vault";
+pub const UNDO_DOMAIN_SKILL: &str = "skill";
+
+impl UndoDomain {
+    /// Стабильный строковый дискриминант (значение `agent_actions.undo_domain`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UndoDomain::Vault => UNDO_DOMAIN_VAULT,
+            UndoDomain::Skill => UNDO_DOMAIN_SKILL,
+        }
+    }
+
+    /// Парс из строкового дискриминанта (обратное к [`UndoDomain::as_str`]). `None` — неизвестное/битое
+    /// значение (читатель тогда падает на [`UndoDomain::from_tool_name`] — fail-safe к мусору в колонке).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            UNDO_DOMAIN_VAULT => Some(UndoDomain::Vault),
+            UNDO_DOMAIN_SKILL => Some(UndoDomain::Skill),
+            _ => None,
+        }
+    }
+
+    /// tool_name-FALLBACK для строк БЕЗ поля `undo_domain` (записаны до R-12b) И для exec-строк: навык
+    /// (`skill_save`) → [`UndoDomain::Skill`], всё прочее → [`UndoDomain::Vault`]. ТОЧНОЕ зеркало прежней
+    /// `undo_root_for`-эвристики (обратная совместимость исторических ledger'ов).
+    pub fn from_tool_name(tool_name: &str) -> Self {
+        if tool_name == "skill_save" {
+            UndoDomain::Skill
+        } else {
+            UndoDomain::Vault
         }
     }
 }
