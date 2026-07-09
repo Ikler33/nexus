@@ -19,6 +19,7 @@ use serde::Serialize;
 use crate::ai::{injection_marker, ChatMessage, ChatProvider, EmbeddingProvider};
 use crate::db::{DbResult, ReadPool, WriteActor};
 use crate::scheduler::{now_secs, Job, JobHandler};
+use crate::util::truncate_chars;
 use crate::vector::VectorIndex;
 
 /// kind планировщика для фоновой генерации эпизодов.
@@ -36,16 +37,6 @@ const MAX_TRANSCRIPT_MSGS: usize = 40;
 const MSG_SNIPPET_CHARS: usize = 600;
 /// Мягкий лимит длины саммари (символов) — для UI/инъекции (EP-2/3).
 const SUMMARY_MAX_CHARS: usize = 600;
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max).collect();
-        out.push('…');
-        out
-    }
-}
 
 /// Тоггл эпизодической памяти включён? Persisted в `settings` (фоновая джоба не получает per-call
 /// флаг, в отличие от `aiAgentMemory`). Дефолт OFF (значения нет → ничего не генерируем).

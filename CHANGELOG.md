@@ -6,6 +6,49 @@
 
 ## [Unreleased]
 
+### Изменено · R-13g (часть 2) — тест-дедуп в `agent::test_support`
+
+**Файлы:** `crates/nexus-core/src/agent/test_support.rs` (новый, `#[cfg(test)]`), `agent/mod.rs`,
+`agent/connect/{handler.rs, client.rs, acp/server/tests.rs}`, `agent/session/tests.rs`.
+
+**Сделано:** новый крейт-приватный `#[cfg(test)] mod agent::test_support` с двумя канонами:
+- `open_db() -> (TempDir, Database)` — 4 байт-идентичные копии (`connect::handler`, `connect::client`,
+  `connect::acp::server::tests`, `session::tests`; последняя отличалась лишь `&`) → один хелпер;
+- плоский FIFO `FakeProvider` (без побочек) — 2 семантически идентичные (косметические расхождения только в doc-комменте и форме атрибута async_trait) копии (`connect::client`,
+  `connect::handler`) → один хелпер.
+
+Потребители переведены на `use crate::agent::test_support::…`; ассерты тестов НЕ менялись, счётчики
+не изменились (перемещение хелперов, не тестов).
+
+**Осознанно НЕ слито** (отчёт-честность > охват): `FakeProvider` в `session::tests` (поле `seen_tools`
++ `first_turn_tools()` — проверка состава реестра) и в `connect::acp::server` (эмитит токен на `Final`
+— доказательство `agent_message_chunk`) — иное поведение; `FakeProvider` в desktop `commands::agent`
+(другой крейт, `new`→`Arc<Self>`, дефолт `"ok"`); прочие `open_db` (`search`/`vector`/desktop —
+иные сигнатуры/3-кортеж); `exec_gate*` ×3 (разные типы возврата 2-/3-кортеж + policy-билдеры);
+`handler_*` ×6 (разные конфиги); `guarded`/`guarded_with_ips` (реальный vs мок-резолвер);
+`serve_once` (net параметризован строкой vs job фиксированный ответ, разные деревья).
+
+**Гейт:** cargo fmt ✓ / clippy --workspace --all-targets -D warnings ✓ / cargo test --workspace ✓.
+
+### Изменено · R-13g (часть 1) — прод-дедуп `truncate_chars` в единый канон
+
+**Файлы:** `crates/nexus-core/src/util.rs` (новый), `crates/nexus-core/src/lib.rs`,
+`crates/nexus-core/src/{ai/chat.rs, episode/mod.rs, skills/mod.rs}`,
+`crates/nexus-core/src/agent/research/worker.rs`.
+
+**Контекст:** волна R-13 нашла `fn truncate_chars(s, max) -> String` продублированной **3× байт-идентично**
+(`take(max)` + `push('…')` при усечении) в `ai::chat`, `episode`, `skills`.
+
+**Сделано:** канон вынесен в новый крейт-приватный модуль `crate::util` (`pub(crate) fn truncate_chars`,
+тело байт-идентично прежним копиям — доказано md5 `c84515d…` по всем трём). Три копии заменены на
+`use crate::util::truncate_chars;`. Юнит-тест `ai::chat::…::truncate_chars_caps_long_utf8` сохранён
+(теперь проверяет канон через реэкспорт) + добавлен прямой тест канона в `util`.
+
+**НЕ тронут ложный близнец:** `agent::research::worker::truncate_chars` — `take(max).collect()` **БЕЗ**
+эллипсиса, иная семантика; оставлен как есть, добавлен doc-коммент о намеренном отличии от канона.
+
+**Гейт:** cargo fmt ✓ / clippy -p nexus-core --all-targets -D warnings ✓ / truncate-тесты ✓.
+
 ### Документация · F-9b — i18n per-module namespace: рассмотрено, ОТЛОЖЕНО (analysis-driven, нулевой дифф кода)
 
 **Файлы:** `docs/dev/connector.md` (новая «### F-9b»), `docs/dev/i18n.md`, `docs/BACKLOG.md` (нет

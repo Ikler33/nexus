@@ -42,6 +42,9 @@ pub mod runner;
 pub mod session;
 pub mod skill_tools;
 pub mod stubs;
+/// Общие `#[cfg(test)]`-хелперы агентного дерева (R-13g): канон `open_db` + плоский `FakeProvider`.
+#[cfg(test)]
+mod test_support;
 pub mod tool;
 pub mod web_tools;
 

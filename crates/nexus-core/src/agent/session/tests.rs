@@ -1,5 +1,6 @@
 use super::*;
 use crate::actuator::PolicyDefault;
+use crate::agent::test_support::open_db;
 use crate::agent::tool::{ToolCall, ToolSpec};
 use crate::ai::tools::ToolTurn;
 use crate::ai::{AiResult, ChatMessage as Msg};
@@ -87,12 +88,6 @@ fn skills_alpha() -> (TempDir, crate::agent::skill_tools::SkillContext) {
     .unwrap();
     let ctx = crate::agent::skill_tools::SkillContext::new(Arc::new(discover_skills(&root)), root);
     (tmp, ctx)
-}
-
-async fn open_db() -> (TempDir, Database) {
-    let dir = TempDir::new().unwrap();
-    let db = Database::open(&dir.path().join("test.db")).await.unwrap();
-    (dir, db)
 }
 
 /// **B7, actuator OFF → реестр ПУСТ** (debug.echo/debug.noop в прод-пути больше не регистрируются:
