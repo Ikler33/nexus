@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import i18n from '../i18n/setup';
 import { commands } from './commands';
-import { attachPlugin } from './plugin-host';
+import { PLUGIN_CSP, attachPlugin, demoPluginSrcdoc, withPluginCsp } from './plugin-host';
 import { tauriApi } from './tauri-api';
 
 /** Один RPC по порту: шлём запрос, ждём ответ с тем же `id` (или таймаут — чтобы тест не висел). */
@@ -150,6 +150,45 @@ describe('plugin-host транспорт (attachPlugin)', () => {
     expect(commands.get('plugin:hello:greet')?.titleKey).toBe('plugin:hello:greetKey');
 
     handle.dispose();
+  });
+});
+
+/**
+ * Egress-контейнмент плагинного iframe (THREAT_MODEL T2). JSDOM НЕ энфорсит CSP, поэтому здесь —
+ * регресс-пин: srcdoc ОБЯЗАН нести точную жёсткую CSP первым meta в <head> (иначе `fetch`/`img`/
+ * `sendBeacon` на внешний хост из iframe открыты). Live-энфорсмент проверяется в реальном Tauri-app.
+ */
+describe('plugin CSP egress-контейнмент (T2)', () => {
+  it('PLUGIN_CSP: connect/img/media/font/form/frame/base = none; script+style unsafe-inline', () => {
+    expect(PLUGIN_CSP).toBe(
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+        "connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; " +
+        "form-action 'none'; frame-src 'none'; base-uri 'none'",
+    );
+  });
+
+  it('withPluginCsp: CSP-meta вставлен ПЕРВЫМ тегом в <head>', () => {
+    const out = withPluginCsp('<!doctype html><html><head><meta charset="utf-8"></head><body>x</body></html>');
+    const expectedMeta = `<meta http-equiv="Content-Security-Policy" content="${PLUGIN_CSP}">`;
+    expect(out).toContain(expectedMeta);
+    // Именно ПЕРВЫМ после <head>: браузер применяет CSP к тому, что объявлено ПОСЛЕ meta.
+    expect(out.indexOf('<head>') + '<head>'.length).toBe(out.indexOf(expectedMeta));
+  });
+
+  it('withPluginCsp: fail-closed при отсутствии <head>', () => {
+    expect(() => withPluginCsp('<!doctype html><html><body>no head</body></html>')).toThrow(/head/);
+  });
+
+  it('demoPluginSrcdoc: несёт точную CSP первым meta в <head> (регресс-пин)', () => {
+    const html = demoPluginSrcdoc();
+    const expectedMeta = `<meta http-equiv="Content-Security-Policy" content="${PLUGIN_CSP}">`;
+    expect(html).toContain(expectedMeta);
+    expect(html.indexOf('<head>') + '<head>'.length).toBe(html.indexOf(expectedMeta));
+    // connect-src 'none' — суть контейнмента egress: fetch/XHR/beacon наружу заблокированы.
+    expect(html).toContain("connect-src 'none'");
+    // Behavior-preserving: демо НЕ тянет внешних ресурсов (иначе CSP их бы срезала).
+    expect(html).not.toMatch(/https?:\/\//); // нет внешних URL в демо
+    expect(html).not.toContain('fetch('); // демо ходит к брокеру через postMessage, не fetch
   });
 });
 

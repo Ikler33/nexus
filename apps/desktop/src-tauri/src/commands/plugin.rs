@@ -18,8 +18,14 @@ use crate::vector::VectorIndex;
 /// `dir` приходит с фронта и используется в `join` + `move_to_trash`, который НЕ проверяет containment).
 /// Отвергаем пустое / разделители / `..` / `.` (последнее критично: `dir="."` → `move_to_trash`
 /// утащил бы в корзину ВЕСЬ каталог `plugins/`, т.к. его `file_name()` пропускает хвостовой `.`).
+/// Дополнительно отвергаем `:` и любой whitespace: `dir` подставляется в неймспейс-ключи `plugin:<dir>:<id>`
+/// (i18n-бандлы, id команд) — `:`/пробел сделали бы ключ неоднозначным и латентно сломали бы обратный
+/// парсинг (напр. `dir="a:b"`). Держим имя каталога плоским и однозначным.
 fn valid_plugin_dir(dir: &str) -> bool {
     if dir.contains('/') || dir.contains('\\') {
+        return false;
+    }
+    if dir.chars().any(|c| c == ':' || c.is_whitespace()) {
         return false;
     }
     let mut comps = std::path::Path::new(dir).components();
@@ -392,10 +398,13 @@ mod tests {
 
     /// Anti-traversal валидатора каталога плагина: принимаем только одиночный нормальный компонент.
     /// КРИТИЧНО отвергаем `.` (иначе remove утащил бы весь `plugins/`), `..`, разделители, абсолютные.
+    /// А также `:` и whitespace — они делают неоднозначным неймспейс-ключ `plugin:<dir>:<id>`.
     #[test]
     fn valid_plugin_dir_rejects_traversal() {
         assert!(valid_plugin_dir("hello"));
+        assert!(valid_plugin_dir("my-plugin"));
         assert!(valid_plugin_dir("my-plugin_2"));
+        assert!(valid_plugin_dir("plugin_1"));
         for bad in [
             "",
             ".",
@@ -408,6 +417,13 @@ mod tests {
             "./x",
             ".nexus/..",
             "a/.",
+            // `:` и whitespace ломают обратный парсинг ключа `plugin:<dir>:<id>` (латентная неоднозначность).
+            "a:b",
+            "a b",
+            "a\tb",
+            "a\nb",
+            " ",
+            "plugin:hello",
         ] {
             assert!(!valid_plugin_dir(bad), "{bad:?} должен отвергаться");
         }

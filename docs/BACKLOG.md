@@ -196,7 +196,7 @@
 
 | Что | Почему отложено | Триггер | Источник |
 |---|---|---|---|
-| ⏳ **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) + **iframe-CSP упакованного app** (`frame-src`/`child-src`, origin ассетов) + доверенный JS в **Worker** (сейчас UI-JS в iframe) | транспорт+sandbox готовы (Ф2-2b·4); загрузка/CSP/Worker — отдельный кусок | доводка Ф2 | ADR-001/002, §7.5, `plugins.md`, `security.md` |
+| ⏳ **Реальная загрузка кода плагина** из `.nexus/plugins/<id>/<entry>` (сейчас демо встроено в хост) + **app-level iframe-CSP упакованного app** (`frame-src`/`child-src`, origin ассетов) + доверенный JS в **Worker** (сейчас UI-JS в iframe) | транспорт+sandbox готовы (Ф2-2b·4); загрузка/Worker/app-CSP — отдельный кусок. **✅ Egress-контейнмент плагинного iframe (per-srcdoc CSP `connect-src 'none'`, T2) СДЕЛАН** (`withPluginCsp`/`PLUGIN_CSP`, security-хардининг) — плагин больше не может слать fetch/beacon наружу мимо брокера; единая точка вставки наследуется будущим загружаемым srcdoc | доводка Ф2 | ADR-001/002, §7.5, `plugins.md`, `security.md`, THREAT_MODEL T2 |
 | ⏳ Host-API плагинов: `ai.complete` (стрим ответа по порту) | embed/search/net.fetch сделаны; стрим чата по MessagePort (события host→plugin) — отдельным срезом | Ф2-3/доводка | §7.2, `plugins.md`, `ai.md` |
 | 🔬 SSRF: DNS-rebinding для `net.fetch` (резолв хоста + проверка адреса) | литеральные приватные адреса + allowlist уже закрыты; резолв домена в приватный IP — глубже | при усилении | AC-SEC-4, `security.md` |
 | ⏳ Миграции схемы `chat_*` / `link_suggestions` (FTS5/usearch нельзя `ALTER`) | не нужны до соответствующих фич | при их реализации | `db.md` |

