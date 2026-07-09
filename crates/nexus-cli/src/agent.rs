@@ -441,9 +441,11 @@ async fn read_line(prompt: &str) -> Option<String> {
 /// Откатывает применённые действия прогона `run_id` (зеркало desktop `agent_undo`: `actuator::undo_run`
 /// над тем же writer/reader). Возвращает число восстановленных действий. Идемпотентно.
 async fn undo_last_run(deps: &Deps, run_id: i64) -> usize {
-    use nexus_core::actuator::{undo_run, AuditSink};
+    use nexus_core::actuator::{undo_run, AuditSink, UndoOpts};
     let ledger = AuditSink::new(deps.db.writer().clone(), deps.db.reader().clone());
-    undo_run(run_id, &deps.canon_root, &ledger).await.restored()
+    undo_run(run_id, &deps.canon_root, &ledger, UndoOpts::new())
+        .await
+        .restored()
 }
 
 /// Slash-команда REPL (разбор — чистая функция, для юнит-теста).

@@ -132,7 +132,7 @@ impl UndoOutcome {
 
 /// Шов исполнения exec-undo (SANDBOX-6c-3e): откат GitOp = САМ мутирующий GitOp, поэтому он RE-ENTER'ит
 /// тот же host/exec путь (classify→decide→approve→mint-token→in-container execute→report), НЕ
-/// привилегированный спец-путь. Для строки [`UndoHandle::ExecGitRef`] [`undo_run_with_driver`] ре-валидирует
+/// привилегированный спец-путь. Для строки [`UndoHandle::ExecGitRef`] [`undo_run`] (с `driver` в [`UndoOpts`]) ре-валидирует
 /// `reference` host-side ([`crate::sandbox::exec_host::is_git_sha`]) и зовёт [`UndoExecDriver::undo_gitref`].
 /// Прод-impl (6c-3d `SandboxUndoExecDriver`) гоняет ОДИН полный цикл в `--network=none` контейнере под тем
 /// же гейтом: `git reset --hard` классифицируется Confirm-НИКОГДА-Auto ⇒ под headless PolicyDefault
@@ -147,48 +147,61 @@ pub trait UndoExecDriver: Send + Sync {
     async fn undo_gitref(&self, reference: &str) -> UndoStatus;
 }
 
+/// Опции отката прогона (R-12b): факультативные параметры [`undo_run`] сверх обязательных
+/// `run_id`/`canon_root`/`ledger`. `Default` (== `UndoOpts::new()`) = ПРЕЖНЕЕ vault-only поведение
+/// (skills_root=None, driver=None): exec-GitOp откат остаётся `Deferred`, строки навыков — Failed
+/// (fail-closed). Билдер (`with_skills_root`/`with_driver`) добавляет ровно то, что нужно вызывателю —
+/// вместо трёх врапперов с разными наборами None-хвостов (`undo_run`/`undo_run_full`/`undo_run_with_driver`).
+#[derive(Default, Clone, Copy)]
+pub struct UndoOpts<'a> {
+    /// Корень навыков (SL-7c): строки навыков (`tool_name="skill_save"`) откатываются ПОД ним (НЕ vault
+    /// `canon_root`). `None` ⇒ строка навыка не откатывается (Failed «skills_root не задан» — fail-closed:
+    /// не угадываем корень). Прод-вызыватель (SL-7d/handler) подставляет канонизированный skills_root.
+    pub skills_root: Option<&'a Path>,
+    /// Драйвер exec-undo (SANDBOX-6c-3e): `Some` ⇒ exec-GitOp откат исполняется реально (синтезированный
+    /// `git reset --hard <ref>` через песочницу под host-апрувом); `None` ⇒ `Deferred` surfacing (байт-в-байт
+    /// как 6c-2h). Композиционный корень (agentd `--sandbox-undo`, 6c-3d) подставляет прод-драйвер.
+    pub driver: Option<&'a dyn UndoExecDriver>,
+}
+
+impl<'a> UndoOpts<'a> {
+    /// vault-only опции по умолчанию (без skills_root/driver) — прежнее поведение `undo_run`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// SL-7c: задать корень навыков для отката строк `skill_save` (иначе они fail-closed Failed).
+    pub fn with_skills_root(mut self, skills_root: &'a Path) -> Self {
+        self.skills_root = Some(skills_root);
+        self
+    }
+
+    /// SANDBOX-6c-3e: задать драйвер реального exec-GitOp отката (иначе exec-GitOp остаётся Deferred).
+    pub fn with_driver(mut self, driver: &'a dyn UndoExecDriver) -> Self {
+        self.driver = Some(driver);
+        self
+    }
+}
+
 /// Откатить прогон `run_id`: пройти его применённые действия NEWEST-FIRST и восстановить каждое через его
 /// [`UndoHandle`]. `canon_root` ОБЯЗАН быть уже канонизированным корнем vault (предусловие рубежа записи).
-/// БЕЗ exec-undo драйвера (exec-GitOp откат остаётся `Deferred` — vault-only поведение); exec-undo —
-/// [`undo_run_with_driver`].
+/// Факультативы (skills_root навыков, exec-undo драйвер) — через [`UndoOpts`]: `UndoOpts::new()` даёт
+/// прежнее vault-only поведение (exec-GitOp откат остаётся `Deferred`, строки навыков — fail-closed Failed).
 ///
 /// Reverse-order критичен: две правки одной заметки v0→v1→v2 откатываются v2 (снапшот=v1) ЗАТЕМ v1
 /// (снапшот=v0) → итог v0. Откатив сначала старейшее, мы бы получили v1, а не v0.
 ///
 /// Идемпотентен: повторный вызов видит пустой набор (откаченные строки в state `undone`, фильтр
 /// [`audit::actions_for_undo`] их не вернёт) → no-op. Толерантен к частичному провалу: один сбойный откат
-/// не прерывает остальные — собираем все исходы в [`UndoOutcome`].
-pub async fn undo_run(run_id: i64, canon_root: &Path, ledger: &AuditSink) -> UndoOutcome {
-    undo_run_inner(run_id, canon_root, None, ledger, None).await
-}
-
-/// SELF-LEARNING SL-7c: как [`undo_run_with_driver`], но с `skills_root` для отката строк навыков
-/// (`tool_name="skill_save"`): их `Snapshot`/`Trash` восстанавливаются ПОД skills_root (НЕ vault
-/// canon_root). `skills_root=None` ⇒ строка навыка не откатывается (Failed «skills_root не задан» —
-/// fail-closed: не угадываем корень). Не-навыковые строки всегда идут под `canon_root`. Прод-вызыватель
-/// (SL-7d/handler) подставляет канонизированный skills_root; vault-only вызыватели зовут [`undo_run`].
-pub async fn undo_run_full(
-    run_id: i64,
-    canon_root: &Path,
-    skills_root: Option<&Path>,
-    ledger: &AuditSink,
-    driver: Option<&dyn UndoExecDriver>,
-) -> UndoOutcome {
-    undo_run_inner(run_id, canon_root, skills_root, ledger, driver).await
-}
-
-/// Как [`undo_run`], но с опциональным [`UndoExecDriver`] (SANDBOX-6c-3e): `Some` ⇒ exec-GitOp откат
-/// исполняется реально (синтезированный `git reset --hard <ref>` через песочницу под host-апрувом); `None` ⇒
-/// `Deferred` surfacing (байт-в-байт как 6c-2h). Композиционный корень (agentd `--sandbox-undo`, 6c-3d)
-/// подставляет прод-драйвер; vault-only вызыватели зовут [`undo_run`]. `reference` ре-валидируется host-side
-/// ([`crate::sandbox::exec_host::is_git_sha`]) ПЕРЕД вызовом драйвера (инъекц-/мусор-ref ⇒ драйвер НЕ зовём).
-pub async fn undo_run_with_driver(
+/// не прерывает остальные — собираем все исходы в [`UndoOutcome`]. `driver.reference` ре-валидируется
+/// host-side ([`crate::sandbox::exec_host::is_git_sha`]) ПЕРЕД вызовом (инъекц-/мусор-ref ⇒ драйвер НЕ зовём).
+pub async fn undo_run(
     run_id: i64,
     canon_root: &Path,
     ledger: &AuditSink,
-    driver: Option<&dyn UndoExecDriver>,
+    opts: UndoOpts<'_>,
 ) -> UndoOutcome {
-    undo_run_inner(run_id, canon_root, None, ledger, driver).await
+    undo_run_inner(run_id, canon_root, opts.skills_root, ledger, opts.driver).await
 }
 
 /// Выбор корня отката строки по её `tool_name`: навык (`skill_save`) → skills_root (если задан), иначе
@@ -549,7 +562,7 @@ mod tests {
         apply_ok(&action, 1, &root, &sink).await;
         assert_eq!(read(&root, "Notes/E.md"), "EDITED", "правка применилась");
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 1, "ровно одно действие откачено");
         assert!(outcome.fully_undone());
         assert_eq!(
@@ -581,7 +594,7 @@ mod tests {
         );
 
         // Откат прогона агента: контракт — вернуть к пред-edit (v0).
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 1, "edit откачен");
         assert!(outcome.fully_undone());
 
@@ -613,7 +626,7 @@ mod tests {
         apply_ok(&action, 1, &root, &sink).await;
         assert!(abs_of(&root, "Notes/New.md").exists(), "файл создан");
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 1);
         assert!(
             !abs_of(&root, "Notes/New.md").exists(),
@@ -639,7 +652,7 @@ mod tests {
         apply_ok(&Action::note_edit("R.md", "v2"), 1, &root, &sink).await;
         assert_eq!(read(&root, "R.md"), "v2");
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.restored(), 2, "оба edit'а откачены");
         // Порядок отката — newest-first: первым в списке v2-правка (её снапшот = v1), затем v1 (снапшот=v0).
         assert_eq!(outcome.actions.len(), 2);
@@ -662,11 +675,11 @@ mod tests {
         write_existing(&root, "I.md", "BEFORE");
         apply_ok(&Action::note_edit("I.md", "AFTER"), 1, &root, &sink).await;
 
-        let first = undo_run(1, &root, &sink).await;
+        let first = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(first.restored(), 1);
         assert_eq!(read(&root, "I.md"), "BEFORE");
 
-        let second = undo_run(1, &root, &sink).await;
+        let second = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert!(
             second.actions.is_empty(),
             "повторный undo_run — пустой набор (всё уже undone), no-op"
@@ -723,7 +736,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.actions.len(), 2);
         assert_eq!(outcome.restored(), 1, "валидное A откачено");
         assert_eq!(outcome.failed(), 1, "битое B отчиталось провалом");
@@ -872,7 +885,7 @@ mod tests {
         .await
         .unwrap();
 
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.actions.len(), 1);
         assert_eq!(outcome.deferred(), 1, "exec-GitOp откат отложен");
         assert_eq!(outcome.failed(), 0, "deferred — НЕ провал");
@@ -969,7 +982,7 @@ mod tests {
     async fn exec_gitref_with_no_driver_still_deferred() {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
-        let outcome = undo_run_with_driver(1, &root, &sink, None).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.deferred(), 1);
         assert_eq!(state_of(&sink, "g").await, "executed", "None ⇒ не undone");
     }
@@ -980,7 +993,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
         let (driver, called) = mock_driver(UndoStatus::Restored);
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert!(
             called.load(std::sync::atomic::Ordering::SeqCst),
             "драйвер вызван"
@@ -1000,7 +1013,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
         let (driver, _c) = mock_driver(UndoStatus::Deferred("апрув отклонён".into()));
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert_eq!(outcome.deferred(), 1);
         assert_eq!(outcome.failed(), 0, "deferred — НЕ провал");
         assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
@@ -1012,7 +1025,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "a1b2c3d4").await;
         let (driver, _c) = mock_driver(UndoStatus::Failed("reset exit 1".into()));
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert_eq!(outcome.failed(), 1);
         assert_eq!(state_of(&sink, "g").await, "executed", "не undone");
     }
@@ -1024,7 +1037,7 @@ mod tests {
         let (_d, root, sink) = setup().await;
         seed_exec_gitref(&sink, 1, "g", "HEAD; rm -rf ~").await;
         let (driver, called) = mock_driver(UndoStatus::Restored);
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert!(
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "инъекц-ref → драйвер НЕ вызван (fail-closed)"
@@ -1052,7 +1065,7 @@ mod tests {
             .await
             .unwrap();
         let (driver, called) = mock_driver(UndoStatus::Restored);
-        let outcome = undo_run_with_driver(1, &root, &sink, Some(&driver)).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new().with_driver(&driver)).await;
         assert!(
             outcome.actions.is_empty(),
             "shell без undo-хэндла — не в наборе отката"
@@ -1096,7 +1109,13 @@ mod tests {
         .await;
         assert!(skills_root.join("s/SKILL.md").exists(), "навык создан");
 
-        let outcome = undo_run_full(1, &root, Some(&skills_root), &sink, None).await;
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
         assert_eq!(outcome.restored(), 1, "create навыка откачен");
         assert!(
             !skills_root.join("s/SKILL.md").exists(),
@@ -1127,7 +1146,13 @@ mod tests {
             "перезаписан"
         );
 
-        let outcome = undo_run_full(1, &root, Some(&skills_root), &sink, None).await;
+        let outcome = undo_run(
+            1,
+            &root,
+            &sink,
+            UndoOpts::new().with_skills_root(&skills_root),
+        )
+        .await;
         assert_eq!(outcome.restored(), 1, "overwrite навыка откачен");
         assert_eq!(
             fs::read_to_string(&abs).unwrap(),
@@ -1151,7 +1176,7 @@ mod tests {
         .await;
 
         // undo_run НЕ знает skills_root → навык откатить нечем.
-        let outcome = undo_run(1, &root, &sink).await;
+        let outcome = undo_run(1, &root, &sink, UndoOpts::new()).await;
         assert_eq!(outcome.failed(), 1, "без skills_root навык → Failed");
         assert_eq!(outcome.restored(), 0);
         assert!(
@@ -1164,7 +1189,7 @@ mod tests {
     #[tokio::test]
     async fn undo_run_empty_for_run_without_actions() {
         let (_d, root, sink) = setup().await;
-        let outcome = undo_run(999, &root, &sink).await;
+        let outcome = undo_run(999, &root, &sink, UndoOpts::new()).await;
         assert!(outcome.actions.is_empty());
         assert!(
             outcome.fully_undone(),

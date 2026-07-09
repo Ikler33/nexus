@@ -310,9 +310,16 @@ impl ConnectHandler for ConnectAgentHandler {
         // SL-7d: skills_root для отката строк навыков (skill.save → Snapshot/Trash под skills_root, НЕ
         // vault). None → строки навыка не откатятся (fail-closed), но note/exec идут под canon_root.
         let skills_root = self.deps.skills.as_ref().map(|s| s.skills_root());
-        let outcome =
-            actuator::undo_run_full(run_id, &self.deps.canon_root, skills_root, &ledger, None)
-                .await;
+        let outcome = actuator::undo_run(
+            run_id,
+            &self.deps.canon_root,
+            &ledger,
+            actuator::UndoOpts {
+                skills_root,
+                driver: None,
+            },
+        )
+        .await;
         Ok(UndoResult {
             restored: outcome.restored() as u32,
         })
