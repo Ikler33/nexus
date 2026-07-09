@@ -189,28 +189,6 @@ mod connected {
         }
     }
 
-    // CONN-4/R-12b: характеризация БАЙТ-ПРЕЖНИХ backend-текстов диагностики сокета после дедупа
-    // (канон `classify_socket` в ядре; тексты — тут). Пинят точные строки.
-    #[cfg(test)]
-    mod diag_tests {
-        use super::{connect_socket_diag_err, SocketDiag};
-        use std::path::Path;
-
-        #[test]
-        fn connect_socket_diag_messages_byte_exact() {
-            let p = Path::new("/v/.nexus/agentd.sock");
-            assert_eq!(
-                connect_socket_diag_err(SocketDiag::NotSocket, p).unwrap(),
-                "/v/.nexus/agentd.sock: путь существует, но это НЕ сокет (проверь ai.connection.socket)"
-            );
-            assert_eq!(
-                connect_socket_diag_err(SocketDiag::Missing, p).unwrap(),
-                "agentd не запущен? сокет /v/.nexus/agentd.sock не найден (`nexus deploy local --apply`)"
-            );
-            assert!(connect_socket_diag_err(SocketDiag::Usable, p).is_none());
-        }
-    }
-
     /// Текущий канал событий активного прогона (форвард-таск шлёт сюда).
     type SharedChannel = Arc<Mutex<Option<Channel<AgentStreamEvent>>>>;
 
@@ -448,6 +426,29 @@ mod connected {
             let u: UndoResult = serde_json::from_value(res)
                 .map_err(|_| AppError::Msg("agent/undo: некорректный результат".into()))?;
             Ok(u.restored as usize)
+        }
+    }
+
+    // CONN-4/R-12b: характеризация БАЙТ-ПРЕЖНИХ backend-текстов диагностики сокета после дедупа
+    // (канон `classify_socket` в ядре; тексты — тут). Пинят точные строки. В КОНЦЕ модуля
+    // (clippy::items_after_test_module: за тест-модулем не должно быть прод-элементов).
+    #[cfg(test)]
+    mod diag_tests {
+        use super::{connect_socket_diag_err, SocketDiag};
+        use std::path::Path;
+
+        #[test]
+        fn connect_socket_diag_messages_byte_exact() {
+            let p = Path::new("/v/.nexus/agentd.sock");
+            assert_eq!(
+                connect_socket_diag_err(SocketDiag::NotSocket, p).unwrap(),
+                "/v/.nexus/agentd.sock: путь существует, но это НЕ сокет (проверь ai.connection.socket)"
+            );
+            assert_eq!(
+                connect_socket_diag_err(SocketDiag::Missing, p).unwrap(),
+                "agentd не запущен? сокет /v/.nexus/agentd.sock не найден (`nexus deploy local --apply`)"
+            );
+            assert!(connect_socket_diag_err(SocketDiag::Usable, p).is_none());
         }
     }
 }
