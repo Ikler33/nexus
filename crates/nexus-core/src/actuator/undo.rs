@@ -1088,7 +1088,7 @@ mod tests {
         );
     }
 
-    // ── SL-7c: откат навыков (skills_root-rooted Snapshot/Trash через undo_run_full) ─────────────
+    // ── SL-7c: откат навыков (skills_root-rooted Snapshot/Trash через undo_run + UndoOpts::with_skills_root) ─────────────
     const VALID_SKILL: &str = "---\nname: s\ndescription: d\n---\nBODY";
 
     /// Канонизированный отдельный skills_root внутри temp (НЕ vault canon_root).
@@ -1107,7 +1107,7 @@ mod tests {
         );
     }
 
-    /// CREATE навыка → undo_run_full (skills_root) уносит файл в корзину (откат create).
+    /// CREATE навыка → undo_run с UndoOpts::with_skills_root уносит файл в корзину (откат create).
     #[tokio::test]
     async fn skill_create_then_undo_uncreates() {
         let (_d, root, sink) = setup().await;
@@ -1135,7 +1135,7 @@ mod tests {
         );
     }
 
-    /// OVERWRITE навыка → undo_run_full восстанавливает ПРЕД-контент под skills_root.
+    /// OVERWRITE навыка → undo_run (UndoOpts::with_skills_root) восстанавливает ПРЕД-контент под skills_root.
     #[tokio::test]
     async fn skill_overwrite_then_undo_restores_prior() {
         let (_d, root, sink) = setup().await;
@@ -1174,7 +1174,7 @@ mod tests {
     }
 
     /// FAIL-CLOSED: строка навыка, но undo_run (vault-only, без skills_root) → Failed, файл НЕ тронут
-    /// (не угадываем корень). Восстановить можно только через undo_run_full со skills_root.
+    /// (не угадываем корень). Восстановить можно только через undo_run с UndoOpts::with_skills_root.
     #[tokio::test]
     async fn skill_undo_without_skills_root_fails_closed() {
         let (_d, root, sink) = setup().await;
@@ -1245,6 +1245,45 @@ mod tests {
             Some("vault"),
             "свежая заметка → undo_domain=vault"
         );
+    }
+
+    /// R-12b (ревью MINOR-2): юниты на ветвление `undo_root_for` — пинят fallback при БИТОМ домене
+    /// (мутация `parse → Some(Vault) для unknown` ловится) и приоритет typed над tool_name (в прод-путях
+    /// рассинхрон недостижим — тест фиксирует fail-closed-направление на случай тампера БД).
+    #[test]
+    fn undo_root_for_garbage_domain_falls_back_and_typed_wins() {
+        let canon = Path::new("/canon");
+        let skills = Path::new("/skills");
+        let mut row = audit::ActionRow {
+            id: 1,
+            run_id: 1,
+            idempotency_key: String::new(),
+            tool_name: "skill_save".into(),
+            target_rel: None,
+            risk_tier: "auto".into(),
+            state: "executed".into(),
+            content_hash: None,
+            undo_kind: Some("snapshot".into()),
+            undo_ref: None,
+            undo_domain: Some("garbage".into()),
+            outcome: None,
+            diff_summary: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        // Битый домен → parse=None → fallback по tool_name: skill_save → Skill-root (НЕ canon!).
+        assert_eq!(
+            undo_root_for(&row, canon, Some(skills)),
+            Some(skills),
+            "битый undo_domain обязан падать в tool_name-fallback"
+        );
+        // Typed wins: явный домен 'vault' сильнее tool_name='skill_save' (достижимо только тампером БД;
+        // fail-closed-направление — запись уходит в canon_root, не в чужой skills-корень).
+        row.undo_domain = Some("vault".into());
+        assert_eq!(undo_root_for(&row, canon, Some(skills)), Some(canon));
+        // И симметрично: домен 'skill' при vault-only вызывателе (skills_root=None) → None → Failed.
+        row.undo_domain = Some("skill".into());
+        assert_eq!(undo_root_for(&row, canon, None), None);
     }
 
     /// R-12b ОБРАТНАЯ СОВМЕСТИМОСТЬ (обязательный тест на ИСТОРИЧЕСКОМ ФИКСТУРЕ): строка навыка,

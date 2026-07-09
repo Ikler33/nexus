@@ -873,7 +873,6 @@ fn run_cmds_strict(cmds: &[Vec<String>]) -> Result<(), String> {
 
 // ── status ────────────────────────────────────────────────────────────────────────────────────────
 
-#[cfg(unix)]
 /// CONN-4: байт-прежнее сообщение диагностики сокета для `nexus status` по вердикту канона
 /// [`classify_socket`]. `None` — путь пригоден (проба продолжается). Тексты специфичны для CLI
 /// (упоминают флаг `--socket` и `nexus deploy local --apply`) — потому маппинг ЗДЕСЬ, не в ядре.
@@ -908,6 +907,7 @@ fn status_probe_err(err: nexus_core::agent::connect::ProbeError) -> String {
     }
 }
 
+#[cfg(unix)]
 fn cmd_status(flags: &[&str]) -> Result<(), String> {
     use nexus_core::agent::connect::{classify_socket, connect_unix, probe_initialize};
     use std::time::Duration;

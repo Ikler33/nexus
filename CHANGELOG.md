@@ -37,7 +37,7 @@
   зеркало прежней эвристики) — **обратная совместимость** старых строк. Доказано: обязательный тест на
   ИСТОРИЧЕСКОМ ФИКСТУРЕ (навык с занулённым undo_domain откатывается под правильный skills_root через
   fallback; парная защита для заметки), миграция-тест «старая БД (v27+строка) + свежая обе работают»,
-  тест «свежие строки несут vault/skill явно». Инварианты undo НЕ ослаблены: `undo_run_inner` неизменён
+  тест «свежие строки несут vault/skill явно». Инварианты undo НЕ ослаблены: `undo_run_inner` прежний (единственная правка — вызов `undo_root_for(&row, …)` вместо `(&row.tool_name, …)`, сам механизм типизированного домена)
   (host-authority ре-валидация `is_git_sha`, fail-closed skills_root=None, Deferred при driver=None).
 - Гейт: `cargo fmt --all --check` ✅ / `clippy --workspace --all-targets -D warnings` ✅ /
   `test --workspace` ✅ (nexus-core 1138 + 20 ignored, agentd 19, cli 51, desktop 247 + 6 ignored,
