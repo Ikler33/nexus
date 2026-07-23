@@ -518,8 +518,13 @@ fn recurring_map_includes_insights_and_contra_without_toggle_snapshot() {
     assert!(on_change.contains(&crate::contradictions::KIND_CONTRA.to_string()));
     assert!(!on_change.iter().any(|k| k == crate::scheduler::KIND_GC));
     assert!(!on_change.iter().any(|k| k == crate::news::KIND_NEWSFEED));
-    assert!(!on_change.iter().any(|k| k == crate::home::stale::KIND_STALE));
-    assert_eq!(rec.get(crate::episode::KIND_EPISODE_ROLLUP), Some(&(DAY_SECS / 4)));
+    assert!(!on_change
+        .iter()
+        .any(|k| k == crate::home::stale::KIND_STALE));
+    assert_eq!(
+        rec.get(crate::episode::KIND_EPISODE_ROLLUP),
+        Some(&(DAY_SECS / 4))
+    );
 }
 
 /// Без chat/util — узкий recurring (GC always; no LLM kinds).
