@@ -493,3 +493,40 @@ async fn boot_no_embedding_no_embedder() {
         "нет ai.embedding → нет эмбеддера"
     );
 }
+
+/// M2 / LLM-audit #324: recurring map строится по provider-гейтам, **без** снимка тогглов.
+/// Иначе ON mid-session + успешный kick не ставит следующий суточный тик до reopen vault.
+#[test]
+fn recurring_map_includes_insights_and_contra_without_toggle_snapshot() {
+    let (rec, on_change) = scheduler_recurring_and_on_change(
+        /*chat*/ true, /*chat_util*/ true, /*vectors*/ true, /*news*/ true,
+    );
+    assert!(rec.contains_key(crate::digest::KIND_DIGEST));
+    assert!(rec.contains_key(crate::contradictions::KIND_CONTRA));
+    assert!(rec.contains_key(crate::scheduler::KIND_GC));
+    assert!(rec.contains_key(&crate::home::widgets::widget_kind(
+        crate::home::insights::KEY_CONTEXT_DRIFT
+    )));
+    assert!(rec.contains_key(&crate::home::widgets::widget_kind(
+        crate::home::insights::KEY_OPEN_QUESTIONS
+    )));
+    assert!(rec.contains_key(crate::home::stale::KIND_STALE));
+    assert!(rec.contains_key(crate::episode::KIND_EPISODE_ROLLUP));
+    assert!(rec.contains_key(crate::news::KIND_NEWSFEED));
+    // on_change — только digest+contra
+    assert!(on_change.contains(&crate::digest::KIND_DIGEST.to_string()));
+    assert!(on_change.contains(&crate::contradictions::KIND_CONTRA.to_string()));
+    assert!(!on_change.iter().any(|k| k == crate::scheduler::KIND_GC));
+    assert!(!on_change.iter().any(|k| k == crate::news::KIND_NEWSFEED));
+    assert!(!on_change.iter().any(|k| k == crate::home::stale::KIND_STALE));
+    assert_eq!(rec.get(crate::episode::KIND_EPISODE_ROLLUP), Some(&(DAY_SECS / 4)));
+}
+
+/// Без chat/util — узкий recurring (GC always; no LLM kinds).
+#[test]
+fn recurring_map_gc_only_without_providers() {
+    let (rec, on_change) = scheduler_recurring_and_on_change(false, false, false, false);
+    assert_eq!(rec.len(), 1);
+    assert!(rec.contains_key(crate::scheduler::KIND_GC));
+    assert!(on_change.is_empty());
+}

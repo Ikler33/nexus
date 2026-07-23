@@ -13,6 +13,55 @@ use crate::state::{AppState, VaultContext};
 use crate::vault::{self, FileEntry, FileMeta, NoteRef, VaultInfo};
 use crate::vector::VectorIndex;
 
+/// Сутки в секундах — интервал default recurring LLM/GC джоб.
+const DAY_SECS: i64 = 24 * 3600;
+
+/// Собирает map `recurring` + список `on_change` для воркера планировщика при open_vault.
+///
+/// **Тогглы insights/contra сюда НЕ входят** (M2 / LLM-audit #324): mid-session ON делает kick,
+/// а `run_due` после успеха переназначает только kinds из map, зафиксированной на open.
+/// Хендлеры при OFF — NOOP. Сиды на open по-прежнему гейтятся тогглами снаружи.
+///
+/// `on_change` = только digest (+ contra при vectors) — insights/episode/news/gc scheduled-only.
+pub(crate) fn scheduler_recurring_and_on_change(
+    chat: bool,
+    chat_util: bool,
+    vectors: bool,
+    news_active: bool,
+) -> (std::collections::HashMap<String, i64>, Vec<String>) {
+    let mut recurring: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    if chat {
+        recurring.insert(crate::digest::KIND_DIGEST.to_string(), DAY_SECS);
+    }
+    if chat && vectors {
+        recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
+    }
+    let on_change: Vec<String> = recurring.keys().cloned().collect();
+    // GC (m1): раз/сутки; не on_change.
+    recurring.insert(crate::scheduler::KIND_GC.to_string(), DAY_SECS);
+    if chat {
+        recurring.insert(
+            crate::home::widgets::widget_kind(crate::home::insights::KEY_CONTEXT_DRIFT),
+            DAY_SECS,
+        );
+    }
+    if chat_util {
+        recurring.insert(
+            crate::home::widgets::widget_kind(crate::home::insights::KEY_OPEN_QUESTIONS),
+            DAY_SECS,
+        );
+        recurring.insert(crate::home::stale::KIND_STALE.to_string(), DAY_SECS);
+        recurring.insert(
+            crate::episode::KIND_EPISODE_ROLLUP.to_string(),
+            DAY_SECS / 4,
+        );
+    }
+    if news_active {
+        recurring.insert(crate::news::KIND_NEWSFEED.to_string(), DAY_SECS);
+    }
+    (recurring, on_change)
+}
+
 /// Открывает vault: канонизирует папку, открывает БД в `.nexus/nexus.db`, сохраняет в state.
 #[tauri::command]
 pub async fn open_vault(
@@ -301,60 +350,16 @@ pub async fn open_vault(
             false
         };
 
-    // Recurring (slice 6): LLM-фичи сами переназначаются после прогона — авто-обновление раз в сутки
-    // (совпадает с их окном «недавнего»). С backpressure (S5) фон не мешает интерактиву.
-    const DAY_SECS: i64 = 24 * 3600;
-    let mut recurring: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-    // Тогглы фоновых ИИ-фич (persisted в settings vault, дефолт OFF — real-test 2026-06-18): инсайты
-    // (open_questions/context_drift/stale) и поиск противоречий при OFF НЕ регистрируем в recurring и НЕ
-    // сидим ниже (фон/LLM не тратится; хендлеры дополнительно рано выходят NOOP при mid-session OFF).
+    // Recurring (slice 6) + on_change (slice 7): policy в `scheduler_recurring_and_on_change`
+    // (M2/#324 — без снимка тогглов). Сиды ниже по-прежнему гейтятся `insights_on`/`contra_on`.
     let insights_on = crate::home::insights::insights_enabled(db.reader()).await;
     let contra_on = crate::contradictions::is_enabled(db.reader()).await;
-    if chat.is_some() {
-        recurring.insert(crate::digest::KIND_DIGEST.to_string(), DAY_SECS);
-    }
-    if chat.is_some() && vectors.is_some() && contra_on {
-        recurring.insert(crate::contradictions::KIND_CONTRA.to_string(), DAY_SECS);
-    }
-    // On-change (slice 7): дайджест+противоречия перезапускаются после правок vault (с дебаунсом).
-    let on_change: Vec<String> = recurring.keys().cloned().collect();
-    // Context drift (H5) — scheduled-only (раз/сутки; концепт: «чаще нет смысла»): в `recurring`, но НЕ в
-    // `on_change` — добавляем ПОСЛЕ снятия on_change, чтобы он не реагировал на каждую правку.
-    if chat.is_some() && insights_on {
-        recurring.insert(
-            crate::home::widgets::widget_kind(crate::home::insights::KEY_CONTEXT_DRIFT),
-            DAY_SECS,
-        );
-    }
-    // Open questions (H5) — AIP-5: проактивно раз/сутки (как context drift), scheduled-only (НЕ on-change,
-    // добавлено после снятия on_change). Раньше — manual-only; теперь генерируется само, чтобы карточка
-    // не висела пустой с «нажми обновить». Хендлер на `chat_util`, поэтому и гейт по нему.
-    if chat_util.is_some() && insights_on {
-        recurring.insert(
-            crate::home::widgets::widget_kind(crate::home::insights::KEY_OPEN_QUESTIONS),
-            DAY_SECS,
-        );
-    }
-    // Stale radar (H4) — AIP-хвост: слой 2 теперь ПРОАКТИВЕН (раз/сутки, scheduled-only, как
-    // open_questions; добавлено после снятия on_change — правка делает заметку МЕНЕЕ устаревшей, спешить
-    // с переобогащением незачем). Per-note кэш делает повторный прогон дешёвым (пропуск валидного).
-    if chat_util.is_some() && insights_on {
-        recurring.insert(crate::home::stale::KIND_STALE.to_string(), DAY_SECS);
-    }
-    // Эпизоды (EP) — scheduled-only (как context drift / open questions; добавлено ПОСЛЕ снятия
-    // on_change, чтобы НЕ реагировать на каждую правку: эпизод — «успокаивающийся» сигнал, сессии
-    // должны затихнуть). Чаще суток: ~6 ч, чтобы завершённые днём сессии суммировались тем же днём.
-    if chat_util.is_some() {
-        recurring.insert(
-            crate::episode::KIND_EPISODE_ROLLUP.to_string(),
-            DAY_SECS / 4,
-        );
-    }
-    // Лента (D3): раз/сутки, НЕ on-change (сетевая, от правок vault не зависит); при выключенной
-    // фиче прогон — дешёвый no-op хендлера.
-    if news_active {
-        recurring.insert(crate::news::KIND_NEWSFEED.to_string(), DAY_SECS);
-    }
+    let (recurring, on_change) = scheduler_recurring_and_on_change(
+        chat.is_some(),
+        chat_util.is_some(),
+        vectors.is_some(),
+        news_active,
+    );
     // Воркер планировщика: spawner хранит конфиг (для ручного рестарта N1), хендл — в lifecycle.
     // Дроп sender'а в хендле (повторный open_vault / закрытие) гасит worker_loop (аудит 2026-06-10).
     let scheduler_spawner = crate::scheduler::WorkerSpawner {
@@ -512,7 +517,8 @@ pub async fn open_vault(
             crate::scheduler::enqueue(db.writer(), crate::home::stale::KIND_STALE, "", 0, 2).await;
     }
     // Лента (D3 «при первом открытии за день»): сид run-if-overdue — фича включена и последний
-    // прогон старше суток (или прогонов не было).
+    // прогон старше суток (или прогонов не было). m2: дедуп `has_ready_job` (как contra/episode) —
+    // повторный open_vault до 1-го прогона не ставит второй сетевой+LLM прогон.
     if news_active
         && news_config_path
             .as_deref()
@@ -525,7 +531,11 @@ pub async fn open_vault(
             crate::news::latest_run(db.reader()).await.ok().flatten(),
             Some(r) if r.run_at >= now - DAY_SECS
         );
-        if overdue {
+        if overdue
+            && !crate::scheduler::has_ready_job(db.reader(), crate::news::KIND_NEWSFEED, now)
+                .await
+                .unwrap_or(false)
+        {
             let _ =
                 crate::scheduler::enqueue(db.writer(), crate::news::KIND_NEWSFEED, "", 0, 2).await;
         }

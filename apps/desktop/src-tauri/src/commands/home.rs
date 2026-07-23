@@ -79,7 +79,7 @@ pub async fn refresh_widget(state: State<'_, AppState>, key: String) -> AppResul
     let Some(kind) = kind else {
         return Err(format!("неизвестный HOME-виджет: {key}").into());
     };
-    // Тоггл «Инсайты» OFF → ручной refresh инсайт-виджета no-op (как сид/recurring гейтятся в vault.rs).
+    // Тоггл «Инсайты» OFF → ручной refresh инсайт-виджета no-op (хендлеры/сид; recurring map с M2 не зависит от тоггла).
     if matches!(
         key.as_str(),
         crate::home::insights::KEY_OPEN_QUESTIONS | crate::home::insights::KEY_CONTEXT_DRIFT
@@ -144,9 +144,9 @@ pub async fn insights_get_enabled(state: State<'_, AppState>) -> AppResult<bool>
 }
 
 /// Переключить «Инсайты». Persist `insights.enabled` + при ВКЛЮЧЕНИИ — enqueue kick для каждого
-/// доступного виджета (зеркало `episode_set_enabled`/`contradictions_set_enabled`: сид/recurring гейтятся
-/// флагом и регистрируются лишь на открытии vault → без kick включение в работающем приложении не
-/// сгенерирует виджеты до перезапуска). Дедуп `has_ready_job`. Хендлеры зарегистрированы всегда.
+/// доступного виджета (зеркало contradictions/episode: open-seed гейтится тогглом; **recurring map
+/// с M2/#324** уже держит kinds при наличии провайдеров — kick = немедленный прогон, суточный rearm
+/// не требует reopen). Дедуп `has_ready_job`. Хендлеры зарегистрированы всегда; OFF → NOOP.
 #[tauri::command]
 pub async fn insights_set_enabled(state: State<'_, AppState>, on: bool) -> AppResult<()> {
     let (writer, reader, has_util, has_fast) = {
