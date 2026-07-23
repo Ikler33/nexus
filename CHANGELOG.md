@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Исправлено · M-β2 Silent brain (LLM-audit batch A: M2 + m1 + m2)
+
+- **M2 / #324:** `open_vault` больше не выкидывает insights/contradictions из scheduler `recurring` по снимку тоггла (дефолт OFF). Mid-session ON + kick снова получает суточный rearm через `run_due`. Policy вынесена в `scheduler_recurring_and_on_change` (provider-гейт only); open-сиды по-прежнему гейтятся тогглом; хендлеры OFF → NOOP.
+- **m1:** `KIND_GC` в recurring (раз/сутки), не только one-shot seed; не в on_change.
+- **m2:** newsfeed open-seed дедупится `has_ready_job` (как contra/episode).
+- Тесты: `recurring_map_includes_insights_and_contra_without_toggle_snapshot`, `recurring_map_gc_only_without_providers`.
+- BACKLOG batch A M2/m1/m2 → DONE.
+
 ### Документация · M-β0 Truth & Freeze (personal dogfood track)
 
 - **README** переписан: убрано ложное «Фаза 0 в работе»; зафиксирован статус feature-complete prototype + track personal 0.1.0; primary agent Hermes/Grok.

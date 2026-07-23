@@ -100,13 +100,16 @@
 > переоценена по консенсусу голосов. Все autonomy-safe (локальная логика/БД/scheduler/парсинг); m9 —
 > egress-касание (фикс egress-safe, но трогает консент-путь → пометить владельцу). Owner-gated блокеров нет.
 > Записано по решению владельца «в бэклог, не фиксить сейчас». Порядок при возврате к фиксам: A → B → C → D.
+>
+> **Батч A (M2/m1/m2) закрыт 2026-07-23 (M-β2)** — см. CHANGELOG Unreleased.
 
-### Батч A — scheduler/recurring (один PR, общая стейт-машина; adversarial-ревью обязателен)
-| # | Sev | Файл:строка | Суть | Фикс | Риск |
-|---|---|---|---|---|---|
-| **M2** | 🔴 MAJOR | `commands/vault.rs:272/279/288/297`; `home.rs:162-182`; `contradictions.rs:71-73` | **РЕГРЕССИЯ #324:** recurring инсайтов/противоречий гейтится снимком тоггла при `open_vault` (дефолт OFF → не в `recurring`). Тоггл-ON делает разовый kick, но `run_due` перевзводит только то, что в `recurring` → фича работает ОДИН раз и молчит до перезапуска приложения. Дефолтный путь пользователя. | Снять `&& contra_on`/`&& insights_on` с recurring-РЕГИСТРАЦИЙ (272/279/288/297) → регистрировать безусловно (только provider-гейт), полагаясь на ранний NOOP хендлеров при OFF — как уже сделано для эпизодов (303) и дайджеста (270). Сиды можно оставить гейтнутыми. Поправить вводящий в заблуждение комментарий `vault.rs:264-266` и `episode.rs:60`. | careful (scheduler-стейт; проверить NOOP хендлеров не делает LLM/сети) |
-| **m1** | 🟡 MINOR | `commands/vault.rs:387`; `scheduler/mod.rs:756-804` | `KIND_GC` сидится разово, НЕ в `recurring` → done-джобы и протухший кэш накапливаются в долгой always-on сессии. | `recurring.insert(KIND_GC.to_string(), DAY_SECS);` рядом с прочими. | trivial |
-| **m2** | 🟡 MINOR | `commands/vault.rs:438-456` | Newsfeed-сид не дедупится `has_ready_job` → повторный `open_vault` до 1-го прогона = двойной сетевой фетч + двойной LLM-бюджет. У contra/episode (B17) защита есть. | `&& !has_ready_job(db.reader(), news::KIND_NEWSFEED, now).await.unwrap_or(false)` зеркально contra (467-473). | trivial |
+### Батч A — scheduler/recurring ✅ CLOSED (M-β2)
+
+| # | Sev | Статус | Суть / фикс |
+|---|---|---|---|
+| **M2** | was MAJOR | ✅ DONE | recurring без снимка тоггла (`scheduler_recurring_and_on_change`); сиды гейтятся; unit-тесты |
+| **m1** | was MINOR | ✅ DONE | `KIND_GC` в recurring DAY_SECS, не on_change |
+| **m2** | was MINOR | ✅ DONE | newsfeed seed + `has_ready_job` |
 
 ### Батч B — RAG-ядро (отдельный PR под eval-гейтом)
 | # | Sev | Файл:строка | Суть | Фикс | Риск |

@@ -55,9 +55,9 @@ pub async fn contradictions_get_enabled(state: State<'_, AppState>) -> AppResult
 }
 
 /// Переключить «Поиск противоречий». Persist `contradictions.enabled` + при ВКЛЮЧЕНИИ — enqueue kick
-/// (зеркало `episode_set_enabled`: сид/recurring гейтятся флагом и регистрируются лишь на открытии vault,
-/// поэтому без kick включение в работающем приложении не запустит поиск до перезапуска). Хендлер сам
-/// рано выйдет NOOP, если состояние рассинхронится.
+/// (зеркало `episode_set_enabled`: open-seed гейтится тогглом; **recurring map с M2/#324** держит kind
+/// всегда при chat+vectors — kick нужен для немедленного прогона, суточный rearm уже в map).
+/// Хендлер сам рано выйдет NOOP, если OFF.
 #[tauri::command]
 pub async fn contradictions_set_enabled(state: State<'_, AppState>, on: bool) -> AppResult<()> {
     let (writer, ready) = {
