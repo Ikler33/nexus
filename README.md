@@ -1,67 +1,92 @@
-# Nexus
+# Nexus (Orvin) · Castor
 
-> Local-first knowledge base — Obsidian-форк (Tauri 2 + Rust + React) с глубокой интеграцией локального LLM/RAG.
-> Vault до 50k+ `.md`, плагинная экосистема, i18n RU/EN, llama.cpp.
+> Local-first knowledge base — Obsidian-class vault on **Tauri 2 + Rust + React** with deep local LLM/RAG.  
+> Brand **Orvin**, in-app AI companion **Castor**. Vault scale target 50k+ `.md`, i18n RU/EN, plugins (curated/demo path today).
 
-**Статус:** архитектура завершена (v1.1, отревьюена и доведена). **Фаза 0 в работе** — каркас (Ф0-1) готов: monorepo + Tauri 2-приложение, зелёные build/lint/test, CI. Прогресс — в `CHANGELOG.md`, инструкции по сборке — ниже («Разработка и сборка»).
+**Status (2026-07):** engineering **feature-complete prototype** on `main` (RAG, second-brain jobs, news, board, agent/agentd, sandbox code default-OFF, PLUG-1 audit, design system).  
+**Not** a public beta: package version is still `0.0.0`, owner UI acceptance has a large 🧪 queue, signed updater is not shipped.  
+**Current product track:** personal dogfood → **0.1.0** (see `docs/BETA-SURFACE.md`).  
+**Progress log:** `CHANGELOG.md` (raw) · milestone map lives in the docs archive summary if you have it.
 
-## Навигация
+**Primary development agent:** Hermes (Igoryan) / Grok — not Claude Code. Project rules still load from `CLAUDE.md` (name is historical).
 
-| Путь | Что это |
+---
+
+## What ships in claim vs what does not
+
+| In **personal beta surface** (goal) | **Out of claim** until owner greenlight |
 |---|---|
-| `CLAUDE.md` | Правила проекта (ADR, антипаттерны, стек, дисциплина доки) — Claude Code грузит автоматически каждую сессию |
-| `docs/architecture/ARCHITECTURE.md` | **Источник истины.** Живой арх-план v1.1; раздел 0 — журнал решений (ADR-001…005) |
-| `docs/architecture/ARCHITECTURE-v1.0-backup.md` | Снимок до правок по ревью |
-| `docs/acceptance/ACCEPTANCE.md` | Критерии приёмки с ID (`AC-…`) — основа тестов |
-| `docs/design/DESIGN.md` | UI/UX-контракт: токены, компоненты, состояния, a11y |
-| `docs/reviews/REVIEW.md` | Мультиагентное ревью (12 блокеров + серьёзные) |
-| `docs/reviews/RE-REVIEW.md` | Проверка: все блокеры закрыты в v1.1 |
-| `docs/dev/` | Модульная дока — наполняется в ходе разработки (см. §8 промпта) |
-| `docs/BACKLOG.md` | **Единый реестр осознанно отложенного** (что не сделано, почему, триггер) |
-| `prompts/DEV-PROMPT.md` | Kickoff-промпт для Claude Code (Фаза 0) |
+| Vault editor, graph, search, Home/Today | Untrusted plugin load / marketplace (PLUG-2) |
+| Chat + RAG citations | Host shell / sandbox exec (`shell_enable`) |
+| Castor embedded agent, confirm gate, undo | Remote agentd WS, multi-channel gateways |
+| Board, news (optional), git-sync, backup | Signed auto-updater / notarization |
+| Operator-curated demo plugin panel | Mobile apps, voice, cloud sync service |
 
-## Порядок чтения
+Details: **`docs/BETA-SURFACE.md`**.
 
-- **Новому участнику:** `ARCHITECTURE.md` (§0 ADR → §1 принципы → §4 слои) → `DESIGN.md` → `ACCEPTANCE.md`. Контекст «почему так» — в `reviews/`.
-- **Для старта разработки:** открой `prompts/DEV-PROMPT.md` и следуй ему.
+---
 
-## Принятые решения (ADR, кратко)
+## Docs map (source of truth)
 
-1. Плагины — **JS-first + host-broker** (не WASM-first).
-2. Безопасность — **capability-broker + path-scoped permissions**; код плагинов не в git.
-3. БД — **rusqlite + write-actor** (не sqlx).
-4. Граф — источник истины **SQLite** (petgraph опц. кэш).
-5. AI — раздельные **Chat/Embedding** провайдеры, мультиязычный эмбеддер, cloud-fallback по opt-in.
+| Path | Role |
+|---|---|
+| `docs/BETA-SURFACE.md` | What we claim for personal dogfood; freeze rules |
+| `docs/architecture/ARCHITECTURE.md` | Architecture + ADR journal §0 |
+| `docs/acceptance/ACCEPTANCE.md` | Automated AC-… criteria |
+| `docs/design/DESIGN.md` | UI contract |
+| `docs/BACKLOG.md` | Deferred work registry (no silent caps) |
+| `docs/THREAT_MODEL.md` | Threats & default-OFF matrix |
+| `docs/AGENT-PROD-PLAN.md` | Agent-as-service plan (**historical + partial**; see superseded note inside beta surface) |
+| `docs/NIGHT-PLAN.md` / `IMPROVEMENT_PLAN.md` | **Historical** autonomous queues — not the live roadmap |
+| `CLAUDE.md` | Hard rules for any coding agent (ADR, anti-patterns, verify) |
+| `CHANGELOG.md` | Per-slice engineering history |
 
-Подробности и обоснования — в `docs/architecture/ARCHITECTURE.md` §0 и `docs/reviews/`.
+**Owner UI acceptance** (“does it work in the live app?”) is **not** fully encoded in git: it lives in the operator STATUS journal (vault/archive). Automated green CI ≠ owner ✅.
 
-## Старт разработки
+---
 
-1. Claude Code запускается из этого корня (`NEXUS/`) — `CLAUDE.md` подгружается автоматически (ADR, антипаттерны, дисциплина доки переживают `/clear`).
-2. Стартовое сообщение — содержимое `prompts/DEV-PROMPT.md` (детальный метод + план Фазы 0).
+## Quick start (development)
 
-## Разработка и сборка
-
-**Требования:** Node ≥ 20 · pnpm ≥ 9 · Rust stable (через `rustup`) + `cargo-tauri` · системный webview (macOS — встроенный WKWebView; Linux — `webkit2gtk-4.1` и пр.; см. CI).
+**Needs:** Node ≥ 20 · pnpm ≥ 9 · Rust stable (`rustup`) + Tauri deps · OS webview (macOS WKWebView / Linux webkit2gtk — see CI).
 
 ```bash
-pnpm install                       # зависимости фронта (workspace)
+pnpm install
 
-# Приложение
-pnpm dev                           # Tauri-приложение в dev-режиме (нативное окно + Vite HMR)
-pnpm --filter @nexus/desktop dev   # только фронт на http://localhost:1420 (для браузерного превью)
-pnpm build                         # продакшн-сборка фронта (tsc --noEmit + vite build)
-pnpm build:app                     # сборка нативного бандла (tauri build)
+pnpm dev                         # native Tauri window + HMR (real backend)
+pnpm --filter @nexus/desktop dev # browser-only on :1420 — **mocks**, not acceptance
 
-# Верификация (каждый срез)
-pnpm typecheck && pnpm lint && pnpm test          # фронт: tsc / eslint / vitest
-
+pnpm typecheck && pnpm lint && pnpm test
 cd apps/desktop/src-tauri
-cargo fmt --all -- --check && cargo build && cargo clippy --all-targets -- -D warnings && cargo test
+source "$HOME/.cargo/env"   # if needed
+cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-> Если `cargo` не найден в неинтерактивной оболочке — подгрузите окружение rustup: `source "$HOME/.cargo/env"`.
+Configure local LLM endpoints in `.nexus/local.json` (gitignored) — OpenAI-compatible chat + embedding. Homelab IPs in older notes are **examples**, not product defaults for strangers.
 
-## Дисциплина документации
+---
 
-Цикл каждого среза: **реализация → тесты зелёные → обновить доку → следующий срез**. Баг-фиксы — всегда с регресс-тестом и правкой доки. Детали — `prompts/DEV-PROMPT.md` §8.
+## ADR (short)
+
+1. Plugins — **JS-first + host-broker** (not WASM-first).  
+2. Security — **capability-broker + path-scoped permissions**; plugin code not in git.  
+3. DB — **rusqlite + write-actor** (not sqlx).  
+4. Graph SoT — **SQLite**.  
+5. AI — split **Chat / Embedding**; cloud chat opt-in only.  
+
+Agent-as-service (`nexus-agentd` + connector) is product reality; formal ADR-009 file under `docs/adr/` may still be pending — do not invent ADR numbers.
+
+---
+
+## Development discipline
+
+Slice cycle: **implement → tests green → update docs → next**.  
+Bugfix: regression test first. Deferred scope → `docs/BACKLOG.md`.  
+Do not change ADR silently. Do not enable owner-gated security flags in real vaults without a written decision.
+
+Agent kickoff details: `prompts/DEV-PROMPT.md` (method still valid; ignore “Claude Code only” wording where present).
+
+---
+
+## License / repo
+
+Public GitHub: `Ikler33/nexus`. Version field remains `0.0.0` until the 0.1.0 cut.

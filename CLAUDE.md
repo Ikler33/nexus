@@ -1,14 +1,18 @@
 # CLAUDE.md — Nexus (правила проекта, грузятся каждую сессию)
 
-Nexus — Obsidian-форк (Tauri 2 + Rust + React) с локальным LLM/RAG, local-first, плагинная экосистема, i18n RU/EN. **Не изобретай архитектуру — реализуй по спеке.** Полный метод и план Фазы 0 — в `prompts/DEV-PROMPT.md`.
+Nexus (бренд Orvin, AI Castor) — Obsidian-форк (Tauri 2 + Rust + React) с локальным LLM/RAG, local-first, плагинная экосистема, i18n RU/EN. **Не изобретай архитектуру — реализуй по спеке.**
+
+Имя файла историческое: правила для **любого** coding-агента. Основной разработчик с 2026-07 — **Hermes / Grok** (не Claude Code). Метод работы — `prompts/DEV-PROMPT.md` + актуальный claim boundary `docs/BETA-SURFACE.md` (personal dogfood track). Не ориентируйся на устаревшее «только Фаза 0» в старых промптах.
 
 ## Источники истины (читай ПЕРЕД кодом)
+0. `docs/BETA-SURFACE.md` — **claim boundary** personal dogfood + feature freeze; не расширять scope молча.
 1. `docs/architecture/ARCHITECTURE.md` — что/как; **раздел 0 (ADR) не пересматривать**.
 2. `docs/acceptance/ACCEPTANCE.md` — критерии `AC-…` = основа тестов.
 3. `docs/design/DESIGN.md` — UI/UX (токены, компоненты, состояния, a11y).
 4. `docs/reviews/` — почему так и какие ошибки запрещены.
+5. `docs/BACKLOG.md` — отложенное (no silent caps).
 
-Перед любым срезом: прочитай релевантный раздел ARCHITECTURE + нужные `AC-…` + (для UI) DESIGN.
+Перед любым срезом: BETA-SURFACE (в scope?) + релевантный раздел ARCHITECTURE + нужные `AC-…` + (для UI) DESIGN.
 
 ## Жёсткие правила (ADR — не менять молча)
 - **ADR-001** Плагины — **JS-first** + host-broker; логика в Web Worker, редакторные расширения в main-контексте; WASM опц. для тяжёлых вычислений. **Не WASM-first.**

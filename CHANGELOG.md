@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Документация · M-β0 Truth & Freeze (personal dogfood track)
+
+- **README** переписан: убрано ложное «Фаза 0 в работе»; зафиксирован статус feature-complete prototype + track personal 0.1.0; primary agent Hermes/Grok.
+- **`docs/BETA-SURFACE.md`** — claim boundary (in/out), feature freeze, acceptance pack, superseded plans, locked defaults 2026-07-23.
+- **`CLAUDE.md`** — framing для любого агента; SoT включает BETA-SURFACE + BACKLOG.
+- **`docs/dev/M-BETA0-TRUTH-FREEZE.md`** — чеклист вехи.
+
 ### Безопасность · PLUG-1: durable audit-лог capability-брокера плагинов (THREAT_MODEL T1)
 
 Первый срез плагин-эпика (владелец: «фундамент, без исполнения стороннего кода»). До PLUG-1 брокер
