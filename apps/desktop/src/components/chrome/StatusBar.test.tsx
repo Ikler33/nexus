@@ -141,7 +141,7 @@ describe('StatusBar — индикатор задач (ADR-007 срез 5 / DP-4
   it('баннер версии: рисует «ветка @ хеш» + «*» для грязного дерева', async () => {
     vi.spyOn(tauriApi.scheduler, 'counts').mockResolvedValue({ running: 0, pending: 0, dead: 0, ready: 0 });
     vi.spyOn(tauriApi.app, 'buildInfo').mockResolvedValue({
-      version: '0.0.0',
+      version: '0.1.0',
       branch: 'main',
       hash: '9d14665',
       dirty: true,

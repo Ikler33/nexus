@@ -1,6 +1,6 @@
 {
   "name": "nexus",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Nexus — local-first knowledge base (Obsidian-форк, Tauri 2 + Rust + React)",
   "packageManager": "pnpm@11.5.1",

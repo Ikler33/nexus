@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-24
+
+### Добавлено · M-β3 Personal 0.1.0 (packaging cut)
+
+- **Версия `0.1.0`** синхронизирована в 4 SoT: корневой `package.json`, `apps/desktop/package.json`,
+  `Cargo.toml [workspace.package]`, `apps/desktop/src-tauri/tauri.conf.json`. Гейт
+  `scripts/check-versions.mjs` по-прежнему валит CI при рассинхроне. Рантайм `app_version` /
+  crash-banner / backup envelope берут `CARGO_PKG_VERSION` → теперь репортят **0.1.0**, не 0.0.0.
+- **`docs/GETTING-STARTED.md`** — dual path: dev (`pnpm dev`, настоящее окно Tauri) и personal
+  unsigned Mac `.app` (`pnpm build:app`); Gatekeeper; LLM endpoints; что не claim.
+- **`docs/dev/M-BETA3-PERSONAL-010.md`** — чеклист вехи; Mac unsigned build остаётся owner.
+- README / BETA-SURFACE / BACKLOG: honesty под cut 0.1.0 (signed updater / notarization — всё ещё out).
+
+**Не в этом срезе:** notarization, auto-updater, owner live acceptance (M-β1), friend closed beta.
+
 ### Исправлено · M-β2 Silent brain (LLM-audit batch A: M2 + m1 + m2)
 
 - **M2 / #324:** `open_vault` больше не выкидывает insights/contradictions из scheduler `recurring` по снимку тоггла (дефолт OFF). Mid-session ON + kick снова получает суточный rearm через `run_due`. Policy вынесена в `scheduler_recurring_and_on_change` (provider-гейт only); open-сиды по-прежнему гейтятся тогглом; хендлеры OFF → NOOP.

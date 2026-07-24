@@ -4,9 +4,9 @@
 > Brand **Orvin**, in-app AI companion **Castor**. Vault scale target 50k+ `.md`, i18n RU/EN, plugins (curated/demo path today).
 
 **Status (2026-07):** engineering **feature-complete prototype** on `main` (RAG, second-brain jobs, news, board, agent/agentd, sandbox code default-OFF, PLUG-1 audit, design system).  
-**Not** a public beta: package version is still `0.0.0`, owner UI acceptance has a large 🧪 queue, signed updater is not shipped.  
-**Current product track:** personal dogfood → **0.1.0** (see `docs/BETA-SURFACE.md`).  
-**Progress log:** `CHANGELOG.md` (raw) · milestone map lives in the docs archive summary if you have it.
+**Package version:** **`0.1.0`** (personal dogfood cut — not a public/signed release). Owner UI acceptance still has a large 🧪 queue; signed updater is not shipped.  
+**Current product track:** personal dogfood (see `docs/BETA-SURFACE.md`) · start here: **`docs/GETTING-STARTED.md`**.  
+**Progress log:** `CHANGELOG.md` · `[0.1.0]` cut 2026-07-24.
 
 **Primary development agent:** Hermes (Igoryan) / Grok — not Claude Code. Project rules still load from `CLAUDE.md` (name is historical).
 
@@ -30,12 +30,14 @@ Details: **`docs/BETA-SURFACE.md`**.
 
 | Path | Role |
 |---|---|
+| `docs/GETTING-STARTED.md` | Dev + personal Mac unsigned run paths |
 | `docs/BETA-SURFACE.md` | What we claim for personal dogfood; freeze rules |
 | `docs/architecture/ARCHITECTURE.md` | Architecture + ADR journal §0 |
 | `docs/acceptance/ACCEPTANCE.md` | Automated AC-… criteria |
 | `docs/design/DESIGN.md` | UI contract |
 | `docs/BACKLOG.md` | Deferred work registry (no silent caps) |
 | `docs/THREAT_MODEL.md` | Threats & default-OFF matrix |
+| `docs/CONFIGURATION-REFERENCE.md` | Config schema from code |
 | `docs/AGENT-PROD-PLAN.md` | Agent-as-service plan (**historical + partial**; see superseded note inside beta surface) |
 | `docs/NIGHT-PLAN.md` / `IMPROVEMENT_PLAN.md` | **Historical** autonomous queues — not the live roadmap |
 | `CLAUDE.md` | Hard rules for any coding agent (ADR, anti-patterns, verify) |
@@ -45,7 +47,9 @@ Details: **`docs/BETA-SURFACE.md`**.
 
 ---
 
-## Quick start (development)
+## Quick start
+
+Full dual-path guide (dev + personal Mac unsigned `.app`): **`docs/GETTING-STARTED.md`**.
 
 **Needs:** Node ≥ 20 · pnpm ≥ 9 · Rust stable (`rustup`) + Tauri deps · OS webview (macOS WKWebView / Linux webkit2gtk — see CI).
 
@@ -89,4 +93,4 @@ Agent kickoff details: `prompts/DEV-PROMPT.md` (method still valid; ignore “Cl
 
 ## License / repo
 
-Public GitHub: `Ikler33/nexus`. Version field remains `0.0.0` until the 0.1.0 cut.
+Public GitHub: `Ikler33/nexus`. Package version **0.1.0** (unsigned personal cut; not notarized).

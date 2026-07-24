@@ -98,10 +98,10 @@ Resolutions go only in **owner STATUS** journal (archive/vault). CI green is not
 
 | Milestone | Intent |
 |---|---|
-| **M-β0** Truth & Freeze | this doc + README + SoT (now) |
-| **M-β1** Acceptance sprint | owner fills ✅ |
-| **M-β2** Silent brain fix | M2 recurring + small scheduler audit items |
-| **M-β3** Personal 0.1.0 | version bump, changelog cut, unsigned .app |
+| **M-β0** Truth & Freeze | this doc + README + SoT — **done** |
+| **M-β1** Acceptance sprint | owner fills ✅ (live Tauri) |
+| **M-β2** Silent brain fix | M2 recurring + scheduler audit — **done** |
+| **M-β3** Personal 0.1.0 | version + changelog cut + GETTING-STARTED — eng **done**; Mac unsigned `.app` — owner |
 | **M-β4** Hardening | daily-loop polish after dogfood |
 
 ---
@@ -116,7 +116,8 @@ Resolutions go only in **owner STATUS** journal (archive/vault). CI green is not
 | `prompts/DEV-PROMPT.md` “Phase 0 only” framing | Method OK; phase framing stale |
 | Old README “Фаза 0 в работе” | Replaced 2026-07-23 |
 
-Live open work: `docs/BACKLOG.md` + this surface + Hermes kanban board `nexus`.
+Live open work: `docs/BACKLOG.md` + this surface + Hermes kanban board `nexus`.  
+User-facing start: **`docs/GETTING-STARTED.md`**.
 
 ---
 
