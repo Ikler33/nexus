@@ -114,6 +114,22 @@
   line-height: var(--leading-normal);
 }
 
+/* U5: CTA «настроить ИИ» в empty-state (когда chat URL не задан). */
+.setupCta {
+  margin-top: var(--space-2);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-ai-soft);
+  color: var(--color-ai);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.setupCta:hover {
+  filter: brightness(1.05);
+}
+
 .suggestPills {
   display: flex;
   flex-direction: column;

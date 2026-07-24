@@ -87,6 +87,7 @@ Version banner / `app_version` should show **0.1.0** (+ git branch/hash when bui
 2. Configure OpenAI-compatible **chat** + **embedding** endpoints in vault  
    `.nexus/local.json` (gitignored) — schema: `docs/CONFIGURATION-REFERENCE.md`.  
 3. Settings → AI: change URL and re-check; errors must be honest (no infinite spinner).  
+   Chat empty state shows **Configure AI** when chat URL is unset; missing provider → banner, not silent hang.  
 4. Homelab IPs in old notes are **examples**, not product defaults.
 
 Dangerous flags (`shell_enable`, sandbox host exec, untrusted plugins) stay **default-OFF**.  

@@ -8,12 +8,41 @@ import { disclosureOpen, useChatStore } from '../../stores/chat';
 import { usePrefsStore } from '../../stores/prefs';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useToastStore } from '../../stores/toast';
+import { useUIStore } from '../../stores/ui';
 import * as activeView from '../../lib/editor/activeView';
+
+const AI_OK = {
+  chat: { url: 'http://localhost:8080/v1', model: 'test' },
+  embedding: { url: 'http://localhost:8083/v1', model: 'bge' },
+  fast: null,
+  agentAutonomy: null,
+  agentActuatorEnabled: false,
+  sandboxEnabled: false,
+  shellEnable: false,
+  webAllowPublicFetch: false,
+  skillsLearningEnabled: false,
+  agentSkillsDir: null,
+  delegationEnabled: false,
+  researchEnabled: false,
+  connection: {
+    mode: 'embedded' as const,
+    socket: null,
+    acpCommand: null,
+    acpCwd: null,
+    acpTransport: null,
+    acpSshHost: null,
+    acpSshKey: null,
+    acpRemoteCommand: null,
+  },
+  shellSupported: false,
+};
 
 beforeEach(() => {
   useChatStore.setState({ messages: [], streaming: false, mode: 'vault', web: false, pinned: [] });
   useToastStore.setState({ toasts: [] });
   disclosureOpen.clear();
+  // U5: default mock AI is null — without this stub empty-state shows setup CTA and breaks older tests.
+  vi.spyOn(tauriApi.settings, 'getAiConfig').mockResolvedValue(AI_OK);
 });
 
 afterEach(() => {
@@ -53,9 +82,44 @@ describe('ChatView (Ф1-8)', () => {
     expect(useChatStore.getState().mode).toBe('vault');
   });
 
-  it('пустое состояние — подсказка', () => {
+  it('пустое состояние — подсказка', async () => {
     render(<ChatView />);
-    expect(screen.getByText(/Спросите что-нибудь о ваших заметках/)).toBeInTheDocument();
+    expect(await screen.findByText(/Спросите что-нибудь о ваших заметках/)).toBeInTheDocument();
+  });
+
+  // U5: vault открыт, chat URL пуст → честный CTA, не «Спросите Castor» как будто ИИ готов.
+  it('U5 empty-state: без chat URL — CTA в настройки ИИ', async () => {
+    vi.spyOn(tauriApi.settings, 'getAiConfig').mockResolvedValue({
+      ...AI_OK,
+      chat: null,
+      embedding: null,
+    });
+    const open = vi.spyOn(useUIStore.getState(), 'openSettings');
+    render(<ChatView />);
+    expect(await screen.findByText(/ИИ ещё не подключён/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Настроить ИИ/i }));
+    expect(open).toHaveBeenCalledWith('ai');
+  });
+
+  // U5: deniedKind aiMissing → баннер + кнопка настроек (не сырая Error: …).
+  it('U5 баннер aiMissing открывает настройки', () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: '?' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: '',
+          error: 'chat-провайдер не сконфигурирован',
+          deniedKind: 'aiMissing',
+        },
+      ],
+    });
+    const open = vi.spyOn(useUIStore.getState(), 'openSettings');
+    render(<ChatView />);
+    expect(screen.getByText(/Чат-модель не подключена/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Открыть настройки/i }));
+    expect(open).toHaveBeenCalledWith('ai');
   });
 
   it('рендерит ответ с источником; клик открывает файл', () => {

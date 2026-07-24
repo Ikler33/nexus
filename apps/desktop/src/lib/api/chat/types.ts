@@ -39,8 +39,15 @@ export interface StoredChatMessage {
   createdAt: number;
 }
 
-/** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host; web — secret (W4). */
-export type EgressDeniedKind = 'offline' | 'feature' | 'host' | 'secret' | 'notConfigured';
+/** Типизированный отказ политики эгресса в стриме (AC-EGR-14): offline | feature | host; web — secret (W4).
+ *  U5: `aiMissing` — chat-провайдер не сконфигурирован (pre-stream Err из `chat_rag`, не egress). */
+export type EgressDeniedKind =
+  | 'offline'
+  | 'feature'
+  | 'host'
+  | 'secret'
+  | 'notConfigured'
+  | 'aiMissing';
 
 /** Web-источник (W-2): результат SearXNG-поиска — цитата web-ответа (зеркалит Rust `SearchResult`). */
 export interface WebSource {

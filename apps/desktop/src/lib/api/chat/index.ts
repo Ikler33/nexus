@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import * as mockSessions from '../../mock/sessions';
 import * as mockVault from '../../mock/vault';
 import { bridge, isTauri } from '../bridge';
+import { classifyChatInvokeError } from './classifyError';
 import type { ChatSearchHit, ChatSessionInfo, ChatStreamEvent, StoredChatMessage } from './types';
 
 /**
@@ -73,7 +74,11 @@ export const chat = {
       sessionId: opts?.sessionId,
       pinned: opts?.pinned,
       channel,
-    }).catch((e: unknown) => onEvent({ type: 'error', message: String(e) }));
+    }).catch((e: unknown) => {
+      // U5: pre-stream Err (нет ai.chat) → typed banner, не вечный «думает» / сырая строка.
+      const { message, deniedKind } = classifyChatInvokeError(e);
+      onEvent({ type: 'error', message, deniedKind });
+    });
     return () => {
       void invoke<void>('chat_cancel');
     };

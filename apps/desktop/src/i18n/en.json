@@ -790,6 +790,9 @@
     "thinkingPlain": "Thinking…",
     "thinkingWeb": "Searching the web…",
     "emptyTitle": "Ask Castor",
+    "setupNeededTitle": "AI is not connected yet",
+    "setupNeeded": "Set an OpenAI-compatible chat model URL (and embeddings if you want RAG). Without that, chat will not answer — notes still work offline.",
+    "setupNeededAction": "Configure AI",
     "ask1": "How does RAG work in Orvin?",
     "ask2": "What are embeddings?",
     "ask3": "Explain local-first",
@@ -850,6 +853,8 @@
       "secretSub": "A secret was detected in the search query — it was not sent over the network (W4).",
       "notConfigured": "Web search is not set up",
       "notConfiguredSub": "Set the SearXNG URL in Settings → AI / Models → \"Web agent (search)\" and enable it.",
+      "aiMissing": "Chat model is not connected",
+      "aiMissingSub": "Need an OpenAI-compatible endpoint in .nexus/local.json (Settings → AI / Models). Without it, chat and RAG will not answer.",
       "openSettings": "Open settings"
     },
     "providerLocal": "Local",
