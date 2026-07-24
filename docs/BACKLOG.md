@@ -51,9 +51,9 @@
 |---|---|---|---|
 | 1 | 🔴 Авто-апдейтер (Tauri-updater off, нет подписанных релизов) | план | трек десктоп-релиза |
 | 2 | 🔴 **AGENT-CONNECT** протокол (коннектор не специфицирован) | spec готов → **след. срез P0a** | блокирует агент-сервис |
-| 3 | 🟡 Подписанные релизы / packaging (версия хардкод `0.0.0`) | план | Release-срез |
+| 3 | 🟡 Подписанные релизы / packaging (версия хардкод `0.0.0`) | **PARTIAL 0.1.0:** версия синхронизирована + CHANGELOG cut; **осталось** notarization / signed updater / public distribute | трек десктоп-релиза / Apple keys |
 | 4 | 🟡 THREAT_MODEL.md | ✅ `docs/THREAT_MODEL.md` (этот срез) | P0-гейт перед Фазой 3 |
-| 5 | 🟡 Install / first-run + user-доки (INSTALL/GETTING-STARTED/CONFIG) | план | v0.1.0-blocking доки |
+| 5 | 🟡 Install / first-run + user-доки (INSTALL/GETTING-STARTED/CONFIG) | **PARTIAL:** `docs/GETTING-STARTED.md` + CONFIG ref; first-run UX honesty polish — по dogfood | M-β1 feedback / M-β4 |
 | 6 | 🔴 Container / VPS-деплой (`nexus deploy`) | план | DEPLOY-2 |
 
 ### ACP-клиент (`mode=acp`, спека `docs/specs/acp-client.md`) — отложенное после ACP-1

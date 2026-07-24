@@ -2794,7 +2794,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-agentd"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
@@ -2819,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2845,7 +2845,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-desktop"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
