@@ -255,6 +255,26 @@ describe('chat store (Ф1-8)', () => {
     expect(useChatStore.getState().streaming).toBe(false);
   });
 
+  // U5: pre-stream / stream error with missing provider → not stuck streaming; deniedKind set.
+  it('U5 send: aiMissing error clears streaming and sets deniedKind', () => {
+    let onEvent: (e: { type: string; message?: string; deniedKind?: string }) => void = () => {};
+    vi.spyOn(tauriApi.chat, 'streamRag').mockImplementation((_q, cb) => {
+      onEvent = cb as typeof onEvent;
+      return () => {};
+    });
+    useChatStore.getState().send('привет');
+    expect(useChatStore.getState().streaming).toBe(true);
+    onEvent({
+      type: 'error',
+      message: 'chat-провайдер не сконфигурирован (.nexus/local.json → ai.chat)',
+      deniedKind: 'aiMissing',
+    });
+    expect(useChatStore.getState().streaming).toBe(false);
+    const reply = useChatStore.getState().messages[1];
+    expect(reply.deniedKind).toBe('aiMissing');
+    expect(reply.error).toMatch(/chat-провайдер/);
+  });
+
   it('режимы: vault → grounded:true; general → grounded:false; web → web:true', () => {
     const spy = vi.spyOn(tauriApi.chat, 'streamRag').mockReturnValue(() => {});
 

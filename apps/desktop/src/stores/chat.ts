@@ -633,11 +633,18 @@ export const useChatStore = create<ChatState>((set, get) => {
             cancelFlush();
             const tail = pending;
             pending = '';
+            // U5: stream path already typed; pre-stream invoke catch sets deniedKind.
+            // Fallback classify if a path only sent the Russian Err string.
+            const deniedKind =
+              event.deniedKind ??
+              (event.message && /chat-провайдер\s+не\s+сконфигурирован/i.test(event.message)
+                ? ('aiMissing' as const)
+                : undefined);
             patch(replyId, (m) => ({
               ...m,
               content: m.content + tail,
               error: event.message,
-              deniedKind: event.deniedKind,
+              deniedKind,
               streaming: false,
             }));
             cancelFn = null;

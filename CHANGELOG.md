@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Исправлено · U5 First-run honesty (chat / no silent AI)
+
+- **Chat pre-stream Err** «chat-провайдер не сконфигурирован» → `deniedKind: aiMissing` + i18n-баннер
+  «Открыть настройки» (не вечный thinking и не только сырая `Error: …`).
+- **Empty-state чата:** если vault открыт и `ai.chat` URL пуст — CTA «Настроить ИИ», а не
+  «Спросите Castor» как будто модель готова. Onboarding B9 (пустые поля / localhost placeholders)
+  уже был честным — не трогали.
+- Тесты: `classifyError`, ChatView empty/banner, store streaming clear.
+
 ## [0.1.0] - 2026-07-24
 
 ### Добавлено · M-β3 Personal 0.1.0 (packaging cut)

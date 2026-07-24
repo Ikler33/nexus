@@ -82,6 +82,26 @@ export function ChatView() {
   const acknowledgeAutoConsolidated = useChatStore((s) => s.acknowledgeAutoConsolidated);
   const undoConsolidation = useChatStore((s) => s.undoConsolidation);
 
+  // U5: empty-state honesty — vault открыт, но ai.chat пуст → CTA в настройки, не «всё готово».
+  // null = ещё не проверили / vault нет; true = chat URL отсутствует; false = настроен.
+  const [aiMissing, setAiMissing] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const cfg = await tauriApi.settings.getAiConfig();
+        if (!alive) return;
+        setAiMissing(!(cfg.chat?.url?.trim()));
+      } catch {
+        // Vault не открыт / конфиг недоступен — empty state без CTA (чат всё равно недоступен).
+        if (alive) setAiMissing(null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [messages.length]); // после clear — перепроверить; после send с ошибкой length>0 баннер в сообщении
+
   // MEM-5: тост по исходу сразу-сохранения. saved → «Запомнил: «…»» + «Отменить» (удаляем ТОЛЬКО
   // реально созданный факт); duplicate → «Уже в памяти» (без отмены — не трогаем существующий);
   // error → «Не удалось сохранить»; nothing → «Нечего сохранять». Одноразово (acknowledge сбрасывает).
@@ -241,10 +261,26 @@ export function ChatView() {
             <div className={styles.emptyGlyph} aria-hidden>
               <OrbitIcon size={24} />
             </div>
-            <div className={styles.emptyTitle}>{t('chat.emptyTitle')}</div>
-            <p className={styles.empty}>{t('chat.empty')}</p>
-            {/* AIP-SQ: при открытой заметке — контекстные вопросы по ней (LLM), иначе статические подсказки. */}
-            <StartingQuestions center={center ?? null} staticPills={pills} onAsk={ask} />
+            {aiMissing ? (
+              <>
+                <div className={styles.emptyTitle}>{t('chat.setupNeededTitle')}</div>
+                <p className={styles.empty}>{t('chat.setupNeeded')}</p>
+                <button
+                  type="button"
+                  className={styles.setupCta}
+                  onClick={() => useUIStore.getState().openSettings('ai')}
+                >
+                  {t('chat.setupNeededAction')}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className={styles.emptyTitle}>{t('chat.emptyTitle')}</div>
+                <p className={styles.empty}>{t('chat.empty')}</p>
+                {/* AIP-SQ: при открытой заметке — контекстные вопросы по ней (LLM), иначе статические подсказки. */}
+                <StartingQuestions center={center ?? null} staticPills={pills} onAsk={ask} />
+              </>
+            )}
           </div>
         ) : (
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
@@ -911,7 +947,7 @@ function Message({
           <div>
             <div className={styles.bannerTitle}>{t(`chat.denied.${message.deniedKind}`)}</div>
             <div className={styles.bannerSub}>{t(`chat.denied.${message.deniedKind}Sub`)}</div>
-            {message.deniedKind === 'notConfigured' && (
+            {message.deniedKind === 'notConfigured' || message.deniedKind === 'aiMissing' ? (
               <button
                 type="button"
                 className={styles.bannerAct}
@@ -919,7 +955,7 @@ function Message({
               >
                 {t('chat.denied.openSettings')}
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       ) : message.error ? (

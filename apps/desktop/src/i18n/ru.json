@@ -802,6 +802,9 @@
     "thinkingPlain": "Думаю…",
     "thinkingWeb": "Ищу в интернете…",
     "emptyTitle": "Спросите Castor",
+    "setupNeededTitle": "ИИ ещё не подключён",
+    "setupNeeded": "Укажите OpenAI-совместимый URL чат-модели (и при желании эмбеддингов). Без этого чат и RAG не отвечают — приложение для заметок работает как обычно.",
+    "setupNeededAction": "Настроить ИИ",
     "ask1": "Как устроен RAG в Orvin?",
     "ask2": "Что такое эмбеддинги?",
     "ask3": "Объясни принцип local-first",
@@ -862,6 +865,8 @@
       "secretSub": "В поисковом запросе обнаружен секрет — он не ушёл в сеть (W4).",
       "notConfigured": "Web-поиск не настроен",
       "notConfiguredSub": "Укажите URL SearXNG в Настройках → AI / Модели → «Web-агент (поиск)» и включите его.",
+      "aiMissing": "Чат-модель не подключена",
+      "aiMissingSub": "Нужен OpenAI-совместимый endpoint в .nexus/local.json (Настройки → AI / Модели). Без него чат и RAG не отвечают.",
       "openSettings": "Открыть настройки"
     },
     "providerLocal": "Локально",
