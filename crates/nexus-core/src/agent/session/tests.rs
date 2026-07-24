@@ -848,12 +848,14 @@ async fn session_slow_gate_decision_does_not_burn_wall_clock() {
     let fwd = Arc::new(CollectingForwarder::default());
     let paused = Arc::new(AtomicBool::new(false));
     let cancel = Arc::new(AtomicBool::new(false));
-    // wall_clock (250мс) ЗАМЕТНО МЕНЬШЕ сна решения (1с): без вычитания паузы прогон обязан упасть
-    // по WallClock на границе перед ходом 2; с проводкой декоратора — дойти до Final. Слак 250мс на
-    // НЕкредитуемую работу (sqlite/classify/apply) — запас против медленного CI.
+    // wall_clock ЗАМЕТНО МЕНЬШЕ сна решения: без вычитания паузы прогон обязан упасть по WallClock
+    // перед ходом 2; с проводкой декоратора — дойти до Final.
+    // Раньше 250мс wall / 1с sleep — на windows-latest CI не-кредитуемая работа (sqlite/classify/apply)
+    // иногда >250мс → ложный BudgetExhausted{WallClock} (d1a2393 job). Держим те же инварианты
+    // с большим зазором: sleep 5с >> wall 2с >> типичная работа хода.
     let bounds = LoopBounds {
         max_steps: 5,
-        wall_clock: Duration::from_millis(250),
+        wall_clock: Duration::from_millis(2_000),
     };
     let outcome = run_agent_session_bounded(
         &spec,
@@ -862,7 +864,7 @@ async fn session_slow_gate_decision_does_not_burn_wall_clock() {
             memory: None,
             skills: None,
             web: None,
-            decision_source: Arc::new(SlowApproveAll(Duration::from_millis(1000))),
+            decision_source: Arc::new(SlowApproveAll(Duration::from_millis(5_000))),
             writer: db.writer(),
             reader: db.reader(),
             paused: &paused,
